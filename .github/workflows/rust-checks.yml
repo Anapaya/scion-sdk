@@ -1,0 +1,118 @@
+name: Rust checks
+env:
+  CARGO_TERM_COLOR: always
+  PROTOC_VERSION: "25.6"
+  NIGHTLY_VERSION: nightly-2025-07-07
+  workspace: .
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - ./**
+jobs:
+  tests:
+    name: rust/tests
+    strategy:
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-2022
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Remove unused tools to free up disk space
+        if: runner.os == 'Linux'
+        run: sudo rm -rf /usr/lib/jvm /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /usr/local/julia* /usr/local/share/chromium /opt/microsoft /opt/google /usr/local/share/powershell
+      - name: Disk space check
+        run: df -h
+      - name: Remove unused tools to free up disk space
+        if: runner.os == 'Windows'
+        run: rm -rf C:/Android/android-sdk
+      - name: Cache protoc
+        id: cache-protoc
+        uses: actions/cache@v3
+        with:
+          path: ~/.protoc
+          key: ${{ runner.os }}-protoc-${{ env.PROTOC_VERSION }}
+      - name: Install protoc
+        if: steps.cache-protoc.outputs.cache-hit != 'true'
+        run: |-
+          if [ "$RUNNER_OS" = "Linux" ]; then
+              PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          else
+              PROTOC_ZIP="protoc-${PROTOC_VERSION}-win64.zip"
+          fi
+
+          PROTOC_DIR="${HOME}/.protoc"
+          PROTOC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
+
+          mkdir -p "${PROTOC_DIR}"
+          curl -LO "${PROTOC_URL}"
+          unzip -q "${PROTOC_ZIP}" -d "${PROTOC_DIR}"
+          rm "${PROTOC_ZIP}"
+      - name: Add protoc to PATH on Linux
+        if: runner.os == 'Linux'
+        run: echo "$HOME/.protoc/bin" >> $GITHUB_PATH
+      - name: Set PROTOC env var on Windows
+        if: runner.os == 'Windows'
+        run: echo "PROTOC=${HOME}/.protoc/bin/protoc.exe" >> $GITHUB_ENV
+      - if: runner.os == 'Linux'
+        name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |-
+            ~/.rustup
+            ~/.cargo
+            ${{ env.workspace }}/target/
+          key: ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
+          restore-keys: |-
+            ${{ runner.os }}-cargo-shear-1.3.2
+            ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
+            ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
+      - if: runner.os == 'Windows'
+        name: Cache cargo dependencies on Windows
+        uses: actions/cache@v4
+        with:
+          path: C:\\rust_cache.vhdx
+          key: ${{ runner.os }}-50GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
+          restore-keys: |-
+            ${{ runner.os }}-50GB
+            ${{ runner.os }}-50GB-cargo-shear-1.3.2
+            ${{ runner.os }}-50GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
+            ${{ runner.os }}-50GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
+      - name: Setup dev drive on Windows
+        if: runner.os == 'Windows'
+        uses: samypr100/setup-dev-drive@v3
+        with:
+          drive-path: C:\\rust_cache.vhdx
+          drive-size: 50GB
+          drive-format: NTFS
+          trusted-dev-drive: true
+          mount-if-exists: true
+          env-mapping: |-
+            CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+            RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
+            CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+      - name: Install rustfmt
+        if: runner.os == 'Linux'
+        run: rustup toolchain install ${NIGHTLY_VERSION} --component rustfmt
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: cargo +${NIGHTLY_VERSION} fmt --all -- --check
+      - name: Run clippy
+        if: runner.os == 'Linux'
+        run: cargo clippy_ci
+      - name: Run tests
+        run: RUST_BACKTRACE=1 cargo test_ci
+      - name: Check documentation
+        if: runner.os == 'Linux'
+        run: RUSTDOCFLAGS="-D warnings" cargo doc_ci
+      - name: Unused dependencies
+        if: runner.os == 'Linux'
+        run: cargo install --version 1.3.2 cargo-shear && cargo shear
