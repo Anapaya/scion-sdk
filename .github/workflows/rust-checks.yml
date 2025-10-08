@@ -24,6 +24,11 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Disable autocrlf on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+        shell: bash
+        working-directory: .
       - name: Checkout
         uses: actions/checkout@v4
       - name: Remove unused tools to free up disk space
