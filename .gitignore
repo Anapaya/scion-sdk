@@ -26,3 +26,6 @@ Desktop.ini
 # Logs and temporary files
 *.log
 *.tmp
+
+# Nix
+.direnv/
