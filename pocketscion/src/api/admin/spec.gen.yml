@@ -8,7 +8,8 @@ info:
     name: Anapaya Operations
     email: ops@anapaya.net
   license:
-    name: ''
+    name: Apache-2.0
+    identifier: Apache-2.0
   version: 0.1.0
 servers:
 - url: http://{host}:{port}/api/v1

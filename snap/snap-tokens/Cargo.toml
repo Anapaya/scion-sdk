@@ -2,6 +2,12 @@
 name = "snap-tokens"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "AuthN/AuthZ tokens used in the SNAP transport underlay for SCION"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
 
 [dependencies]
 jsonwebtoken = { workspace = true }

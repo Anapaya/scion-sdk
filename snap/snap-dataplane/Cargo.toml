@@ -2,6 +2,12 @@
 name = "snap-dataplane"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Data plane implementation of the SNAP transport underlay for SCION"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
 
 [dependencies]
 anyhow = { workspace = true }

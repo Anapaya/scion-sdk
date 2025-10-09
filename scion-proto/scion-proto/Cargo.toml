@@ -3,8 +3,12 @@
 name = "scion-proto"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
-publish = false
+description = "SCION protocol data structures and serialization"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
 
 [dependencies]
 bytes = { workspace = true }

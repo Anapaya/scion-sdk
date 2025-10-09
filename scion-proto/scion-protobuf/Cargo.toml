@@ -2,8 +2,12 @@
 name = "scion-protobuf"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
-publish = false
+description = "Protobuf definitions used in the SCION control plane"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
 
 [dependencies]
 prost = { workspace = true }

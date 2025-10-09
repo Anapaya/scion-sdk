@@ -1,12 +1,10 @@
-# Pocketscion
+# PocketSCION
 
-This is evolving.
+PocketSCION is a lightweight SCION network simulator. It allows you to create and manage local SCION
+topologies, making it an invaluable tool for testing your applications without needing a
+full-fledged SCION network.
 
-## Synopsis
+PocketSCION supports both the UDP and SNAP underlays, allowing you to test your applications in a
+variety of network scenarios.
 
-Run the pocket SCION:
-
-```sh
-cd endhost/public/pocketscion
-cargo run -- run --state-file state.json --stdout
-```
+You can find examples on how to use PocketSCION for local testing in the examples directory.

@@ -2,6 +2,11 @@
 name = "scion-sdk-address-manager"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Address manager to allocate and manage SCION endhost addresses"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
 
 [dependencies]
 anyhow = { workspace = true }

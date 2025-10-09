@@ -2,6 +2,11 @@
 name = "endhost-api-models"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Connect RPC client library for reqwest based clients"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
 
 [dependencies]
 # Local Dependencies

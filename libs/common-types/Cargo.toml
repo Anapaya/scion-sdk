@@ -2,6 +2,11 @@
 name = "scion-sdk-common-types"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "SCION endhost SDK common types"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
 
 [dependencies]
 ed25519-dalek = { workspace = true, features = ["pem", "pkcs8"] }

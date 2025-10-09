@@ -2,6 +2,12 @@
 name = "snap-tun"
 version = "0.1.0"
 edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "The snap-tun implementation for the SNAP transport underlay for SCION"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
 
 [dependencies]
 assert_matches = { workspace = true }

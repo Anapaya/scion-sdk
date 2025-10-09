@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! # Endshost API
+//! # SCION Endhost API
 //!
 //! Connect RPC API endpoint handlers and utilities to embed the endhost API into an existing
 //! [`axum::Router`].

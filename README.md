@@ -15,7 +15,7 @@ technology company. We thank our colleagues at [Mysten Labs](https://mystenlabs.
 
 The main entry point for using the SCION endhost SDK is the [scion-stack](scion-stack/) crate. It
 provides the `ScionStack` type - a stateful object that is the conceptual equivalent of the
-UDP/TCP/IP networking stacks found in typical operating systems.
+UDP/TCP/IP networking stack found in typical operating systems.
 
 ### Basic example: Creating a path-aware socket
 
