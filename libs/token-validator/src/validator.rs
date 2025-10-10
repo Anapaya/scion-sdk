@@ -49,7 +49,10 @@ where
 pub enum TokenValidatorError {
     /// JWT errors.
     #[error("JWT error: {0}")]
-    JwtError(#[from] JwtError),
+    JwtError(JwtError),
+    /// JWT signature is invalid.
+    #[error("JWT signature is invalid")]
+    JwtSignatureInvalid(),
     /// Expired token error.
     #[error("token expired: {0:?}")]
     TokenExpired(SystemTime),
@@ -101,8 +104,7 @@ where
     C: for<'de> Deserialize<'de> + Token,
 {
     fn validate(&self, now: SystemTime, token: &str) -> Result<C, TokenValidatorError> {
-        let token_data: TokenData<C> = decode::<C>(token, &self.public_key, &self.validator)
-            .map_err(TokenValidatorError::JwtError)?;
+        let token_data: TokenData<C> = decode::<C>(token, &self.public_key, &self.validator)?;
 
         let token_exp = token_data.claims.exp_time();
         if now > token_exp {
@@ -137,4 +139,17 @@ pub fn insecure_const_ed25519_key_pair_pem() -> (Pem, Pem) {
 pub fn insecure_const_ed25519_signing_key() -> ed25519_dalek::SigningKey {
     let seed = [43u8; 32];
     ed25519_dalek::SigningKey::from_bytes(&seed)
+}
+
+impl From<JwtError> for TokenValidatorError {
+    fn from(value: JwtError) -> Self {
+        use jsonwebtoken::errors::*;
+        // For now, we only explicitly expose signature errors and don't commit
+        // to report all other jsonwebtoken-errors, so we can swap out the
+        // underlying implementation.
+        if let ErrorKind::InvalidSignature = value.kind() {
+            return TokenValidatorError::JwtSignatureInvalid();
+        }
+        TokenValidatorError::JwtError(value)
+    }
 }

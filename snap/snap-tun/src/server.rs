@@ -687,12 +687,16 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                 resp.encode(&mut resp_body).expect("no fail");
                 StatusCode::OK
             }
+            Err(TokenValidatorError::JwtSignatureInvalid()) => {
+                info!("Invalid signature");
+                StatusCode::UNAUTHORIZED
+            }
             Err(TokenValidatorError::JwtError(err)) => {
                 info!(?err, "Token validation failed");
                 StatusCode::BAD_REQUEST
             }
             Err(TokenValidatorError::TokenExpired(err)) => {
-                info!(?err, "Token validation failed");
+                info!(?err, "Token validation failed: token expired");
                 StatusCode::UNAUTHORIZED
             }
         };
@@ -795,12 +799,16 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                 resp.encode(&mut resp_body).expect("no fail");
                 StatusCode::OK
             }
+            Err(TokenValidatorError::JwtSignatureInvalid()) => {
+                info!("Invalid JWT Signature");
+                StatusCode::UNAUTHORIZED
+            }
             Err(TokenValidatorError::JwtError(err)) => {
                 info!(?err, "Token validation failed");
                 StatusCode::BAD_REQUEST
             }
             Err(TokenValidatorError::TokenExpired(err)) => {
-                info!(?err, "Token validation failed");
+                info!(?err, "Token validation failed: token expired");
                 StatusCode::UNAUTHORIZED
             }
         };

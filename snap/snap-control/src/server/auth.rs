@@ -82,7 +82,7 @@ where
             Ok(token) => token,
             Err(err) => {
                 debug!(error=%err, "extract bearer token");
-                return Box::pin(async { Ok(build_error_response(err)) });
+                return Box::pin(async { Ok(build_unauthorized_response(err)) });
             }
         };
 
@@ -94,16 +94,16 @@ where
             }
             Err(err) => {
                 debug!(error=%err, "Invalid Token");
-                Box::pin(async { Ok(build_error_response(err)) })
+                Box::pin(async { Ok(build_unauthorized_response(err)) })
             }
         }
     }
 }
 
-fn build_error_response<E: Display>(err: E) -> Response<Body> {
+fn build_unauthorized_response<E: Display>(err: E) -> Response<Body> {
     Response::builder()
         .status(http::StatusCode::UNAUTHORIZED)
-        .body(Body::from(err.to_string()))
+        .body(Body::from(format!("SNAP Token validation failed: {err}")))
         .expect("no fail")
 }
 

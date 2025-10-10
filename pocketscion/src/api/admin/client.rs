@@ -83,15 +83,21 @@ impl ApiClient {
         let url = self.api.join(endpoint)?;
         let response = self.client.get(url).send().await?;
 
-        if response.status() != reqwest::StatusCode::OK {
-            return Err(ClientError::InvalidResponseStatus(
-                response.status(),
-                response.bytes().await?,
-            ));
+        match response.status() {
+            reqwest::StatusCode::OK => {
+                let result = response.json::<T>().await?;
+                Ok(result)
+            }
+            reqwest::StatusCode::UNAUTHORIZED => {
+                Err(ClientError::Unauthorized(response.bytes().await?))
+            }
+            _ => {
+                Err(ClientError::InvalidResponseStatus(
+                    response.status(),
+                    response.bytes().await?,
+                ))
+            }
         }
-
-        let result = response.json::<T>().await?;
-        Ok(result)
     }
 }
 
@@ -104,6 +110,9 @@ pub enum ClientError {
     /// An error occurred while making a request with `reqwest`.
     #[error("reqwest error: {0:?}")]
     ReqwestError(#[from] reqwest::Error),
+    /// The request could not be authorized.
+    #[error("the request could not be authorized: {0:?}")]
+    Unauthorized(Bytes),
     /// Invalid response status.
     #[error("invalid response status ({0}): {1:?}")]
     InvalidResponseStatus(reqwest::StatusCode, Bytes),
