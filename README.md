@@ -1,5 +1,10 @@
 # SCION endhost software development kit (SDK)
 
+[![CI](https://github.com/Anapaya/scion-sdk/actions/workflows/rust-checks.yml/badge.svg)](https://github.com/Anapaya/scion-sdk/actions/workflows/rust-checks.yml)
+[![crates.io](https://img.shields.io/crates/v/scion-stack.svg)](https://crates.io/crates/scion-stack)
+[![docs.rs](https://docs.rs/scion-stack/badge.svg)](https://docs.rs/scion-stack)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Supercharge your applications with SCION's path-aware networking capabilities!
 
 The SCION endhost SDK provides the tools and libraries necessary to build applications that can
