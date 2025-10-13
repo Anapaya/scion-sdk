@@ -133,4 +133,4 @@ details.
 ## Contact
 
 For any questions or inquiries, please contact us at
-[engineering@anapaya.net](mailto:engineering@anapaya.net).
+[scion-sdk@anapaya.net](mailto:scion-sdk@anapaya.net).
