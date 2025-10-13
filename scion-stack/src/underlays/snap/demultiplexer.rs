@@ -176,14 +176,14 @@ impl DemultiplexerHost {
                 result = self.underlay_receiver.read_datagram() => {
                     match result {
                         Ok(raw_data) => {
-                            if let Err(e) = self.dispatch_packet(raw_data).await {
-                                warn!("Failed to dispatch packet: {}", e);
+                            if let Err(err) = self.dispatch_packet(raw_data).await {
+                                warn!(%err, "Failed to dispatch packet");
                             }
                         }
-                        Err(e) => {
+                        Err(err) => {
                             // TODO: this error never bubbles up and is never properly handled, it
                             // just stops the main loop
-                            tracing::error!("Error reading datagram: {}", e);
+                            tracing::error!(%err, "Failed to receive datagram");
                             break;
                         }
                     }
