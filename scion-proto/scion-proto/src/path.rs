@@ -64,6 +64,7 @@ pub mod epic;
 pub use epic::EpicAuths;
 
 pub mod combinator;
+pub mod policy;
 
 mod fingerprint;
 pub use fingerprint::{FingerprintError, PathFingerprint};

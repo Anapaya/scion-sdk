@@ -39,7 +39,7 @@ use super::{AddressParseError, error::AddressKind};
     Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, ToSchema,
 )]
 #[repr(transparent)]
-pub struct Asn(u64);
+pub struct Asn(pub u64);
 
 impl Asn {
     /// A SCION AS number representing the wildcard AS number.
