@@ -306,6 +306,19 @@ impl Control {
             debug!("Failed to notify session expiry update");
         }
     }
+
+    /// An async function that returns when the underlying connection is closed.
+    pub async fn closed(&self) {
+        let _ = self.conn.closed().await;
+    }
+
+    /// This is a helper function that returns a debug-printable object
+    /// containing metrics about the underlying QUIC-connection.
+    // XXX(dsd): We are overcautious here and do not want to commit to an
+    // implementation-specific type.
+    pub fn debug_path_stats(&self) -> impl std::fmt::Debug {
+        self.conn.stats().path
+    }
 }
 
 /// Token renew task error.

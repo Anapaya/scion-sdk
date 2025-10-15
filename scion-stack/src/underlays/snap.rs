@@ -118,6 +118,21 @@ impl SnapUnderlayStack {
         let demultiplexer_handle = demultiplexer.handle();
 
         tokio::spawn(demultiplexer.main_loop());
+        // A task that logs path statistics on a regular basis (every 10
+        // minutes).
+        tokio::spawn({
+            let tunnel = tunnel.clone();
+            async move {
+                loop {
+                    let path_stats = tunnel.debug_path_stats();
+                    tracing::debug!(?path_stats, "reporting snaptun path stats");
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(600)) => {}
+                        _ = tunnel.closed() => { return }
+                    };
+                }
+            }
+        });
 
         Ok(Self {
             snap_cp_client,

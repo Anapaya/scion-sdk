@@ -186,6 +186,19 @@ impl SnapTunnel {
     pub fn assigned_addresses(&self) -> Vec<EndhostAddr> {
         self.ctrl.assigned_addresses()
     }
+
+    /// Returns when the underlying connection is closed.
+    pub async fn closed(&self) {
+        let _ = self.ctrl.closed().await;
+    }
+
+    /// This is a helper function that returns a debug-printable object
+    /// containing metrics about the underlying QUIC-connection.
+    // XXX(dsd): We are overcautious here and do not want to commit to an
+    // implementation-specific type.
+    pub fn debug_path_stats(&self) -> impl std::fmt::Debug {
+        self.ctrl.debug_path_stats()
+    }
 }
 
 /// SNAP tunnel errors.
