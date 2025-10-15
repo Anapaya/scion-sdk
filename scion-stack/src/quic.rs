@@ -50,6 +50,8 @@ pub trait QuinnConn: Clone + Send + Sync {
     fn local_ip(&self) -> Option<Self::AddrType>;
     /// Returns a stable connection identifier.
     fn stable_id(&self) -> usize;
+    /// Returns connection statistics.
+    fn stats(&self) -> quinn::ConnectionStats;
 }
 
 /// SCION quinn connection.
@@ -118,6 +120,9 @@ impl QuinnConn for ScionQuinnConn {
     fn stable_id(&self) -> usize {
         self.inner.stable_id()
     }
+    fn stats(&self) -> quinn::ConnectionStats {
+        self.inner.stats()
+    }
 }
 
 impl QuinnConn for quinn::Connection {
@@ -175,5 +180,8 @@ impl QuinnConn for quinn::Connection {
 
     fn stable_id(&self) -> usize {
         self.stable_id()
+    }
+    fn stats(&self) -> quinn::ConnectionStats {
+        self.stats()
     }
 }
