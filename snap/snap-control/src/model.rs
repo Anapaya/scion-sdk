@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use scion_proto::address::IsdAsn;
-use snap_dataplane::session::manager::{SessionOpenError, SessionTokenError};
+use snap_dataplane::session::{manager::SessionTokenError, state::SessionOpenError};
 use snap_tokens::snap_token::SnapTokenClaims;
 use thiserror::Error;
 

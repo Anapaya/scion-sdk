@@ -29,7 +29,7 @@ use scion_sdk_common_types::ed25519::Ed25519SigningKeyPem;
 use serde::{Deserialize, Serialize};
 use snap_tokens::{Pssid, session_token::SessionTokenClaims};
 
-use super::manager::{SessionManager, SessionOpenError, SessionTokenError, TokenIssuer};
+use super::manager::{SessionTokenError, TokenIssuer};
 use crate::state::{DataPlaneId, Id};
 
 pub mod dto;
@@ -76,26 +76,11 @@ impl SessionManagerState {
             sessions: BTreeMap::new(),
         }
     }
-}
 
-impl Default for SessionManagerState {
-    fn default() -> Self {
-        Self::new(DEFAULT_SESSION_DURATION)
-    }
-}
-
-/// Grant for a session required to issue session tokens.
-pub struct SessionGrant {
-    // The expiration time of the session.
-    expiry: SystemTime,
-}
-
-impl SessionManager for SessionManagerState {
-    // Opens a new SNAP data plane session for the given PSSID and data plane ID.
-    //
+    /// Opens a new SNAP data plane session for the given PSSID and data plane ID.
     // XXX(bunert): We allow multiple sessions per PSSID for now. Later we might want to
     // disallow this when we properly remove sessions from terminated connections.
-    fn open(
+    pub fn open(
         &mut self,
         pssid: Pssid,
         data_plane_id: DataPlaneId,
@@ -113,6 +98,22 @@ impl SessionManager for SessionManagerState {
             expiry: session_expiry,
         })
     }
+}
+
+/// Errors that can occur during session management.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionOpenError {}
+
+impl Default for SessionManagerState {
+    fn default() -> Self {
+        Self::new(DEFAULT_SESSION_DURATION)
+    }
+}
+
+/// Grant for a session required to issue session tokens.
+pub struct SessionGrant {
+    // The expiration time of the session.
+    expiry: SystemTime,
 }
 
 /// Open data plane session.

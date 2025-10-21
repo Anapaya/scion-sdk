@@ -38,7 +38,7 @@ use snap_control::{
 };
 use snap_dataplane::{
     session::{
-        manager::{SessionManager, TokenIssuer},
+        manager::TokenIssuer,
         state::{SessionManagerState, SessionTokenIssuerState, insecure_const_ed25519_signing_key},
     },
     state::{DataPlaneId, DataPlaneState, Id},

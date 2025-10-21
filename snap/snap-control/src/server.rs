@@ -282,5 +282,9 @@ fn handle_session_error(
             tracing::error!(%err, "Failed to encode session token");
             (StatusCode::INTERNAL_SERVER_ERROR, anyhow!("internal error"))
         }
+        CreateSessionError::OpenSession(session_open_error) => {
+            tracing::error!(err=%session_open_error, "Failed to open session");
+            (StatusCode::INTERNAL_SERVER_ERROR, anyhow!("internal error"))
+        }
     }
 }

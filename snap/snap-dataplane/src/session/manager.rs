@@ -18,20 +18,6 @@ use thiserror::Error;
 
 use crate::{session::state::SessionGrant, state::DataPlaneId};
 
-/// SessionManager is the interface to manage sessions.
-pub trait SessionManager {
-    /// Open a session for the given SNAP token claims and data plane ID.
-    fn open(
-        &mut self,
-        pssid: Pssid,
-        data_plane_id: DataPlaneId,
-    ) -> Result<SessionGrant, SessionOpenError>;
-}
-
-/// Errors that can occur during session management.
-#[derive(Debug, Error)]
-pub enum SessionOpenError {}
-
 /// TokenIssuer is the interface to issue session tokens.
 pub trait TokenIssuer {
     /// Issues a session token for the given PSSID, data plane ID, and session grant.
