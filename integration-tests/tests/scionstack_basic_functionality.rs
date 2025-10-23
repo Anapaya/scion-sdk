@@ -393,7 +393,7 @@ async fn test_scmp_packet_dispatch_with_port_snap() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
-    let path_manager = sender_stack.default_path_manager();
+    let path_manager = sender_stack.create_path_manager();
 
     let udp_receiver = receiver_stack.bind(None).await.unwrap();
     let raw_receiver = receiver_stack
@@ -481,7 +481,7 @@ async fn test_scmp_packet_dispatch_with_port_udp() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
-    let path_manager = sender_stack.default_path_manager();
+    let path_manager = sender_stack.create_path_manager();
 
     let udp_receiver = receiver_stack.bind(None).await.unwrap();
     let raw_receiver = receiver_stack
@@ -564,7 +564,7 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
-    let path_manager = sender_stack.default_path_manager();
+    let path_manager = sender_stack.create_path_manager();
 
     // Create an SCMP error message (destination unreachable) which doesn't have a port
     // This should only be dispatched to the default SCMP handler
@@ -639,7 +639,7 @@ async fn test_scmp_packet_dispatch_without_port_udp() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
-    let path_manager = sender_stack.default_path_manager();
+    let path_manager = sender_stack.create_path_manager();
 
     // Create an SCMP error message (destination unreachable) which doesn't have a port
     // This should only be dispatched to the default SCMP handler
@@ -695,7 +695,7 @@ async fn test_scmp_echo_is_replied_snap() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
-    let path_manager = sender_stack.default_path_manager();
+    let path_manager = sender_stack.create_path_manager();
 
     let echo_data = Bytes::from_static(b"ping test data");
     let identifier = sender.local_addr().port();

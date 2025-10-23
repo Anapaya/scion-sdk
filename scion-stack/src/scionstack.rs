@@ -211,9 +211,13 @@ pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, Udp
 // Re-export the main types from the modules
 pub use self::builder::ScionStackBuilder;
 pub use self::scmp_handler::{DefaultScmpHandler, ScmpHandler};
-use crate::path::{
-    Shortest,
-    manager::{CachingPathManager, ConnectRpcSegmentFetcher, PathFetcherImpl},
+use crate::{
+    path::{
+        PathStrategy,
+        manager::{CachingPathManager, ConnectRpcSegmentFetcher, PathFetcherImpl},
+        ranking::Shortest,
+    },
+    scionstack::socket::SocketConfig,
 };
 
 /// Default duration to reserve a port when binding a socket.
@@ -258,8 +262,37 @@ impl ScionStack {
         &self,
         bind_addr: Option<SocketAddr>,
     ) -> Result<UdpScionSocket, ScionSocketBindError> {
+        self.bind_with_config(bind_addr, SocketConfig::default())
+            .await
+    }
+
+    /// Create a path-aware SCION socket with custom configuration.
+    ///
+    /// # Arguments
+    /// * `bind_addr` - The address to bind the socket to. If None, an available address will be
+    ///   used.
+    /// * `socket_config` - Configuration for the socket.
+    ///
+    /// # Returns
+    /// A path-aware SCION socket.
+    pub async fn bind_with_config(
+        &self,
+        bind_addr: Option<SocketAddr>,
+        mut socket_config: SocketConfig,
+    ) -> Result<UdpScionSocket, ScionSocketBindError> {
         let socket = self.bind_path_unaware(bind_addr).await?;
-        let pather = self.default_path_manager();
+        let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+
+        // Default to Shortest path ranking if no ranking is configured.
+        if socket_config.path_strategy.ranking.is_empty() {
+            socket_config.path_strategy.add_ranking(Shortest);
+        }
+
+        let pather = Arc::new(CachingPathManager::start(
+            socket_config.path_strategy,
+            fetcher,
+        ));
+
         Ok(UdpScionSocket::new(socket, pather, None))
     }
 
@@ -281,6 +314,26 @@ impl ScionStack {
         Ok(socket.connect(remote_addr))
     }
 
+    /// Create a connected path-aware SCION socket with custom configuration.
+    ///
+    /// # Arguments
+    /// * `remote_addr` - The remote address to connect to.
+    /// * `bind_addr` - The address to bind the socket to. If None, an available address will be
+    ///   used.
+    /// * `socket_config` - Configuration for the socket
+    ///
+    /// # Returns
+    /// A connected path-aware SCION socket.
+    pub async fn connect_with_config(
+        &self,
+        remote_addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
+        socket_config: SocketConfig,
+    ) -> Result<UdpScionSocket, ScionSocketBindError> {
+        let socket = self.bind_with_config(bind_addr, socket_config).await?;
+        Ok(socket.connect(remote_addr))
+    }
+
     /// Bind a socket with controlled time for port allocation.
     ///
     /// This allows tests to control port reservation timing without sleeping.
@@ -293,7 +346,7 @@ impl ScionStack {
             .underlay
             .bind_socket_with_time(SocketKind::Udp, bind_addr, now)
             .await?;
-        let pather = self.default_path_manager();
+        let pather = self.create_path_manager();
         Ok(UdpScionSocket::new(
             PathUnawareUdpScionSocket::new(socket),
             pather,
@@ -384,14 +437,56 @@ impl ScionStack {
         server_config: Option<quinn::ServerConfig>,
         runtime: Option<Arc<dyn quinn::Runtime>>,
     ) -> anyhow::Result<Endpoint> {
+        self.quic_endpoint_with_config(
+            bind_addr,
+            config,
+            server_config,
+            runtime,
+            SocketConfig::default(),
+        )
+        .await
+    }
+
+    /// Create a QUIC over SCION endpoint using custom socket configuration.
+    ///
+    /// This is a convenience method that creates a QUIC (quinn) endpoint over a SCION socket.
+    ///
+    /// # Arguments
+    /// * `bind_addr` - The address to bind the socket to. If None, an available address will be
+    ///   used.
+    /// * `config` - The quinn endpoint configuration.
+    /// * `server_config` - The quinn server configuration.
+    /// * `runtime` - The runtime to spawn tasks on.
+    /// * `socket_config` - Scion Socket configuration
+    ///
+    /// # Returns
+    /// A QUIC endpoint that can be used to accept or create QUIC connections.
+    pub async fn quic_endpoint_with_config(
+        &self,
+        bind_addr: Option<SocketAddr>,
+        config: quinn::EndpointConfig,
+        server_config: Option<quinn::ServerConfig>,
+        runtime: Option<Arc<dyn quinn::Runtime>>,
+        socket_config: SocketConfig,
+    ) -> anyhow::Result<Endpoint> {
         let socket = self.underlay.bind_async_udp_socket(bind_addr).await?;
         let address_translator = Arc::new(AddressTranslator::default());
-        let sync_path_manager = self.default_path_manager();
-        let pather = sync_path_manager.clone();
+
+        let path_manager = {
+            let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+
+            // Default to Shortest path ranking if no ranking is configured.
+            let mut strategy = socket_config.path_strategy;
+            if strategy.ranking.is_empty() {
+                strategy.add_ranking(Shortest);
+            }
+
+            Arc::new(CachingPathManager::start(strategy, fetcher))
+        };
 
         let socket = Arc::new(ScionAsyncUdpSocket::new(
             socket,
-            pather,
+            path_manager.clone(),
             address_translator.clone(),
         ));
 
@@ -405,7 +500,7 @@ impl ScionStack {
             server_config,
             socket,
             runtime,
-            sync_path_manager,
+            path_manager,
             address_translator,
         )?)
     }
@@ -419,14 +514,14 @@ impl ScionStack {
         self.underlay.local_addresses()
     }
 
-    /// Get an instance of the default path manager.
-    ///
-    /// # Returns
-    ///
-    /// An instance of the default path manager.
-    pub fn default_path_manager(&self) -> Arc<CachingPathManager> {
+    /// Creates a path manager with default configuration.
+    pub fn create_path_manager(&self) -> Arc<CachingPathManager> {
         let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
-        Arc::new(CachingPathManager::start(Shortest::default(), fetcher))
+        let mut strategy = PathStrategy::default();
+
+        strategy.add_ranking(Shortest);
+
+        Arc::new(CachingPathManager::start(strategy, fetcher))
     }
 }
 

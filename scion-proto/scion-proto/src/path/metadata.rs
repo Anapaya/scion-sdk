@@ -86,6 +86,78 @@ macro_rules! some_if_length_matches {
     };
 }
 
+impl Metadata {
+    /// Formats the interfaces of the path for human consumption
+    ///
+    /// Example: `"1-ff00:0:111 2>2 1-ff00:0:110 5>10 1-ff00:0:200"`
+    ///
+    /// If no interface data is available, `<no interface data>` is written.
+    pub fn format_interfaces(&self, writer: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        match &self.interfaces {
+            Some(interfaces) => {
+                if interfaces.is_empty() {
+                    write!(writer, "<empty interfaces>")?;
+                    return Ok(());
+                }
+
+                if interfaces.len() != 1 && interfaces.len() % 2 != 0 {
+                    // This is not a valid path, but we handle it anyway.
+                    write!(writer, "<invalid path> ")?;
+                }
+
+                // first interface
+                let first = &interfaces[0]; // Safety: we know there is at least one interface
+                write!(writer, "{} {}", first.isd_asn, first.id)?;
+
+                if interfaces.len() <= 1 {
+                    // in case there is only one interface we are done
+                    return Ok(());
+                }
+
+                write!(writer, ">")?;
+
+                let mut had_final = false;
+                // following interfaces
+                for chunk in interfaces[1..interfaces.len()].chunks(2) {
+                    match chunk {
+                        [trav_in, trav_out] => {
+                            match trav_in.isd_asn == trav_out.isd_asn {
+                                true => {
+                                    write!(
+                                        writer,
+                                        "{} {} {}>",
+                                        trav_in.id, trav_in.isd_asn, trav_out.id
+                                    )?
+                                }
+                                false => {
+                                    write!(
+                                        writer,
+                                        "{} <invalid hop> ({}/{}) {}>",
+                                        trav_in.id, trav_in.isd_asn, trav_out.isd_asn, trav_out.id
+                                    )?;
+                                }
+                            }
+                        }
+                        [final_if] => {
+                            write!(writer, "{} {}", final_if.id, final_if.isd_asn)?;
+                            had_final = true;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !had_final {
+                    writer.write_str(" missing final hop")?;
+                }
+            }
+            None => {
+                write!(writer, "<no interface data>")?;
+            }
+        };
+        Ok(())
+    }
+}
+
 impl TryFrom<daemon_grpc::Path> for Metadata {
     type Error = PathParseError;
 
@@ -430,6 +502,79 @@ mod tests {
                 )
                 .is_none()
             );
+        }
+    }
+
+    mod format_test {
+        use super::*;
+
+        #[test]
+        fn should_format_interfaces() {
+            let cases = vec![
+                (0, "<empty interfaces>"),
+                (1, "0-0 10"),
+                (2, "0-0 10>11 1-1"),
+                (3, "<invalid path> 0-0 10>11 1-1 12> missing final hop"),
+                (4, "0-0 10>11 1-1 12>13 2-2"),
+                (6, "0-0 10>11 1-1 12>13 2-2 14>15 3-3"),
+                (8, "0-0 10>11 1-1 12>13 2-2 14>15 3-3 16>17 4-4"),
+            ];
+
+            for (n, expected) in cases {
+                let interfaces: Vec<_> = (0..n)
+                    .map(|i| {
+                        let offset_i = i + 1;
+                        PathInterface {
+                            isd_asn: IsdAsn::new(
+                                Isd::new((offset_i / 2) as u16),
+                                Asn::new((offset_i / 2) as u64),
+                            ),
+                            id: i as u16 + 10,
+                        }
+                    })
+                    .collect();
+
+                let mut output = String::new();
+                let meta = Metadata {
+                    interfaces: Some(interfaces),
+                    ..Default::default()
+                };
+
+                meta.format_interfaces(&mut output).unwrap();
+                assert_eq!(output, expected, "Unexpected format at test with n={n}");
+            }
+        }
+
+        #[test]
+        fn should_format_not_matching_as() {
+            let interfaces = vec![
+                PathInterface {
+                    isd_asn: IsdAsn::new(Isd::new(1), Asn::new(42)),
+                    id: 10,
+                },
+                PathInterface {
+                    isd_asn: IsdAsn::new(Isd::new(1), Asn::new(43)),
+                    id: 11,
+                },
+                // This hop is invalid, different ASes
+                PathInterface {
+                    isd_asn: IsdAsn::new(Isd::new(2), Asn::new(1)),
+                    id: 12,
+                },
+                PathInterface {
+                    isd_asn: IsdAsn::new(Isd::new(2), Asn::new(1)),
+                    id: 13,
+                },
+            ];
+
+            let mut output = String::new();
+            let meta = Metadata {
+                interfaces: Some(interfaces),
+                ..Default::default()
+            };
+
+            meta.format_interfaces(&mut output).unwrap();
+            assert_eq!(output, "1-42 10>11 <invalid hop> (1-43/2-1) 12>13 2-1");
         }
     }
 }

@@ -323,6 +323,26 @@ where
     }
 }
 
+impl<T> std::fmt::Display for Path<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "src:{}, dst:{}, next hop: {}, path: ",
+            self.isd_asn.source,
+            self.isd_asn.destination,
+            self.underlay_next_hop
+                .map_or_else(|| "none".to_string(), |a| a.to_string()),
+        )?;
+
+        match self.metadata.as_ref() {
+            Some(meta) => meta.format_interfaces(f)?,
+            None => write!(f, "<no metadata>")?,
+        };
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};

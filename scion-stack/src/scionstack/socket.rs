@@ -28,8 +28,10 @@ use tracing::{debug, trace};
 use super::{NetworkError, UnderlaySocket};
 use crate::{
     path::{
-        Shortest,
+        PathStrategy,
         manager::{CachingPathManager, PathManager, PathWaitError},
+        policy::PathPolicy,
+        ranking::PathRanking,
     },
     scionstack::{ScionSocketReceiveError, ScionSocketSendError},
 };
@@ -319,8 +321,45 @@ impl RawScionSocket {
     }
 }
 
+/// Configuration for a path aware socket.
+#[derive(Default)]
+pub struct SocketConfig {
+    pub(crate) path_strategy: PathStrategy,
+}
+impl SocketConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a path policy.
+    ///
+    /// Path policies can restrict the set of usable paths based on their characteristics.
+    /// E.g. filtering out paths that go through certain ASes.
+    ///
+    /// See [`HopPatternPolicy`](scion_proto::path::policy::hop_pattern::HopPatternPolicy) and
+    /// [`AclPolicy`](scion_proto::path::policy::acl::AclPolicy)
+    pub fn with_path_policy(mut self, policy: impl PathPolicy) -> Self {
+        self.path_strategy.add_policy(policy);
+        self
+    }
+
+    /// Add a path ranking strategy.
+    ///
+    /// Path Rankings prioritize paths based on their characteristics.
+    ///
+    /// Ranking priority is determined by the order in which they are added to the stack, the first
+    /// having the highest priority.
+    ///
+    /// If no ranking strategies are added, ranking will default to
+    /// [`Shortest`](crate::path::ranking::Shortest).
+    pub fn with_path_ranking(mut self, ranking: impl PathRanking) -> Self {
+        self.path_strategy.add_ranking(ranking);
+        self
+    }
+}
+
 /// A path aware UDP socket generic over the underlay socket and path manager.
-pub struct UdpScionSocket<P: PathManager = CachingPathManager<Shortest>> {
+pub struct UdpScionSocket<P: PathManager = CachingPathManager> {
     socket: PathUnawareUdpScionSocket,
     pather: Arc<P>,
     remote_addr: Option<SocketAddr>,

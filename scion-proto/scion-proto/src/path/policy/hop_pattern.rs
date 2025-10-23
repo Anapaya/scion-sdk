@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str::FromStr;
+use std::{borrow::Cow, str::FromStr};
 
 pub use parser::ParseError;
 
@@ -20,6 +20,7 @@ use super::{
     hop_pattern::{lexer::HopPatternLexer, parser::HopPatternParser},
     types::{HopPredicate, PathPolicyHop},
 };
+use crate::path::policy::PathPolicy;
 
 /// Path Policy Hop pattern
 ///
@@ -93,6 +94,15 @@ impl FromStr for HopPatternPolicy {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
+    }
+}
+impl PathPolicy for HopPatternPolicy {
+    fn path_allowed<T>(
+        &self,
+        path: &crate::path::Path<T>,
+    ) -> Result<bool, std::borrow::Cow<'static, str>> {
+        let path_hops = PathPolicyHop::hops_from_path(path).map_err(Cow::from)?;
+        Ok(self.matches(&path_hops))
     }
 }
 

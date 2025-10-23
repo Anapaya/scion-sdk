@@ -14,5 +14,7 @@
 //! SCION stack path handling.
 
 pub mod manager;
-pub mod policy;
-pub use policy::*;
+pub mod types;
+
+mod strategy;
+pub use strategy::*;

@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::str::FromStr;
+use std::{borrow::Cow, str::FromStr};
 
 use super::types::{HopPredicate, PathPolicyHop};
+use crate::path::policy::PathPolicy;
 
 /// ACL Policy filters segments based on if they contain certain hops
 ///
@@ -114,8 +115,9 @@ impl AclPolicy {
     ///
     /// - `operator` defines if the entry allows or denies a path matching the hop predicate
     /// - `hop` defines the hop predicate to match against
-    pub fn add_entry(&mut self, operator: AclEntryOperator, hop: HopPredicate) {
+    pub fn add_entry(mut self, operator: AclEntryOperator, hop: HopPredicate) -> Self {
         self.entries.push(AclEntry::new(operator, hop));
+        self
     }
 
     /// Checks if the ACL policy allows the given path
@@ -140,6 +142,15 @@ impl FromStr for AclPolicy {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
+    }
+}
+impl PathPolicy for AclPolicy {
+    fn path_allowed<T>(
+        &self,
+        path: &crate::path::Path<T>,
+    ) -> Result<bool, std::borrow::Cow<'static, str>> {
+        let path_hops = PathPolicyHop::hops_from_path(path).map_err(Cow::from)?;
+        Ok(self.matches(&path_hops))
     }
 }
 

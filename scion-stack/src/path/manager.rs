@@ -24,11 +24,12 @@
 //! asynchronous background task (via `tokio::spawn`) that fetches requested
 //! paths using the provided [PathFetcher].
 //!
-//! Typically, applications require paths to fulfill specific constraints and
-//! paths are ranked; i.e. some paths are preferred over others. In the case of
-//! the [CachingPathManager] such constraints are expressed via a [PathPolicy]:
-//! only paths that fulfill [PathPolicy::predicate] are returned and paths with
-//! a lower rank according to [PathPolicy::rank] are preferred.
+//! Constraints on the used path, like e.g. not using certain ASes, or preferring paths with low
+//! latency, can be expressed using [PathPolicies](crate::path::policy::PathPolicy) and
+//! [PathRankings](crate::path::ranking::PathRanking).
+//!
+//! PathPolicies are used to filter out unwanted paths.
+//! PathRankings are used to rank paths based on their characteristics.
 
 use std::{cmp::Ordering, future::Future, io, sync::Arc};
 
@@ -50,9 +51,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
 
-use super::{Shortest, policy::PathPolicy};
-use crate::types::ResFut;
-
+use crate::{
+    path::{PathStrategy, types::PathManagerPath},
+    types::ResFut,
+};
 /// Path fetch errors.
 #[derive(Debug, Error)]
 pub enum PathToError {
@@ -132,24 +134,23 @@ struct PathRegistration {
 
 /// Cached path entry with metadata
 #[derive(Debug, Clone)]
-struct CachedPath {
-    path: scion_proto::path::Path,
+struct PathCacheEntry {
+    path: PathManagerPath,
     #[expect(unused)]
     cached_at: DateTime<Utc>,
-    from_registration: bool,
 }
 
-impl CachedPath {
-    fn new(path: scion_proto::path::Path, now: DateTime<Utc>, from_registration: bool) -> Self {
+impl PathCacheEntry {
+    fn new(path: PathManagerPath, now: DateTime<Utc>) -> Self {
         Self {
             path,
             cached_at: now,
-            from_registration,
         }
     }
 
     fn is_expired(&self, now: DateTime<Utc>) -> bool {
         self.path
+            .scion_path()
             .expiry_time()
             .map(|expiry| expiry < now)
             .unwrap_or(true)
@@ -157,9 +158,9 @@ impl CachedPath {
 }
 
 /// Active path manager that runs as a background task
-pub struct CachingPathManager<P: PathPolicy = Shortest, F: PathFetcher = PathFetcherImpl> {
+pub struct CachingPathManager<F: PathFetcher = PathFetcherImpl> {
     /// Shared state between the manager and the background task
-    state: CachingPathManagerState<P, F>,
+    state: CachingPathManagerState<F>,
     /// Channels for communicating with the background task
     prefetch_tx: mpsc::Sender<PrefetchRequest>,
     registration_tx: mpsc::Sender<PathRegistration>,
@@ -187,13 +188,13 @@ pub trait PathFetcher {
 
 type BoxedPathLookupResult = BoxFuture<'static, Result<Path<Bytes>, PathWaitError>>;
 
-struct CachingPathManagerStateInner<P: PathPolicy, F: PathFetcher> {
+struct CachingPathManagerStateInner<F: PathFetcher> {
     /// Policy for path selection
-    policy: P,
+    selection: PathStrategy,
     /// Path fetcher for requesting new paths
     fetcher: F,
     /// Cache of paths indexed by (src, dst)
-    path_cache: HashIndex<(IsdAsn, IsdAsn), CachedPath>,
+    path_cache: HashIndex<(IsdAsn, IsdAsn), PathCacheEntry>,
     /// In-flight path requests indexed by (src, dst)
     inflight: HashIndex<(IsdAsn, IsdAsn), future::Shared<BoxedPathLookupResult>>,
 }
@@ -201,26 +202,22 @@ struct CachingPathManagerStateInner<P: PathPolicy, F: PathFetcher> {
 /// Shared state for the active path manager
 #[derive(Deref)]
 #[deref(forward)]
-struct CachingPathManagerState<P: PathPolicy, F: PathFetcher>(
-    Arc<CachingPathManagerStateInner<P, F>>,
-);
+struct CachingPathManagerState<F: PathFetcher>(Arc<CachingPathManagerStateInner<F>>);
 
-impl<P: PathPolicy, F: PathFetcher> Clone for CachingPathManagerState<P, F> {
+impl<F: PathFetcher> Clone for CachingPathManagerState<F> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'static>
-    CachingPathManager<P, F>
-{
+impl<F: PathFetcher + Send + Sync + 'static> CachingPathManager<F> {
     /// Create and start an active path manager with automatic task management.
     /// The background task is spawned internally and will be cancelled when the manager is dropped.
     /// This is the recommended method for most users.
-    pub fn start(policy: P, fetcher: F) -> Self {
+    pub fn start(path_strategy: PathStrategy, fetcher: F) -> Self {
         let cancellation_token = CancellationToken::new();
         let (manager, task_future) =
-            Self::start_future(policy, fetcher, cancellation_token.clone());
+            Self::start_future(path_strategy, fetcher, cancellation_token.clone());
 
         // Spawn task internally, it is stopped when the manager is dropped.
         tokio::spawn(async move {
@@ -232,7 +229,7 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
 
     /// Create the manager and task future.
     pub fn start_future(
-        policy: P,
+        selection: PathStrategy,
         fetcher: F,
         cancellation_token: CancellationToken,
     ) -> (Self, impl std::future::Future<Output = ()>) {
@@ -240,7 +237,7 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
         let (registration_tx, registration_rx) = mpsc::channel(1000);
 
         let state = CachingPathManagerState(Arc::new(CachingPathManagerStateInner {
-            policy,
+            selection,
             fetcher,
             path_cache: HashIndex::new(),
             inflight: HashIndex::new(),
@@ -302,7 +299,7 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
     }
 }
 
-impl<P: PathPolicy, F: PathFetcher> Drop for CachingPathManager<P, F> {
+impl<F: PathFetcher> Drop for CachingPathManager<F> {
     fn drop(&mut self) {
         self.cancellation_token.cancel();
         // Background task will be cleaned up automatically
@@ -310,9 +307,7 @@ impl<P: PathPolicy, F: PathFetcher> Drop for CachingPathManager<P, F> {
     }
 }
 
-impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'static> SyncPathManager
-    for CachingPathManager<P, F>
-{
+impl<F: PathFetcher + Send + Sync + 'static> SyncPathManager for CachingPathManager<F> {
     fn register_path(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>, path: Path<Bytes>) {
         self.register_path_internal(src, dst, now, path);
     }
@@ -337,9 +332,7 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
     }
 }
 
-impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'static> PathManager
-    for CachingPathManager<P, F>
-{
+impl<F: PathFetcher + Send + Sync + 'static> PathManager for CachingPathManager<F> {
     fn path_wait(
         &self,
         src: IsdAsn,
@@ -364,17 +357,13 @@ pub trait PathPrefetcher {
     fn prefetch_path(&self, src: IsdAsn, dst: IsdAsn);
 }
 
-impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'static> PathPrefetcher
-    for CachingPathManager<P, F>
-{
+impl<F: PathFetcher + Send + Sync + 'static> PathPrefetcher for CachingPathManager<F> {
     fn prefetch_path(&self, src: IsdAsn, dst: IsdAsn) {
         self.prefetch_path_internal(src, dst, Utc::now());
     }
 }
 
-impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'static>
-    CachingPathManagerState<P, F>
-{
+impl<F: PathFetcher + Send + Sync + 'static> CachingPathManagerState<F> {
     /// Returns a cached path if it is not expired.
     pub fn try_cached_path(
         &self,
@@ -386,7 +375,7 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
         match self.path_cache.peek(&(src, dst), &guard) {
             Some(cached) => {
                 if !cached.is_expired(now) {
-                    Ok(Some(cached.path.clone()))
+                    Ok(Some(cached.path.scion_path().clone()))
                 } else {
                     Ok(None)
                 }
@@ -407,7 +396,7 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
         match self.path_cache.peek(&(src, dst), &guard) {
             Some(cached) => {
                 if !cached.is_expired(now) {
-                    Some(cached.path.clone())
+                    Some(cached.path.scion_path().clone())
                 } else {
                     None
                 }
@@ -455,33 +444,28 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
             .fetcher
             .fetch_paths(src, dst)
             .await
-            .map_err(|e| PathWaitError::FetchFailed(e.to_string()))?;
+            .map_err(|e| PathWaitError::FetchFailed(e.to_string()))?
+            .into_iter()
+            .map(|p| PathManagerPath::new(p, false))
+            .collect::<Vec<_>>();
 
-        paths.retain(|path| {
-            self.policy
-                .predicate(&super::policy::PolicyPath::new(path, false))
-        });
-        paths.sort_by(|a, b| {
-            self.policy.rank(
-                &super::policy::PolicyPath::new(a, false),
-                &super::policy::PolicyPath::new(b, false),
-            )
-        });
+        self.selection.filter_inplace(&mut paths);
+        self.selection.rank_inplace(&mut paths);
+
         let preferred_path = paths.into_iter().next().ok_or(PathWaitError::NoPathFound)?;
-        let cached_path = CachedPath::new(preferred_path.clone(), now, false);
+        let preferred_path_entry = PathCacheEntry::new(preferred_path.clone(), now);
 
-        let entry = self.path_cache.entry_sync((src, dst));
-        match entry {
+        match self.path_cache.entry_sync((src, dst)) {
             Entry::Occupied(mut entry) => {
-                entry.update(cached_path);
+                entry.update(preferred_path_entry);
             }
             Entry::Vacant(entry) => {
-                entry.insert_entry(cached_path);
+                entry.insert_entry(preferred_path_entry);
             }
         }
 
         debug!(src = %src, dst = %dst, "Cached new path");
-        Ok(preferred_path)
+        Ok(preferred_path.path)
     }
 
     /// Check if there is an in-flight request for the given source and destination.
@@ -492,18 +476,16 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
 }
 
 /// Background task that handles prefetch requests and path registrations
-struct PathManagerTask<P: PathPolicy, F: PathFetcher> {
-    state: CachingPathManagerState<P, F>,
+struct PathManagerTask<F: PathFetcher> {
+    state: CachingPathManagerState<F>,
     prefetch_rx: mpsc::Receiver<PrefetchRequest>,
     registration_rx: mpsc::Receiver<PathRegistration>,
     cancellation_token: CancellationToken,
 }
 
-impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'static>
-    PathManagerTask<P, F>
-{
+impl<F: PathFetcher + Send + Sync + 'static> PathManagerTask<F> {
     fn new(
-        state: CachingPathManagerState<P, F>,
+        state: CachingPathManagerState<F>,
         prefetch_rx: mpsc::Receiver<PrefetchRequest>,
         registration_rx: mpsc::Receiver<PathRegistration>,
         cancellation_token: CancellationToken,
@@ -565,9 +547,10 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
             "Handling path registration"
         );
 
+        let new_path = PathManagerPath::new(registration.path, true);
+
         // Check if the path is accepted by the policy
-        let policy_path = super::policy::PolicyPath::new(&registration.path, true);
-        if !self.state.policy.predicate(&policy_path) {
+        if !self.state.selection.predicate(&new_path) {
             debug!(
                 src = %registration.src,
                 dst = %registration.dst,
@@ -575,29 +558,25 @@ impl<P: PathPolicy + Send + Sync + 'static, F: PathFetcher + Send + Sync + 'stat
             );
             return;
         }
+
+        // See if we already have a cached path
         let entry = self
             .state
             .path_cache
             .entry_sync((registration.src, registration.dst));
+
         match entry {
             Entry::Occupied(mut entry) => {
-                let cached = entry.get();
-                let should_update = if cached.is_expired(registration.now) {
-                    true
-                } else {
-                    let existing_policy_path =
-                        super::policy::PolicyPath::new(&cached.path, cached.from_registration);
-                    matches!(
-                        self.state.policy.rank(&policy_path, &existing_policy_path),
-                        Ordering::Less
-                    )
-                };
-                if should_update {
-                    entry.update(CachedPath::new(registration.path, registration.now, true));
+                // Update the cached path if the cached path is expired or the new path is preferred
+                if entry.is_expired(registration.now)
+                    // or if the new path is preferred (Ordering::Less means new_path is preferred)
+                    || self.state.selection.rank_order(&new_path, &entry.path) == Ordering::Less
+                {
+                    entry.update(PathCacheEntry::new(new_path, registration.now));
                 }
             }
             Entry::Vacant(entry) => {
-                entry.insert_entry(CachedPath::new(registration.path, registration.now, true));
+                entry.insert_entry(PathCacheEntry::new(new_path, registration.now));
             }
         }
     }
@@ -773,7 +752,7 @@ mod tests {
     use tokio::{sync::Barrier, task::yield_now};
 
     use super::*;
-    use crate::path::policy;
+    use crate::path::ranking::Shortest;
 
     type PathMap = HashMap<(IsdAsn, IsdAsn), Result<Vec<Path>, PathFetchError>>;
     #[derive(Default)]
@@ -855,12 +834,15 @@ mod tests {
         )
     }
 
-    fn setup_pm(fetcher: MockPathFetcher) -> CachingPathManagerState<Shortest, MockPathFetcher> {
+    fn setup_pm(fetcher: MockPathFetcher) -> CachingPathManagerState<MockPathFetcher> {
         CachingPathManagerState(Arc::new(CachingPathManagerStateInner {
-            policy: policy::Shortest {},
             fetcher,
             path_cache: HashIndex::new(),
             inflight: HashIndex::new(),
+            selection: PathStrategy {
+                policies: vec![],
+                ranking: vec![Arc::new(Shortest)],
+            },
         }))
     }
 
