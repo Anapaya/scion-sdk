@@ -14,6 +14,7 @@
 //! SNAP tunnel client.
 
 use std::{
+    borrow::Cow,
     net::IpAddr,
     ops::Deref,
     pin::Pin,
@@ -33,9 +34,8 @@ use crate::requests::{
     system_time_from_unix_epoch_secs,
 };
 
-/// All control requests issued by the client MUST NOT exceed
-/// `CTRL_REQUEST_BUF_SIZE` bytes.
-pub const CTRL_RESPONSE_BUF_SIZE: usize = 4096;
+/// Maximum size of a control message, both request and response.
+pub const MAX_CTRL_MESSAGE_SIZE: usize = 4096;
 
 /// Lead time for session renewal. Renewal is triggered when the current time is later than the
 /// token expiry minus the lead time.
@@ -157,7 +157,10 @@ impl Control {
         desired_addresses: Vec<EndhostAddr>,
     ) -> Result<(), ControlError> {
         debug!(?desired_addresses, "Requesting address assignment");
+
         let (mut snd, mut rcv) = self.conn.open_bi().await?;
+
+        // Send address assignment request
         let request = AddressAssignRequest {
             requested_addresses: desired_addresses
                 .into_iter()
@@ -178,15 +181,17 @@ impl Control {
         let body = request.encode_to_vec();
         let token = self.state.read().expect("no fail").session_token.clone();
         send_control_request(&mut snd, crate::PATH_ADDR_ASSIGNMENT, body.as_ref(), &token).await?;
-        let mut resp_buf = [0u8; CTRL_RESPONSE_BUF_SIZE];
-        let response: AddressAssignResponse =
-            parse_http_response(&mut resp_buf[..], &mut rcv).await?;
+
+        // Parse address assignment response
+        let mut resp_buf = [0u8; MAX_CTRL_MESSAGE_SIZE];
+        let response = recv_response::<AddressAssignResponse>(&mut resp_buf[..], &mut rcv).await?;
 
         if response.assigned_addresses.is_empty() {
             return Err(ControlError::AddressAssignmentFailed(
                 AddrAssignError::NoAddressAssigned,
             ));
         }
+
         let assigned_addresses = response
             .assigned_addresses
             .iter()
@@ -196,9 +201,11 @@ impl Control {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+
         debug!(?assigned_addresses, "Got address assignment");
 
         self.state.write().expect("no fail").assigned_addresses = assigned_addresses;
+
         Ok(())
     }
 
@@ -344,8 +351,8 @@ pub async fn renew_session(
 
     let body = vec![];
     send_control_request(&mut snd, crate::PATH_SESSION_RENEWAL, &body, token).await?;
-    let mut resp_buf = [0u8; CTRL_RESPONSE_BUF_SIZE];
-    let response: SessionRenewalResponse = parse_http_response(&mut resp_buf[..], &mut rcv).await?;
+    let mut resp_buf = [0u8; MAX_CTRL_MESSAGE_SIZE];
+    let response: SessionRenewalResponse = recv_response(&mut resp_buf[..], &mut rcv).await?;
 
     Ok(system_time_from_unix_epoch_secs(response.valid_until))
 }
@@ -445,29 +452,62 @@ pub enum ParseResponseError {
     /// Protobuf decode error.
     #[error("parsing control message failed: {0}")]
     ParseError(#[from] prost::DecodeError),
+    /// Received a bad response.
+    #[error("received bad response: {0}")]
+    ResponseError(Cow<'static, str>),
 }
 
-async fn parse_http_response<M: prost::Message + Default>(
+async fn recv_response<M: prost::Message + Default>(
     buf: &mut [u8],
     rcv: &mut RecvStream,
 ) -> Result<M, ParseResponseError> {
-    let mut cursor = 0usize;
-    let mut body_offset = 0usize;
+    let mut cursor = 0;
+    let mut body_offset = 0;
+    let mut code = 0;
+
+    // Parse HTTP response headers.
     while let Some(n) = rcv.read(&mut buf[cursor..]).await? {
         cursor += n;
+
         let mut headers = [httparse::EMPTY_HEADER; 16];
         let mut resp = httparse::Response::new(&mut headers);
-        body_offset = match resp.parse(&buf[..cursor]) {
-            Ok(httparse::Status::Partial) => continue,
-            Ok(httparse::Status::Complete(n)) => n,
-            Err(e) => return Err(ParseResponseError::HTTParseError(e)),
+
+        match resp.parse(&buf[..cursor])? {
+            httparse::Status::Partial => {}
+            httparse::Status::Complete(n) => {
+                body_offset = n;
+                code = resp.code.unwrap_or(0);
+                break;
+            }
         };
+
+        // Only keep reading if we have enough space in buffer
+        if cursor >= buf.len() {
+            return Err(ParseResponseError::ResponseError(
+                "response too large".into(),
+            ));
+        }
     }
-    // we want to keep this method cancel-safe, so we use repeated reads.
+
+    // We only have a single message on the stream, so the rest we expect to be the body.
     while let Some(n) = rcv.read(&mut buf[cursor..]).await? {
         cursor += n;
+        if cursor >= buf.len() {
+            return Err(ParseResponseError::ResponseError(
+                "response too large".into(),
+            ));
+        }
     }
+
+    // If the response code is not 200, return an error with the response body as message.
+    if code != 200 {
+        let msg = String::from_utf8_lossy(&buf[body_offset..cursor]).to_string();
+        return Err(ParseResponseError::ResponseError(msg.into()));
+    }
+
+    // Otherwise, parse the body as protobuf message.
     let m = M::decode(&buf[body_offset..cursor])?;
+
     Ok(m)
 }
 

@@ -26,7 +26,6 @@ in
 
         # Libs
         zlib
-        libelf
         libbpf
         glibc
         openssl

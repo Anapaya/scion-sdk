@@ -112,9 +112,8 @@ pub const ACCEPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3
 /// Sending a control response to the client may take no longer than
 /// `SEND_TIMEOUT`.
 pub const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-/// All control requests issued by the client MUST NOT exceed
-/// `CTRL_REQUEST_BUF_SIZE` bytes.
-const CTRL_REQUEST_BUF_SIZE: usize = 4096;
+/// Maximum size of a control message, both request and response.
+const MAX_CTRL_MESSAGE_SIZE: usize = 4096;
 
 /// The snaptun server accepts connections from clients and provides them with an address
 /// assignment.
@@ -209,19 +208,17 @@ impl<T: SnapTunToken> Server<T> {
 
         let now = SystemTime::now();
         debug!(?now, request=?address_assign_request, "Process expected session renewal request");
+
         let (code, body) = state_machine.process_control_request(now, address_assign_request);
         let send_res = send_http_response(&mut snd, code, &body).await;
         if !code.is_success() {
-            conn.close(
-                SnaptunConnErrors::InvalidRequest.into(),
-                b"handling session renewal request",
-            );
+            conn.close(SnaptunConnErrors::InvalidRequest.into(), &body);
             return Err(AcceptError::UnexpectedControlRequest);
         }
         if let Err(e) = send_res {
             conn.close(
                 SnaptunConnErrors::InternalError.into(),
-                b"send control response error",
+                b"failed to send control response",
             );
             return Err(AcceptError::SendControlResponseError(e));
         }
@@ -240,16 +237,13 @@ impl<T: SnapTunToken> Server<T> {
         let (code, body) = state_machine.process_control_request(now, address_assign_request);
         let send_res = send_http_response(&mut snd, code, &body).await;
         if !code.is_success() {
-            conn.close(
-                SnaptunConnErrors::InvalidRequest.into(),
-                b"handling address assignment request",
-            );
+            conn.close(SnaptunConnErrors::InvalidRequest.into(), &body);
             return Err(AcceptError::UnexpectedControlRequest);
         }
         if let Err(e) = send_res {
             conn.close(
                 SnaptunConnErrors::InternalError.into(),
-                b"send control response error",
+                b"failed to send control response",
             );
             return Err(AcceptError::SendControlResponseError(e));
         }
@@ -283,8 +277,8 @@ async fn receive_expected_control_request(
         .accept_bi()
         .await
         .map_err(AcceptError::ConnectionError)?;
-    let mut buf = vec![0u8; CTRL_REQUEST_BUF_SIZE];
-    let req = match parse_http_request(&mut buf, &mut rcv).await {
+    let mut buf = vec![0u8; MAX_CTRL_MESSAGE_SIZE];
+    let req = match recv_request(&mut buf, &mut rcv).await {
         Ok(req) if expected(&req) => req,
         Ok(_) => {
             conn.close(
@@ -556,8 +550,8 @@ impl Control {
                             }
                         };
 
-                        let mut buf = vec![0u8; CTRL_REQUEST_BUF_SIZE];
-                        let control_request  = parse_http_request(&mut buf, &mut rcv).await.inspect_err(|err| {
+                        let mut buf = vec![0u8; MAX_CTRL_MESSAGE_SIZE];
+                        let control_request  = recv_request(&mut buf, &mut rcv).await.inspect_err(|err| {
                             handle_invalid_request(&conn, err);
                             tunnel_state.shutdown();
                         })?;
@@ -649,8 +643,9 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         control_request: ControlRequest,
     ) -> (http::StatusCode, Vec<u8>) {
         let mut inner_state = self.inner_state.write().expect("no fail");
+
         if let TunnelState::Closed = *inner_state {
-            return (http::StatusCode::BAD_REQUEST, vec![]);
+            return (http::StatusCode::BAD_REQUEST, "tunnel is closed".into());
         }
         match control_request {
             ControlRequest::AddressAssignment(token, address_assign_request) => {
@@ -673,8 +668,7 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         now: SystemTime,
         token: String,
     ) -> (http::StatusCode, Vec<u8>) {
-        let mut resp_body = vec![];
-        let resp_code = match self.validator.validate(now, &token) {
+        match self.validator.validate(now, &token) {
             Ok(claims) => {
                 let token_expiry = claims.exp_time();
 
@@ -684,23 +678,24 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                 let resp = SessionRenewalResponse {
                     valid_until: unix_epoch_from_system_time(token_expiry),
                 };
+
+                let mut resp_body = vec![];
                 resp.encode(&mut resp_body).expect("no fail");
-                StatusCode::OK
+                (StatusCode::OK, resp_body)
             }
             Err(TokenValidatorError::JwtSignatureInvalid()) => {
                 info!("Invalid signature");
-                StatusCode::UNAUTHORIZED
+                (StatusCode::UNAUTHORIZED, "Unauthorized".into())
             }
             Err(TokenValidatorError::JwtError(err)) => {
                 info!(?err, "Token validation failed");
-                StatusCode::BAD_REQUEST
+                (StatusCode::UNAUTHORIZED, "Unauthorized".into())
             }
             Err(TokenValidatorError::TokenExpired(err)) => {
                 info!(?err, "Token validation failed: token expired");
-                StatusCode::UNAUTHORIZED
+                (StatusCode::UNAUTHORIZED, "Unauthorized".into())
             }
-        };
-        (resp_code, resp_body)
+        }
     }
 
     /// Processes an address assignment request, updates the internal protocol
@@ -712,13 +707,15 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         token: String,
         addr_assignments: AddressAssignRequest,
     ) -> (http::StatusCode, Vec<u8>) {
-        let mut resp_body = vec![];
-        let resp_code = match self.validator.validate(now, &token) {
+        match self.validator.validate(now, &token) {
             Ok(claims) => {
                 if addr_assignments.requested_addresses.len() > 1 {
                     // We only implement single address assignments at the moment
                     warn!("Address assignment failed, multiple address assignments not supported");
-                    return (StatusCode::NOT_IMPLEMENTED, resp_body);
+                    return (
+                        StatusCode::NOT_IMPLEMENTED,
+                        "multiple address assignments are not supported".into(),
+                    );
                 }
 
                 let mut requests: Vec<(IsdAsn, IpNet)> = match addr_assignments
@@ -728,7 +725,13 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                     .collect::<Result<Vec<_>, AddrError>>()
                 {
                     Ok(reqs) => reqs,
-                    Err(_) => return (StatusCode::BAD_REQUEST, vec![]),
+                    Err(_) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            "a requested address assignment contained an invalid address range"
+                                .into(),
+                        );
+                    }
                 };
 
                 // We only implement single address assignments at the moment
@@ -737,7 +740,10 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                     .any(|(_, net)| net.prefix_len() != net.max_prefix_len())
                 {
                     warn!("Address assignment failed, prefix assignments are not supported");
-                    return (StatusCode::NOT_IMPLEMENTED, resp_body);
+                    return (
+                        StatusCode::NOT_IMPLEMENTED,
+                        "prefix assignments are not supported".into(),
+                    );
                 }
 
                 // If no addresses are requested, try allocating either a IPv4 or IPv6 address.
@@ -754,7 +760,10 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                             ?err,
                             "Failed to get session validity when processing address assignment request"
                         );
-                        return (StatusCode::INTERNAL_SERVER_ERROR, vec![]);
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "session state invalid".into(),
+                        );
                     }
                 };
 
@@ -781,7 +790,11 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                 // Only return an error if no addresses were assigned.
                 let Some(assigned_address) = assigned_address else {
                     warn!("Address assignment failed - no available addresses for: {requests:?}",);
-                    return (StatusCode::BAD_REQUEST, vec![]);
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        "either requested address is unavailable, or no addresses are available"
+                            .into(),
+                    );
                 };
 
                 self.locked_update_state(
@@ -796,23 +809,23 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                     assigned_addresses: vec![(&assigned_address.address).into()],
                 };
 
+                let mut resp_body = vec![];
                 resp.encode(&mut resp_body).expect("no fail");
-                StatusCode::OK
+                (StatusCode::OK, resp_body)
             }
             Err(TokenValidatorError::JwtSignatureInvalid()) => {
                 info!("Invalid JWT Signature");
-                StatusCode::UNAUTHORIZED
+                (StatusCode::UNAUTHORIZED, "unauthorized".into())
             }
             Err(TokenValidatorError::JwtError(err)) => {
                 info!(?err, "Token validation failed");
-                StatusCode::BAD_REQUEST
+                (StatusCode::UNAUTHORIZED, "unauthorized".into())
             }
             Err(TokenValidatorError::TokenExpired(err)) => {
                 info!(?err, "Token validation failed: token expired");
-                StatusCode::UNAUTHORIZED
+                (StatusCode::UNAUTHORIZED, "unauthorized".into())
             }
-        };
-        (resp_code, resp_body)
+        }
     }
 
     fn locked_update_tunnel_session(
@@ -1045,64 +1058,78 @@ pub enum ParseControlRequestError {
 // * The request MUST have a correct path.
 //
 // All other headers are ignored.
-async fn parse_http_request(
+async fn recv_request(
     buf: &mut [u8],
     rcv: &mut RecvStream,
 ) -> Result<ControlRequest, ParseControlRequestError> {
     use ParseControlRequestError::*;
     let mut cursor = 0;
+
+    // Keep reading into the buffer
     while let Some(n) = rcv.read(&mut buf[cursor..]).await? {
         cursor += n;
         let mut headers = [httparse::EMPTY_HEADER; 16];
         let mut req = httparse::Request::new(&mut headers);
-        if let Ok(httparse::Status::Complete(body_offset)) = req.parse(&buf[..cursor]) {
-            if !matches!(req.method, Some("POST")) {
-                return Err(InvalidRequest("invalid method".into()));
+
+        // Try to parse the request
+        let Ok(httparse::Status::Complete(body_offset)) = req.parse(&buf[..cursor]) else {
+            // Check if we can keep reading
+            if cursor >= buf.len() {
+                return Err(InvalidRequest("request too big".into()));
             }
-            // A first defensive check that the path is correct before we
-            // actually act on it. (1)
-            match req.path {
-                Some(PATH_ADDR_ASSIGNMENT) => {}
-                Some(PATH_SESSION_RENEWAL) => {}
-                Some(_) | None => return Err(InvalidRequest("invalid path".into())),
-            }
-            let Some(h) = req.headers.iter().find(|h| h.name == AUTH_HEADER) else {
-                return Err(Unauthenticated("no auth header".into()));
-            };
-            let t = h
-                .value
-                .strip_prefix(b"Bearer ")
-                .ok_or(Unauthenticated(
-                    "bearer not found in authorization header".into(),
-                ))
-                .map(|x| String::from_utf8_lossy(x).to_string())?;
-            // assert: req.path.is_some() and is valid, see (1)
-            let path = req.path.unwrap();
-            match path {
-                PATH_ADDR_ASSIGNMENT => {
-                    // We want to keep this method cancel-safe, therefore we are
-                    // _not_ using read_to_end().
-                    while let Some(n) = rcv.read(&mut buf[cursor..]).await? {
-                        cursor += n;
-                    }
-                    // parse address assignment request
-                    let Ok(addr_req) = AddressAssignRequest::decode(&buf[body_offset..cursor])
-                    else {
-                        return Err(InvalidRequest(
-                            "error when parsing address assignment request".into(),
-                        ));
-                    };
-                    return Ok(ControlRequest::AddressAssignment(t, addr_req));
-                }
-                PATH_SESSION_RENEWAL => return Ok(ControlRequest::SessionRenewal(t)),
-                path => unreachable!("invalid path: {path}"),
-            }
+            continue;
+        };
+
+        // Parsed full request
+        if !matches!(req.method, Some("POST")) {
+            return Err(InvalidRequest("invalid method".into()));
         }
-        // Reached size of buffer w/o success in parsing.
-        if cursor == buf.len() {
-            return Err(InvalidRequest("request too big".into()));
+
+        // A first defensive check that the path is correct before we
+        // actually act on it. (1)
+        match req.path {
+            Some(PATH_ADDR_ASSIGNMENT) => {}
+            Some(PATH_SESSION_RENEWAL) => {}
+            Some(_) | None => return Err(InvalidRequest("invalid path".into())),
+        }
+
+        // Expect auth header
+        let Some(auth_header) = req.headers.iter().find(|h| h.name == AUTH_HEADER) else {
+            return Err(Unauthenticated("no auth header".into()));
+        };
+        let bearer_token = auth_header
+            .value
+            .strip_prefix(b"Bearer ")
+            .ok_or(Unauthenticated(
+                "bearer not found in authorization header".into(),
+            ))
+            .map(|x| String::from_utf8_lossy(x).to_string())?;
+
+        // assert: req.path.is_some() and is valid, see (1)
+        let path = req.path.unwrap();
+        match path {
+            PATH_ADDR_ASSIGNMENT => {
+                // Read rest of the stream, we expect a body
+                while let Some(n) = rcv.read(&mut buf[cursor..]).await? {
+                    cursor += n;
+                    if cursor >= buf.len() {
+                        return Err(InvalidRequest("request too big".into()));
+                    }
+                }
+
+                // parse address assignment request
+                let Ok(addr_req) = AddressAssignRequest::decode(&buf[body_offset..cursor]) else {
+                    return Err(InvalidRequest(
+                        "error when parsing address assignment request".into(),
+                    ));
+                };
+                return Ok(ControlRequest::AddressAssignment(bearer_token, addr_req));
+            }
+            PATH_SESSION_RENEWAL => return Ok(ControlRequest::SessionRenewal(bearer_token)),
+            path => unreachable!("invalid path: {path}"),
         }
     }
+
     Err(ClosedPrematurely)
 }
 
