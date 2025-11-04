@@ -27,6 +27,7 @@ jobs:
     defaults:
       run:
         shell: bash
+    timeout-minutes: 45
     steps:
       - name: Disable autocrlf on Windows
         if: runner.os == 'Windows'
@@ -35,13 +36,13 @@ jobs:
         working-directory: .
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Remove unused tools to free up disk space
-        if: runner.os == 'Linux'
+      - if: runner.os == 'Linux'
+        name: Remove unused tools to free up disk space
         run: sudo rm -rf /usr/lib/jvm /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /usr/local/julia* /usr/local/share/chromium /opt/microsoft /opt/google /usr/local/share/powershell
       - name: Disk space check
         run: df -h
-      - name: Remove unused tools to free up disk space
-        if: runner.os == 'Windows'
+      - if: runner.os == 'Windows'
+        name: Remove unused tools to free up disk space
         run: rm -rf C:/Android/android-sdk
       - name: Cache protoc
         id: cache-protoc
@@ -71,9 +72,9 @@ jobs:
       - name: Set PROTOC env var on Windows
         if: runner.os == 'Windows'
         run: echo "PROTOC=${HOME}/.protoc/bin/protoc.exe" >> $GITHUB_ENV
-      - if: runner.os == 'Linux'
-        name: Cache cargo dependencies
+      - name: Cache cargo dependencies
         uses: actions/cache@v4
+        if: runner.os == 'Linux'
         with:
           path: |-
             ~/.rustup
@@ -84,9 +85,9 @@ jobs:
             ${{ runner.os }}-cargo-shear-1.3.2
             ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
             ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
-      - if: runner.os == 'Windows'
-        name: Cache cargo dependencies on Windows
+      - name: Cache cargo dependencies on Windows
         uses: actions/cache@v4
+        if: runner.os == 'Windows'
         with:
           path: C:\\rust_cache.vhdx
           key: ${{ runner.os }}-50GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
@@ -96,8 +97,8 @@ jobs:
             ${{ runner.os }}-50GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
             ${{ runner.os }}-50GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
       - name: Setup dev drive on Windows
-        if: runner.os == 'Windows'
         uses: samypr100/setup-dev-drive@v3
+        if: runner.os == 'Windows'
         with:
           drive-path: C:\\rust_cache.vhdx
           drive-size: 50GB
@@ -109,22 +110,22 @@ jobs:
             RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
             CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
       - name: Check generated protobuf files are up to date
-        if: runner.os == 'Linux'
         run: cargo run -p proto-gen -- check
+        if: runner.os == 'Linux'
       - name: Install rustfmt
-        if: runner.os == 'Linux'
         run: rustup toolchain install ${NIGHTLY_VERSION} --component rustfmt
+        if: runner.os == 'Linux'
       - name: Check formatting
-        if: runner.os == 'Linux'
         run: cargo +${NIGHTLY_VERSION} fmt --all -- --check
-      - name: Run clippy
         if: runner.os == 'Linux'
+      - name: Run clippy
         run: cargo clippy_ci
+        if: runner.os == 'Linux'
       - name: Run tests
         run: RUST_BACKTRACE=1 cargo test_ci
       - name: Check documentation
-        if: runner.os == 'Linux'
         run: RUSTDOCFLAGS="-D warnings" cargo doc_ci
-      - name: Unused dependencies
         if: runner.os == 'Linux'
+      - name: Unused dependencies
         run: cargo install --version 1.3.2 cargo-shear && cargo shear
+        if: runner.os == 'Linux'
