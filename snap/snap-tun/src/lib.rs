@@ -13,6 +13,7 @@
 // limitations under the License.
 //! SNAP tunnel library.
 
+pub mod cert_validator;
 pub mod client;
 pub mod metrics;
 pub mod requests;

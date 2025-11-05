@@ -28,8 +28,12 @@ snap-tokens = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+x509-cert = { workspace = true }
 
 [dev-dependencies]
+ed25519-dalek = { workspace = true }
+pem = { workspace = true }
+rcgen = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 
 [lints]

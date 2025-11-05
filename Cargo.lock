@@ -3300,12 +3300,15 @@ dependencies = [
  "assert_matches",
  "bytes",
  "chrono",
+ "ed25519-dalek",
  "http",
  "httparse",
  "ipnet",
+ "pem",
  "prometheus",
  "prost",
  "quinn",
+ "rcgen",
  "scion-proto",
  "scion-sdk-observability",
  "scion-sdk-token-validator",
@@ -3316,6 +3319,7 @@ dependencies = [
  "thiserror 2.0.16",
  "tokio",
  "tracing",
+ "x509-cert",
 ]
 
 [[package]]
