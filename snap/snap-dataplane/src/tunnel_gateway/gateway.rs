@@ -155,7 +155,7 @@ where
                         tracing::debug!("Session control stream closed gracefully");
                     }
                     Err(e) => {
-                        tracing::error!(error=%e, "Session control stream closed with error");
+                        tracing::warn!(error=%e, "Session control stream closed with error");
                     }
                 }
             }

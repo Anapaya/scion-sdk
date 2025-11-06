@@ -16,7 +16,6 @@
 use std::{collections::BTreeMap, fmt};
 
 use anyhow::Context as _;
-use scion_proto::address::IsdAsn;
 use scion_sdk_address_manager::manager::AddressManager;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,8 +25,8 @@ use crate::dto::DataPlaneStateDto;
 /// The SNAP data plane state.
 #[derive(Debug, Default, PartialEq, Clone)]
 pub struct DataPlaneState {
-    /// The address registries (per ISD AS).
-    pub address_registries: BTreeMap<IsdAsn, AddressManager>,
+    /// The address registries (per registry id).
+    pub address_registries: BTreeMap<u64, AddressManager>,
 }
 
 impl From<&DataPlaneState> for DataPlaneStateDto {
@@ -49,11 +48,11 @@ impl TryFrom<DataPlaneStateDto> for DataPlaneState {
         let registries = state
             .address_registries
             .into_iter()
-            .map(|mngr| {
-                let addr_mngr: AddressManager = mngr
+            .map(|mgr_dto| {
+                let mgr: AddressManager = mgr_dto
                     .try_into()
                     .context("Failed to convert manager to AddressManager")?;
-                Ok((addr_mngr.isd_asn(), addr_mngr))
+                Ok((mgr.id(), mgr))
             })
             .collect::<Result<BTreeMap<_, _>, Self::Error>>()?;
 

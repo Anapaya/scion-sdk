@@ -23,6 +23,7 @@ use scion_proto::address::{EndhostAddr, IsdAsn};
 use scion_sdk_address_manager::manager::AddressManager;
 use scion_sdk_token_validator::validator::Token;
 use snap_tokens::session_token::SessionTokenClaims;
+use snap_tun::{AddressAllocation, AddressAllocationId};
 
 use crate::state::{AllocationError, SharedPocketScionState, SnapDataPlaneId, SystemState};
 
@@ -40,7 +41,7 @@ impl StateSnapAddressAllocator {
         }
     }
 
-    fn mut_registry<'a>(
+    fn mut_registry_by_isd_as<'a>(
         &self,
         state_guard: &'a mut RwLockWriteGuard<'_, SystemState>,
         isd_as: IsdAsn,
@@ -62,35 +63,64 @@ impl StateSnapAddressAllocator {
         Ok(reg)
     }
 
+    fn mut_registry_by_id<'a>(
+        &self,
+        state_guard: &'a mut RwLockWriteGuard<'_, SystemState>,
+        registry_id: u64,
+    ) -> Result<&'a mut AddressManager, AllocationError> {
+        let reg = state_guard
+            .snaps
+            .get_mut(&self.snap_data_plane_id.snap())
+            .expect("SNAP not found")
+            .data_planes
+            .get_mut(&self.snap_data_plane_id.data_plane())
+            .expect("SNAP data plane not found");
+
+        let reg = reg
+            .address_registries
+            .values_mut()
+            .find(|registry| registry.id() == registry_id)
+            .ok_or(AllocationError::NoAddressManagerForId(registry_id))?;
+
+        Ok(reg)
+    }
+
     fn allocate_internal(
         &self,
         isd_as: IsdAsn,
         prefix: IpNet,
         id: String,
-    ) -> Result<EndhostAddr, AllocationError> {
+    ) -> Result<AddressAllocation, AllocationError> {
         if prefix.prefix_len() != prefix.max_prefix_len() {
             return Err(AllocationError::PrefixAllocationNotSupported(prefix));
         }
 
         let mut state_guard = self.state.system_state.write().unwrap();
 
-        let registry = self.mut_registry(&mut state_guard, isd_as)?;
+        let registry = self.mut_registry_by_isd_as(&mut state_guard, isd_as)?;
 
-        let grant = registry.register(id, isd_as, prefix.addr())?;
+        let grant = registry.register(id.clone(), isd_as, prefix.addr())?;
 
-        Ok(EndhostAddr::new(grant.isd_as, grant.prefix.addr()))
+        Ok(AddressAllocation {
+            id: AddressAllocationId {
+                registry_id: registry.id(),
+                alloc_id: id,
+            },
+            address: EndhostAddr::new(grant.isd_as, grant.prefix.addr()),
+        })
     }
 
     fn hold_internal(&self, id: snap_tun::AddressAllocationId) -> bool {
         let mut state_guard = self.state.system_state.write().unwrap();
         let start_time: SystemTime = state_guard.start_time;
 
-        let Ok(registry) = self.mut_registry(&mut state_guard, id.isd_as) else {
+        let Ok(registry) = self.mut_registry_by_id(&mut state_guard, id.registry_id) else {
+            tracing::warn!(id= ?id, "Address allocation contained invalid registry id");
             return false;
         };
 
         registry.put_on_hold(
-            id.id,
+            id.alloc_id,
             SystemTime::now()
                 .duration_since(start_time)
                 .expect("system time went backwards"),
@@ -100,11 +130,12 @@ impl StateSnapAddressAllocator {
     fn deallocate_internal(&self, id: snap_tun::AddressAllocationId) -> bool {
         let mut state_guard = self.state.system_state.write().unwrap();
 
-        let Ok(registry) = self.mut_registry(&mut state_guard, id.isd_as) else {
+        let Ok(registry) = self.mut_registry_by_id(&mut state_guard, id.registry_id) else {
+            tracing::warn!(id= ?id, "Address allocation contained invalid registry id");
             return false;
         };
 
-        registry.free(&id.id)
+        registry.free(&id.alloc_id)
     }
 }
 
@@ -119,15 +150,7 @@ impl snap_tun::AddressAllocator<SessionTokenClaims> for StateSnapAddressAllocato
             return Err(snap_tun::AddressAllocationError::AddressAllocationRejected);
         }
 
-        let grant = self.allocate_internal(isd_as, prefix, claims.id())?;
-
-        Ok(snap_tun::AddressAllocation {
-            id: snap_tun::AddressAllocationId {
-                isd_as,
-                id: claims.id(),
-            },
-            address: grant,
-        })
+        Ok(self.allocate_internal(isd_as, prefix, claims.id())?)
     }
 
     fn put_on_hold(&self, id: snap_tun::AddressAllocationId) -> bool {

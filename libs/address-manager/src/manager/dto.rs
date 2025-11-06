@@ -29,6 +29,8 @@ use crate::{
 /// The data plane address registry.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct AddressManagerDto {
+    /// The id of the address registry.
+    pub id: u64,
     /// The ISD-AS of the data plane.
     pub isd_as: IsdAsn,
     /// The duration for which an address is held.
@@ -46,6 +48,7 @@ pub struct AddressManagerDto {
 impl From<&AddressManager> for AddressManagerDto {
     fn from(state: &AddressManager) -> Self {
         AddressManagerDto {
+            id: state.id,
             isd_as: state.isd_as,
             hold_duration: state.hold_duration,
             address_grants: state.address_grants.values().map(|ag| ag.into()).collect(),
@@ -74,6 +77,7 @@ impl TryFrom<AddressManagerDto> for AddressManager {
         let free_ips = AddressAllocator::try_from(value.free_ips)?;
 
         Ok(Self {
+            id: value.id,
             isd_as: value.isd_as,
             hold_duration: value.hold_duration,
             address_grants,

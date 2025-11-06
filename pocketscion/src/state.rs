@@ -251,10 +251,9 @@ impl SharedPocketScionState {
         let dp_id = DataPlaneId::from_usize(snap.data_planes.len());
         let snap_dp_id = SnapDataPlaneId::new(snap_id, dp_id);
 
+        let mgr = AddressManager::new(isd_as, prefixes, rng).unwrap();
         let mut dp_state = DataPlaneState::default();
-        dp_state
-            .address_registries
-            .insert(isd_as, AddressManager::new(isd_as, prefixes, rng).unwrap());
+        dp_state.address_registries.insert(mgr.id(), mgr);
 
         snap.data_planes.insert(dp_id, dp_state);
 
@@ -689,6 +688,8 @@ enum AllocationError {
     PrefixAllocationNotSupported(IpNet),
     #[error("no address manager for ISD-AS: {0}")]
     NoAddressManagerForIsdAs(IsdAsn),
+    #[error("no address manager for id: {0}")]
+    NoAddressManagerForId(u64),
 }
 
 impl From<AllocationError> for snap_tun::AddressAllocationError {
@@ -736,7 +737,12 @@ impl DataPlaneDiscovery for SnapDataPlaneDiscoveryHandle {
         snap.data_planes
             .iter()
             .filter_map(|(dp_id, dp_state)| {
-                let isd_ases: Vec<IsdAsn> = dp_state.address_registries.keys().cloned().collect();
+                let isd_ases: Vec<IsdAsn> = dp_state
+                    .address_registries
+                    .values()
+                    .map(|ar| ar.isd_asn())
+                    .collect();
+
                 self.io_config
                     .snap_data_plane_addr(SnapDataPlaneId::new(self.snap_id, *dp_id))
                     .map(|address| SnapDataPlane { address, isd_ases })

@@ -168,6 +168,7 @@ components:
       type: object
       description: The data plane address registry.
       required:
+      - id
       - isd_as
       - hold_duration
       - address_grants
@@ -186,6 +187,11 @@ components:
         hold_duration:
           type: string
           description: The duration for which an address is held.
+        id:
+          type: integer
+          format: int64
+          description: The id of the address registry.
+          minimum: 0
         isd_as:
           $ref: '#/components/schemas/IsdAsn'
           description: The ISD-AS of the data plane.

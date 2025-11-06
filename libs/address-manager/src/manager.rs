@@ -15,6 +15,7 @@
 
 use std::{
     collections::BTreeMap,
+    hash::{DefaultHasher, Hash, Hasher},
     net::IpAddr,
     time::{self, Duration},
 };
@@ -71,6 +72,8 @@ struct AddressGrantEntry {
 /// Simple single ISD-AS address registry.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AddressManager {
+    /// Hash of isd_as and prefixes to identify the registry
+    id: u64,
     isd_as: IsdAsn,
     hold_duration: time::Duration,
     /// Map between ID and Grant
@@ -88,7 +91,15 @@ impl AddressManager {
         rng: ChaCha8Rng,
     ) -> Result<Self, AllocatorCreationError> {
         let free_ips = AddressAllocator::new(prefixes.clone(), rng)?;
+        let id = {
+            let mut hasher = DefaultHasher::new();
+            isd_as.hash(&mut hasher);
+            prefixes.hash(&mut hasher);
+            hasher.finish()
+        };
+
         Ok(Self {
+            id,
             isd_as,
             hold_duration: DEFAULT_HOLD_DURATION,
             address_grants: Default::default(),
@@ -96,6 +107,11 @@ impl AddressManager {
             free_ips,
             prefixes,
         })
+    }
+
+    /// Get the unique identifier of this address registry
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Set the hold duration for address grants.
@@ -564,5 +580,32 @@ mod tests {
         let (before, after) = registry.clean_expired(registry.hold_duration);
         assert_eq!(before, 1);
         assert_eq!(after, 1);
+    }
+
+    #[test]
+    fn should_remove_on_hold_on_reallocation() {
+        let mut registry = get_registry();
+
+        let initial = "192.168.0.0".parse().unwrap();
+        // Register initial address
+        let grant = registry
+            .register(id(), IsdAsn::WILDCARD, initial)
+            .expect("Should succeed");
+
+        // Put on hold
+        assert!(registry.put_on_hold(grant.id.clone(), duration(0)));
+
+        // Re-register the same address
+        let regrant = registry
+            .register(id(), IsdAsn::WILDCARD, initial)
+            .expect("Should succeed");
+
+        // Assert that the re-granted address is the same as the original
+        assert!(regrant.prefix == grant.prefix);
+
+        // Assert that the original grant is no longer on hold
+        let entry = registry.address_grants.get(&grant.id);
+        assert!(entry.is_some());
+        assert!(entry.unwrap().on_hold_expiry.is_none());
     }
 }

@@ -42,10 +42,10 @@ pub const IPV6_WILDCARD: IpNet = IpNet::V6(Ipv6Net::new_assert(Ipv6Addr::UNSPECI
 /// Address allocation identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AddressAllocationId {
-    /// ISD-AS.
-    pub isd_as: IsdAsn,
-    /// Unique identifier.
-    pub id: String,
+    /// Registry identifier.
+    pub registry_id: u64,
+    /// Unique identifier for the allocation.
+    pub alloc_id: String,
 }
 
 /// Address allocation.

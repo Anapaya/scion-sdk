@@ -289,8 +289,8 @@ impl AddressAllocator<DummyToken> for EchoingAllocator {
     ) -> Result<AddressAllocation, AddressAllocationError> {
         Ok(AddressAllocation {
             id: AddressAllocationId {
-                isd_as,
-                id: claims.id(),
+                registry_id: 0,
+                alloc_id: claims.id(),
             },
             address: EndhostAddr::new(isd_as, prefix.addr()),
         })
