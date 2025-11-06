@@ -7,8 +7,9 @@ publish = false
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 prost-build = { workspace = true }
+
 tempfile = { workspace = true }
-tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
 walkdir = { workspace = true }
 
 [lints]

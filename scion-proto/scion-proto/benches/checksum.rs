@@ -25,7 +25,7 @@ fn reference_checksum(data: &[u8]) -> u16 {
     let mut cumsum = 0u32;
     let mut i = 0usize;
 
-    let (data, leftover) = if data.len() % 2 == 0 {
+    let (data, leftover) = if data.len().is_multiple_of(2) {
         (data, 0u8)
     } else {
         (&data[..data.len() - 1], data[data.len() - 1])

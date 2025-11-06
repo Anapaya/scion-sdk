@@ -129,7 +129,7 @@ where
     /// Returns the segment at the specified index, if any.
     ///
     /// There are always at most 3 segments.
-    pub fn segment(&self, segment_index: usize) -> Option<EncodedSegment> {
+    pub fn segment(&self, segment_index: usize) -> Option<EncodedSegment<'_>> {
         let info_field = self.info_field(segment_index)?;
 
         // Get the index of the first hop field in the segment.
@@ -148,7 +148,7 @@ where
     }
 
     /// Returns an iterator over the segments of this path.
-    pub fn segments(&self) -> EncodedSegments {
+    pub fn segments(&self) -> EncodedSegments<'_> {
         EncodedSegments::new([self.segment(0), self.segment(1), self.segment(2)])
     }
 
@@ -162,7 +162,7 @@ where
             .expect("at least 1 segment")
     }
 
-    fn hop_fields_subset(&self, hop_index: usize, n_hop_fields: usize) -> HopFields {
+    fn hop_fields_subset(&self, hop_index: usize, n_hop_fields: usize) -> HopFields<'_> {
         let start = self.meta_header.hop_field_offset(hop_index);
         let stop = start + n_hop_fields * EncodedHopField::LENGTH;
 
@@ -170,7 +170,7 @@ where
     }
 
     /// Returns an iterator over all the [`EncodedInfoField`]s in the SCION path.
-    pub fn info_fields(&self) -> InfoFields {
+    pub fn info_fields(&self) -> InfoFields<'_> {
         let start = MetaHeader::info_field_offset(0);
         let stop = start + self.meta_header.info_fields_count() * EncodedInfoField::LENGTH;
 
@@ -178,7 +178,7 @@ where
     }
 
     /// Returns an iterator over all of the [`EncodedHopField`]s in the SCION path.
-    pub fn hop_fields(&self) -> HopFields {
+    pub fn hop_fields(&self) -> HopFields<'_> {
         self.hop_fields_subset(0, self.meta_header.hop_fields_count())
     }
 

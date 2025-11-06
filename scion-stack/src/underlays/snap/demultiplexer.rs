@@ -30,15 +30,6 @@ use tokio::{
 
 use crate::{scionstack::ScmpHandler, snap_tunnel::SnapTunnel};
 
-#[derive(Debug, thiserror::Error)]
-pub enum DemultiplexerError {
-    #[expect(unused)]
-    #[error("port already in use")]
-    PortAlreadyInUse,
-    #[error("tunnel error: {0}")]
-    TunnelError(#[from] crate::snap_tunnel::SnapTunnelError),
-}
-
 /// Handle to [DemultiplexerHost] allowing registration of new sockets
 pub struct DemultiplexerHandle {
     handle: Weak<DemultiplexerState>,

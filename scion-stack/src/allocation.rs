@@ -233,10 +233,8 @@ impl SingleAddrPortAllocator {
     fn clean_reserved(&mut self, now: Instant) {
         self.reserved.retain(|port, reserved_until| {
             let is_expired = *reserved_until < now;
-            if is_expired {
-                if let Err(e) = self.free.insert(*port) {
-                    panic!("Port already in use, this should never happen: {e}");
-                }
+            if is_expired && let Err(e) = self.free.insert(*port) {
+                panic!("Port already in use, this should never happen: {e}");
             }
             !is_expired
         });

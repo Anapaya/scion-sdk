@@ -192,16 +192,15 @@ impl AddressManager {
         };
 
         // Insert/Overwrite existing entry
-        if let Some(removed) = self.address_grants.insert(id, grant.clone()) {
-            if removed.endhost_address != endhost_address {
-                if let Err(e) = self.free_ips.free(removed.endhost_address.local_address()) {
-                    tracing::error!(
-                        error = %e,
-                        "Allocator did not contain IP from removed entry - this should not happen"
-                    )
-                };
-            };
-        }
+        if let Some(removed) = self.address_grants.insert(id, grant.clone())
+            && removed.endhost_address != endhost_address
+            && let Err(e) = self.free_ips.free(removed.endhost_address.local_address())
+        {
+            tracing::error!(
+                error = %e,
+                "Allocator did not contain IP from removed entry - this should not happen"
+            )
+        };
 
         Ok(AddressGrant {
             id: grant.id,

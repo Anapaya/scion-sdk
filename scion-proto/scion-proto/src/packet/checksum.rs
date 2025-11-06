@@ -151,7 +151,7 @@ impl ChecksumDigest {
         let ptr: *const u8 = data.as_ptr();
 
         // Converting to a `&[u16]` requires an even number of elements in the slice.
-        if data.len() % 2 != 0 {
+        if !data.len().is_multiple_of(2) {
             // We want to zero pad the value, i.e., for slice where we pair the elements,
             // we have [A, B], [C, D], ... [X, 0]. Since all the values are currently in
             // memory in the order [A, B] storing [0, X] on a little endian architecture
@@ -226,7 +226,7 @@ mod tests {
         let mut cumsum = 0u32;
         let mut i = 0usize;
 
-        let (data, leftover) = if data.len() % 2 == 0 {
+        let (data, leftover) = if data.len().is_multiple_of(2) {
             (data, 0u8)
         } else {
             (&data[..data.len() - 1], data[data.len() - 1])

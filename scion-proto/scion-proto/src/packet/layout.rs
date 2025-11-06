@@ -283,7 +283,7 @@ impl PathMetaHeaderLayout {
     /// Returns the count of info fields in the path meta header.
     fn info_field_count(base_offset: u16, encoded_packet: &[u8]) -> u8 {
         debug_assert!(
-            base_offset % 8 == 0,
+            base_offset.is_multiple_of(8),
             "Path meta header base offset must be a multiple of 8 bits but got {base_offset}"
         );
 

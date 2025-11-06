@@ -105,7 +105,7 @@ impl ScionPacketScmp {
         ) else {
             return Err(ScmpEncodeError::ParameterOutOfRange);
         };
-        if interface_index % 2 == 0 {
+        if interface_index.is_multiple_of(2) {
             hop_field.set_cons_egress_router_alert(true);
         } else {
             hop_field.set_cons_ingress_router_alert(true);

@@ -352,7 +352,7 @@ where
     }
 
     /// Finds and returns all possible valid paths from src to dst.
-    pub fn get_paths(&self, src: IsdAsn, dst: IsdAsn) -> Vec<PathSolution> {
+    pub fn get_paths(&self, src: IsdAsn, dst: IsdAsn) -> Vec<PathSolution<'_>> {
         let mut solutions = Vec::new();
         let mut queue = VecDeque::from([PathSolution::new(Vertex::AS(src))]);
         while let Some(current_solution) = queue.pop_front() {

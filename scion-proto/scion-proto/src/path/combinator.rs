@@ -111,12 +111,11 @@ fn filter_duplicates(paths: Vec<Path>) -> Vec<Path> {
     let mut unique_paths: HashMap<PathFingerprint, usize> = HashMap::new();
     for (i, path) in paths.iter().enumerate() {
         let fingerprint = path.fingerprint().unwrap();
-        if let Some(prev) = unique_paths.get(&fingerprint) {
-            if paths[*prev].metadata.as_ref().unwrap().expiration
+        if let Some(prev) = unique_paths.get(&fingerprint)
+            && paths[*prev].metadata.as_ref().unwrap().expiration
                 > path.metadata.as_ref().unwrap().expiration
-            {
-                continue;
-            }
+        {
+            continue;
         }
         unique_paths.insert(fingerprint, i);
     }

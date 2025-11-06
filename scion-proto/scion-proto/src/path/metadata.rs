@@ -166,7 +166,7 @@ impl TryFrom<daemon_grpc::Path> for Metadata {
         // We check that the metadata is itself consistent, including the lengths of various
         // metadata vectors. We *do not* check if it is consistent with the raw data plane path.
         let count_interfaces = grpc_path.interfaces.len();
-        if count_interfaces == 0 || count_interfaces % 2 != 0 {
+        if count_interfaces == 0 || !count_interfaces.is_multiple_of(2) {
             return Err(PathParseErrorKind::InvalidNumberOfInterfaces.into());
         }
         let expected_count_ases = count_interfaces / 2 + 1;

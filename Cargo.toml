@@ -17,108 +17,109 @@ edition = "2024"
 
 [workspace.dependencies]
 # Local Crates
-endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.2.0" }
-endhost-api = { path = "endhost-api/endhost-api", version = "0.2.0" }
-endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.2.0" }
-endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.2.0" }
+endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.2" }
+endhost-api = { path = "endhost-api/endhost-api", version = "0.2" }
+endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.2" }
+endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.2" }
 
-scion-sdk-address-manager = { path = "libs/address-manager", version = "0.2.0" }
-scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.2.0" }
-scion-sdk-common-types = { path = "libs/common-types", version = "0.2.0" }
-scion-sdk-observability = { path = "libs/observability", version = "0.2.0" }
-scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.2.0" }
-scion-sdk-token-validator = { path = "libs/token-validator", version = "0.2.0" }
-scion-sdk-utils = { path = "libs/utils", version = "0.2.0" }
+scion-sdk-address-manager = { path = "libs/address-manager", version = "0.2" }
+scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.2" }
+scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
+scion-sdk-observability = { path = "libs/observability", version = "0.2" }
+scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.2" }
+scion-sdk-token-validator = { path = "libs/token-validator", version = "0.2" }
+scion-sdk-utils = { path = "libs/utils", version = "0.2" }
 
 
-pocketscion = { path = "pocketscion", version = "0.2.0" }
+pocketscion = { path = "pocketscion", version = "0.2" }
 
-scion-proto = { path = "scion-proto/scion-proto", version = "0.2.0" }
-scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.2.0" }
+scion-proto = { path = "scion-proto/scion-proto", version = "0.2" }
+scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.2" }
 
-snap-control = { path = "snap/snap-control", version = "0.2.0" }
-snap-dataplane = { path = "snap/snap-dataplane", version = "0.2.0" }
-snap-tun = { path = "snap/snap-tun", version = "0.2.0" }
-snap-tokens = { path = "snap/snap-tokens", version = "0.2.0" }
+snap-control = { path = "snap/snap-control", version = "0.2" }
+snap-dataplane = { path = "snap/snap-dataplane", version = "0.2" }
+snap-tun = { path = "snap/snap-tun", version = "0.2" }
+snap-tokens = { path = "snap/snap-tokens", version = "0.2" }
 
-scion-stack = { path = "scion-stack", version = "0.2.0" }
+scion-stack = { path = "scion-stack", version = "0.2" }
 
 # General Dependencies
-aes = "0.8.4"
+aes = "0.8"
 anyhow = { version = "1" }
-arc-swap = "1.7.1"
-assert_matches = "1.5.0"
-async-trait = "0.1.89"
-axum = { version = "0.8.4", features = ["http2"] }
+arc-swap = "1.7"
+assert_matches = "1.5"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["http2"] }
 axum-macros = "0.5"
-bytes = "1.10.1"
-chrono = { version = "0.4.41", features = ["serde"] }
-clap = "4.5.38"
-cmac = "0.7.2"
-cms = "0.2.3"
-criterion = "0.5.1"
-derive_more = { version = "2.0.1", features = ["display", "deref"] }
-der = { version = "0.7.10", features = ["pem", "derive"] }
-ed25519-dalek = { version = "2.1.1", features = ["pkcs8", "pem"] }
-foldhash = "0.1.5"
-futures = "0.3.31"
-hex = "0.4.3"
-http = "1.3.1"
-httparse = "1.10.1"
-ipnet = "2.11.0"
-jsonwebtoken = "9.3.1"
-mockall = "0.13.1"
-num-traits = "0.2.19"
-ntest = "0.9.3"
-pem = "3.0.5"
+bytes = "1.10"
+chrono = { version = "0.4", features = ["serde"] }
+clap = "4.5"
+cmac = "0.7"
+cms = "0.2"
+criterion = "0.7"
+derive_more = { version = "2.0", features = ["display", "deref"] }
+der = { version = "0.7", features = ["pem", "derive"] }
+ed25519-dalek = { version = "2.1", features = ["pkcs8", "pem"] }
+foldhash = "0.2"
+futures = "0.3"
+hex = "0.4"
+http = "1.3"
+httparse = "1.10"
+ipnet = "2.11"
+jsonwebtoken = "9.3"
+mockall = "0.13"
+num-traits = "0.2"
+ntest = "0.9"
+pem = "3.0"
 pin-project-lite = "0.2"
-prometheus = { version = "0.14.0", features = ["process"] }
-prost = "0.13"
-prost-build = "0.13.5"
-prost-types = "0.13.5"
-quinn = "0.11.8"
-rand = "0.9.1"
-rand_chacha = { version = "0.9.0", features = ["serde"] }
-rand_xorshift = "0.4.0"
-rcgen = "0.13.2"
-reqwest = { version = "0.12.15", features = [
+prometheus = { version = "0.14", features = ["process"] }
+prost = "0.14"
+prost-build = "0.14"
+prost-types = "0.14"
+quinn = "0.11"
+rand = "0.9"
+rand_chacha = { version = "0.9", features = ["serde"] }
+rand_xorshift = "0.4"
+rcgen = "0.14"
+reqwest = { version = "0.12", features = [
     "charset",
     "http2",
     "json",
     "rustls-tls",
     "rustls-tls-native-roots",
 ], default-features = false }
-rustls = { version = "0.23.27", features = [
+rustls = { version = "0.23", features = [
     "ring",
     "std",
     "brotli",
 ], default-features = false }
 scc = "3.2"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-serde_with = "3.14.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_with = "3.14"
 serde_yaml_ng = "0.10"
-sha2 = "0.10.9"
-tempfile = "3.23.0"
-test-log = { version = "0.2.17", features = ["trace"] }
-thiserror = "2.0.12"
-tokio = { version = "1.45.1", features = ["full"] }
-tokio-util = "0.7.15"
-tonic = "0.12"
-tonic-build = "0.12"
-tower = { version = "0.5.2", features = ["limit", "load-shed", "timeout"] }
-tower-http = { version = "0.6.4", features = ["trace"] }
-tracing = "0.1.41"
-tracing-appender = "0.2.3"
-tracing-bunyan-formatter = "0.3.10"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json", "time"] }
-url = { version = "2.5.4", features = ["serde"] }
-utoipa = { version = "5.3.1", features = ["chrono", "url", "uuid"] }
-utoipa-axum = "0.2.0"
-utoipa-redoc = { version = "6.0.0", features = ["axum"] }
-uuid = "1.16.0"
-walkdir = "2.5.0"
-x509-cert = "0.2.5"
+sha2 = "0.10"
+tempfile = "3.23"
+test-log = { version = "0.2", features = ["trace"] }
+thiserror = "2.0"
+tokio = { version = "1.45", features = ["full"] }
+tokio-util = "0.7"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tower = { version = "0.5", features = ["limit", "load-shed", "timeout"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-bunyan-formatter = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
+url = { version = "2.5", features = ["serde"] }
+utoipa = { version = "5.3", features = ["chrono", "url", "uuid"] }
+utoipa-axum = "0.2"
+utoipa-redoc = { version = "6.0", features = ["axum"] }
+uuid = "1.16"
+walkdir = "2.5"
+x509-cert = "0.2"
 
 
 [workspace.lints.clippy]
@@ -128,7 +129,7 @@ mem_forget = "deny"
 missing_docs = "warn"
 
 [workspace.metadata.cargo-shear]
-ignored = ["foldhash", "scion-proto", "edge-tun"]
+ignored = ["foldhash", "scion-proto"]
 
 [profile.ci]
 inherits = "dev"            # https://doc.rust-lang.org/cargo/reference/profiles.html#dev

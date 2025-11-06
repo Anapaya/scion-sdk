@@ -200,7 +200,7 @@ macro_rules! socket_address {
 
         impl $name {
             /// Creates a new SCION socket address from an [ISD-AS number][`IsdAsn`],
-            /// [address][`$type`], and port number.
+            /// address, and port number.
             pub const fn new(scion_addr: $type, port: u16) -> Self {
                 Self { scion_addr, port }
             }

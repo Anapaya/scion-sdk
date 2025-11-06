@@ -800,12 +800,6 @@ impl SessionGranter for SessionManagerHandle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize, ToSchema)]
-pub(crate) enum DispatcherId {
-    Snap(SnapDataPlaneId),
-    Router(RouterId),
-}
-
 /// The SNAP identifier.
 #[derive(
     Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema,

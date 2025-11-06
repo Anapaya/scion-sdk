@@ -415,8 +415,9 @@ impl PocketScionRuntime {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) enum PathOrObject<T> {
+    #[default]
     Unspecified,
     Path(PathBuf),
     Object(T),
@@ -486,12 +487,6 @@ impl PathOrObject<IoConfig> {
     #[allow(unused)]
     pub(crate) async fn write_to_temp_file(&self) -> PathBuf {
         todo!()
-    }
-}
-
-impl<T> Default for PathOrObject<T> {
-    fn default() -> Self {
-        Self::Unspecified
     }
 }
 

@@ -165,9 +165,9 @@ fn compare_dirs(gen_dir: &Path, src_dir: &Path) -> anyhow::Result<Vec<PathBuf>> 
 fn compile_scion_protobuf(out_dir: &str) -> anyhow::Result<()> {
     let proto_root = "scion-proto/scion-protobuf/";
     let proto_files = get_proto_files(proto_root)?;
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .out_dir(out_dir)
-        .compile_protos(&proto_files, &[proto_root])
+        .compile_protos(&proto_files, &[proto_root.to_string()])
         .context("failed to compile scion-protobuf")?;
     Ok(())
 }

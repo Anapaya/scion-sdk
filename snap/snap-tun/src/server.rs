@@ -945,10 +945,9 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
             session_expiry: _,
             address,
         } = &*inner_state
+            && !self.allocator.put_on_hold(address.id.clone())
         {
-            if !self.allocator.put_on_hold(address.id.clone()) {
-                tracing::error!(addr=?address.address, "Could not set address to hold during shutdown - address was released while tunnel was still assigned");
-            }
+            tracing::error!(addr=?address.address, "Could not set address to hold during shutdown - address was released while tunnel was still assigned");
         }
 
         self.locked_update_state(&mut inner_state, TunnelState::Closed);
@@ -961,8 +960,9 @@ enum TunnelStateError {
     InvalidState(TunnelState),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 enum TunnelState {
+    #[default]
     Unassigned,
     SessionEstablished {
         session_expiry: SystemTime,
@@ -981,12 +981,6 @@ impl TunnelState {
             TunnelState::Assigned { session_expiry, .. } => Ok(*session_expiry),
             _ => Err(TunnelStateError::InvalidState(self.clone())),
         }
-    }
-}
-
-impl Default for TunnelState {
-    fn default() -> Self {
-        Self::Unassigned
     }
 }
 

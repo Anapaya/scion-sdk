@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn bytes_encoding_vec() {
-        assert_eq!([BYTES.clone()], BYTES.clone().encode_to_bytes_vec());
+        assert_eq!(std::slice::from_ref(&BYTES), BYTES.encode_to_bytes_vec());
         assert_eq!(BYTES.clone().required_capacity(), 4);
         assert_eq!(BYTES.clone().total_length(), 4);
         assert_eq!(BYTES.clone().encode_to_bytes_vec()[0].len(), 4);

@@ -2,7 +2,7 @@ name: Rust checks
 env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: "25.6"
-  NIGHTLY_VERSION: nightly-2025-07-07
+  NIGHTLY_VERSION: nightly-2025-11-06
   workspace: .
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -469,7 +469,7 @@ pub mod lexer {
 
     impl Token {
         /// Returns a tuple of (&TokenKind, &Token) for convenience.
-        pub fn splat(&self) -> TokenSplat {
+        pub fn splat(&self) -> TokenSplat<'_> {
             (self.kind.clone(), self.span)
         }
 
@@ -725,7 +725,7 @@ pub mod parser {
         }
 
         /// Consume current token and advance.
-        fn consume(&mut self) -> Option<TokenSplat> {
+        fn consume(&mut self) -> Option<TokenSplat<'_>> {
             if let Some(t) = self.tokens.get(self.pos) {
                 self.pos += 1;
                 Some(t.splat())

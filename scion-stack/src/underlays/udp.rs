@@ -231,12 +231,11 @@ impl LocalIpResolver for TargetAddrLocalIpResolver {
     fn local_ips(&self) -> Vec<net::IpAddr> {
         let mut ips = vec![];
         for ip in [Ipv4Addr::UNSPECIFIED.into(), Ipv6Addr::UNSPECIFIED.into()] {
-            if let Ok(socket) = net::UdpSocket::bind(net::SocketAddr::new(ip, 0)) {
-                if socket.connect(self.api_socket_address).is_ok() {
-                    if let Ok(addr) = socket.local_addr() {
-                        ips.push(addr.ip());
-                    }
-                }
+            if let Ok(socket) = net::UdpSocket::bind(net::SocketAddr::new(ip, 0))
+                && socket.connect(self.api_socket_address).is_ok()
+                && let Ok(addr) = socket.local_addr()
+            {
+                ips.push(addr.ip());
             }
         }
         ips

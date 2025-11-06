@@ -51,15 +51,15 @@ impl StreamParser {
     pub fn parse(&mut self, data: &mut BytesMut) -> Result<Option<Packet>, DecodeError> {
         self.try_decode_header(data)?;
 
-        if let Some(DecodedHeader::Full(ref header)) = self.header {
-            if data.remaining() >= header.payload_size() {
-                let header = self.header.take().unwrap().take_full();
+        if let Some(DecodedHeader::Full(ref header)) = self.header
+            && data.remaining() >= header.payload_size()
+        {
+            let header = self.header.take().unwrap().take_full();
 
-                return Ok(Some(Packet {
-                    last_host: header.destination,
-                    content: data.split_to(header.payload_size()).freeze(),
-                }));
-            }
+            return Ok(Some(Packet {
+                last_host: header.destination,
+                content: data.split_to(header.payload_size()).freeze(),
+            }));
         }
 
         Ok(None)

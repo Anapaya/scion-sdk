@@ -19,7 +19,6 @@ in
         gcc
         rustup
         pkg-config
-        bpf-linker
         clang
         llvmPackages.bintools
         m4
@@ -75,4 +74,4 @@ in
       "stackclashprotection"
     ];
     NIX_CFLAGS_COMPILE = "-Wno-unused-command-line-argument"; # Ignore some errors while building shell
-  }
+}

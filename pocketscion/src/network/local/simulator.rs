@@ -52,7 +52,7 @@ impl LocalNetworkSimulation<'_> {
         local_as: IsdAsn,
         local_if_id: u16,
         receivers: &NetworkReceiverRegistry,
-    ) -> LocalNetworkSimulation {
+    ) -> LocalNetworkSimulation<'_> {
         LocalNetworkSimulation {
             local_if_id,
             local_as,
