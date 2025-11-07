@@ -133,17 +133,17 @@ mod tests {
     }
 
     test_api_client!(
-        api_client_with_schema,
+        should_normalize_url_with_http_schema,
         &"http://localhost:9000".parse().unwrap(),
         "http://localhost:9000/api/v1/"
     );
     test_api_client!(
-        api_client_with_trailing_slash,
+        should_normalize_url_with_trailing_slash,
         &"http://localhost:9000/".parse().unwrap(),
         "http://localhost:9000/api/v1/"
     );
     test_api_client!(
-        api_client_with_https_schema,
+        should_normalize_url_with_https_schema,
         &"https://localhost:9000".parse().unwrap(),
         "https://localhost:9000/api/v1/"
     );

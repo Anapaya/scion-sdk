@@ -35,7 +35,7 @@ use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
 
 #[test(tokio::test)]
-async fn snap_tunnel_simple_echo_test() {
+async fn snap_tunnel_should_echo_packets() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let mut pstate = SharedPocketScionState::new(SystemTime::now());

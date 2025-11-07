@@ -221,7 +221,7 @@ mod test {
     };
 
     #[test_log::test]
-    fn up() {
+    fn should_list_up_segments() {
         // NonAS to Core
         Test::new("2-2", "2-1").expect(ExpectedSegments {
             up: vec!["2-1#2 -> 2-2#3;"],
@@ -240,7 +240,7 @@ mod test {
     }
 
     #[test_log::test]
-    fn down() {
+    fn should_list_down_segments() {
         // Core to NonAS
         Test::new("2-1", "2-21").expect(ExpectedSegments {
             up: vec![],
@@ -258,7 +258,7 @@ mod test {
     }
 
     #[test_log::test]
-    fn core() {
+    fn should_list_core_segments() {
         // Core to Core
         Test::new("1-21", "2-1").expect(ExpectedSegments {
             up: vec![],
@@ -283,7 +283,7 @@ mod test {
     }
 
     #[test_log::test]
-    fn core_down() {
+    fn should_list_core_down_segments() {
         // Core to NonAS
         Test::new("1-21", "2-2").expect(ExpectedSegments {
             up: vec![],
@@ -311,7 +311,7 @@ mod test {
     }
 
     #[test_log::test]
-    fn up_core() {
+    fn should_list_up_core_segments() {
         // NonAS to Core to Core
         Test::new("2-2", "1-21").expect(ExpectedSegments {
             up: vec!["2-1#2 -> 2-2#3;"],
@@ -339,7 +339,7 @@ mod test {
     }
 
     #[test_log::test]
-    fn up_down() {
+    fn should_list_up_down_segments() {
         // NonAS to Core to NonAS - single Core
         Test::new("2-3", "2-21").expect(ExpectedSegments {
             up: vec![
@@ -353,7 +353,7 @@ mod test {
     }
 
     #[test_log::test]
-    fn up_core_down() {
+    fn should_list_up_core_down_segments() {
         // NonCore to Core to Core`to NonCore
         Test::new("2-2", "1-2").expect(ExpectedSegments {
             up: vec!["2-1#2 -> 2-2#3;"],

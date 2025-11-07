@@ -935,7 +935,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn convert() {
+    fn should_convert_to_dto_and_back_without_data_loss() {
         let mut pstate = SharedPocketScionState::new(SystemTime::now());
         let isd_as = "1-ff00:0:110".parse().unwrap();
         let snap_id = pstate.add_snap();

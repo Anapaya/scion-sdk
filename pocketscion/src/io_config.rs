@@ -364,7 +364,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn convert() {
+    fn should_convert_to_dto_and_back_without_data_loss() {
         let io_config = SharedPocketScionIoConfig::new();
         let tunnel_addr = "127.0.0.1:9000".parse().unwrap();
 

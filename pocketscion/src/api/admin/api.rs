@@ -302,7 +302,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generate_openapi() {
+    fn should_generate_valid_openapi_spec() {
         let update = std::env::var("UPDATE").is_ok();
 
         let current = include_str!("spec.gen.yml");

@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test(tokio::test)]
-    async fn test_allocation() {
+    async fn should_allocate_explicit_and_wildcard_addresses() {
         let now = SystemTime::now();
         let mut state = SharedPocketScionState::new(now);
 
