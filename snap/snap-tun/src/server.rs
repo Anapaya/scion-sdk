@@ -1220,7 +1220,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn should_put_on_hold_after_shutdown() {
+        fn control_request_put_on_hold_after_shutdown() {
             let (tun, alloc) = setup();
 
             let (status, body) = tun.process_control_request(
@@ -1239,7 +1239,7 @@ mod tests {
         }
 
         #[test]
-        fn should_put_on_hold_after_drop() {
+        fn control_request_put_on_hold_after_drop() {
             let (tun, alloc) = setup();
 
             let (status, body) = tun.process_control_request(

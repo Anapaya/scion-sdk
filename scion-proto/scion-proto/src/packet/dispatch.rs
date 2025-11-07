@@ -182,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_valid_udp() {
+    fn classify_udp_packet_succeeds() {
         let endpoints = test_addresses();
         let dp_path = test_path();
 
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_valid_scmp_echo_reply_with_port() {
+    fn classify_scmp_echo_reply_with_port_succeeds() {
         let endpoints = test_addresses();
         let dp_path = test_path();
 
@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_scmp_destination_unreachable_with_parsable_udp_payload() {
+    fn classify_scmp_destination_unreachable_with_parsable_payload() {
         let endpoints = test_addresses();
         let mut endpoints_reversed = test_addresses();
         endpoints_reversed.reverse();
@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_scmp_destination_unreachable_without_parsable_udp_payload() {
+    fn classify_scmp_destination_unreachable_without_parsable_payload() {
         let endpoints = test_addresses();
         let dp_path = test_path();
 
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_scion_packet_with_invalid_payload() {
+    fn classify_scion_packet_with_invalid_payload() {
         let endpoints = test_addresses();
         let dp_path = test_path();
 

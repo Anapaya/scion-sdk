@@ -294,7 +294,7 @@ mod tests {
     static BYTES: Bytes = Bytes::from_static(&[0, 1, 2, 3]);
 
     #[test]
-    fn bytes_encoding() {
+    fn bytes_encode_decode_roundtrip() {
         let b = BYTES.clone();
         let mut buffer = BytesMut::new();
         assert!(b.encode_to(&mut buffer).is_ok());
@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn bytes_encoding_vec() {
+    fn bytes_encode_to_vec_succeeds() {
         assert_eq!(std::slice::from_ref(&BYTES), BYTES.encode_to_bytes_vec());
         assert_eq!(BYTES.clone().required_capacity(), 4);
         assert_eq!(BYTES.clone().total_length(), 4);
@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn bytes_encoding_failure() {
+    fn bytes_encode_inadequate_buffer_returns_error() {
         let mut buffer = [0_u8; 1];
         assert_eq!(
             BYTES.clone().encode_to(&mut buffer.as_mut()),

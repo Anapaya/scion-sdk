@@ -171,7 +171,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_serialize_deserialize() {
+    fn crpc_error_serializes_and_deserializes() {
         let err = CrpcError {
             code: CrpcErrorCode::InvalidArgument,
             message: "invalid argument".to_string(),

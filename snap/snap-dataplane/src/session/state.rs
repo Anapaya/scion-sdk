@@ -232,7 +232,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_mgmt() {
+    fn session_management_lifecycle() {
         let claims = SnapTokenClaims {
             pssid: Pssid(Uuid::new_v4()),
             exp: (SystemTime::now() + Duration::from_secs(360))

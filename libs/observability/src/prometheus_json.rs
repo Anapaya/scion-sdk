@@ -152,7 +152,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_prometheus_json_encoder() {
+    fn encoder_formats_metrics_as_json() {
         let registry = Registry::new();
         let counter = prometheus::Counter::new("test_counter", "A test counter").unwrap();
         registry.register(Box::new(counter.clone())).unwrap();

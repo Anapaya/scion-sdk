@@ -141,7 +141,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn valid_token() {
+    fn validate_valid_token_succeeds() {
         let (_, decoding_key) = insecure_const_snap_token_key_pair();
         let validator: Validator<SnapTokenClaims> = Validator::new(decoding_key, None);
         let token = dummy_snap_token();
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_token() {
+    fn validate_invalid_token_returns_error() {
         let (_encoding_key, decoding_key) = insecure_const_snap_token_key_pair();
         let validator: Validator<SnapTokenClaims> = Validator::new(decoding_key, None);
         let token = "invalid-jwt-token";
@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_token() {
+    fn validate_expired_token_returns_error() {
         // A token expires at the exact expiry time. So if expiry == now
         let (encoding_key, decoding_key) = insecure_const_snap_token_key_pair();
         let validator: Validator<SnapTokenClaims> = Validator::new(decoding_key, None);

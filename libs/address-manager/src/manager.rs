@@ -338,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn should_fail_on_isd_as_mismatch() {
+    fn register_mismatched_isd_as_returns_error() {
         let result = register(
             id(),
             (
@@ -356,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn should_fail_if_ipv4_is_outside_range() {
+    fn register_ipv4_outside_range_returns_error() {
         let result = register(id(), get_request("192.168.1.0"));
         assert_eq!(
             result,
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn should_fail_if_ipv6_is_outside_range() {
+    fn register_ipv6_outside_range_returns_error() {
         let result = register(id(), get_request("2001:db9::"));
         assert_eq!(
             result,
@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn should_succeed_to_re_register_same_ip_and_fail_register_same_ip_with_different_id() {
+    fn register_same_ip_succeeds_with_same_id_fails_with_different_id() {
         let isd_as = IsdAsn::from_str("1-ff00:0:110").unwrap();
         let mut registry = get_registry();
         // v4
@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn should_fail_if_no_address_is_available() {
+    fn register_empty_pool_returns_no_addresses_available() {
         let isd_as = IsdAsn::from_str("1-ff00:0:110").unwrap();
         let mut registry = AddressManager::new(
             IsdAsn::from_str("1-ff00:0:110").unwrap(),
@@ -453,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn should_succeed_allocation_with_specific_ip() {
+    fn register_specific_ip_allocates_exact_address() {
         let isd_as = IsdAsn::from_str("1-ff00:0:110").unwrap();
         let mut registry = get_registry();
         // v4
@@ -468,7 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn should_succeed_allocation_with_wildcard() {
+    fn register_wildcard_allocates_available_address() {
         let mut registry = get_registry();
         // v4
         let result = registry.register(id(), IsdAsn::WILDCARD, Ipv4Addr::UNSPECIFIED.into());
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn should_clean_existing_grant_on_reallocation() {
+    fn register_frees_previous_grant_on_reallocation() {
         let mut registry = get_registry();
         let initial = "192.168.0.0".parse().unwrap();
         let other = "2001:db8::".parse().unwrap();
@@ -524,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn should_not_assign_on_hold_address() {
+    fn register_on_hold_address_returns_already_allocated() {
         let mut registry = get_registry();
         let initial = "192.168.0.0".parse().unwrap();
 
@@ -546,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn should_clean_expired_grants() {
+    fn clean_expired_grants_removes_expired() {
         let mut registry = get_registry();
         let initial = "192.168.0.0".parse().unwrap();
         let grant = registry
@@ -566,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn should_keep_not_expired_grants() {
+    fn clean_expired_grants_keeps_valid() {
         let mut registry = get_registry();
 
         let initial = "192.168.0.0".parse().unwrap();
@@ -582,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn should_remove_on_hold_on_reallocation() {
+    fn register_removes_on_hold_on_reallocation() {
         let mut registry = get_registry();
 
         let initial = "192.168.0.0".parse().unwrap();

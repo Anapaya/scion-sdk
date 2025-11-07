@@ -116,7 +116,7 @@ mod tests {
     use super::verify_ed25519_public_key;
 
     #[test]
-    fn can_parse_cert() {
+    fn verify_ed25519_certificate_succeeds() {
         let seed = [84u8; 32];
         let dalek_keypair = ed25519_dalek::SigningKey::from_bytes(&seed);
 

@@ -345,7 +345,7 @@ pub fn default_graph() -> Result<Graph, GraphFromTopoError> {
 
 // Test to print the mermaid flowchard of the default.topo file
 #[test]
-fn test_mermaid_flowchart() {
+fn mermaid_flowchart_generates_correctly() {
     let topo = Topo::default_testing();
     let graph = Graph::try_from(topo).unwrap();
     println!("{}", graph.mermaid_flowchart());

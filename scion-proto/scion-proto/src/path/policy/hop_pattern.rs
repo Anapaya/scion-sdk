@@ -221,21 +221,21 @@ mod tests {
         // Simple
         //
         #[test]
-        fn should_match_simple_linear_hop_pattern() {
+        fn simple_linear_pattern_matches() {
             let seq = HopPatternPolicy::parse("1 2 3").unwrap();
             let hv = hops(&["1-1", "2-1", "3-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_when_path_too_short() {
+        fn pattern_too_short_path_no_match() {
             let seq = HopPatternPolicy::parse("1 2 3").unwrap();
             let hv = hops(&["1-1", "2-1"]);
             assert!(!seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_wrong_order() {
+        fn pattern_wrong_order_no_match() {
             let seq = HopPatternPolicy::parse("1 2").unwrap();
             let hv = hops(&["2-1", "1-1"]);
             assert!(!seq.matches(&hv));
@@ -244,14 +244,14 @@ mod tests {
         // Optionals
         //
         #[test]
-        fn should_match_with_optional_absent() {
+        fn optional_absent_matches() {
             let seq = HopPatternPolicy::parse("1 2? 3").unwrap();
             let hv = hops(&["1-1", "3-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_with_optional_present() {
+        fn optional_present_matches() {
             let seq = HopPatternPolicy::parse("1 2? 3").unwrap();
             let hv = hops(&["1-1", "2-1", "3-1"]);
             assert!(seq.matches(&hv));
@@ -260,34 +260,34 @@ mod tests {
         // One Or More
         //
         #[test]
-        fn should_match_one_or_more_single() {
+        fn one_or_more_single_matches() {
             let seq = HopPatternPolicy::parse("1+").unwrap();
             let hv = hops(&["1-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_one_or_more_multiple() {
+        fn one_or_more_multiple_matches() {
             let seq = HopPatternPolicy::parse("1+").unwrap();
             let hv = hops(&["1-1", "1-1", "1-1"]);
             assert!(seq.matches(&hv));
         }
         #[test]
-        fn should_match_one_or_more_multiple_with_final_segment() {
+        fn one_or_more_with_final_segment_matches() {
             let seq = HopPatternPolicy::parse("1+ 1-4").unwrap();
             let hv = hops(&["1-1", "1-1", "1-1", "1-4"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_one_or_more_multiple_with_missing_final_segment() {
+        fn one_or_more_missing_final_no_match() {
             let seq = HopPatternPolicy::parse("1+ 1-4").unwrap();
             let hv = hops(&["1-1", "1-1", "1-1", "1-5"]);
             assert!(!seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_one_or_more_with_zero() {
+        fn one_or_more_with_zero_no_match() {
             let seq = HopPatternPolicy::parse("1+").unwrap();
             let hv = hops(&["2-1"]);
             assert!(!seq.matches(&hv));
@@ -296,28 +296,28 @@ mod tests {
         // Zero Or More
         //
         #[test]
-        fn should_match_zero_or_more_zero_case() {
+        fn zero_or_more_zero_case_matches() {
             let seq = HopPatternPolicy::parse("1* 2").unwrap();
             let hv = hops(&["2-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_zero_or_more_multiple_case() {
+        fn zero_or_more_multiple_case_matches() {
             let seq = HopPatternPolicy::parse("1* 2").unwrap();
             let hv = hops(&["1-1", "1-1", "2-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_zero_or_more_with_final() {
+        fn zero_or_more_with_final_matches() {
             let seq = HopPatternPolicy::parse("1* 1-5").unwrap();
             let hv = hops(&["1-1", "1-1", "1-5"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_zero_or_more_with_bad_final() {
+        fn zero_or_more_bad_final_no_match() {
             let seq = HopPatternPolicy::parse("1* 1-5").unwrap();
             let hv = hops(&["1-1", "1-1", "1-4"]);
             assert!(!seq.matches(&hv));
@@ -327,35 +327,35 @@ mod tests {
         //
 
         #[test]
-        fn should_match_or_left_branch() {
+        fn or_left_branch_matches() {
             let seq = HopPatternPolicy::parse("(1 | 2) 3").unwrap();
             let hv = hops(&["1-1", "3-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_or_right_branch() {
+        fn or_right_branch_matches() {
             let seq = HopPatternPolicy::parse("(1 | 2) 3").unwrap();
             let hv = hops(&["2-1", "3-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_chained_or_middle() {
+        fn chained_or_middle_branch_matches() {
             let seq = HopPatternPolicy::parse("1 | 2 | 3").unwrap();
             let hv = hops(&["2-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_or_when_no_branch_matches() {
+        fn or_no_branch_matches_no_match() {
             let seq = HopPatternPolicy::parse("(1 | 2) 3").unwrap();
             let hv = hops(&["4-1", "3-1"]);
             assert!(!seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_concatenated_alternations() {
+        fn concatenated_alternations_match() {
             let seq = HopPatternPolicy::parse("(1 | 2) (3 | 4)").unwrap();
             let hv = hops(&["2-1", "4-1"]);
             assert!(seq.matches(&hv));
@@ -364,7 +364,7 @@ mod tests {
         /// Complex
 
         #[test]
-        fn should_handle_complex_nested_quantifiers_and_or() {
+        fn complex_nested_quantifiers_and_or_match() {
             let seq = HopPatternPolicy::parse("1 (2+ | 3) 4").unwrap();
             let hv = hops(&["1-1", "2-1", "2-1", "4-1"]);
             assert!(seq.matches(&hv));
@@ -382,14 +382,14 @@ mod tests {
         }
 
         #[test]
-        fn should_match_optional_followed_by_plus() {
+        fn optional_followed_by_plus_matches() {
             let seq = HopPatternPolicy::parse("1? 2+ 3").unwrap();
             let hv = hops(&["2-1", "3-1"]);
             assert!(seq.matches(&hv));
         }
 
         #[test]
-        fn should_match_zero_or_more_then_plus() {
+        fn zero_or_more_then_plus_matches() {
             let seq = HopPatternPolicy::parse("1* 2+").unwrap();
             let hv = hops(&["1-1", "1-1", "2-1", "2-1"]);
             assert!(seq.matches(&hv));
@@ -399,28 +399,28 @@ mod tests {
         //
 
         #[test]
-        fn should_not_match_plus_group_missing_required_repetition() {
+        fn plus_group_missing_required_no_match() {
             let seq = HopPatternPolicy::parse("0+ (1 | 2)+ 3+").unwrap();
             let hv = hops(&["0-1", "1-1", "2-1"]);
             assert!(!seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_optional_path_still_fails_later() {
+        fn optional_path_failing_later_no_match() {
             let seq = HopPatternPolicy::parse("1? 2 3").unwrap();
             let hv = hops(&["1-1", "2-1"]); // missing 3
             assert!(!seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_star_consumes_all_and_misses_tail() {
+        fn star_consumes_all_missing_tail_no_match() {
             let seq = HopPatternPolicy::parse("1* 2 3").unwrap();
             let hv = hops(&["1-1", "1-1", "2-1"]); // missing 3
             assert!(!seq.matches(&hv));
         }
 
         #[test]
-        fn should_not_match_concatenated_alternations_wrong_second() {
+        fn concatenated_alternations_wrong_second_no_match() {
             let seq = HopPatternPolicy::parse("(1 | 2) (3 | 4)").unwrap();
             let hv = hops(&["2-1", "5-1"]);
             assert!(!seq.matches(&hv));
@@ -559,7 +559,7 @@ pub mod lexer {
         use crate::path::policy::hop_pattern::lexer::{HopPatternLexer, TokenKind};
 
         #[test]
-        fn test_single_ident() {
+        fn lex_single_ident_succeeds() {
             let mut lx = HopPatternLexer::new("1-ff00:0:133#1");
             let tokens = lx.tokenize();
             assert_eq!(tokens.len(), 2);
@@ -571,7 +571,7 @@ pub mod lexer {
         }
 
         #[test]
-        fn test_symbols() {
+        fn lex_symbols_succeeds() {
             let mut lx = HopPatternLexer::new("! & | ( ) ? + *");
             let tokens = lx.tokenize();
             let kinds: Vec<_> = tokens.into_iter().map(|t| t.kind).collect();
@@ -592,7 +592,7 @@ pub mod lexer {
         }
 
         #[test]
-        fn test_expression_mixed() {
+        fn lex_mixed_expression_succeeds() {
             let mut lx = HopPatternLexer::new("!foo & (bar | baz)");
             let tokens = lx.tokenize();
             let kinds: Vec<_> = tokens.into_iter().map(|t| t.kind).collect();
@@ -613,7 +613,7 @@ pub mod lexer {
         }
 
         #[test]
-        fn test_whitespace_handling() {
+        fn lex_whitespace_handling_succeeds() {
             let mut lx = HopPatternLexer::new("  foo\t\n&bar ");
             let tokens = lx.tokenize();
             let kinds: Vec<_> = tokens.into_iter().map(|t| t.kind).collect();
@@ -899,7 +899,7 @@ pub mod parser {
         }
 
         #[test]
-        fn should_generate_hop_patterns() {
+        fn generate_hop_patterns_from_string() {
             let token = HopPatternLexer::new("1-ff00:0:133#1 2-1").tokenize();
             let expr = HopPatternParser::new(&token).parse().unwrap();
 
@@ -916,7 +916,7 @@ pub mod parser {
         }
 
         #[test]
-        fn should_parse_single_predicate() {
+        fn parse_single_predicate_succeeds() {
             let expr = parse_single_expression(vec![TokenKind::HopPredicate("1".into())]);
             match expr {
                 HopPatternExpression::HopPredicate(ref s) if s.isd == Isd(1) => {}
@@ -925,7 +925,7 @@ pub mod parser {
         }
 
         #[test]
-        fn should_parse_parentheses() {
+        fn parse_parentheses_succeeds() {
             let expr = parse_single_expression(vec![
                 TokenKind::LParen,
                 TokenKind::HopPredicate("1".into()),
@@ -954,7 +954,7 @@ pub mod parser {
         }
 
         #[test]
-        fn should_parse_postfix_optional() {
+        fn parse_postfix_optional_succeeds() {
             let expr = parse_single_expression(vec![
                 TokenKind::HopPredicate("1".into()),
                 TokenKind::QMark,
@@ -973,7 +973,7 @@ pub mod parser {
         }
 
         #[test]
-        fn should_parse_postfix_plus() {
+        fn parse_postfix_plus_succeeds() {
             let expr =
                 parse_single_expression(vec![TokenKind::HopPredicate("1".into()), TokenKind::Plus]);
             match expr {
@@ -990,7 +990,7 @@ pub mod parser {
         }
 
         #[test]
-        fn should_parse_postfix_star() {
+        fn parse_postfix_star_succeeds() {
             let expr =
                 parse_single_expression(vec![TokenKind::HopPredicate("1".into()), TokenKind::Star]);
             match expr {
@@ -1007,7 +1007,7 @@ pub mod parser {
         }
 
         #[test]
-        fn should_parse_chained_postfix() {
+        fn parse_chained_postfix_succeeds() {
             let expr = parse_single_expression(vec![
                 TokenKind::HopPredicate("1".into()),
                 TokenKind::QMark,
@@ -1048,7 +1048,7 @@ pub mod parser {
             use super::*;
 
             #[test]
-            fn should_error_on_unexpected_token() {
+            fn parse_unexpected_token_returns_error() {
                 let tokens = vec![tok(TokenKind::And), tok(TokenKind::EOI)];
                 let mut parser = HopPatternParser::new(&tokens);
                 let err = parser.parse().unwrap_err();
@@ -1060,7 +1060,7 @@ pub mod parser {
             }
 
             #[test]
-            fn should_error_on_unexpected_end() {
+            fn parse_unexpected_end_returns_error() {
                 let tokens = vec![tok(TokenKind::LParen)];
                 let mut parser = HopPatternParser::new(&tokens);
                 let err = parser.parse().unwrap_err();
@@ -1072,7 +1072,7 @@ pub mod parser {
             }
 
             #[test]
-            fn should_error_on_unexpected_trailing_tokens() {
+            fn parse_unexpected_trailing_tokens_returns_error() {
                 let tokens = vec![
                     tok(TokenKind::HopPredicate("1".into())),
                     tok(TokenKind::HopPredicate("2".into())),

@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn senders_should_notice_drop() {
+    fn dispatcher_senders_notified_on_receiver_drop() {
         let dp = Dispatcher::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(1);
         dp.add_entry(*TEST_ADDR, tx).unwrap();

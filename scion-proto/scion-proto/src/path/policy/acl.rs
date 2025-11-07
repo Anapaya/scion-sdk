@@ -271,7 +271,7 @@ mod test {
         }
 
         #[test]
-        fn should_parse() {
+        fn parse_valid_acl_succeeds() {
             expect_parse("- 1 +");
             expect_parse("- 1 + 0");
             expect_parse("- 1 + 0-0");
@@ -289,7 +289,7 @@ mod test {
             AclPolicy::parse(s).expect_err(&format!("Should fail with: {s}"))
         }
         #[test]
-        fn should_fail_parse() {
+        fn parse_invalid_acl_returns_error() {
             expect_parse_fail(""); // Empty string
             expect_parse_fail("- 1"); // Missing default operator
             expect_parse_fail("1"); // Missing operator

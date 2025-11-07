@@ -310,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn should_correctly_calculate_segment_index() {
+    fn segment_index_calculated_correctly() {
         test_case(0, [2, 0, 0], Some(0)).unwrap();
         test_case(1, [2, 2, 2], Some(0)).unwrap();
         test_case(2, [2, 1, 0], Some(1)).unwrap();
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn should_correctly_reverse_at_hop_index() {
+    fn reverse_at_hop_index_updates_correctly() {
         struct HeaderState {
             hop: u8,
             info: u8,

@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn test_random_operations_all_types() {
+    fn random_operations_maintain_invariants() {
         // Create RNGs with different seeds for each test
         let mut rng_u16 = ChaCha8Rng::seed_from_u64(42);
         let mut rng_u32 = ChaCha8Rng::seed_from_u64(43);
@@ -364,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nth_function() {
+    fn nth_returns_correct_element() {
         let rangeset: RangeSet<u16> = RangeSet::new(vec![
             Range::new(1, 5),   // 1,2,3,4
             Range::new(10, 15), // 10,11,12,13,14
@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn test_boundary_conditions() {
+    fn boundary_values_handled_correctly() {
         // Test boundary values
         let test_cases = [
             (1u32, 10),  // Small range
@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn test_adjacent_ranges_merge() {
+    fn adjacent_ranges_merge_on_insert() {
         let mut rangeset = RangeSet::new(vec![
             Range::new(1u32, 5), // 1,2,3,4
             Range::new(10, 15),  // 10,11,12,13,14
@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn test_range_splitting() {
+    fn remove_splits_ranges_correctly() {
         let mut rangeset = RangeSet::new(vec![Range::new(1u32, 10)]).unwrap();
 
         // Remove a value from the middle, splitting the range

@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_packet() {
+    fn inbound_datagram_valid_packet_accepted() {
         let source_addrs = example_source_addrs();
 
         let packet = get_valid_packet(source_addrs[0], standard_path());
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid() {
+    fn inbound_datagram_invalid_packet_rejected() {
         let source_addrs = example_source_addrs();
         let datagram: &[u8; 4] = &[1, 2, 3, 4];
 
@@ -198,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_path() {
+    fn inbound_datagram_empty_path_rejected() {
         let source_addrs = example_source_addrs();
         let packet = get_valid_packet(source_addrs[0], DataPlanePath::EmptyPath);
 
@@ -210,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_source_addr() {
+    fn inbound_datagram_invalid_source_addr_rejected() {
         let source_addrs = example_source_addrs();
         let packet = get_valid_packet(source_addrs[0], standard_path());
 

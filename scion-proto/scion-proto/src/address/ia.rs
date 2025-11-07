@@ -268,17 +268,17 @@ mod tests {
     }
 
     #[test]
-    fn gets_isd() {
+    fn isd_extracts_correctly() {
         assert_eq!(IsdAsn(0x2_ff00_0000_1101).isd(), Isd::new(2));
     }
 
     #[test]
-    fn gets_asn() {
+    fn asn_extracts_correctly() {
         assert_eq!(IsdAsn(0x2_ff00_0000_1101).asn(), Asn::new(0xff00_0000_1101));
     }
 
     #[test]
-    fn to_u64() {
+    fn to_u64_converts_correctly() {
         assert_eq!(
             IsdAsn::new(Isd::new(0x0123), Asn::new(0x4567_89ab_cdef)).to_u64(),
             0x0123_4567_89ab_cdef
@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn correctly_formats_debug_repr() {
+    fn debug_format_displays_hyphenated_string() {
         assert_eq!(
             format!("{:?}", IsdAsn(0x0001_ff00_0000_00ab)),
             "1-ff00:0:ab"
@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid() {
+    fn from_str_invalid_isd_returns_error() {
         assert_eq!(
             IsdAsn::from_str("a-0:0:1").unwrap_err(),
             AddressParseError(AddressKind::IsdAsn)
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_parts() {
+    fn from_str_invalid_format_returns_error() {
         assert_eq!(
             IsdAsn::from_str("1-1-0:0:1").unwrap_err(),
             AddressParseError(AddressKind::IsdAsn)
@@ -348,7 +348,7 @@ mod tests {
         use crate::address::{Asn, IsdAsn};
 
         #[test]
-        fn should_serialize_and_deserialize() {
+        fn isd_asn_serializes_and_deserializes() {
             let tests = [
                 (IsdAsn::new(Isd::WILDCARD, Asn::WILDCARD), "0-0"),
                 (IsdAsn::new(Isd::WILDCARD, Asn::new(1)), "0-1"),

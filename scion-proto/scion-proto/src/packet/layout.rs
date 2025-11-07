@@ -428,7 +428,7 @@ mod test {
     };
 
     #[test]
-    fn should_work_for_all_variants() {
+    fn header_layout_works_for_all_variants() {
         test_variant(32, 32, 0);
         test_variant(32, 32, 3);
         test_variant(32, 128, 0);
@@ -489,7 +489,7 @@ mod test {
     }
 
     #[test]
-    fn should_never_panic() {
+    fn header_layout_never_panics() {
         // If packet is invalid, it should just assume 32bit addresses and no info fields
         let pck = vec![];
         validate(32, 32, 0, pck);
@@ -606,7 +606,7 @@ mod test {
         };
 
         #[test]
-        fn should_get_correct_address_field_lengths() {
+        fn address_field_lengths_computed_correctly() {
             let mut base_common_header = CommonHeader {
                 version: 0.into(),
                 traffic_class: 0,
@@ -659,7 +659,7 @@ mod test {
         }
 
         #[test]
-        fn should_get_correct_info_field_count() {
+        fn info_field_count_computed_correctly() {
             let mut base_header = MetaHeader {
                 current_info_field: 0.into(),
                 current_hop_field: 0.into(),
@@ -701,7 +701,7 @@ mod test {
         }
 
         #[test]
-        fn should_byte_into_bit() {
+        fn byte_into_bit_converts_correctly() {
             let offset = BitOffset(16);
             assert_eq!(offset.bytes(), 2);
             assert_eq!(offset.bits(), 16);

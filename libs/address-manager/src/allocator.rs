@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allocate_random() {
+    fn allocate_random_addresses_successfully() {
         let prefixes = vec![
             "192.168.0.0/24".parse().unwrap(),
             "10.0.0.0/16".parse().unwrap(),
@@ -308,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allocate_boundary() {
+    fn allocate_boundary_addresses_validates_range() {
         let testcases = vec![
             // v4
             (
@@ -377,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allocate_full() {
+    fn allocate_exhausted_pool_returns_error() {
         let mut allocator = AddressAllocator::new(
             vec![
                 "192.168.0.0/31".parse().unwrap(),

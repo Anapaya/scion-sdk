@@ -509,7 +509,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn should_format_interfaces() {
+        fn format_interfaces_displays_correctly() {
             let cases = vec![
                 (0, "<empty interfaces>"),
                 (1, "0-0 10"),
@@ -546,7 +546,7 @@ mod tests {
         }
 
         #[test]
-        fn should_format_not_matching_as() {
+        fn format_not_matching_as_displays_correctly() {
             let interfaces = vec![
                 PathInterface {
                     isd_asn: IsdAsn::new(Isd::new(1), Asn::new(42)),

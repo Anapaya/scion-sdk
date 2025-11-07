@@ -511,7 +511,7 @@ mod tests {
         }
 
         #[test]
-        fn test_undecoded_address_info() {
+        fn undecoded_address_info_computed_correctly() {
             let address_info = AddressInfo::new(0b1001).expect("valid result");
 
             assert_eq!(address_info, AddressInfo(0b1001));
