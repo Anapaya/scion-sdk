@@ -13,7 +13,7 @@ concurrency:
       - main
   pull_request:
     paths:
-      - ./**
+      - **/*
       - .github/workflow/rust-checks.yml
 jobs:
   tests:
