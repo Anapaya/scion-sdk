@@ -271,7 +271,7 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManager<F> {
 
     fn prefetch_path_internal(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>) {
         if let Err(e) = self.prefetch_tx.try_send(PrefetchRequest { src, dst, now }) {
-            tracing::warn!(err=?e, "Prefetch path channel send failed");
+            tracing::info!(err=?e, "Prefetch path channel send failed");
         }
     }
 
