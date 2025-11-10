@@ -14,7 +14,7 @@ concurrency:
   pull_request:
     paths:
       - **/*
-      - .github/workflow/rust-checks.yml
+      - .github/workflows/rust-checks.yml
 jobs:
   tests:
     name: rust/tests
