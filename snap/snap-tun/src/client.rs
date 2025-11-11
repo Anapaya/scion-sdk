@@ -24,7 +24,7 @@ use std::{
 
 use bytes::Bytes;
 use prost::Message;
-use quinn::{RecvStream, SendStream};
+use quinn::{ConnectionError, RecvStream, SendStream};
 use scion_proto::address::EndhostAddr;
 use tokio::{sync::watch, task::JoinHandle};
 
@@ -44,13 +44,15 @@ pub const DEFAULT_RENEWAL_WAIT_THRESHOLD: Duration = Duration::from_secs(300); /
 pub type TokenRenewError = Box<dyn std::error::Error + Sync + Send>;
 
 /// Function type for renewing tokens.
-pub type TokenRenewFn = Box<
+pub type TokenRenewFn = Arc<
     dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, TokenRenewError>> + Send>> + Send + Sync,
 >;
 
 /// Automatic session renewal configuration.
+#[derive(Clone)]
 pub struct AutoSessionRenewal {
-    token_renewer: TokenRenewFn,
+    /// Function to fetch a new session token.
+    pub token_renewer: TokenRenewFn,
     renew_wait_threshold: Duration,
 }
 
@@ -113,9 +115,9 @@ impl ClientBuilder {
 
         ctrl.state.write().expect("no fail").session_token = self.initial_session_token;
         ctrl.renew_session().await?;
-        ctrl.request_address(self.desired_addresses).await?;
+        ctrl.request_address(self.desired_addresses.clone()).await?;
 
-        if let Some(auto_session_renewal) = self.auto_session_renewal {
+        if let Some(auto_session_renewal) = self.auto_session_renewal.clone() {
             ctrl.start_auto_session_renewal(auto_session_renewal, expiry_receiver);
         }
 
@@ -143,6 +145,11 @@ impl Control {
     /// Returns the session expiry time.
     pub fn session_expiry(&self) -> SystemTime {
         self.state.read().expect("no fail").session_expiry
+    }
+
+    /// Returns the current session token.
+    pub fn session_token(&self) -> String {
+        self.state.read().expect("no fail").session_token.clone()
     }
 
     /// Sends an address assign request to the snaptun server.
@@ -314,15 +321,20 @@ impl Control {
     }
 
     /// An async function that returns when the underlying connection is closed.
-    pub async fn closed(&self) {
-        let _ = self.conn.closed().await;
+    pub async fn closed(&self) -> ConnectionError {
+        self.conn.closed().await
+    }
+
+    /// Returns the underlying QUIC connection.
+    pub fn inner_conn(&self) -> quinn::Connection {
+        self.conn.clone()
     }
 
     /// This is a helper function that returns a debug-printable object
     /// containing metrics about the underlying QUIC-connection.
     // XXX(dsd): We are overcautious here and do not want to commit to an
     // implementation-specific type.
-    pub fn debug_path_stats(&self) -> impl std::fmt::Debug {
+    pub fn debug_path_stats(&self) -> impl std::fmt::Debug + 'static + use<> {
         self.conn.stats().path
     }
 }
@@ -403,6 +415,7 @@ impl Deref for SharedConnState {
 }
 
 /// SNAP tunnel sender.
+#[derive(Debug, Clone)]
 pub struct Sender {
     conn: quinn::Connection,
 }
@@ -415,18 +428,17 @@ impl Sender {
 
     /// Sends a datagram to the connection.
     pub fn send_datagram(&self, data: Bytes) -> Result<(), quinn::SendDatagramError> {
-        self.conn.send_datagram(data)?;
-        Ok(())
+        self.conn.send_datagram(data)
     }
 
     /// Sends a datagram to the connection and waits for the datagram to be sent.
     pub async fn send_datagram_wait(&self, data: Bytes) -> Result<(), quinn::SendDatagramError> {
-        self.conn.send_datagram_wait(data).await?;
-        Ok(())
+        self.conn.send_datagram_wait(data).await
     }
 }
 
 /// SNAP tunnel receiver.
+#[derive(Debug, Clone)]
 pub struct Receiver {
     conn: quinn::Connection,
 }
@@ -434,8 +446,7 @@ pub struct Receiver {
 impl Receiver {
     /// Reads a datagram from the connection.
     pub async fn read_datagram(&self) -> Result<Bytes, quinn::ConnectionError> {
-        let packet = self.conn.read_datagram().await?;
-        Ok(packet)
+        self.conn.read_datagram().await
     }
 }
 

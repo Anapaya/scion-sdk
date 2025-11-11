@@ -426,7 +426,7 @@ impl<P: PathManager> UdpScionSocket<P> {
                     }
                     PathWaitError::NoPathFound => {
                         ScionSocketSendError::NetworkUnreachable(
-                            NetworkError::DestinationUnreachable("No path found".to_string()),
+                            NetworkError::DestinationUnreachable("No path found".into()),
                         )
                     }
                 }

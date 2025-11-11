@@ -29,7 +29,7 @@ use url::Url;
 use super::DynUnderlayStack;
 use crate::{
     scionstack::{DefaultScmpHandler, ScionStack, ScmpHandler},
-    snap_tunnel::{SessionRenewal, SnapTunnel, SnapTunnelError},
+    snap_tunnel::{SessionRenewal, SnapTunnelError, SnapTunnelSender},
     underlays::{
         snap::{NewSnapUnderlayStackError, SnapUnderlayStack},
         udp::{
@@ -48,7 +48,7 @@ pub const DEFAULT_RECEIVE_CHANNEL_SIZE: usize = 1000;
 
 /// Type alias for the complex SCMP handler factory type to reduce type complexity
 type ScmpHandlerFactory =
-    Box<dyn FnOnce(Arc<SnapTunnel>) -> Arc<dyn ScmpHandler> + Sync + Send + 'static>;
+    Box<dyn FnOnce(SnapTunnelSender) -> Arc<dyn ScmpHandler> + Sync + Send + 'static>;
 
 /// Builder for creating a [ScionStack].
 ///
@@ -396,7 +396,7 @@ pub struct SnapUnderlayConfig {
     requested_addresses: Vec<EndhostAddr>,
     default_scmp_handler: Option<ScmpHandlerFactory>,
     snap_dp_index: usize,
-    session_auto_renewal: Option<SessionRenewal>,
+    session_auto_renewal: SessionRenewal,
     ports_rng: Option<ChaCha8Rng>,
     ports_reserved_time: Duration,
 }
@@ -409,7 +409,7 @@ impl Default for SnapUnderlayConfig {
             ports_reserved_time: DEFAULT_RESERVED_TIME,
             snap_dp_index: 0,
             default_scmp_handler: None,
-            session_auto_renewal: Some(SessionRenewal::default()),
+            session_auto_renewal: SessionRenewal::default(),
             ports_rng: None,
         }
     }
@@ -485,9 +485,9 @@ impl SnapUnderlayConfigBuilder {
     ///
     /// # Arguments
     ///
-    /// * `session_auto_renewal` - The automatic session renewal.
+    /// * `interval` - The interval before session expiry to wait before attempting renewal.
     pub fn with_session_auto_renewal(mut self, interval: Duration) -> Self {
-        self.0.session_auto_renewal = Some(SessionRenewal::new(interval));
+        self.0.session_auto_renewal = SessionRenewal::new(interval);
         self
     }
 

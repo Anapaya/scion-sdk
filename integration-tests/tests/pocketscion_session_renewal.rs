@@ -137,11 +137,7 @@ async fn auto_session_renewal_with_client() {
     let sender = stack.bind(None).await.unwrap();
 
     let test_data = Bytes::from("Hello, World!");
-    let dst_isd_as: IsdAsn = "2-ff00:0:212".parse().unwrap();
-    let test_destination = SocketAddr::new(
-        ScionAddr::new(dst_isd_as, HostAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
-        8080,
-    );
+    let test_destination = "[2-ff00:0:212,127.0.0.1]:8080".parse().unwrap();
 
     // sender loop sending packets to a random location (dropped by the SNAP).
     let res = timeout(std::time::Duration::from_secs(4), async {

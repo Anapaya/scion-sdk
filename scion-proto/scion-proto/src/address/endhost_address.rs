@@ -35,7 +35,7 @@ pub enum EndhostAddr {
 
 impl Display for EndhostAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{},{}]", self.isd_asn(), self.local_address())
+        write!(f, "{},{}", self.isd_asn(), self.local_address())
     }
 }
 
@@ -136,4 +136,35 @@ pub enum EndhostAddrError {
     /// Service addresses are not supported.
     #[error("cannot convert service address to endhost address")]
     ServiceAddressNotAllowed,
+}
+
+#[cfg(test)]
+mod tests {
+    use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+
+    #[test]
+    fn endhost_display_is_parse_inverse() {
+        let cases = [
+            EndhostAddr::new(
+                IsdAsn(0x1_ff00_0000_0110),
+                IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)),
+            ),
+            EndhostAddr::new(
+                IsdAsn(0x2_ff00_0000_0200),
+                IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42)),
+            ),
+            EndhostAddr::new(
+                IsdAsn(0x3_ff00_0000_0300),
+                IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+            ),
+        ];
+
+        for expected in cases {
+            let encoded = expected.to_string();
+            let parsed = encoded.parse::<EndhostAddr>().expect("failed to parse");
+            assert_eq!(parsed, expected, "round trip mismatch for {encoded}");
+        }
+    }
 }

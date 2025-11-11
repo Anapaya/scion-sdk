@@ -82,13 +82,9 @@ pub struct PortAllocator {
 }
 
 impl PortAllocator {
-    pub fn new(addresses: Vec<EndhostAddr>, rng: ChaCha8Rng, reserved_time: Duration) -> Self {
+    pub fn new(rng: ChaCha8Rng, reserved_time: Duration) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(PortAllocatorInner::new(
-                addresses,
-                rng,
-                reserved_time,
-            ))),
+            inner: Arc::new(Mutex::new(PortAllocatorInner::new(rng, reserved_time))),
         }
     }
 
@@ -127,25 +123,15 @@ impl Clone for PortAllocator {
 struct PortAllocatorInner {
     allocators: HashMap<(Kind, EndhostAddr), SingleAddrPortAllocator>,
     rng: ChaCha8Rng,
+    reserved_time: Duration,
 }
 
 impl PortAllocatorInner {
-    fn new(addresses: Vec<EndhostAddr>, rng: ChaCha8Rng, reserved_time: Duration) -> Self {
+    fn new(rng: ChaCha8Rng, reserved_time: Duration) -> Self {
         Self {
-            allocators: addresses
-                .iter()
-                .flat_map(|a| {
-                    vec![
-                        ((Kind::Udp, *a), SingleAddrPortAllocator::new(reserved_time)),
-                        ((Kind::Raw, *a), SingleAddrPortAllocator::new(reserved_time)),
-                        (
-                            (Kind::ScmpHandler, *a),
-                            SingleAddrPortAllocator::new(reserved_time),
-                        ),
-                    ]
-                })
-                .collect(),
+            allocators: HashMap::new(),
             rng,
+            reserved_time,
         }
     }
 
@@ -162,8 +148,8 @@ impl PortAllocatorInner {
         now: Instant,
     ) -> Result<u16, PortAllocatorError> {
         self.allocators
-            .get_mut(&(kind, address))
-            .ok_or(PortAllocatorError::AddressNotFound)?
+            .entry((kind, address))
+            .or_insert(SingleAddrPortAllocator::new(self.reserved_time))
             .allocate(port, now, &mut self.rng)
     }
 

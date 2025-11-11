@@ -21,7 +21,10 @@ use tokio_util::sync::CancellationToken;
 use utoipa_redoc::{Redoc, Servable};
 
 use super::api::admin;
-use crate::{io_config::SharedPocketScionIoConfig, state::SharedPocketScionState};
+use crate::{
+    io_config::SharedPocketScionIoConfig,
+    state::{SharedPocketScionState, TunnelGatewayStates},
+};
 
 /// Starts the management API.
 pub async fn start(
@@ -29,10 +32,16 @@ pub async fn start(
     ready_state: Arc<AtomicBool>,
     system_state: SharedPocketScionState,
     io_config: SharedPocketScionIoConfig,
+    tunnel_gateway_states: TunnelGatewayStates,
     listener: TcpListener,
 ) -> std::io::Result<()> {
-    let (router, openapi) =
-        admin::api::build_management_api(ready_state, system_state, io_config).split_for_parts();
+    let (router, openapi) = admin::api::build_management_api(
+        ready_state,
+        system_state,
+        io_config,
+        tunnel_gateway_states,
+    )
+    .split_for_parts();
 
     let final_router = Router::new()
         .nest("/api/v1", router)

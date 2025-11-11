@@ -28,7 +28,7 @@ use tokio::{
     time,
 };
 
-use crate::{scionstack::ScmpHandler, snap_tunnel::SnapTunnel};
+use crate::{scionstack::ScmpHandler, snap_tunnel::SnapTunnelReceiver};
 
 /// Handle to [DemultiplexerHost] allowing registration of new sockets
 pub struct DemultiplexerHandle {
@@ -126,7 +126,7 @@ impl DemultiplexerState {
 }
 
 pub struct DemultiplexerHost {
-    underlay_receiver: std::sync::Arc<SnapTunnel>,
+    underlay_receiver: SnapTunnelReceiver,
     state: Arc<DemultiplexerState>,
     // TODO(uniquefine): Add metrics:
     // - packets_received_total: How many packets are read from the underlay. Labels: kind (udp,
@@ -140,7 +140,7 @@ pub struct DemultiplexerHost {
 
 impl DemultiplexerHost {
     pub fn new(
-        underlay_receiver: std::sync::Arc<SnapTunnel>,
+        underlay_receiver: SnapTunnelReceiver,
         default_scmp_handler: Arc<dyn ScmpHandler>,
     ) -> Self {
         Self {

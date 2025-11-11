@@ -13,7 +13,7 @@
 // limitations under the License.
 //! SCION stack SCMP handler.
 
-use std::{pin::Pin, sync::Arc};
+use std::pin::Pin;
 
 use scion_proto::{
     packet::{ByEndpoint, ScionPacketScmp},
@@ -21,7 +21,7 @@ use scion_proto::{
     wire_encoding::WireEncodeVec as _,
 };
 
-use crate::snap_tunnel::SnapTunnel;
+use crate::snap_tunnel::SnapTunnelSender;
 
 /// A trait for handling SCMP packets when they are received.
 /// It will be called with all SCMP packets that are received irrespective
@@ -36,7 +36,7 @@ pub trait ScmpHandler: Send + Sync {
 
 /// Default SCMP handller.
 pub struct DefaultScmpHandler {
-    tunnel_sender: Arc<SnapTunnel>,
+    tunnel_sender: SnapTunnelSender,
 }
 
 impl Clone for DefaultScmpHandler {
@@ -49,7 +49,7 @@ impl Clone for DefaultScmpHandler {
 
 impl DefaultScmpHandler {
     /// Creates a new default SCMP handler.
-    pub fn new(tunnel_sender: Arc<SnapTunnel>) -> Self {
+    pub fn new(tunnel_sender: SnapTunnelSender) -> Self {
         Self { tunnel_sender }
     }
 }

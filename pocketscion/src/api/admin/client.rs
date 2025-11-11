@@ -17,11 +17,12 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use reqwest::ClientBuilder;
+use scion_proto::address::EndhostAddr;
 use thiserror::Error;
 use url::Url;
 
 use super::api::{AuthServerResponse, SnapsResponse, StatusResponse};
-use crate::{api::admin::api::EndhostApisResponse, dto::IoConfigDto};
+use crate::{api::admin::api::EndhostApisResponse, dto::IoConfigDto, state::SnapId};
 
 /// A client for interacting with the PocketScion API.
 #[derive(Debug, Clone)]
@@ -74,6 +75,27 @@ impl ApiClient {
     /// Retrieves the authorization server.
     pub async fn get_auth_server(&self) -> Result<AuthServerResponse, ClientError> {
         self.get("auth_server").await
+    }
+
+    /// Closes a snap connection on the snap in pocketSCION.
+    pub async fn delete_snap_connection(
+        &self,
+        snap_id: SnapId,
+        endhost_addr: EndhostAddr,
+    ) -> Result<(), ClientError> {
+        let url = self
+            .api
+            .join(&format!("snaps/{snap_id}/connections/{endhost_addr}"))?;
+        let response = self.client.delete(url).send().await?;
+        match response.status() {
+            reqwest::StatusCode::NO_CONTENT => Ok(()),
+            _ => {
+                Err(ClientError::InvalidResponseStatus(
+                    response.status(),
+                    response.bytes().await?,
+                ))
+            }
+        }
     }
 
     async fn get<T>(&self, endpoint: &str) -> Result<T, ClientError>

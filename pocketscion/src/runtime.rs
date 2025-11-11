@@ -52,7 +52,7 @@ use crate::{
         tunnel_gateway::TunnelGatewayReceiver,
     },
     state::{
-        SharedPocketScionState, SystemState,
+        SharedPocketScionState, SystemState, TunnelGatewayStates,
         address_allocator::StateSnapAddressAllocator,
         endhost_segment_lister::StateEndhostSegmentLister,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
@@ -135,6 +135,7 @@ impl PocketScionRuntimeBuilder {
         };
         let system_state = self.system_state.load(start_time).await?;
         let pstate = SharedPocketScionState::from_system_state(system_state);
+        let mut tunnel_gateway_states = TunnelGatewayStates::default();
 
         let io_config = self.io_config.load().await?;
         let io_config = SharedPocketScionIoConfig::from_state(io_config);
@@ -230,6 +231,10 @@ impl PocketScionRuntimeBuilder {
                 };
 
                 let shared_tunnel_gw_state = SharedTunnelGatewayState::new();
+                tunnel_gateway_states
+                    .entry(snap_id)
+                    .or_default()
+                    .insert(snap_dp_id, shared_tunnel_gw_state.clone());
                 let tunnel_gw_dispatcher = TunnelGatewayDispatcher::new(
                     shared_tunnel_gw_state.clone(),
                     TunnelGatewayDispatcherMetrics::new(&metrics_registry),
@@ -318,8 +323,15 @@ impl PocketScionRuntimeBuilder {
             tracing::info!(addr=%listen_address, "Starting management API");
 
             task_set.join_set.spawn(async move {
-                management_api::start(token, ready_state_clone, system_state, io_config, listener)
-                    .await
+                management_api::start(
+                    token,
+                    ready_state_clone,
+                    system_state,
+                    io_config,
+                    tunnel_gateway_states,
+                    listener,
+                )
+                .await
             });
             io::Result::Ok(listen_address)
         }?;

@@ -99,9 +99,9 @@ impl UdpUnderlaySocket {
                 match e.kind() {
                     HostUnreachable | NetworkUnreachable => {
                         ScionSocketSendError::NetworkUnreachable(
-                            NetworkError::DestinationUnreachable(format!(
-                                "Error sending packet locally to {dst_addr}: {e:?}"
-                            )),
+                            NetworkError::DestinationUnreachable(
+                                format!("Error sending packet locally to {dst_addr}: {e:?}").into(),
+                            ),
                         )
                     }
                     ConnectionAborted | ConnectionReset | BrokenPipe => {

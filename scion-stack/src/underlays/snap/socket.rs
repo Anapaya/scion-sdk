@@ -36,12 +36,12 @@ use crate::{
         AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket,
         udp_polling::UdpPoller,
     },
-    snap_tunnel::SnapTunnel,
+    snap_tunnel::SnapTunnelSender,
 };
 
 /// A SNAP underlay socket.
 pub struct SnapUnderlaySocket {
-    pub(crate) tunnel: Arc<SnapTunnel>,
+    pub(crate) tunnel: SnapTunnelSender,
     pub(crate) bind_addr: SocketAddr,
     pub(crate) _port_allocation: Arc<PortGuard>,
     pub(crate) receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<ScionPacketRaw>>>,
@@ -50,7 +50,7 @@ pub struct SnapUnderlaySocket {
 impl SnapUnderlaySocket {
     /// Creates a new SNAP underlay socket.
     pub fn new(
-        tunnel: Arc<SnapTunnel>,
+        tunnel: SnapTunnelSender,
         bind_addr: SocketAddr,
         port_allocation: PortGuard,
         receiver: mpsc::Receiver<ScionPacketRaw>,
@@ -76,7 +76,13 @@ impl UnderlaySocket for SnapUnderlaySocket {
                     quinn::SendDatagramError::TooLarge => {
                         ScionSocketSendError::InvalidPacket("Packet too large".into())
                     }
-                    quinn::SendDatagramError::ConnectionLost(_) => ScionSocketSendError::Closed,
+                    quinn::SendDatagramError::ConnectionLost(_) => {
+                        ScionSocketSendError::NetworkUnreachable(
+                            crate::scionstack::NetworkError::DestinationUnreachable(
+                                "Connection lost, reconnecting".into(),
+                            ),
+                        )
+                    }
                     quinn::SendDatagramError::Disabled
                     | quinn::SendDatagramError::UnsupportedByPeer => {
                         ScionSocketSendError::IoError(std::io::Error::other(format!(
@@ -112,7 +118,7 @@ impl UnderlaySocket for SnapUnderlaySocket {
 }
 
 pub(crate) struct SnapAsyncUdpSocket {
-    tunnel: Arc<SnapTunnel>,
+    tunnel: SnapTunnelSender,
     bind_addr: SocketAddr,
     receiver: Mutex<mpsc::Receiver<ScionPacketRaw>>,
     _port_allocation: PortGuard,
@@ -120,7 +126,7 @@ pub(crate) struct SnapAsyncUdpSocket {
 
 impl SnapAsyncUdpSocket {
     pub fn new(
-        tunnel: Arc<SnapTunnel>,
+        tunnel: SnapTunnelSender,
         bind_addr: SocketAddr,
         receiver: mpsc::Receiver<ScionPacketRaw>,
         port_allocation: PortGuard,
@@ -155,6 +161,12 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
         {
             Ok(_) => Ok(()),
             Err(quinn::SendDatagramError::TooLarge) => Ok(()),
+            Err(quinn::SendDatagramError::ConnectionLost(_)) => {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NetworkUnreachable,
+                    "Connection lost, reconnecting",
+                ))
+            }
             e => Err(std::io::Error::other(format!("Send error: {e:?}"))),
         }
     }

@@ -365,8 +365,8 @@ impl<T: SnapTunToken> Sender<T> {
     /// Immediately closes the underlying connection with the given code and reason.
     ///
     /// All other methods on this Sender will return ConnectionClosed after this is called.
-    pub fn close(&self, code: u32, reason: &'static [u8]) {
-        self.conn.close(code.into(), reason);
+    pub fn close(&self, error_code: SnaptunConnErrors, reason: &[u8]) {
+        self.conn.close(error_code.into(), reason)
     }
 
     fn validate_tun(&self, pkt: Bytes) -> Result<Bytes, SendPacketError<T>> {

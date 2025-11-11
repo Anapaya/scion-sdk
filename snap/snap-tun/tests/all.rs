@@ -158,7 +158,7 @@ pub async fn auto_session_renewal() {
         .with_desired_addresses(desired_addresses.clone())
         .with_auto_session_renewal(AutoSessionRenewal::new(
             DEFAULT_RENEWAL_WAIT_THRESHOLD,
-            Box::new(|| Box::pin(async move { Ok(MAGIC_TOKEN.to_string()) })),
+            Arc::new(move || Box::pin(async move { Ok(MAGIC_TOKEN.to_string()) })),
         ))
         .connect(c)
         .await

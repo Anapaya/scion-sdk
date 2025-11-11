@@ -19,9 +19,13 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Path, State},
+    response::IntoResponse,
+};
 use http::StatusCode;
-use scion_proto::address::IsdAsn;
+use scion_proto::address::{EndhostAddr, IsdAsn};
 use scion_sdk_observability::info_trace_layer;
 use serde::{Deserialize, Serialize};
 use tower::ServiceBuilder;
@@ -34,7 +38,7 @@ use crate::{
     dto::{IoConfigDto, SystemStateDto},
     endhost_api::EndhostApiId,
     io_config::SharedPocketScionIoConfig,
-    state::{SharedPocketScionState, SnapId},
+    state::{SharedPocketScionState, SnapId, TunnelGatewayStates},
 };
 
 const MANAGEMENT_TAG: &str = "management";
@@ -62,6 +66,7 @@ pub(crate) fn build_management_api(
     ready_state: Arc<AtomicBool>,
     system_state: SharedPocketScionState,
     io_config: SharedPocketScionIoConfig,
+    tunnel_gateway_states: TunnelGatewayStates,
 ) -> OpenApiRouter {
     let logging_layer = ServiceBuilder::new().layer(info_trace_layer());
 
@@ -77,6 +82,8 @@ pub(crate) fn build_management_api(
                 .routes(routes!(get_endhost_apis))
                 .with_state((system_state.clone(), io_config.clone())),
         )
+        .routes(routes!(delete_snap_connection))
+        .with_state(tunnel_gateway_states)
         .layer(logging_layer)
 }
 
@@ -174,6 +181,61 @@ async fn get_snaps(
     });
 
     Json(SnapsResponse { snaps })
+}
+
+struct EndhostAddrString(EndhostAddr);
+
+impl<'de> Deserialize<'de> for EndhostAddrString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        let addr = s.parse::<EndhostAddr>().map_err(serde::de::Error::custom)?;
+        Ok(EndhostAddrString(addr))
+    }
+}
+
+/// Delete (close) a snaptun connection from the server side.
+#[utoipa::path(
+    delete,
+    path = "/snaps/{snap_id}/connections/{endhost_addr}",
+    tag = MANAGEMENT_TAG,
+    responses(
+        (
+        status = 204,
+        description = "Connection closed successfully"
+        ),
+        (
+            status = 404,
+            description = "Connection not found"
+        ),
+    )
+)]
+async fn delete_snap_connection(
+    Path((snap_id, endhost_addr)): Path<(SnapId, EndhostAddrString)>,
+    State(tunnel_gateway_states): State<TunnelGatewayStates>,
+) -> impl IntoResponse {
+    if let Some(tunnel_gw_states) = tunnel_gateway_states.get(&snap_id) {
+        for (_, tunnel_gw_state) in tunnel_gw_states.iter() {
+            let guard = tunnel_gw_state.write().expect("no fail");
+            match guard.get(&endhost_addr.0) {
+                Some(sender) => {
+                    sender.close(
+                        snap_tun::server::SnaptunConnErrors::InternalError,
+                        b"Connection closed through management API",
+                    );
+                    tracing::info!(snap_id=%snap_id, endhost_addr=%endhost_addr.0, "Closed connection");
+                    return StatusCode::NO_CONTENT;
+                }
+                None => {
+                    tracing::info!(snap_id=%snap_id, endhost_addr=%endhost_addr.0, "Connection not found");
+                    continue;
+                }
+            }
+        }
+    }
+    http::StatusCode::NOT_FOUND
 }
 
 /// Authorization server response.
@@ -311,6 +373,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             SharedPocketScionState::new(SystemTime::now()),
             SharedPocketScionIoConfig::new(),
+            TunnelGatewayStates::default(),
         )
         .split_for_parts();
 

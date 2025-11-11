@@ -39,7 +39,7 @@ use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use scion_stack::{
     quic::QuinnConn as _,
     scionstack::{ScionStackBuilder, UdpScionSocket, builder::SnapUnderlayConfig},
-    snap_tunnel::SnapTunnel,
+    snap_tunnel::{SessionRenewal, SnapTunnel},
 };
 use snap_control::client::{ControlPlaneApi, CrpcSnapControlClient};
 use snap_tokens::snap_token::dummy_snap_token;
@@ -83,9 +83,9 @@ async fn send_and_receive_echo(tun: &SnapTunnel, payload: Bytes) {
         tun.assigned_addresses()[0].into(),
         &payload,
     );
-    tun.send_datagram(packet.clone().into()).unwrap();
+    tun.sender().send_datagram(packet.clone().into()).unwrap();
 
-    let rdata = tun.read_datagram().await.unwrap();
+    let rdata = tun.receiver().read_datagram().await.unwrap();
 
     // Check length before decoding as the bytes get consumed.
     assert!(packet.len() == rdata.len());
@@ -577,9 +577,14 @@ async fn with_auth_server() {
     let session_grant = session_grants
         .first()
         .expect("getting first SNAP data plane session grant");
-    let tun = SnapTunnel::new(session_grant, Arc::new(client), vec![], None)
-        .await
-        .unwrap();
+    let tun = SnapTunnel::new(
+        session_grant,
+        Arc::new(client),
+        vec![],
+        SessionRenewal::default(),
+    )
+    .await
+    .unwrap();
 
     send_and_receive_echo(&tun, Bytes::from_static(b"my SCION packet")).await;
 }

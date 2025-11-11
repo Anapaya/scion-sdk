@@ -653,7 +653,8 @@ pub enum ScionSocketSendError {
     /// There was an error looking up the path in the path registry.
     #[error("path lookup error: {0}")]
     PathLookupError(Cow<'static, str>),
-    /// The desination is not reachable. E.g. because no path is available.
+    /// The destination is not reachable. E.g. because no path is available
+    /// or because the connection to the snap is unavailable.
     #[error("network unreachable: {0}")]
     NetworkUnreachable(NetworkError),
     /// The provided packet is invalid. The underlying socket is
@@ -676,9 +677,10 @@ pub enum ScionSocketSendError {
 pub enum NetworkError {
     /// The destination is unreachable.
     #[error("destination unreachable: {0}")]
-    DestinationUnreachable(String),
-    /// Underlay next hop unreachable.
-    #[error("next hop unreachable: {isd_as}#{interface_id}: {msg}")]
+    DestinationUnreachable(Cow<'static, str>),
+    /// UDP underlay next hop unreachable. This is only
+    /// returned if the selected underlay is UDP.
+    #[error("udp next hop unreachable: {isd_as}#{interface_id}: {msg}")]
     UnderlayNextHopUnreachable {
         /// ISD-AS of the next hop.
         isd_as: IsdAsn,

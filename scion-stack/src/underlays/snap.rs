@@ -30,7 +30,7 @@ use tracing::{Instrument, Span, instrument};
 use crate::{
     allocation::{self, PortAllocator},
     scionstack::{ScionSocketBindError, ScmpHandler, SocketKind, UnderlayStack},
-    snap_tunnel::{SessionRenewal, SnapTunnel, SnapTunnelError},
+    snap_tunnel::{SessionRenewal, SnapTunnel, SnapTunnelError, SnapTunnelSender},
     underlays::snap::demultiplexer::DemultiplexerHandle,
 };
 
@@ -82,9 +82,9 @@ impl SnapUnderlayStack {
         requested_addresses: Vec<EndhostAddr>,
         rng: ChaCha8Rng,
         port_reserved_time: Duration,
-        default_scmp_handler_factory: impl FnOnce(Arc<SnapTunnel>) -> Arc<dyn ScmpHandler>,
+        default_scmp_handler_factory: impl FnOnce(SnapTunnelSender) -> Arc<dyn ScmpHandler>,
         receive_channel_size: usize,
-        auto_session_renewal: Option<SessionRenewal>,
+        auto_session_renewal: SessionRenewal,
     ) -> Result<Self, NewSnapUnderlayStackError> {
         // Try to establish a tunnel to each dataplane. Return the first successful tunnel or an
         // error.
@@ -124,9 +124,9 @@ impl SnapUnderlayStack {
                 .join(", "),
         );
 
-        let default_scmp_handler = default_scmp_handler_factory(tunnel.clone());
+        let default_scmp_handler = default_scmp_handler_factory(tunnel.sender());
 
-        let demultiplexer = DemultiplexerHost::new(tunnel.clone(), default_scmp_handler);
+        let demultiplexer = DemultiplexerHost::new(tunnel.receiver(), default_scmp_handler);
         let demultiplexer_handle = demultiplexer.handle();
 
         tokio::spawn(demultiplexer.main_loop().in_current_span());
@@ -140,7 +140,6 @@ impl SnapUnderlayStack {
                     tracing::debug!(?path_stats, "Reporting snaptun path stats");
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_secs(600)) => {}
-                        _ = tunnel.closed() => { return }
                     };
                 }
             }
@@ -151,7 +150,7 @@ impl SnapUnderlayStack {
             snap_cp_client,
             demultiplexer_handle,
             tunnel,
-            port_allocator: PortAllocator::new(assigned_addresses, rng, port_reserved_time),
+            port_allocator: PortAllocator::new(rng, port_reserved_time),
             receive_channel_size,
         })
     }
@@ -280,7 +279,7 @@ impl UnderlayStack for SnapUnderlayStack {
             }
 
             Ok(SnapUnderlaySocket::new(
-                self.tunnel.clone(),
+                self.tunnel.sender(),
                 bind_addr,
                 allocation,
                 receiver,
@@ -302,7 +301,7 @@ impl UnderlayStack for SnapUnderlayStack {
                 .map_err(|e| registration_error_to_bind_error(e, bind_addr.port()))?;
 
             Ok(SnapAsyncUdpSocket::new(
-                self.tunnel.clone(),
+                self.tunnel.sender(),
                 bind_addr,
                 rx,
                 allocation,

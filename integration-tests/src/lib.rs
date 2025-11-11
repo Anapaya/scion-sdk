@@ -26,7 +26,7 @@ use pocketscion::{
     api::admin::api::EndhostApiResponseEntry,
     network::scion::topology::{ScionAs, ScionTopology},
     runtime::{PocketScionRuntime, PocketScionRuntimeBuilder},
-    state::SharedPocketScionState,
+    state::{SharedPocketScionState, SnapId},
 };
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha8Rng;
@@ -51,6 +51,10 @@ pub struct PocketscionTestEnv {
     pub eh_api132: EndhostApiResponseEntry,
     /// Endhost API entry for AS 2-ff00:0:212.
     pub eh_api212: EndhostApiResponseEntry,
+    /// Snap ID for AS 1-ff00:0:132.
+    pub snap132: SnapId,
+    /// Snap ID for AS 2-ff00:0:212.
+    pub snap212: SnapId,
 }
 
 /// Sets up PocketSCION with two SNAPs in different ASes for testing.
@@ -121,6 +125,8 @@ pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTes
         pocketscion,
         eh_api132: endhost_apis.endhost_apis.remove(&eh132).unwrap(),
         eh_api212: endhost_apis.endhost_apis.remove(&eh212).unwrap(),
+        snap132,
+        snap212,
     }
 }
 

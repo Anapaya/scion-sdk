@@ -13,6 +13,7 @@
 // limitations under the License.
 //! Shared utilities for the SCION SDK.
 
+pub mod backoff;
 pub mod io;
 pub mod rangeset;
 pub mod task_handler;

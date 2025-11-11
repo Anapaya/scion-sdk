@@ -67,6 +67,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SnapsResponse'
+  /snaps/{snap_id}/connections/{endhost_addr}:
+    delete:
+      tags:
+      - management
+      summary: Delete (close) a snaptun connection from the server side.
+      operationId: delete_snap_connection
+      responses:
+        '204':
+          description: Connection closed successfully
+        '404':
+          description: Connection not found
   /status:
     get:
       tags:
