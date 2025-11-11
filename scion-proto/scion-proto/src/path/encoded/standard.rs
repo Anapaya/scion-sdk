@@ -391,11 +391,18 @@ mod tests {
                     let path = EncodedStandardPath::decode(&mut data).expect("valid decode");
 
                     let twice_reversed = path.to_reversed().to_reversed();
-                    assert!(path.hop_fields().eq(twice_reversed.hop_fields()));
-                    assert!(path.info_fields().eq(twice_reversed.info_fields()));
+                    assert!(
+                        path.hop_fields().eq(twice_reversed.hop_fields()),
+                        "hop fields should match after double reversal"
+                    );
+                    assert!(
+                        path.info_fields().eq(twice_reversed.info_fields()),
+                        "info fields should match after double reversal"
+                    );
                     assert_eq!(
                         path.meta_header.segment_lengths,
-                        twice_reversed.meta_header.segment_lengths
+                        twice_reversed.meta_header.segment_lengths,
+                        "segment lengths should match after double reversal"
                     );
                 }
             }

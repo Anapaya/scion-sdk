@@ -271,10 +271,20 @@ mod tests {
                 .allocate(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
                 .expect("Failed to allocate");
             check_allocator_invariants(&allocator);
-            assert!(!allocator.is_free(addr));
-            assert!(addr.is_ipv4());
+            assert!(
+                !allocator.is_free(addr),
+                "allocated address should not be free"
+            );
+            assert!(
+                addr.is_ipv4(),
+                "allocated address should be IPv4 when requested"
+            );
             expected_length -= 1;
-            assert_eq!(allocator.free_v4() + allocator.free_v6(), expected_length);
+            assert_eq!(
+                allocator.free_v4() + allocator.free_v6(),
+                expected_length,
+                "total free addresses should decrease by 1 after allocation"
+            );
             allocated.push(addr);
         }
         // IPv6 addresses
@@ -283,10 +293,20 @@ mod tests {
                 .allocate(IpAddr::V6(Ipv6Addr::UNSPECIFIED))
                 .expect("Failed to allocate");
             check_allocator_invariants(&allocator);
-            assert!(!allocator.is_free(addr));
-            assert!(addr.is_ipv6());
+            assert!(
+                !allocator.is_free(addr),
+                "allocated address should not be free"
+            );
+            assert!(
+                addr.is_ipv6(),
+                "allocated address should be IPv6 when requested"
+            );
             expected_length -= 1;
-            assert_eq!(allocator.free_v4() + allocator.free_v6(), expected_length);
+            assert_eq!(
+                allocator.free_v4() + allocator.free_v6(),
+                expected_length,
+                "total free addresses should decrease by 1 after allocation"
+            );
             allocated.push(addr);
         }
         // Insert the addresses back into the allocator
@@ -294,16 +314,31 @@ mod tests {
             allocator.free(addr).unwrap();
             check_allocator_invariants(&allocator);
             expected_length += 1;
-            assert_eq!(allocator.free_v4() + allocator.free_v6(), expected_length);
-            assert!(allocator.is_free(addr));
+            assert_eq!(
+                allocator.free_v4() + allocator.free_v6(),
+                expected_length,
+                "total free addresses should increase by 1 after freeing"
+            );
+            assert!(
+                allocator.is_free(addr),
+                "is_free() returned false. freed address should be marked as free"
+            );
         }
 
         // Check that all prefix sets only have one range
         for set in &allocator.v4 {
-            assert_eq!(1, set.free.ranges().len());
+            assert_eq!(
+                1,
+                set.free.ranges().len(),
+                "IPv4 prefix set should have exactly one contiguous range after freeing all addresses"
+            );
         }
         for set in &allocator.v6 {
-            assert_eq!(1, set.free.ranges().len());
+            assert_eq!(
+                1,
+                set.free.ranges().len(),
+                "IPv6 prefix set should have exactly one contiguous range after freeing all addresses"
+            );
         }
     }
 
@@ -337,42 +372,60 @@ mod tests {
             // lower end of the range
             let fail = allocator
                 .allocate(lower)
-                .expect_err("Should not be able to allocate");
-            assert!(matches!(fail, AddressAllocatorError::AddressNotInPrefix(_)),);
+                .expect_err("should not be able to allocate");
+            assert!(
+                matches!(fail, AddressAllocatorError::AddressNotInPrefix(_)),
+                "allocate() succeeded unexpectedly. expected AddressNotInPrefix error when allocating address below prefix range"
+            );
 
             let addr = allocator
                 .allocate(prefix.network())
                 .expect("Failed to allocate");
-            assert!(!allocator.is_free(addr));
-            assert!(std::mem::discriminant(&addr) == std::mem::discriminant(&prefix.network()));
+            assert!(
+                !allocator.is_free(addr),
+                "is_free() returned true. allocated address should not be free"
+            );
+            assert!(
+                std::mem::discriminant(&addr) == std::mem::discriminant(&prefix.network()),
+                "allocated address should have same IP version as prefix"
+            );
 
             let fail = allocator
                 .allocate(prefix.network())
-                .expect_err("Should not be able to allocate");
-            assert!(matches!(
-                fail,
-                AddressAllocatorError::AddressAlreadyAllocated(_)
-            ));
+                .expect_err("should not be able to allocate");
+            assert!(
+                matches!(fail, AddressAllocatorError::AddressAlreadyAllocated(_)),
+                "allocate() succeeded unexpectedly. expected AddressAlreadyAllocated error when allocating the same address twice"
+            );
 
             // upper end of the range
             let fail = allocator
                 .allocate(upper)
-                .expect_err("Should not be able to allocate");
-            assert!(matches!(fail, AddressAllocatorError::AddressNotInPrefix(_)));
+                .expect_err("should not be able to allocate");
+            assert!(
+                matches!(fail, AddressAllocatorError::AddressNotInPrefix(_)),
+                "allocate() succeeded unexpectedly. expected AddressNotInPrefix error when allocating address above prefix range"
+            );
 
             let addr = allocator
                 .allocate(prefix.broadcast())
                 .expect("Failed to allocate");
-            assert!(!allocator.is_free(addr));
-            assert!(std::mem::discriminant(&addr) == std::mem::discriminant(&prefix.network()));
+            assert!(
+                !allocator.is_free(addr),
+                "is_free() returned true. allocated broadcast address should not be free"
+            );
+            assert!(
+                std::mem::discriminant(&addr) == std::mem::discriminant(&prefix.network()),
+                "allocated address should have same IP version as prefix"
+            );
 
             let fail = allocator
                 .allocate(prefix.broadcast())
-                .expect_err("Should not be able to allocate");
-            assert!(matches!(
-                fail,
-                AddressAllocatorError::AddressAlreadyAllocated(_)
-            ));
+                .expect_err("should not be able to allocate");
+            assert!(
+                matches!(fail, AddressAllocatorError::AddressAlreadyAllocated(_)),
+                "allocate() succeeded unexpectedly. expected AddressAlreadyAllocated error when allocating the same broadcast address twice"
+            );
         }
     }
 
@@ -390,13 +443,23 @@ mod tests {
             let addr = allocator
                 .allocate(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
                 .expect("Failed to allocate");
-            assert!(addr.is_ipv4());
+            assert!(
+                addr.is_ipv4(),
+                "allocated address should be IPv4 when requested"
+            );
             check_allocator_invariants(&allocator);
         }
-        assert_eq!(allocator.free_v4(), 0);
+        assert_eq!(
+            allocator.free_v4(),
+            0,
+            "should have no free IPv4 addresses after allocating all available addresses"
+        );
         let fail = allocator
             .allocate(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
-            .expect_err("Should not be able to allocate");
-        assert!(matches!(fail, AddressAllocatorError::NoAddressesAvailable));
+            .expect_err("should not be able to allocate");
+        assert!(
+            matches!(fail, AddressAllocatorError::NoAddressesAvailable),
+            "allocate() succeeded unexpectedly. expected NoAddressesAvailable error when allocating from an exhausted pool"
+        );
     }
 }

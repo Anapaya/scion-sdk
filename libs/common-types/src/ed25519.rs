@@ -294,13 +294,20 @@ mod tests {
         let expected_serialized = serde_json::to_string(&source_config)?;
         let deserialized = serde_json::from_str::<S>(&expected_serialized);
         let deserialized = if expect_parse_failure {
-            assert!(deserialized.is_err());
+            assert!(
+                deserialized.is_err(),
+                "from_str() returned Ok. deserialization should fail for invalid input"
+            );
             return Ok(());
         } else {
             deserialized.unwrap()
         };
         let actual_serialize = serde_json::to_string::<S>(&deserialized)?;
-        assert_eq!(strip_cr(expected_serialized), strip_cr(actual_serialize));
+        assert_eq!(
+            strip_cr(expected_serialized),
+            strip_cr(actual_serialize),
+            "serialized form should match after round-trip deserialization"
+        );
         Ok(())
     }
 

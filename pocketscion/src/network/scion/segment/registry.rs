@@ -450,7 +450,11 @@ mod tests {
         .map(|s| parse_segment(s, ScionLinkType::Core).unwrap())
         .collect::<Vec<_>>();
 
-        assert_eq!(core_segments.segment_count(), expected_core_segments.len());
+        assert_eq!(
+            core_segments.segment_count(),
+            expected_core_segments.len(),
+            "core segments count should match expected number of segments"
+        );
         core_segments
             .all_segments
             .values()
@@ -485,7 +489,11 @@ mod tests {
             .get(&Isd(1))
             .expect("ISD 1 segments not found");
 
-        assert_eq!(isd1_store.segment_count(), isd1_segments.len());
+        assert_eq!(
+            isd1_store.segment_count(),
+            isd1_segments.len(),
+            "ISD 1 segment count should match expected number of segments"
+        );
         isd1_store
             .all_segments
             .values()
@@ -520,7 +528,11 @@ mod tests {
                     "Segment not found in ISD 2 segments: {segment}"
                 );
             });
-        assert_eq!(isd2_store.segment_count(), isd2_segments.len());
+        assert_eq!(
+            isd2_store.segment_count(),
+            isd2_segments.len(),
+            "ISD 2 segment count should match expected number of segments"
+        );
     }
 
     mod link_segment_store {

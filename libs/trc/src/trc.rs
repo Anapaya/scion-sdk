@@ -292,7 +292,7 @@ mod tests {
         {
             let trc = Trc::parse_from_pem(trc_bytes)?;
 
-            assert_eq!(trc.id(), trc_id);
+            assert_eq!(trc.id(), trc_id, "TRC ID should match expected value");
 
             let core_ases: Vec<_> = trc.core_ases().collect();
             assert_eq!(

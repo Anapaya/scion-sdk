@@ -225,7 +225,13 @@ mod tests {
         let deserialized: CrpcError =
             serde_json::from_str(&serialized).expect("failed to deserialize");
 
-        assert_eq!(err.code as u8, deserialized.code as u8);
-        assert_eq!(err.message, deserialized.message);
+        assert_eq!(
+            err.code as u8, deserialized.code as u8,
+            "error code should match after serialization round-trip"
+        );
+        assert_eq!(
+            err.message, deserialized.message,
+            "error message should match after serialization round-trip"
+        );
     }
 }

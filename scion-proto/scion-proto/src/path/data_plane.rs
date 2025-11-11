@@ -346,7 +346,14 @@ mod tests {
     fn reverse_standard() {
         let dp_path = standard_path();
         let reverse_path = dp_path.to_reversed().unwrap();
-        assert!(dp_path != reverse_path);
-        assert_eq!(reverse_path.to_reversed().unwrap(), dp_path);
+        assert!(
+            dp_path != reverse_path,
+            "reversed path should differ from original path"
+        );
+        assert_eq!(
+            reverse_path.to_reversed().unwrap(),
+            dp_path,
+            "double reversal should return original path"
+        );
     }
 }

@@ -889,8 +889,12 @@ mod tests {
             vec![up],
         );
 
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].metadata.as_ref().unwrap().mtu, 1002);
+        assert_eq!(paths.len(), 1, "should produce exactly one combined path");
+        assert_eq!(
+            paths[0].metadata.as_ref().unwrap().mtu,
+            1002,
+            "path MTU should be limited by the smallest segment MTU"
+        );
     }
 
     #[test_log::test]
@@ -909,8 +913,12 @@ mod tests {
             vec![up],
         );
 
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].metadata.as_ref().unwrap().mtu, 1002);
+        assert_eq!(paths.len(), 1, "should produce exactly one combined path");
+        assert_eq!(
+            paths[0].metadata.as_ref().unwrap().mtu,
+            1002,
+            "path MTU should be limited by ingress link MTU"
+        );
     }
 
     #[test_log::test]
@@ -930,8 +938,12 @@ mod tests {
             vec![up],
         );
 
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].metadata.as_ref().unwrap().mtu, 1001);
+        assert_eq!(paths.len(), 1, "should produce exactly one combined path");
+        assert_eq!(
+            paths[0].metadata.as_ref().unwrap().mtu,
+            1001,
+            "path MTU should be limited by the smallest AS MTU in the path"
+        );
     }
 
     // Create test segments with one peer link removed between AS 111 and AS 211.
@@ -996,8 +1008,12 @@ mod tests {
             vec![up, down],
         );
 
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].metadata.as_ref().unwrap().mtu, 1001);
+        assert_eq!(paths.len(), 1, "should produce exactly one combined path");
+        assert_eq!(
+            paths[0].metadata.as_ref().unwrap().mtu,
+            1001,
+            "path MTU should be limited by the smallest peer link MTU"
+        );
     }
 
     #[test_log::test]
@@ -1035,7 +1051,11 @@ mod tests {
             vec![up, down],
         );
 
-        assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0].metadata.as_ref().unwrap().mtu, 1002);
+        assert_eq!(paths.len(), 1, "should produce exactly one combined path");
+        assert_eq!(
+            paths[0].metadata.as_ref().unwrap().mtu,
+            1002,
+            "path MTU should be limited by the destination AS MTU in down segment"
+        );
     }
 }

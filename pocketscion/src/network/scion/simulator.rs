@@ -301,7 +301,7 @@ mod tests {
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
         )
-        .expect("Should not fail to route");
+        .expect("should not fail to route");
 
         match result.action {
             LocalAsRoutingAction::ForwardLocal { target_address } => {
@@ -309,7 +309,7 @@ mod tests {
             }
             _ => {
                 panic!(
-                    "Expected a local forwarding decision, but got: {:?}",
+                    "expected a local forwarding decision, but got: {:?}",
                     result.action
                 )
             }
@@ -366,7 +366,7 @@ mod tests {
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
         )
-        .expect("Should not fail to simulate");
+        .expect("should not fail to simulate");
 
         assert!(result.at_as == failing_as, "Final ISD-ASN mismatch");
         assert!(
@@ -378,10 +378,10 @@ mod tests {
             LocalAsRoutingAction::SendSCMPErrorResponse(err) => {
                 assert!(
                     matches!(err, ScmpErrorMessage::ParameterProblem(_)),
-                    "Expected a ParameterProblem SCMP error"
+                    "expected a ParameterProblem SCMP error"
                 );
             }
-            _ => panic!("Expected a SCMP error response due to broken path"),
+            _ => panic!("expected a SCMP error response due to broken path"),
         }
     }
 
@@ -422,7 +422,7 @@ mod tests {
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
         )
-        .expect("Should not fail to route");
+        .expect("should not fail to route");
 
         check_step(
             &mut iter,
@@ -469,16 +469,28 @@ mod tests {
             expected_finished: bool,
         ) {
             let res = iter.next().expect("Step").expect("No error");
-            assert_eq!(res.at_ingress_interface, expected_ingress_interface);
-            assert_eq!(res.at_as, expected_isd_asn);
-            assert_eq!(res.action, expected_action);
-            assert_eq!(res.finished, expected_finished);
+            assert_eq!(
+                res.at_ingress_interface, expected_ingress_interface,
+                "ingress interface should match expected value at this step"
+            );
+            assert_eq!(
+                res.at_as, expected_isd_asn,
+                "AS should match expected IsdAsn at this step"
+            );
+            assert_eq!(
+                res.action, expected_action,
+                "routing action should match expected action at this step"
+            );
+            assert_eq!(
+                res.finished, expected_finished,
+                "finished flag should match expected state at this step"
+            );
         }
 
         // No more steps should be available
         assert!(
             iter.next().is_none(),
-            "There should be no more steps after the last one"
+            "iter.next() returned Some. no more steps should be available after the last one"
         );
     }
 

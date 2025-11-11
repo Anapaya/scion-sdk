@@ -384,10 +384,10 @@ mod tests {
         // v4
         {
             let v4 = "192.168.0.0".parse().unwrap();
-            registry.register(id(), isd_as, v4).expect("Should Succeed");
+            registry.register(id(), isd_as, v4).expect("should Succeed");
 
             // Register with the same id succeeds.
-            registry.register(id(), isd_as, v4).expect("Should Succeed");
+            registry.register(id(), isd_as, v4).expect("should Succeed");
 
             // Register same address, with a different id fails.
             let other_id = "Other Id".to_string();
@@ -405,10 +405,10 @@ mod tests {
         {
             let mut registry = get_registry();
             let v6 = "2001:db8::".parse().unwrap();
-            registry.register(id(), isd_as, v6).expect("Should Succeed");
+            registry.register(id(), isd_as, v6).expect("should Succeed");
 
             // Register with the same id succeeds.
-            registry.register(id(), isd_as, v6).expect("Should Succeed");
+            registry.register(id(), isd_as, v6).expect("should Succeed");
 
             // Register same address, with a different id fails.
             let other_id = "Other Id".to_string();
@@ -458,13 +458,13 @@ mod tests {
         let mut registry = get_registry();
         // v4
         let v4 = "192.168.0.0".parse().unwrap();
-        let result = registry.register(id(), isd_as, v4).expect("Should succeed");
-        assert_eq!(result.prefix.addr(), v4, "Expected specific assignment");
+        let result = registry.register(id(), isd_as, v4).expect("should succeed");
+        assert_eq!(result.prefix.addr(), v4, "expected specific assignment");
 
         // v6
         let v6 = "2001:db8::".parse().unwrap();
-        let result = registry.register(id(), isd_as, v6).expect("Should succeed");
-        assert_eq!(result.prefix.addr(), v6, "Expected specific assignment");
+        let result = registry.register(id(), isd_as, v6).expect("should succeed");
+        assert_eq!(result.prefix.addr(), v6, "expected specific assignment");
     }
 
     #[test]
@@ -472,11 +472,17 @@ mod tests {
         let mut registry = get_registry();
         // v4
         let result = registry.register(id(), IsdAsn::WILDCARD, Ipv4Addr::UNSPECIFIED.into());
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "register() returned Err. IPv4 address allocation with wildcard IsdAsn should succeed"
+        );
 
         // v6
         let result = registry.register(id(), IsdAsn::WILDCARD, Ipv6Addr::UNSPECIFIED.into());
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "register() returned Err. IPv6 address allocation with wildcard IsdAsn should succeed"
+        );
     }
 
     #[test]
@@ -487,38 +493,38 @@ mod tests {
 
         assert!(
             registry.free_ips.is_free(initial),
-            "Expected initial address to be free"
+            "expected initial address to be free"
         );
 
         // Try it a few times
         for _ in 0..10 {
             let grant = registry
                 .register(id(), IsdAsn::WILDCARD, initial)
-                .expect("Should succeed");
+                .expect("should succeed");
 
             assert_eq!(
                 grant.prefix.addr(),
                 initial,
-                "Expected assignment of given address"
+                "expected assignment of given address"
             );
 
             assert!(
                 !registry.free_ips.is_free(initial),
-                "Expected initial address to not be free"
+                "expected initial address to not be free"
             );
 
             assert!(
                 registry.free_ips.is_free(other),
-                "Expected other address to be free"
+                "expected other address to be free"
             );
             // Reregister with different ip
             registry
                 .register(id(), IsdAsn::WILDCARD, other)
-                .expect("Should succeed");
+                .expect("should succeed");
 
             assert!(
                 registry.free_ips.is_free(initial),
-                "Expected initial address to have been freed"
+                "expected initial address to have been freed"
             );
         }
     }
@@ -530,7 +536,7 @@ mod tests {
 
         let _grant = registry
             .register(id(), IsdAsn::WILDCARD, initial)
-            .expect("Should succeed");
+            .expect("should succeed");
 
         registry.put_on_hold(id(), duration(0));
 
@@ -541,7 +547,7 @@ mod tests {
             Err(AddressRegistrationError::AddressAllocatorError(
                 AddressAllocatorError::AddressAlreadyAllocated(initial)
             )),
-            "Should have given AddressAlreadyAllocated got {result:?}"
+            "should have given AddressAlreadyAllocated got {result:?}"
         );
     }
 
@@ -551,17 +557,20 @@ mod tests {
         let initial = "192.168.0.0".parse().unwrap();
         let grant = registry
             .register(id(), IsdAsn::WILDCARD, initial)
-            .expect("Should succeed");
+            .expect("should succeed");
 
-        assert!(registry.put_on_hold(grant.id, duration(0)));
+        assert!(
+            registry.put_on_hold(grant.id, duration(0)),
+            "put_on_hold() returned false. grant should be successfully put on hold"
+        );
 
         let (before, after) =
             registry.clean_expired(registry.hold_duration + Duration::from_nanos(1));
-        assert_eq!(before, 1);
-        assert_eq!(after, 0, "Expected grant to have been cleaned");
+        assert_eq!(before, 1, "should have one grant before cleaning");
+        assert_eq!(after, 0, "expected grant to have been cleaned");
         assert!(
             registry.free_ips.is_free(initial),
-            "Expected initial address to have been freed"
+            "is_free() returned false. initial address should be free after cleaning"
         );
     }
 
@@ -572,13 +581,19 @@ mod tests {
         let initial = "192.168.0.0".parse().unwrap();
         let grant = registry
             .register(id(), IsdAsn::WILDCARD, initial)
-            .expect("Should succeed");
+            .expect("should succeed");
 
-        assert!(registry.put_on_hold(grant.id, duration(0)));
+        assert!(
+            registry.put_on_hold(grant.id, duration(0)),
+            "put_on_hold() returned false. grant should be successfully put on hold"
+        );
 
         let (before, after) = registry.clean_expired(registry.hold_duration);
-        assert_eq!(before, 1);
-        assert_eq!(after, 1);
+        assert_eq!(before, 1, "should have one grant before cleaning");
+        assert_eq!(
+            after, 1,
+            "should still have one grant after cleaning non-expired grants"
+        );
     }
 
     #[test]
@@ -589,22 +604,34 @@ mod tests {
         // Register initial address
         let grant = registry
             .register(id(), IsdAsn::WILDCARD, initial)
-            .expect("Should succeed");
+            .expect("should succeed");
 
         // Put on hold
-        assert!(registry.put_on_hold(grant.id.clone(), duration(0)));
+        assert!(
+            registry.put_on_hold(grant.id.clone(), duration(0)),
+            "put_on_hold() returned false. grant should be successfully put on hold"
+        );
 
         // Re-register the same address
         let regrant = registry
             .register(id(), IsdAsn::WILDCARD, initial)
-            .expect("Should succeed");
+            .expect("should succeed");
 
         // Assert that the re-granted address is the same as the original
-        assert!(regrant.prefix == grant.prefix);
+        assert!(
+            regrant.prefix == grant.prefix,
+            "re-granted prefix should match original"
+        );
 
         // Assert that the original grant is no longer on hold
         let entry = registry.address_grants.get(&grant.id);
-        assert!(entry.is_some());
-        assert!(entry.unwrap().on_hold_expiry.is_none());
+        assert!(
+            entry.is_some(),
+            "get() returned None. grant entry should exist in registry"
+        );
+        assert!(
+            entry.unwrap().on_hold_expiry.is_none(),
+            "on_hold_expiry is Some. grant should no longer be on hold after re-registration"
+        );
     }
 }

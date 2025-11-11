@@ -853,11 +853,24 @@ mod tests {
 
         let result = state.fetch_and_cache_path(src, dst, Utc::now()).await;
 
-        assert!(result.is_ok());
-        assert_eq!(state.fetcher.call_count.load(Ordering::SeqCst), 1);
+        assert!(
+            result.is_ok(),
+            "fetch_and_cache_path() returned Err. path fetch should succeed"
+        );
+        assert_eq!(
+            state.fetcher.call_count.load(Ordering::SeqCst),
+            1,
+            "path fetcher should be called exactly once"
+        );
         let guard = Guard::new();
-        assert!(state.path_cache.peek(&(src, dst), &guard).is_some());
-        assert!(state.inflight.peek(&(src, dst), &guard).is_none());
+        assert!(
+            state.path_cache.peek(&(src, dst), &guard).is_some(),
+            "peek() on path_cache returned None. fetched path should be cached"
+        );
+        assert!(
+            state.inflight.peek(&(src, dst), &guard).is_none(),
+            "peek() on inflight returned Some. no in-flight request should remain after completion"
+        );
     }
 
     #[tokio::test]
@@ -892,11 +905,18 @@ mod tests {
 
         let (res1, res2) = future::join(task1, task2).await;
 
-        assert_eq!(state.fetcher.call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            state.fetcher.call_count.load(Ordering::SeqCst),
+            1,
+            "Path fetcher should be called only once despite concurrent requests"
+        );
         res1.unwrap().unwrap();
         res2.unwrap().unwrap();
         let guard = Guard::new();
-        assert!(state.inflight.peek(&(src, dst), &guard).is_none());
+        assert!(
+            state.inflight.peek(&(src, dst), &guard).is_none(),
+            "peek() on inflight returned Some. no in-flight request should remain after concurrent requests complete"
+        );
     }
 
     #[tokio::test]
