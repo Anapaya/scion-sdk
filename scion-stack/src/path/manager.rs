@@ -31,7 +31,7 @@
 //! PathPolicies are used to filter out unwanted paths.
 //! PathRankings are used to rank paths based on their characteristics.
 
-use std::{cmp::Ordering, future::Future, io, sync::Arc};
+use std::{cmp::Ordering, future::Future, io, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -55,6 +55,12 @@ use crate::{
     path::{PathStrategy, types::PathManagerPath},
     types::ResFut,
 };
+
+/// Minimum time remaining before path expiry to trigger refetch
+const PATH_EXPIRY_REFRESH_THRESHOLD: Duration = Duration::from_secs(60);
+/// Interval after which to refetch paths unless they expire earlier
+const PATH_REFETCH_INTERVAL: Duration = Duration::from_secs(60 * 30); // 30 minutes
+
 /// Path fetch errors.
 #[derive(Debug, Error)]
 pub enum PathToError {
@@ -138,13 +144,31 @@ struct PathCacheEntry {
     path: PathManagerPath,
     #[expect(unused)]
     cached_at: DateTime<Utc>,
+    refresh_at: DateTime<Utc>,
 }
 
 impl PathCacheEntry {
-    fn new(path: PathManagerPath, now: DateTime<Utc>) -> Self {
+    fn new(
+        path: PathManagerPath,
+        now: DateTime<Utc>,
+        refetch_interval: Duration,
+        expiry_threshold: Duration,
+    ) -> Self {
+        let refresh_at = (now + refetch_interval).min(
+            path.scion_path().expiry_time().unwrap_or_else(|| {
+                tracing::warn!(
+                    src = %path.scion_path().source(),
+                    dst = %path.scion_path().destination(),
+                    "Preferred path has no expiry time"
+                );
+                now + refetch_interval
+            }) - expiry_threshold,
+        );
+
         Self {
             path,
             cached_at: now,
+            refresh_at,
         }
     }
 
@@ -155,6 +179,23 @@ impl PathCacheEntry {
             .map(|expiry| expiry < now)
             .unwrap_or(true)
     }
+
+    fn expiry_state(&self, now: DateTime<Utc>) -> ExpiryState {
+        if self.is_expired(now) {
+            ExpiryState::Expired
+        } else if now >= self.refresh_at {
+            ExpiryState::NeedsRefresh
+        } else {
+            ExpiryState::Valid
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpiryState {
+    Expired,
+    NeedsRefresh,
+    Valid,
 }
 
 /// Active path manager that runs as a background task
@@ -197,6 +238,10 @@ struct CachingPathManagerStateInner<F: PathFetcher> {
     path_cache: HashIndex<(IsdAsn, IsdAsn), PathCacheEntry>,
     /// In-flight path requests indexed by (src, dst)
     inflight: HashIndex<(IsdAsn, IsdAsn), future::Shared<BoxedPathLookupResult>>,
+    /// Minimum time remaining before triggering path refresh
+    refresh_threshold: Duration,
+    /// Interval after which to refetch paths unless they expire earlier
+    refetch_interval: Duration,
 }
 
 /// Shared state for the active path manager
@@ -241,6 +286,8 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManager<F> {
             fetcher,
             path_cache: HashIndex::new(),
             inflight: HashIndex::new(),
+            refresh_threshold: PATH_EXPIRY_REFRESH_THRESHOLD,
+            refetch_interval: PATH_REFETCH_INTERVAL,
         }));
 
         let manager = Self {
@@ -266,7 +313,7 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManager<F> {
         dst: IsdAsn,
         now: DateTime<Utc>,
     ) -> io::Result<Option<Path<Bytes>>> {
-        self.state.try_cached_path(src, dst, now)
+        Ok(self.state.try_cached_path(src, dst, now))
     }
 
     fn prefetch_path_internal(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>) {
@@ -313,7 +360,7 @@ impl<F: PathFetcher + Send + Sync + 'static> SyncPathManager for CachingPathMana
         dst: IsdAsn,
         now: DateTime<Utc>,
     ) -> io::Result<Option<Path<Bytes>>> {
-        match self.state.try_cached_path(src, dst, now)? {
+        match self.state.try_cached_path(src, dst, now) {
             Some(path) => Ok(Some(path)),
             None => {
                 // If the path is not found in the cache, we issue a prefetch request.
@@ -333,12 +380,14 @@ impl<F: PathFetcher + Send + Sync + 'static> PathManager for CachingPathManager<
     ) -> impl ResFut<'_, Path<Bytes>, PathWaitError> {
         async move {
             // First check if we have a cached path
-            if let Some(cached) = self.state.cached_path_wait(src, dst, now).await {
+            if let Some(cached) = self.state.try_cached_path(src, dst, now) {
                 return Ok(cached);
             }
 
             // Fetch new path
-            self.state.fetch_and_cache_path(src, dst, now).await
+            self.state
+                .fetch_and_cache_path(src, dst, now, "path_wait")
+                .await
         }
     }
 }
@@ -357,40 +406,33 @@ impl<F: PathFetcher + Send + Sync + 'static> PathPrefetcher for CachingPathManag
 
 impl<F: PathFetcher + Send + Sync + 'static> CachingPathManagerState<F> {
     /// Returns a cached path if it is not expired.
-    pub fn try_cached_path(
-        &self,
-        src: IsdAsn,
-        dst: IsdAsn,
-        now: DateTime<Utc>,
-    ) -> io::Result<Option<Path<Bytes>>> {
+    ///
+    /// If the path is expired or not found, returns None.
+    ///
+    /// Possibly initiates a refresh if the path requires it.
+    fn try_cached_path(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>) -> Option<Path<Bytes>> {
         let guard = Guard::new();
         match self.path_cache.peek(&(src, dst), &guard) {
             Some(cached) => {
-                if !cached.is_expired(now) {
-                    Ok(Some(cached.path.scion_path().clone()))
-                } else {
-                    Ok(None)
-                }
-            }
-            None => Ok(None),
-        }
-    }
+                match cached.expiry_state(now) {
+                    ExpiryState::Expired => {
+                        tracing::debug!(
+                            src = %src,
+                            dst = %dst,
+                            expiry = ?cached.path.scion_path().expiry_time(),
+                            "Cached path expired"
+                        );
 
-    /// Returns a cached path if it is not expired. The cache state is locked asynchronously.
-    /// This should be used to get the cached path in an async context.
-    async fn cached_path_wait(
-        &self,
-        src: IsdAsn,
-        dst: IsdAsn,
-        now: DateTime<Utc>,
-    ) -> Option<Path<Bytes>> {
-        let guard = Guard::new();
-        match self.path_cache.peek(&(src, dst), &guard) {
-            Some(cached) => {
-                if !cached.is_expired(now) {
-                    Some(cached.path.scion_path().clone())
-                } else {
-                    None
+                        drop(self.get_or_create_inflight_request(src, dst, now, "expired"));
+
+                        None
+                    }
+                    ExpiryState::NeedsRefresh => {
+                        drop(self.get_or_create_inflight_request(src, dst, now, "refresh"));
+
+                        Some(cached.path.scion_path().clone())
+                    }
+                    ExpiryState::Valid => Some(cached.path.scion_path().clone()),
                 }
             }
             None => None,
@@ -403,26 +445,39 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManagerState<F> {
         src: IsdAsn,
         dst: IsdAsn,
         now: DateTime<Utc>,
+        reason: &str,
     ) -> Result<Path<Bytes>, PathWaitError> {
-        let fut = match self.inflight.entry_sync((src, dst)) {
-            Entry::Occupied(entry) => entry.get().clone(),
-            Entry::Vacant(entry) => {
-                let self_c = self.clone();
-                entry
-                    .insert_entry(
-                        async move {
-                            let result = self_c.do_fetch_and_cache(src, dst, now).await;
-                            self_c.inflight.remove_sync(&(src, dst));
-                            result
-                        }
-                        .boxed()
-                        .shared(),
-                    )
-                    .clone()
-            }
-        };
+        self.get_or_create_inflight_request(src, dst, now, reason)
+            .await
+    }
 
-        fut.await
+    /// Ensure there is an in-flight request for the given source and destination.
+    /// If there is already an in-flight request, it is returned.
+    fn get_or_create_inflight_request(
+        &self,
+        src: IsdAsn,
+        dst: IsdAsn,
+        now: DateTime<Utc>,
+        reason: &str,
+    ) -> future::Shared<BoxedPathLookupResult> {
+        match self.inflight.entry_sync((src, dst)) {
+            Entry::Occupied(entry) => entry,
+            Entry::Vacant(entry) => {
+                tracing::debug!(%src, %dst, %reason, "New path fetch initiated");
+                let self_c = self.clone();
+                entry.insert_entry(
+                    async move {
+                        let result = self_c.do_fetch_and_cache(src, dst, now).await;
+                        self_c.inflight.remove_sync(&(src, dst));
+                        result
+                    }
+                    .boxed()
+                    .shared(),
+                )
+            }
+        }
+        .get()
+        .clone()
     }
 
     /// Helper to do the actual fetching and caching of paths between source and destination.
@@ -432,6 +487,12 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManagerState<F> {
         dst: IsdAsn,
         now: DateTime<Utc>,
     ) -> Result<Path<Bytes>, PathWaitError> {
+        tracing::debug!(
+            src = %src,
+            dst = %dst,
+            "Fetching paths"
+        );
+
         let mut paths = self
             .fetcher
             .fetch_paths(src, dst)
@@ -455,7 +516,13 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManagerState<F> {
         );
 
         let preferred_path = paths.into_iter().next().ok_or(PathWaitError::NoPathFound)?;
-        let preferred_path_entry = PathCacheEntry::new(preferred_path.clone(), now);
+
+        let preferred_path_entry = PathCacheEntry::new(
+            preferred_path.clone(),
+            now,
+            self.refetch_interval,
+            self.refresh_threshold,
+        );
 
         match self.path_cache.entry_sync((src, dst)) {
             Entry::Occupied(mut entry) => {
@@ -578,11 +645,21 @@ impl<F: PathFetcher + Send + Sync + 'static> PathManagerTask<F> {
                         dst = %registration.dst,
                         "Updating active path"
                     );
-                    entry.update(PathCacheEntry::new(new_path, registration.now));
+                    entry.update(PathCacheEntry::new(
+                        new_path,
+                        registration.now,
+                        self.state.refetch_interval,
+                        self.state.refresh_threshold,
+                    ));
                 }
             }
             Entry::Vacant(entry) => {
-                entry.insert_entry(PathCacheEntry::new(new_path, registration.now));
+                entry.insert_entry(PathCacheEntry::new(
+                    new_path,
+                    registration.now,
+                    self.state.refetch_interval,
+                    self.state.refresh_threshold,
+                ));
             }
         }
     }
@@ -594,17 +671,32 @@ impl<F: PathFetcher + Send + Sync + 'static> PathManagerTask<F> {
     async fn handle_prefetch(&self, request: PrefetchRequest) {
         tracing::debug!("Handling prefetch request");
 
+        let mut reason = "prefetch";
         // Check if we already have a valid cached path
-        if self
-            .state
-            .cached_path_wait(request.src, request.dst, request.now)
-            .await
-            .is_some()
         {
-            tracing::debug!("Path already cached, skipping prefetch");
-            return;
-        }
+            let guard = Guard::new();
+            let cached = self
+                .state
+                .path_cache
+                .peek(&(request.src, request.dst), &guard);
 
+            if let Some(cached) = cached {
+                match cached.expiry_state(request.now) {
+                    ExpiryState::Valid => {
+                        tracing::debug!("Path already cached and valid, skipping prefetch");
+                        return;
+                    }
+                    ExpiryState::NeedsRefresh => {
+                        reason = "refresh";
+                        tracing::debug!("Path needs refresh, ensuring refresh");
+                    }
+                    ExpiryState::Expired => {
+                        reason = "expired";
+                        tracing::debug!("Path expired, proceeding to prefetch");
+                    }
+                }
+            }
+        }
         // Check if there is an in-flight request for the same source and destination
         if self.state.request_inflight(request.src, request.dst) {
             tracing::debug!("Path request already in flight, skipping prefetch");
@@ -616,7 +708,7 @@ impl<F: PathFetcher + Send + Sync + 'static> PathManagerTask<F> {
         // by the other request or the prefetch will be coalesced with it.
         match self
             .state
-            .fetch_and_cache_path(request.src, request.dst, request.now)
+            .fetch_and_cache_path(request.src, request.dst, request.now, reason)
             .await
         {
             Ok(_) => {
@@ -840,6 +932,8 @@ mod tests {
                 policies: vec![],
                 ranking: vec![Arc::new(Shortest)],
             },
+            refresh_threshold: PATH_EXPIRY_REFRESH_THRESHOLD,
+            refetch_interval: PATH_REFETCH_INTERVAL,
         }))
     }
 
@@ -851,7 +945,9 @@ mod tests {
         let fetcher = MockPathFetcher::with_path(src, dst, path.clone());
         let state = setup_pm(fetcher);
 
-        let result = state.fetch_and_cache_path(src, dst, Utc::now()).await;
+        let result = state
+            .fetch_and_cache_path(src, dst, Utc::now(), "test")
+            .await;
 
         assert!(
             result.is_ok(),
@@ -884,10 +980,11 @@ mod tests {
         let state = setup_pm(fetcher);
 
         let state_clone = state.clone();
-        let task1 =
-            tokio::spawn(
-                async move { state_clone.fetch_and_cache_path(src, dst, Utc::now()).await },
-            );
+        let task1 = tokio::spawn(async move {
+            state_clone
+                .fetch_and_cache_path(src, dst, Utc::now(), "test")
+                .await
+        });
         // Wait for the first task to start the fetch operation.
         while state.fetcher.call_count.load(Ordering::SeqCst) < 1 {
             yield_now().await;
@@ -896,7 +993,7 @@ mod tests {
         let state_clone2 = state.clone();
         let task2 = tokio::spawn(async move {
             state_clone2
-                .fetch_and_cache_path(src, dst, Utc::now())
+                .fetch_and_cache_path(src, dst, Utc::now(), "test")
                 .await
         });
 
@@ -926,7 +1023,9 @@ mod tests {
         let fetcher = MockPathFetcher::with_error(src, dst, "error");
         let state = setup_pm(fetcher);
 
-        let result = state.fetch_and_cache_path(src, dst, Utc::now()).await;
+        let result = state
+            .fetch_and_cache_path(src, dst, Utc::now(), "test")
+            .await;
 
         assert!(matches!(result, Err(PathWaitError::FetchFailed(_))));
         assert_eq!(state.fetcher.call_count.load(Ordering::SeqCst), 1);
@@ -942,7 +1041,9 @@ mod tests {
         let fetcher = MockPathFetcher::default();
         let state = setup_pm(fetcher);
 
-        let result = state.fetch_and_cache_path(src, dst, Utc::now()).await;
+        let result = state
+            .fetch_and_cache_path(src, dst, Utc::now(), "test")
+            .await;
 
         assert!(matches!(result, Err(PathWaitError::NoPathFound)));
         assert_eq!(state.fetcher.call_count.load(Ordering::SeqCst), 1);
@@ -973,14 +1074,14 @@ mod tests {
         let state_clone1 = state.clone();
         let task1 = tokio::spawn(async move {
             state_clone1
-                .fetch_and_cache_path(src1, dst1, Utc::now())
+                .fetch_and_cache_path(src1, dst1, Utc::now(), "test")
                 .await
         });
 
         let state_clone2 = state.clone();
         let task2 = tokio::spawn(async move {
             state_clone2
-                .fetch_and_cache_path(src2, dst2, Utc::now())
+                .fetch_and_cache_path(src2, dst2, Utc::now(), "test")
                 .await
         });
 
