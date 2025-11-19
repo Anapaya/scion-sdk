@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{borrow::Cow, str::FromStr};
+use std::str::FromStr;
 
 use super::types::{HopPredicate, PathPolicyHop};
 use crate::path::policy::PathPolicy;
@@ -149,7 +149,7 @@ impl PathPolicy for AclPolicy {
         &self,
         path: &crate::path::Path<T>,
     ) -> Result<bool, std::borrow::Cow<'static, str>> {
-        let path_hops = PathPolicyHop::hops_from_path(path).map_err(Cow::from)?;
+        let path_hops = PathPolicyHop::hops_from_path(path)?;
         Ok(self.matches(&path_hops))
     }
 }

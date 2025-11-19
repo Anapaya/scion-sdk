@@ -619,7 +619,7 @@ impl<F: PathFetcher + Send + Sync + 'static> PathManagerTask<F> {
 
         // Check if the path is accepted by the policy
         if !self.state.selection.predicate(&new_path) {
-            tracing::debug!(
+            tracing::trace!(
                 src = %registration.src,
                 dst = %registration.dst,
                 "Registered path rejected by policy"

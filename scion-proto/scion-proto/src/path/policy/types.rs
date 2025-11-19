@@ -258,7 +258,7 @@ impl Display for InterfacesPredicate {
 }
 
 /// Path Hop used to match against a Path Policy
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathPolicyHop {
     /// The ISD-ASN of the hop
     pub isd_asn: IsdAsn,
@@ -285,13 +285,23 @@ impl PathPolicyHop {
             return Err("Path metadata has no interfaces");
         };
 
-        let (interfaces, remainder) = interfaces.as_chunks::<2>();
-        if !remainder.is_empty() {
-            // Interfaces should always be in pairs - this is wrong
-            return Err("Path metadata has an odd number of interfaces");
+        let first_hop = interfaces
+            .first()
+            .ok_or("Path metadata has no interfaces")?;
+
+        let mut path_hops: Vec<PathPolicyHop> = Vec::with_capacity(interfaces.len() + 2);
+        path_hops.push(PathPolicyHop {
+            isd_asn: first_hop.isd_asn,
+            ingress: 0,
+            egress: first_hop.id,
+        });
+
+        let (interfaces, remainder) = interfaces[1..].as_chunks::<2>();
+        if remainder.is_empty() {
+            // There must be one left over interface for the last hop
+            return Err("Path contains an odd number of hop interfaces");
         }
 
-        let mut path_hops: Vec<PathPolicyHop> = Vec::with_capacity(interfaces.len());
         for [ingress, egress] in interfaces {
             if ingress.isd_asn != egress.isd_asn {
                 return Err("Path contains a hop with interfaces in different Isd-Asn's");
@@ -304,6 +314,149 @@ impl PathPolicyHop {
             });
         }
 
+        let last_hop = remainder
+            .first()
+            .expect("checked above that remainder is not empty");
+
+        path_hops.push(PathPolicyHop {
+            isd_asn: last_hop.isd_asn,
+            ingress: last_hop.id,
+            egress: 0,
+        });
+
         Ok(path_hops)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use bytes::Bytes;
+    use chrono::Utc;
+
+    use super::*;
+    use crate::{
+        packet::ByEndpoint,
+        path::{Metadata, PathInterface},
+    };
+
+    fn policy_hops(data: Vec<(IsdAsn, u16, u16)>) -> Vec<PathPolicyHop> {
+        data.into_iter()
+            .map(|(isd_asn, ingress, egress)| {
+                PathPolicyHop {
+                    isd_asn,
+                    ingress,
+                    egress,
+                }
+            })
+            .collect()
+    }
+    /// Helper to create a Path with given PathPolicyHops
+    ///
+    /// Path is mostly a stub, just 'metadata.interfaces' is correct
+    fn make_path(path_hops: Vec<PathPolicyHop>) -> Path<Bytes> {
+        let mut path_interfaces: Vec<PathInterface> = vec![];
+        for hop in path_hops {
+            if hop.ingress != 0 {
+                path_interfaces.push(PathInterface {
+                    isd_asn: hop.isd_asn,
+                    id: hop.ingress,
+                });
+            }
+            if hop.egress != 0 {
+                path_interfaces.push(PathInterface {
+                    isd_asn: hop.isd_asn,
+                    id: hop.egress,
+                });
+            }
+        }
+
+        let source = path_interfaces
+            .first()
+            .expect("path_hops must contain at least one hop")
+            .isd_asn;
+        let destination = path_interfaces
+            .last()
+            .expect("path_hops must contain at least one hop")
+            .isd_asn;
+
+        Path::<Bytes> {
+            data_plane_path: crate::path::DataPlanePath::EmptyPath,
+            underlay_next_hop: None,
+            isd_asn: ByEndpoint {
+                source,
+                destination,
+            },
+            metadata: Some(Metadata {
+                expiration: Utc::now(),
+                mtu: 1280,
+                interfaces: Some(path_interfaces),
+                latency: None,
+                bandwidth_kbps: None,
+                geo: None,
+                link_type: None,
+                internal_hops: None,
+                notes: None,
+                epic_auths: None,
+            }),
+        }
+    }
+
+    mod path_policy_hop {
+        use super::*;
+
+        #[test]
+        fn should_correctly_load_path() {
+            let path_hops = policy_hops(vec![
+                (IsdAsn::from_str("1-ff00:0:1").unwrap(), 0, 10),
+                (IsdAsn::from_str("1-ff00:0:2").unwrap(), 10, 20),
+                (IsdAsn::from_str("2-ff00:0:2").unwrap(), 20, 30),
+                (IsdAsn::from_str("2-ff00:0:3").unwrap(), 30, 0),
+            ]);
+
+            let path = make_path(path_hops.clone());
+            let loaded_hops = PathPolicyHop::hops_from_path(&path).unwrap();
+
+            assert_eq!(path_hops, loaded_hops);
+
+            let path_hops = policy_hops(vec![
+                (IsdAsn::from_str("1-ff00:0:1").unwrap(), 0, 10),
+                (IsdAsn::from_str("2-ff00:0:3").unwrap(), 30, 0),
+            ]);
+
+            let path = make_path(path_hops.clone());
+            let loaded_hops = PathPolicyHop::hops_from_path(&path).unwrap();
+
+            assert_eq!(path_hops, loaded_hops);
+        }
+
+        #[test]
+        fn should_fail_on_invalid_path() {
+            // Odd number of interfaces
+            let path_hops = policy_hops(vec![
+                (IsdAsn::from_str("1-ff00:0:1").unwrap(), 0, 10), // First hop
+                // 0 doesn't insert an interface
+                (IsdAsn::from_str("2-ff00:0:2").unwrap(), 20, 0),
+                (IsdAsn::from_str("3-ff00:0:3").unwrap(), 30, 0), // Last hop
+            ]);
+
+            let path = make_path(path_hops.clone());
+            let res = PathPolicyHop::hops_from_path(&path);
+            assert!(res.is_err(), "Expected error on odd number of interfaces");
+
+            // Different Isd-Asns in one hop
+            let path_hops = policy_hops(vec![
+                (IsdAsn::from_str("1-ff00:0:1").unwrap(), 0, 10),
+                (IsdAsn::from_str("2-ff00:0:2").unwrap(), 10, 0),
+                (IsdAsn::from_str("2-ff00:0:3").unwrap(), 0, 20),
+                (IsdAsn::from_str("3-ff00:0:4").unwrap(), 30, 0),
+            ]);
+
+            let path = make_path(path_hops.clone());
+            let res = PathPolicyHop::hops_from_path(&path);
+            assert!(
+                res.is_err(),
+                "Expected error on different Isd-Asns in one hop"
+            );
+        }
     }
 }
