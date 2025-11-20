@@ -15,27 +15,51 @@
 
 use std::time::Duration;
 
-/// Returns a function that implements exponential backoff.
-///
-/// # Arguments
-///
-/// * `minimum_delay` - The minimum delay in seconds.
-/// * `maximum_delay` - The maximum delay in seconds.
-/// * `factor` - The factor to multiply the delay by.
-/// * `jitter` - The jitter to add to the delay.
-///
-/// # Returns
-/// A function that takes the current attempt and sleeps for the appropriate duration.
-/// If attempt is 0, the minimum delay is used.
-pub fn exponential_backoff(
-    minimum_delay_secs: f32,
-    maximum_delay_secs: f32,
-    factor: f32,
-    jitter_secs: f32,
-) -> impl Fn(i32) -> Duration + Send + Sync {
-    move |attempt: i32| {
-        let backoff = minimum_delay_secs * factor.powi(attempt);
-        let backoff = backoff + rand::random::<f32>() * jitter_secs;
-        Duration::from_secs_f32(backoff.min(maximum_delay_secs))
+/// Configuration for exponential backoff.
+#[derive(Debug, Clone, Copy)]
+pub struct BackoffConfig {
+    /// Minimum delay before retrying.
+    pub minimum_delay_secs: f32,
+    /// Maximum delay for a retry.
+    pub maximum_delay_secs: f32,
+    /// Factor by which to increase the delay.
+    pub factor: f32,
+    /// Jitter to add to the delay.
+    pub jitter_secs: f32,
+}
+
+/// Exponential backoff
+#[derive(Debug, Clone, Copy)]
+pub struct ExponentialBackoff {
+    config: BackoffConfig,
+}
+impl ExponentialBackoff {
+    /// Creates a new [`ExponentialBackoff`].
+    pub fn new(
+        minimum_delay_secs: f32,
+        maximum_delay_secs: f32,
+        factor: f32,
+        jitter_secs: f32,
+    ) -> Self {
+        Self {
+            config: BackoffConfig {
+                minimum_delay_secs,
+                maximum_delay_secs,
+                factor,
+                jitter_secs,
+            },
+        }
+    }
+
+    /// Creates a new [`ExponentialBackoff`] from the given configuration.
+    pub fn new_from_config(config: BackoffConfig) -> Self {
+        Self { config }
+    }
+
+    /// Returns the backoff duration for the given attempt.
+    pub fn duration(&self, attempt: u32) -> Duration {
+        let backoff = self.config.minimum_delay_secs * self.config.factor.powi(attempt as i32);
+        let backoff = backoff + rand::random::<f32>() * self.config.jitter_secs;
+        Duration::from_secs_f32(backoff.min(self.config.maximum_delay_secs))
     }
 }

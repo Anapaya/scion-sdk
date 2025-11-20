@@ -19,7 +19,7 @@ use bytes::Bytes;
 use quinn::{TransportConfig, crypto::rustls::QuicClientConfig};
 use rustls::ClientConfig;
 use scion_proto::address::EndhostAddr;
-use scion_sdk_utils::backoff::exponential_backoff;
+use scion_sdk_utils::backoff::ExponentialBackoff;
 use snap_control::{client::ControlPlaneApi, crpc_api::api_service::model::SessionGrant};
 use snap_tun::client::{
     AutoSessionRenewal, ClientBuilder, DEFAULT_RENEWAL_WAIT_THRESHOLD, SnapTunError,
@@ -165,7 +165,7 @@ impl<F: AsyncFn(Vec<EndhostAddr>) -> Result<SnapTunConnection, SnapTunnelError> 
     /// If the connection is interrupted, the main loop will attempt to reconnect indefinitely.
     pub async fn main_loop(self) {
         let backoff =
-            exponential_backoff(MINIMUM_DELAY_SECS, MAXIMUM_DELAY_SECS, FACTOR, JITTER_SECS);
+            ExponentialBackoff::new(MINIMUM_DELAY_SECS, MAXIMUM_DELAY_SECS, FACTOR, JITTER_SECS);
         loop {
             // Wait for the current connection to be closed.
             // It's fine to keep the ref around for a while. This task is the only writer.
@@ -181,7 +181,7 @@ impl<F: AsyncFn(Vec<EndhostAddr>) -> Result<SnapTunConnection, SnapTunnelError> 
                         tracing::debug!(error=%e,%attempt, "failed to reconnect snaptun");
                     }
                 };
-                tokio::time::sleep(backoff(attempt)).await;
+                tokio::time::sleep(backoff.duration(attempt)).await;
                 attempt += 1;
             };
             self.current_connection.send_replace(new_connection);

@@ -14,6 +14,7 @@
 //! SCION stack path handling.
 
 pub mod manager;
+pub mod multipath_manager;
 pub mod types;
 
 mod strategy;

@@ -40,7 +40,7 @@ pub struct FingerprintError;
 ///
 /// Fingerprints can be created with the [`fingerprint`][Path::<T>::fingerprint] method
 /// on [`Path`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PathFingerprint([u8; PathFingerprint::LENGTH]);
 
 impl PathFingerprint {

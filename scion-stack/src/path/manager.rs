@@ -31,7 +31,7 @@
 //! PathPolicies are used to filter out unwanted paths.
 //! PathRankings are used to rank paths based on their characteristics.
 
-use std::{cmp::Ordering, future::Future, io, sync::Arc, time::Duration};
+use std::{borrow::Cow, cmp::Ordering, future::Future, io, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -215,10 +215,18 @@ pub enum PathFetchError {
     /// Segment fetch failed.
     #[error("failed to fetch segments: {0}")]
     FetchSegments(#[from] SegmentFetchError),
+
+    /// No paths found.
+    #[error("no paths found")]
+    NoPathsFound,
+
+    /// Non network related internal error.
+    #[error("internal error: {0}")]
+    InternalError(Cow<'static, str>),
 }
 
 /// Path fetcher trait.
-pub trait PathFetcher {
+pub trait PathFetcher: Send + Sync + 'static {
     /// Fetch paths between source and destination ISD-AS.
     fn fetch_paths(
         &self,
@@ -736,7 +744,7 @@ pub struct Segments {
 }
 
 /// Segment fetcher trait.
-pub trait SegmentFetcher {
+pub trait SegmentFetcher: Send + Sync + 'static {
     /// Fetch path segments between src and dst.
     fn fetch_segments<'a>(
         &'a self,
@@ -797,7 +805,7 @@ impl<F: SegmentFetcher> PathFetcherImpl<F> {
     }
 }
 
-impl<L: SegmentFetcher + Send + Sync> PathFetcher for PathFetcherImpl<L> {
+impl<L: SegmentFetcher> PathFetcher for PathFetcherImpl<L> {
     async fn fetch_paths(
         &self,
         src: IsdAsn,
