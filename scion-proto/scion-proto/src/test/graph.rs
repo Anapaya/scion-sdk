@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use super::topo::LinkType;
@@ -61,7 +61,15 @@ pub enum GraphError {
     /// Error creating a new segment.
     #[error(transparent)]
     NewSegmentError(#[from] NewSegmentError),
+    /// Invalid argument provided.
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
 }
+
+/// Default hop field expiration time used in test beacons.
+///
+/// This value corresponds to 6 hours of expiration time.
+pub const DEFAULT_HOP_EXPIRATION: u8 = 63;
 
 impl Graph {
     /// Creates a new empty graph
@@ -157,9 +165,37 @@ impl Graph {
     ///
     /// The resulting beacon will traverse the following interfaces:
     /// 1-1#1, 1-2#1, 1-2#2, 1-3#1
+    ///
+    /// All hop fields will have the default expiration time of [`DEFAULT_HOP_EXPIRATION`].
     pub fn beacon(&self, start_ia: IsdAsn, egress_ifs: &[u16]) -> Result<PathSegment, GraphError> {
+        self.beacon_with_exp_times(start_ia, egress_ifs, None)
+    }
+
+    /// Beacon with custom expiration times for each hop field.
+    ///
+    /// Same as [`beacon`](Self::beacon), but allows specifying custom expiration times.
+    /// If `exp_times` is None, all hop fields will have the default expiration time of
+    /// [`DEFAULT_HOP_EXPIRATION`]. If `exp_times` is Some, it must have length equal to
+    /// `egress_ifs.len() + 1` (one for each AS entry).
+    pub fn beacon_with_exp_times(
+        &self,
+        start_ia: IsdAsn,
+        egress_ifs: &[u16],
+        exp_times: Option<&[u8]>,
+    ) -> Result<PathSegment, GraphError> {
         if egress_ifs.is_empty() {
             return Err(GraphError::EmptySegment);
+        }
+
+        // Validate exp_times length if provided
+        if let Some(exp_times) = exp_times
+            && exp_times.len() != egress_ifs.len() + 1
+        {
+            return Err(GraphError::InvalidArgument(format!(
+                "exp_times length {} must equal egress_ifs length {} + 1",
+                exp_times.len(),
+                egress_ifs.len()
+            )));
         }
 
         let mut as_entries = Vec::new();
@@ -171,6 +207,10 @@ impl Graph {
         // interface plus one extra for the final AS entry that has egress interface 0.
         // See https://docs.scion.org/en/latest/control-plane.html#as-entries for more details.
         for (i, egress) in egress_ifs.iter().chain(std::iter::once(&0)).enumerate() {
+            // Get the expiration time for this hop field
+            let exp_time = exp_times
+                .map(|times| times[i])
+                .unwrap_or(DEFAULT_HOP_EXPIRATION);
             // Find the next AS and the ingress interface id by following the link
             // from the current AS's egress interface.
             let (next_ia, next_ingress) = if i < egress_ifs.len() {
@@ -225,7 +265,7 @@ impl Graph {
                     peer_interface: link.b_ifid,
                     peer_mtu: 1280,
                     hop_field: SegmentHopField {
-                        exp_time: 63,
+                        exp_time,
                         // Ingress is set to the interface ID where the beacon was received.
                         cons_ingress: link.a_ifid,
                         //
@@ -243,7 +283,7 @@ impl Graph {
                 hop_entry: HopEntry {
                     ingress_mtu: 1280,
                     hop_field: SegmentHopField {
-                        exp_time: 63,
+                        exp_time,
                         cons_ingress: ingress,
                         cons_egress: *egress,
                         mac: i.to_le_bytes()[2..].try_into().unwrap(),
@@ -267,8 +307,13 @@ impl Graph {
             }
         }
 
-        // Create segment with current timestamp and a test segment ID
-        Ok(PathSegment::new(Utc::now(), rand::random(), as_entries)?)
+        // Create segment with current timestamp (truncated to seconds as per spec) and a test
+        // segment ID InfoField timestamp has 1-second time granularity, so we must truncate
+        // nanoseconds
+        let now = Utc::now();
+        let timestamp = DateTime::from_timestamp(now.timestamp(), 0)
+            .expect("current timestamp should be valid");
+        Ok(PathSegment::new(timestamp, rand::random(), as_entries)?)
     }
 
     /// Generates a mermaid flowchart representation of the graph.

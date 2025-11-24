@@ -731,16 +731,13 @@ impl<'a> PathSolution<'a> {
             .unwrap();
         }
 
+        let standard_path: crate::path::encoded::EncodedStandardPath = path.into();
+
         Path {
             metadata: Some(Metadata {
                 interfaces: Some(interfaces),
                 mtu,
-                expiration: self
-                    .edges
-                    .iter()
-                    .map(|e| e.segment.path_segment().min_expiry())
-                    .min()
-                    .unwrap(),
+                expiration: standard_path.expiry_time(),
                 latency: None,
                 bandwidth_kbps: None,
                 geo: None,
@@ -754,7 +751,7 @@ impl<'a> PathSolution<'a> {
                 source: self.edges.first().unwrap().src.ia().unwrap(),
                 destination: self.edges.last().unwrap().dst.ia().unwrap(),
             },
-            data_plane_path: crate::path::DataPlanePath::Standard(path.into()),
+            data_plane_path: crate::path::DataPlanePath::Standard(standard_path),
         }
     }
 }
