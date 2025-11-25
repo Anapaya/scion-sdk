@@ -24,8 +24,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use scion_proto::{
     address::ScionAddr,
-    packet,
-    packet::{ByEndpoint, FlowId, ScionPacketRaw},
+    packet::{self, ByEndpoint, ScionPacketUdp},
     path::{DataPlanePath, encoded::EncodedStandardPath},
     wire_encoding::{WireDecode, WireEncodeVec},
 };
@@ -74,9 +73,11 @@ async fn snap_tunnel_should_echo_packets() {
 
 /// Builds a SCION packet with the given payload and source address.
 fn build_scion_packet(source_addr: ScionAddr, dest_addr: ScionAddr, payload: &Bytes) -> Vec<u8> {
+    let src_sock_addr = scion_proto::address::SocketAddr::new(source_addr, 1025);
+    let dst_sock_addr = scion_proto::address::SocketAddr::new(dest_addr, 1025);
     let endpoints = ByEndpoint {
-        source: source_addr,
-        destination: dest_addr,
+        source: src_sock_addr,
+        destination: dst_sock_addr,
     };
 
     // Construct a simple one hop path:
@@ -87,15 +88,7 @@ fn build_scion_packet(source_addr: ScionAddr, dest_addr: ScionAddr, payload: &By
     let dp_path =
         DataPlanePath::Standard(EncodedStandardPath::decode(&mut path_raw.freeze()).unwrap());
 
-    let packet = ScionPacketRaw::new(
-        endpoints,
-        dp_path,
-        payload.clone(),
-        0,
-        FlowId::new(0).unwrap(),
-    )
-    .unwrap();
-
+    let packet = ScionPacketUdp::new(endpoints, dp_path, payload.clone()).unwrap();
     packet.encode_to_bytes_vec().concat()
 }
 
@@ -107,14 +100,20 @@ async fn send_and_receive_echo(tun: &SnapTunnel, payload: Bytes) {
         tun.assigned_addresses()[0].into(),
         &payload,
     );
+
+    println!("{}", std::line!());
     tun.sender().send_datagram(packet.clone().into()).unwrap();
+    println!("{}", std::line!());
 
     let rdata = tun.receiver().read_datagram().await.unwrap();
+    println!("{}", std::line!());
 
     // Check length before decoding as the bytes get consumed.
     assert!(packet.len() == rdata.len());
-    let received_packet = packet::ScionPacketRaw::decode(&mut rdata.clone()).unwrap();
-    assert!(received_packet.payload == payload);
+    println!("{}", std::line!());
+    let received_packet = packet::ScionPacketUdp::decode(&mut rdata.clone()).unwrap();
+    assert!(received_packet.datagram.payload == payload);
+    println!("{}", std::line!());
     assert!(
         received_packet.headers.address.destination().unwrap()
             == tun.assigned_addresses()[0].into()

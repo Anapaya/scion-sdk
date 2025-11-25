@@ -24,6 +24,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use scion_proto::address::{EndhostAddr, IsdAsn};
 
+/// The socket address assign connect RPC endpoint.
+pub(crate) const PATH_SOCK_ADDR_ASSIGNMENT: &str = "/connectrpc.v1.snaptun/assign_socketaddr";
 /// The address assign connect RPC endpoint.
 pub(crate) const PATH_ADDR_ASSIGNMENT: &str = "/connectrpc.v1.snaptun/assign_addresses";
 /// The session renewal connect RPC endpoint.

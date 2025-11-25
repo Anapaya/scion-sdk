@@ -219,7 +219,9 @@ async fn delete_snap_connection(
     if let Some(tunnel_gw_states) = tunnel_gateway_states.get(&snap_id) {
         for (_, tunnel_gw_state) in tunnel_gw_states.iter() {
             let guard = tunnel_gw_state.write().expect("no fail");
-            match guard.get(&endhost_addr.0) {
+            // XXX: we expect this API to be used only in the legacy address
+            // assignment case, for now.
+            match guard.get(&SocketAddr::new(endhost_addr.0.local_address(), 0)) {
                 Some(sender) => {
                     sender.close(
                         snap_tun::server::SnaptunConnErrors::InternalError,

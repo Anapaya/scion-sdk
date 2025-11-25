@@ -16,6 +16,8 @@
 //! This module provides a function [inbound_datagram_check] to check whether
 //! incoming SCION packet conform to the SNAP packet policies.
 
+use std::net::IpAddr;
+
 use bytes::{Buf, Bytes};
 use scion_proto::{
     address::EndhostAddr,
@@ -32,11 +34,10 @@ use tracing::error;
 /// - The packet (SCION common header, address header, data plane path) can be decoded correctly.
 /// - The SCION source address is set.
 /// - The data plane path is a standard path (not empty).
-/// - The SCION source address matches the assigned address for the tunnel.
-#[allow(unused)]
+/// - The SCION source address matches the expected source socket address (IP part only).
 pub fn inbound_datagram_check(
     mut datagram: &[u8],
-    possible_source_addrs: &[EndhostAddr],
+    expected_ip: IpAddr,
 ) -> Result<ScionPacketRaw, PacketPolicyError> {
     let common_header = match CommonHeader::decode(&mut datagram) {
         Ok(headers) => headers,
@@ -50,20 +51,20 @@ pub fn inbound_datagram_check(
             Err(err) => return Err(PacketPolicyError::InvalidAddressHeader(err)),
         };
 
-    // check if the SCION source address matches the assigned address for the tunnel
+    // Check if the SCION source address matches the expected socket address (IP part).
     match address_header.source() {
         Some(packet_source_addr) => {
             let packet_source_addr = match EndhostAddr::try_from(packet_source_addr) {
                 Ok(addr) => addr,
-                Err(e) => {
+                Err(_) => {
                     return Err(PacketPolicyError::InvalidSourceAddress);
                 }
             };
-            if !possible_source_addrs.contains(&packet_source_addr) {
+            if packet_source_addr.local_address() != expected_ip {
                 return Err(PacketPolicyError::InvalidSourceAddress);
             }
         }
-        _ => return Err(PacketPolicyError::InvalidSourceAddress),
+        None => return Err(PacketPolicyError::InvalidSourceAddress),
     }
 
     let path_offset: u16 = (CommonHeader::LENGTH + address_header.total_length()) as u16;
@@ -75,10 +76,10 @@ pub fn inbound_datagram_check(
         Err(err) => return Err(PacketPolicyError::InvalidPath(err, path_offset)),
     };
 
-    // check if the data plane path is a standard path (not empty)
+    // Check if the data plane path is a standard path (not empty).
     match &dp_path {
         scion_proto::path::DataPlanePath::Standard(_path) => {}
-        // only standard paths are allowed (first hop required)
+        // Only standard paths are allowed (first hop required).
         _ => return Err(PacketPolicyError::InvalidPathType(common_header.path_type)),
     }
 
@@ -180,7 +181,7 @@ mod tests {
 
         let packet = get_valid_packet(source_addrs[0], standard_path());
 
-        let res = inbound_datagram_check(&packet, &source_addrs);
+        let res = inbound_datagram_check(&packet, source_addrs[0].local_address());
         assert!(res.is_ok());
         assert_eq!(packet, res.unwrap().encode_to_bytes_vec().concat());
     }
@@ -190,7 +191,7 @@ mod tests {
         let source_addrs = example_source_addrs();
         let datagram: &[u8; 4] = &[1, 2, 3, 4];
 
-        let res = inbound_datagram_check(datagram, &source_addrs);
+        let res = inbound_datagram_check(datagram, source_addrs[0].local_address());
         assert!(matches!(
             res,
             Err(PacketPolicyError::InvalidCommonHeader(_))
@@ -202,7 +203,7 @@ mod tests {
         let source_addrs = example_source_addrs();
         let packet = get_valid_packet(source_addrs[0], DataPlanePath::EmptyPath);
 
-        let res = inbound_datagram_check(&packet, &source_addrs);
+        let res = inbound_datagram_check(&packet, source_addrs[0].local_address());
         assert!(matches!(
             res,
             Err(PacketPolicyError::InvalidPathType(PathType::Empty))
@@ -214,12 +215,12 @@ mod tests {
         let source_addrs = example_source_addrs();
         let packet = get_valid_packet(source_addrs[0], standard_path());
 
-        let wrong_source_addrs = vec![EndhostAddr::new(
+        let wrong_source_addrs = EndhostAddr::new(
             IsdAsn::new(Isd(2), Asn::new(0xff00_0000_0110)),
-            Ipv4Addr::new(127, 0, 0, 1).into(),
-        )];
+            Ipv4Addr::new(127, 0, 0, 2).into(),
+        );
 
-        let res = inbound_datagram_check(&packet, &wrong_source_addrs);
+        let res = inbound_datagram_check(&packet, wrong_source_addrs.local_address());
         assert!(matches!(res, Err(PacketPolicyError::InvalidSourceAddress)));
     }
 }

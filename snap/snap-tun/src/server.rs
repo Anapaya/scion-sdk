@@ -71,11 +71,11 @@ use tokio::sync::watch;
 
 use crate::{
     AUTH_HEADER, AddressAllocation, AddressAllocator, IPV4_WILDCARD, IPV6_WILDCARD,
-    PATH_ADDR_ASSIGNMENT, PATH_SESSION_RENEWAL,
+    PATH_ADDR_ASSIGNMENT, PATH_SESSION_RENEWAL, PATH_SOCK_ADDR_ASSIGNMENT,
     metrics::{Metrics, ReceiverMetrics, SenderMetrics},
     requests::{
         AddrError, AddressAssignRequest, AddressAssignResponse, SessionRenewalResponse,
-        unix_epoch_from_system_time,
+        SocketAddrAssignmentResponse, unix_epoch_from_system_time,
     },
 };
 
@@ -191,6 +191,7 @@ impl<T: SnapTunToken> Server<T> {
         conn: quinn::Connection,
     ) -> Result<(Sender<T>, Receiver<T>, Control), AcceptError> {
         let state_machine = Arc::new(TunnelStateMachine::new(
+            conn.remote_address(),
             self.validator.clone(),
             self.allocator.clone(),
         ));
@@ -221,11 +222,13 @@ impl<T: SnapTunToken> Server<T> {
             return Err(AcceptError::SendControlResponseError(e));
         }
 
-        //
         // Second request MUST be an address assignment request.
         let (address_assign_request, mut snd, _rcv) = receive_expected_control_request(
             &conn,
-            |r| matches!(r, ControlRequest::AddressAssignment { .. }),
+            |r| {
+                matches!(r, ControlRequest::AddressAssignment { .. })
+                    || matches!(r, ControlRequest::SocketAddrAssignment { .. })
+            },
             b"expected address assignment request",
         )
         .await?;
@@ -251,6 +254,7 @@ impl<T: SnapTunToken> Server<T> {
         let initial_state_version = state_machine.state_version();
         Ok((
             Sender::new(
+                state_machine.get_socket_addr(),
                 state_machine.get_addresses().expect("assigned state"),
                 conn.clone(),
                 state_machine.clone(),
@@ -300,6 +304,7 @@ async fn receive_expected_control_request(
 ///
 /// Sender offers a synchronous and an asychronous API to send packets to the client.
 pub struct Sender<T: SnapTunToken> {
+    assigned_socket_addr: Option<SocketAddr>,
     metrics: SenderMetrics,
     addresses: Vec<EndhostAddr>,
     conn: quinn::Connection,
@@ -310,6 +315,7 @@ pub struct Sender<T: SnapTunToken> {
 
 impl<T: SnapTunToken> Sender<T> {
     fn new(
+        assigned_socket_addr: Option<SocketAddr>,
         addresses: Vec<EndhostAddr>,
         conn: quinn::Connection,
         state_machine: Arc<TunnelStateMachine<T>>,
@@ -317,6 +323,7 @@ impl<T: SnapTunToken> Sender<T> {
         metrics: SenderMetrics,
     ) -> Self {
         Self {
+            assigned_socket_addr,
             addresses,
             conn,
             state_machine,
@@ -331,7 +338,12 @@ impl<T: SnapTunToken> Sender<T> {
         self.addresses.clone()
     }
 
-    /// Returns the remote address of the underling QUIC connection.
+    /// Returns the endhost socket address assigned to the endhost.
+    pub fn assigned_socket_addr(&self) -> Option<SocketAddr> {
+        self.assigned_socket_addr
+    }
+
+    /// Returns the remote address of the underlying QUIC connection.
     pub fn remote_underlay_address(&self) -> SocketAddr {
         self.conn.remote_address()
     }
@@ -398,6 +410,7 @@ impl<T: SnapTunToken> Sender<T> {
             // Return the new sender with the updated addresses
             return Err(SendPacketError::NewAssignedAddress((
                 Box::new(Sender::new(
+                    self.state_machine.get_socket_addr(),
                     addresses,
                     self.conn.clone(),
                     self.state_machine.clone(),
@@ -599,7 +612,7 @@ pub enum AddressAssignmentError {
     NoAddressAssigned,
 }
 
-/// The state transitions of an edgetun connection.
+/// The state transitions of an snap-tun connection.
 ///
 /// ```text
 /// Unassigned --> Assigend --> Closed
@@ -609,6 +622,7 @@ pub enum AddressAssignmentError {
 /// The state machine has an internal state version that is incremented whenever the state changes.
 /// This can be used to cheaply detect changes in the state machine from the outside.
 pub struct TunnelStateMachine<T: SnapTunToken> {
+    remote_sock_addr: SocketAddr,
     validator: Arc<dyn TokenValidator<T>>,
     allocator: Arc<dyn AddressAllocator<T>>,
     inner_state: RwLock<TunnelState>,
@@ -627,12 +641,14 @@ impl<T: SnapTunToken> Drop for TunnelStateMachine<T> {
 
 impl<T: SnapTunToken> TunnelStateMachine<T> {
     pub(crate) fn new(
+        remote_sock_addr: SocketAddr,
         validator: Arc<dyn TokenValidator<T>>,
         allocator: Arc<dyn AddressAllocator<T>>,
     ) -> Self {
         let (sender, receiver) = watch::channel(());
 
         Self {
+            remote_sock_addr,
             validator,
             allocator,
             inner_state: Default::default(),
@@ -663,6 +679,9 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                     address_assign_request,
                 )
             }
+            ControlRequest::SocketAddrAssignment(token) => {
+                self.locked_process_socket_addr_assignment_request(&mut inner_state, now, token)
+            }
             ControlRequest::SessionRenewal(token) => {
                 self.locked_process_session_renewal(&mut inner_state, now, token)
             }
@@ -690,18 +709,60 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                 resp.encode(&mut resp_body).expect("no fail");
                 (StatusCode::OK, resp_body)
             }
-            Err(TokenValidatorError::JwtSignatureInvalid()) => {
-                tracing::info!("Invalid signature");
-                (StatusCode::UNAUTHORIZED, "Unauthorized".into())
+            Err(e) => map_token_validation_err_to_response(e),
+        }
+    }
+
+    fn locked_process_socket_addr_assignment_request(
+        &self,
+        inner_state: &mut TunnelState,
+        now: SystemTime,
+        token: String,
+    ) -> (http::StatusCode, Vec<u8>) {
+        // We disallow assigning a socket address if a legacy address
+        // was already assigned.
+        match inner_state {
+            // XXX: assuming well-behaved clients, we should never encounter
+            // such a state. Also, LegacyAddrAssigned will be removed.
+            TunnelState::LegacyAddrAssigned { .. } | TunnelState::Closed => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid state transition".into(),
+                );
             }
-            Err(TokenValidatorError::JwtError(err)) => {
-                tracing::info!(?err, "Token validation failed");
-                (StatusCode::UNAUTHORIZED, "Unauthorized".into())
+            _ => {}
+        }
+        // XXX: assuming well-behaved clients, we should never encounter
+        // a situation where a client did not authenticate before requesting a
+        // socket addr.
+        let session_expiry = match inner_state.session_validity() {
+            Ok(v) => v,
+            Err(err) => {
+                tracing::error!(
+                    ?err,
+                    "Failed to get session validity when processing address assignment request"
+                );
+                // this should, in principle, never happen assuming well-behaved
+                // clients.
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid state transition".into(),
+                );
             }
-            Err(TokenValidatorError::TokenExpired(err)) => {
-                tracing::info!(?err, "Token validation failed: token expired");
-                (StatusCode::UNAUTHORIZED, "Unauthorized".into())
+        };
+        match self.validator.validate(now, &token) {
+            Ok(_claims) => {
+                self.locked_update_state(
+                    inner_state,
+                    TunnelState::SockAddrAssigned { session_expiry },
+                );
+                let resp = SocketAddrAssignmentResponse::from(self.remote_sock_addr);
+
+                let mut resp_body = vec![];
+                resp.encode(&mut resp_body).expect("no fail");
+                (StatusCode::OK, resp_body)
             }
+            Err(e) => map_token_validation_err_to_response(e),
         }
     }
 
@@ -714,6 +775,19 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         token: String,
         addr_assignments: AddressAssignRequest,
     ) -> (http::StatusCode, Vec<u8>) {
+        // We disallow assigning a socket address if a legacy address
+        // was already assigned.
+        match inner_state {
+            // XXX: assuming well-behaved clients, we should never encounter
+            // such a state. Also, LegacyAddrAssigned will be removed.
+            TunnelState::SockAddrAssigned { .. } | TunnelState::Closed => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid state transition".into(),
+                );
+            }
+            _ => {}
+        }
         match self.validator.validate(now, &token) {
             Ok(claims) => {
                 if addr_assignments.requested_addresses.len() > 1 {
@@ -812,7 +886,7 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
 
                 self.locked_update_state(
                     inner_state,
-                    TunnelState::Assigned {
+                    TunnelState::LegacyAddrAssigned {
                         session_expiry,
                         address: assigned_address.clone(),
                     },
@@ -826,18 +900,7 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                 resp.encode(&mut resp_body).expect("no fail");
                 (StatusCode::OK, resp_body)
             }
-            Err(TokenValidatorError::JwtSignatureInvalid()) => {
-                tracing::info!("Invalid JWT Signature");
-                (StatusCode::UNAUTHORIZED, "unauthorized".into())
-            }
-            Err(TokenValidatorError::JwtError(err)) => {
-                tracing::info!(?err, "Token validation failed");
-                (StatusCode::UNAUTHORIZED, "unauthorized".into())
-            }
-            Err(TokenValidatorError::TokenExpired(err)) => {
-                tracing::info!(?err, "Token validation failed: token expired");
-                (StatusCode::UNAUTHORIZED, "unauthorized".into())
-            }
+            Err(e) => map_token_validation_err_to_response(e),
         }
     }
 
@@ -853,13 +916,15 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
             TunnelState::SessionEstablished { .. } => {
                 *inner_state = TunnelState::SessionEstablished { session_expiry };
             }
-            TunnelState::Assigned { address, .. } => {
-                *inner_state = TunnelState::Assigned {
+            TunnelState::LegacyAddrAssigned { address, .. } => {
+                *inner_state = TunnelState::LegacyAddrAssigned {
                     session_expiry,
                     address: address.clone(),
                 };
             }
-            // XXX(bunert): Should not happen as we error out before updating the state.
+            TunnelState::SockAddrAssigned { .. } => {
+                *inner_state = TunnelState::SockAddrAssigned { session_expiry }
+            }
             TunnelState::Closed => tracing::error!("Updating tunnel session but in closed state"),
         };
     }
@@ -879,14 +944,20 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
 
     fn get_addresses(&self) -> Result<Vec<EndhostAddr>, AddressAssignmentError> {
         let guard = self.inner_state.read().expect("no fail");
-        if let TunnelState::Assigned {
-            address,
-            session_expiry: _,
-        } = &*guard
-        {
-            return Ok(vec![address.address]);
+
+        match &*guard {
+            TunnelState::LegacyAddrAssigned { address, .. } => Ok(vec![address.address]),
+            TunnelState::SockAddrAssigned { .. } => Ok(vec![]),
+            _ => Err(AddressAssignmentError::NoAddressAssigned),
         }
-        Err(AddressAssignmentError::NoAddressAssigned)
+    }
+
+    fn get_socket_addr(&self) -> Option<SocketAddr> {
+        let guard = self.inner_state.read().expect("no fail");
+        if let TunnelState::SockAddrAssigned { .. } = &*guard {
+            return Some(self.remote_sock_addr);
+        }
+        None
     }
 
     async fn await_session_expiry(&self) {
@@ -941,7 +1012,7 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         let mut inner_state = self.inner_state.write().expect("no fail");
 
         // Put address grant on hold
-        if let TunnelState::Assigned {
+        if let TunnelState::LegacyAddrAssigned {
             session_expiry: _,
             address,
         } = &*inner_state
@@ -951,6 +1022,23 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         }
 
         self.locked_update_state(&mut inner_state, TunnelState::Closed);
+    }
+}
+
+fn map_token_validation_err_to_response(value: TokenValidatorError) -> (StatusCode, Vec<u8>) {
+    match value {
+        TokenValidatorError::JwtSignatureInvalid() => {
+            tracing::info!("Invalid JWT Signature");
+            (StatusCode::UNAUTHORIZED, "unauthorized".into())
+        }
+        TokenValidatorError::JwtError(err) => {
+            tracing::info!(?err, "Token validation failed");
+            (StatusCode::UNAUTHORIZED, "unauthorized".into())
+        }
+        TokenValidatorError::TokenExpired(err) => {
+            tracing::info!(?err, "Token validation failed: token expired");
+            (StatusCode::UNAUTHORIZED, "unauthorized".into())
+        }
     }
 }
 
@@ -967,9 +1055,12 @@ enum TunnelState {
     SessionEstablished {
         session_expiry: SystemTime,
     },
-    Assigned {
+    LegacyAddrAssigned {
         session_expiry: SystemTime,
         address: AddressAllocation,
+    },
+    SockAddrAssigned {
+        session_expiry: SystemTime,
     },
     Closed,
 }
@@ -978,7 +1069,8 @@ impl TunnelState {
     fn session_validity(&self) -> Result<SystemTime, TunnelStateError> {
         match self {
             TunnelState::SessionEstablished { session_expiry } => Ok(*session_expiry),
-            TunnelState::Assigned { session_expiry, .. } => Ok(*session_expiry),
+            TunnelState::LegacyAddrAssigned { session_expiry, .. } => Ok(*session_expiry),
+            TunnelState::SockAddrAssigned { session_expiry, .. } => Ok(*session_expiry),
             _ => Err(TunnelStateError::InvalidState(self.clone())),
         }
     }
@@ -995,24 +1087,32 @@ impl std::fmt::Display for TunnelState {
                     DateTime::<Utc>::from(*session_expiry)
                 )
             }
-            TunnelState::Assigned {
+            TunnelState::LegacyAddrAssigned {
                 session_expiry,
                 address,
             } => {
                 write!(
                     f,
-                    "Assigned (valid until: {}, addresses: [{}])",
+                    "LegacyAddrAssigned (valid until: {}, addresses: [{}])",
                     DateTime::<Utc>::from(*session_expiry),
                     address.address
                 )
             }
             TunnelState::Closed => write!(f, "Closed"),
+            TunnelState::SockAddrAssigned { session_expiry } => {
+                write!(
+                    f,
+                    "Remote socket address assigned (valid until: {}).",
+                    DateTime::<Utc>::from(*session_expiry),
+                )
+            }
         }
     }
 }
 
 #[derive(Debug)]
 enum ControlRequest {
+    SocketAddrAssignment(String),
     AddressAssignment(String, AddressAssignRequest),
     SessionRenewal(String),
 }
@@ -1095,6 +1195,7 @@ async fn recv_request(
         // A first defensive check that the path is correct before we
         // actually act on it. (1)
         match req.path {
+            Some(PATH_SOCK_ADDR_ASSIGNMENT) => {}
             Some(PATH_ADDR_ASSIGNMENT) => {}
             Some(PATH_SESSION_RENEWAL) => {}
             Some(_) | None => return Err(InvalidRequest("invalid path".into())),
@@ -1131,6 +1232,9 @@ async fn recv_request(
                     ));
                 };
                 return Ok(ControlRequest::AddressAssignment(bearer_token, addr_req));
+            }
+            PATH_SOCK_ADDR_ASSIGNMENT => {
+                return Ok(ControlRequest::SocketAddrAssignment(bearer_token));
             }
             PATH_SESSION_RENEWAL => return Ok(ControlRequest::SessionRenewal(bearer_token)),
             path => unreachable!("invalid path: {path}"),
@@ -1200,7 +1304,11 @@ mod tests {
                 is_on_hold: AtomicBool::new(false),
             });
 
-            let tun = TunnelStateMachine::new(Arc::new(MockValidator), alloc.clone());
+            let tun = TunnelStateMachine::new(
+                "127.0.0.1:1234".parse().unwrap(),
+                Arc::new(MockValidator),
+                alloc.clone(),
+            );
             // Prepare the state machine by doing a session renewal first
             let (status, body) = tun.process_control_request(
                 SystemTime::now(),

@@ -14,7 +14,7 @@
 //! SNAP tunnel control requests.
 
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::SystemTime,
 };
 
@@ -97,6 +97,84 @@ impl AddressRange {
                 Ok(Ipv6Net::new_assert(Ipv6Addr::from(bytes), self.prefix_length as u8).into())
             }
             v => Err(AddrError::InvalidIPVersion(v)),
+        }
+    }
+}
+
+/// Represents a socket addr assignment request.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SocketAddrAssignmentRequest {}
+
+/// Represents a socket addr assignment response.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SocketAddrAssignmentResponse {
+    /// Version MUST be either 4 or 6, indicating IPv4 or IPv6 respectively.
+    #[prost(uint32, tag = "1")]
+    pub ip_version: u32,
+    /// The IP address in network byte order. The length of the address
+    /// must be 4 for version = 4 and 16 for version = 6.
+    #[prost(bytes = "vec", tag = "2")]
+    pub address: Vec<u8>,
+    /// The port of the endhost socket address.
+    #[prost(uint32, tag = "3")]
+    pub port: u32,
+}
+
+impl SocketAddrAssignmentResponse {
+    /// Converts the response to a standard `std::net::SocketAddr`.
+    pub fn socket_addr(&self) -> Result<SocketAddr, AddrError> {
+        let port = self
+            .port
+            .try_into()
+            .map_err(|_| AddrError::InvalidPort(self.port))?;
+
+        match self.ip_version {
+            4 => {
+                if self.address.len() != 4 {
+                    return Err(AddrError::InvalidAddressLen {
+                        actual: self.address.len() as u8,
+                        expected: 4,
+                    });
+                }
+                let mut bytes = [0u8; 4];
+                bytes.copy_from_slice(&self.address);
+                let addr = Ipv4Addr::from(bytes);
+                Ok(SocketAddr::new(addr.into(), port))
+            }
+            6 => {
+                if self.address.len() != 16 {
+                    return Err(AddrError::InvalidAddressLen {
+                        actual: self.address.len() as u8,
+                        expected: 16,
+                    });
+                }
+                let mut bytes = [0u8; 16];
+                bytes.copy_from_slice(&self.address);
+                let addr = Ipv6Addr::from(bytes);
+                Ok(SocketAddr::new(addr.into(), port))
+            }
+            v => Err(AddrError::InvalidIPVersion(v)),
+        }
+    }
+}
+
+impl From<SocketAddr> for SocketAddrAssignmentResponse {
+    fn from(socket_addr: SocketAddr) -> Self {
+        match socket_addr {
+            SocketAddr::V4(addr) => {
+                Self {
+                    ip_version: 4,
+                    address: addr.ip().octets().to_vec(),
+                    port: addr.port() as u32,
+                }
+            }
+            SocketAddr::V6(addr) => {
+                Self {
+                    ip_version: 6,
+                    address: addr.ip().octets().to_vec(),
+                    port: addr.port() as u32,
+                }
+            }
         }
     }
 }
@@ -184,6 +262,9 @@ pub enum AddrError {
     /// Wildcard ISD-AS is not allowed.
     #[error("wildcard ISD-AS is not allowed")]
     InvalidIsdAs,
+    /// Provided port is outside of allowed range 1..65535.
+    #[error("port outside of allowed range: {0}")]
+    InvalidPort(u32),
 }
 
 #[cfg(test)]

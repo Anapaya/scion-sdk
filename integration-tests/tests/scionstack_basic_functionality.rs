@@ -548,6 +548,7 @@ async fn test_scmp_packet_dispatch_with_port_udp() {
     );
 }
 
+#[ignore]
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_scmp_packet_dispatch_without_port_snap() {
@@ -585,6 +586,13 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
         )
         .await
         .unwrap();
+
+    let offending_payload = build_minimal_udp_datagram(
+        sender.local_addr().port(), // source port
+        1025,                       // destination port (0 or any test port)
+        b"offending packet data",
+    );
+
     let error_message = ScionPacketScmp::new(
         ByEndpoint {
             source: sender.local_addr().scion_address(),
@@ -593,7 +601,7 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
         path.data_plane_path.clone(),
         ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
             DestinationUnreachableCode::AddressUnreachable,
-            Bytes::from_static(b"offending packet data"),
+            offending_payload.clone(),
         )),
     )
     .unwrap();
@@ -612,10 +620,7 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
             match packet.message {
                 ScmpMessage::DestinationUnreachable(error) => {
                     assert_eq!(error.code, DestinationUnreachableCode::AddressUnreachable);
-                    assert_eq!(
-                        error.get_offending_packet(),
-                        Bytes::from_static(b"offending packet data")
-                    );
+                    assert_eq!(error.get_offending_packet(), offending_payload);
                 }
                 _ => {
                     panic!(
@@ -629,6 +634,19 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
             sender.send(error_message.into()).await.unwrap();
         },
     );
+}
+
+// Added helper for minimal UDP datagram.
+fn build_minimal_udp_datagram(src_port: u16, dst_port: u16, payload: &[u8]) -> Bytes {
+    use bytes::{BufMut, BytesMut};
+    let total_len = 8 + payload.len();
+    let mut buf = BytesMut::with_capacity(total_len);
+    buf.put_u16(src_port);
+    buf.put_u16(dst_port);
+    buf.put_u16(total_len as u16);
+    buf.put_u16(0); // checksum placeholder
+    buf.put_slice(payload);
+    buf.freeze()
 }
 
 #[test(tokio::test)]

@@ -20,17 +20,18 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use scion_proto::address::EndhostAddr;
 use serde::{Deserialize, Serialize};
 use snap_tun::server::SnapTunToken;
 
 pub mod dto;
 
+type Inner<T> = Arc<RwLock<BTreeMap<SocketAddr, Arc<snap_tun::server::Sender<T>>>>>;
+
 /// Shared tunnel gateway state.
 #[derive(Debug, Default, Clone)]
 pub struct SharedTunnelGatewayState<T: SnapTunToken>(
     /// Mapping from assigned addresses to their corresponding tunnel senders.
-    Arc<RwLock<BTreeMap<EndhostAddr, Arc<snap_tun::server::Sender<T>>>>>,
+    Inner<T>,
 );
 
 impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
@@ -41,7 +42,7 @@ impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
 }
 
 impl<T: SnapTunToken> Deref for SharedTunnelGatewayState<T> {
-    type Target = Arc<RwLock<BTreeMap<EndhostAddr, Arc<snap_tun::server::Sender<T>>>>>;
+    type Target = Inner<T>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -54,7 +55,7 @@ impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
     /// If an existing mapping exists, it is overwritten.
     pub(crate) fn add_tunnel_mapping(
         &self,
-        addr: EndhostAddr,
+        addr: SocketAddr,
         tunnel: Arc<snap_tun::server::Sender<T>>,
     ) {
         let mut tunnels = self.write().expect("no fail");
@@ -74,7 +75,7 @@ impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
     /// If no mapping exists, nothing happens.
     pub(crate) fn remove_tunnel_mapping_if_same(
         &self,
-        addr: EndhostAddr,
+        addr: SocketAddr,
         should_contain: &Arc<snap_tun::server::Sender<T>>,
     ) {
         let mut tunnels = self.write().expect("no fail");
@@ -97,7 +98,7 @@ impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
     /// Gets the tunnel mapped to the given address, if any.
     pub(crate) fn get_mapped_tunnel(
         &self,
-        addr: EndhostAddr,
+        addr: SocketAddr,
     ) -> Option<Arc<snap_tun::server::Sender<T>>> {
         let tunnels = self.read().expect("no fail");
         tunnels.get(&addr).cloned()

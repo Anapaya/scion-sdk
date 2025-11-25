@@ -14,14 +14,14 @@
 //! Tunnel gateway.
 
 use std::{
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
 use bytes::Bytes;
 use quinn::{Connection, Endpoint as QuinnEndpoint};
 use scion_proto::{
-    address::{EndhostAddr, HostAddr, ScionAddr},
+    address::{EndhostAddr, HostAddr, IsdAsn, ScionAddr},
     packet::{ByEndpoint, ScionPacketScmp, ScmpEncodeError, layout::ScionPacketOffset},
     path::DataPlanePath,
     scmp::{ParameterProblemCode, ScmpMessage, ScmpParameterProblem},
@@ -129,23 +129,19 @@ where
             }
         };
 
-        let assigned_addrs = tx.assigned_addresses();
-        assert!(
-            !assigned_addrs.is_empty(),
-            "At least one address must be assigned"
-        );
+        // XXX: we only assigned a single address. Once we switch to socket
+        // based addressing, this is removed.
+        let assigned_addr = tx
+            .assigned_addresses()
+            .first()
+            .map(|a| SocketAddr::new(a.local_address(), 0))
+            .xor(tx.assigned_socket_addr())
+            .expect("At least one address or socket addr must be assigned");
 
         self.metrics.snaptun_connections_active.inc();
 
         // Record the assigned addresses in the tracing span.
-        Span::current().record(
-            "assigned",
-            assigned_addrs
-                .iter()
-                .map(|a| a.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
+        Span::current().record("assigned", assigned_addr.to_string());
 
         // Spawn a task to handle the session control stream.
         tokio::spawn(
@@ -162,15 +158,11 @@ where
             .in_current_span(),
         );
 
-        let cloned_addrs: Vec<EndhostAddr> = assigned_addrs.clone();
+        // XXX: assembles socket addresses that correspond to the assigned
+        // endhost addresses.
         let shared_tx = Arc::new(tx);
-        // Insert the tunnel for each assigned address into the tunnels map.
-        {
-            for &addr in assigned_addrs.iter() {
-                self.state.add_tunnel_mapping(addr, shared_tx.clone());
-                tracing::debug!(%addr, "Added new SNAP tunnel");
-            }
-        }
+        self.state
+            .add_tunnel_mapping(assigned_addr, shared_tx.clone());
 
         cancellation_token
             .run_until_cancelled({
@@ -180,7 +172,7 @@ where
                         // Handle new datagram.
                         match rx.receive().await {
                             Ok(data) => {
-                                match inbound_datagram_check(&data[..], &assigned_addrs) {
+                                match inbound_datagram_check(&data[..], assigned_addr.ip()) {
                                     Ok(pkt) => {
                                         dispatcher.try_dispatch(pkt);
                                     }
@@ -191,7 +183,11 @@ where
                                             e,
                                             data,
                                             local_addr,
-                                            assigned_addrs[0],
+                                            // XXX: the SNAP generating SCMP
+                                            // errors is a bit bogus, as the
+                                            // SNAP technically is not a node in
+                                            // the SCION-network.
+                                            EndhostAddr::new(IsdAsn::from(0), assigned_addr.ip()),
                                             shared_tx.clone(),
                                         );
                                     }
@@ -217,9 +213,8 @@ where
             .await;
 
         // The session was closed by the client or cancelled by the server.
-        for addr in cloned_addrs {
-            self.state.remove_tunnel_mapping_if_same(addr, &shared_tx);
-        }
+        self.state
+            .remove_tunnel_mapping_if_same(assigned_addr, &shared_tx);
 
         self.metrics.snaptun_connections_active.dec();
     }

@@ -16,7 +16,10 @@
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use scion_proto::{address::EndhostAddr, packet::ScionPacketRaw, wire_encoding::WireEncodeVec};
+use scion_proto::{
+    packet::{ScionPacketRaw, classify_scion_packet},
+    wire_encoding::WireEncodeVec,
+};
 use scion_sdk_token_validator::validator::Token;
 use serde::Deserialize;
 use snap_tun::server::{AddressAssignmentError, SendPacketError};
@@ -68,24 +71,37 @@ where
         while let Some(packet) = receiver.recv().await {
             self.metrics.dispatch_queue_size.dec();
 
-            let dest_addr = match packet.headers.address.destination() {
-                Some(addr) => addr,
-                None => {
+            // Classify so we can get the port (if any)
+            // XXX: Another packet duplication that should disappear.
+            let classification = match classify_scion_packet(packet.clone()) {
+                Ok(c) => c,
+                Err(e) => {
                     self.metrics.invalid_packets_errors.inc();
-                    tracing::debug!("Destination address couldn't be decoded.");
-                    continue;
-                }
-            };
-            let dest_addr: EndhostAddr = match EndhostAddr::try_from(dest_addr) {
-                Ok(addr) => addr,
-                Err(err) => {
-                    self.metrics.invalid_packets_errors.inc();
-                    tracing::debug!(%err, "Destination address is not a valid endhost address");
+                    tracing::debug!(error=%e, "Failed to classify packet");
                     continue;
                 }
             };
 
-            match self.state.get_mapped_tunnel(dest_addr) {
+            let Some(dest_addr) = classification.destination() else {
+                self.metrics.invalid_packets_errors.inc();
+                tracing::debug!("Could not deduce destination socket address after classification");
+                continue;
+            };
+
+            let Some(mut sock_addr) = dest_addr.local_address() else {
+                self.metrics.invalid_packets_errors.inc();
+                tracing::debug!("Found invalid service address");
+                continue;
+            };
+            let mut tun = self.state.get_mapped_tunnel(sock_addr);
+            if tun.is_none() {
+                // XXX: If we can't find the entry for a specific port, we try with
+                // a wildcard ISD-AS and port.
+                sock_addr.set_port(0);
+                tun = self.state.get_mapped_tunnel(sock_addr);
+            }
+
+            match tun {
                 Some(tun) => {
                     let raw: Bytes = packet.encode_to_bytes_vec().concat().into();
                     tracing::trace!(remote = %tun.remote_underlay_address(), remote_virt_addr = %dest_addr, pkt_len=%raw.len(), "Dispatching packet");

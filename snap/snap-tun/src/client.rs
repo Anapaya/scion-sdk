@@ -15,7 +15,7 @@
 
 use std::{
     borrow::Cow,
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     ops::Deref,
     pin::Pin,
     sync::{Arc, RwLock},
@@ -30,7 +30,7 @@ use tokio::{sync::watch, task::JoinHandle};
 
 use crate::requests::{
     AddrError, AddressAssignRequest, AddressAssignResponse, AddressRange, SessionRenewalResponse,
-    system_time_from_unix_epoch_secs,
+    SocketAddrAssignmentRequest, SocketAddrAssignmentResponse, system_time_from_unix_epoch_secs,
 };
 
 /// Maximum size of a control message, both request and response.
@@ -75,6 +75,7 @@ pub struct ClientBuilder {
     desired_addresses: Vec<EndhostAddr>,
     initial_session_token: String,
     auto_session_renewal: Option<AutoSessionRenewal>,
+    sock_addr_assignment: bool,
 }
 
 impl ClientBuilder {
@@ -84,6 +85,7 @@ impl ClientBuilder {
             desired_addresses: Vec::new(),
             initial_session_token: initial_session_token.as_ref().into(),
             auto_session_renewal: None,
+            sock_addr_assignment: false,
         }
     }
 
@@ -97,6 +99,12 @@ impl ClientBuilder {
     /// Enable automatic session renewal.
     pub fn with_auto_session_renewal(mut self, session_renewal: AutoSessionRenewal) -> Self {
         self.auto_session_renewal = Some(session_renewal);
+        self
+    }
+
+    /// Enable socket address assignment
+    pub fn with_sock_addr_assignment(mut self) -> Self {
+        self.sock_addr_assignment = true;
         self
     }
 
@@ -115,7 +123,11 @@ impl ClientBuilder {
 
         ctrl.state.write().expect("no fail").session_token = self.initial_session_token;
         ctrl.renew_session().await?;
-        ctrl.request_address(self.desired_addresses.clone()).await?;
+        if self.sock_addr_assignment {
+            ctrl.request_socket_addr().await?;
+        } else {
+            ctrl.request_address(self.desired_addresses.clone()).await?;
+        }
 
         if let Some(auto_session_renewal) = self.auto_session_renewal.clone() {
             ctrl.start_auto_session_renewal(auto_session_renewal, expiry_receiver);
@@ -142,6 +154,15 @@ impl Control {
             .clone()
     }
 
+    /// Returns the socket address assigned by the server. This typically
+    /// corresponds to the client's _remote_ socket address; i.e. the possibly
+    /// NAT'ed address of the client visible to the server.
+    ///
+    /// It is up to the client to use the correct ISD-AS for this tunnel.
+    pub fn assigned_sock_addr(&self) -> Option<SocketAddr> {
+        self.state.read().expect("no fail").assigned_sock_addr
+    }
+
     /// Returns the session expiry time.
     pub fn session_expiry(&self) -> SystemTime {
         self.state.read().expect("no fail").session_expiry
@@ -152,9 +173,39 @@ impl Control {
         self.state.read().expect("no fail").session_token.clone()
     }
 
+    /// Sends a socket address assign request to the snaptun server.
+    async fn request_socket_addr(&mut self) -> Result<(), ControlError> {
+        tracing::debug!("Requesting socket address assignment");
+        let (mut snd, mut rcv) = self.conn.open_bi().await?;
+
+        let request = SocketAddrAssignmentRequest {};
+
+        let body = request.encode_to_vec();
+        let token = self.state.read().expect("no fail").session_token.clone();
+        send_control_request(
+            &mut snd,
+            crate::PATH_SOCK_ADDR_ASSIGNMENT,
+            body.as_ref(),
+            &token,
+        )
+        .await?;
+
+        // Parse address assignment response
+        let mut resp_buf = [0u8; MAX_CTRL_MESSAGE_SIZE];
+        let response =
+            recv_response::<SocketAddrAssignmentResponse>(&mut resp_buf[..], &mut rcv).await?;
+
+        let sock_addr = response
+            .socket_addr()
+            .map_err(|e| ControlError::AddressAssignmentFailed(AddrAssignError::InvalidAddr(e)))?;
+
+        let mut sstate = self.state.0.write().expect("no fail");
+        sstate.assigned_sock_addr = Some(sock_addr);
+
+        Ok(())
+    }
+
     /// Sends an address assign request to the snaptun server.
-    ///
-    /// In addition, this also extends the session validity based on the token validity.
     ///
     /// # Arguments
     /// * `desired_addresses` - Client can request specific [EndhostAddr] from the server.
@@ -383,6 +434,9 @@ struct ConnState {
     session_token: String,
     session_expiry: SystemTime,
     assigned_addresses: Vec<EndhostAddr>,
+    // The socket address that is assigned by the remote and should be used as
+    // the endhost socket address for this tunnel.
+    assigned_sock_addr: Option<SocketAddr>,
     expiry_notifier: watch::Sender<()>,
 }
 
@@ -392,6 +446,7 @@ impl ConnState {
             session_token: String::new(),
             session_expiry: SystemTime::UNIX_EPOCH,
             assigned_addresses: Vec::new(),
+            assigned_sock_addr: None,
             expiry_notifier,
         }
     }
