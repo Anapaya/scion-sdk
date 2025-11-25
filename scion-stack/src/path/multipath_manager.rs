@@ -22,7 +22,7 @@ use std::{
     collections::HashMap,
     hash::RandomState,
     ops::Deref,
-    sync::{Arc, Weak, atomic::AtomicBool},
+    sync::{Arc, Mutex, Weak, atomic::AtomicBool},
     time::{Duration, SystemTime},
 };
 
@@ -33,8 +33,8 @@ use scion_proto::{
     path::{Path, PathFingerprint},
 };
 use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
-use tokio::{select, task::JoinHandle};
-use tracing::{Instrument, instrument, span};
+use tokio::{select, sync::Notify, task::JoinHandle};
+use tracing::{Instrument, instrument};
 
 use crate::path::{
     PathStrategy,
@@ -72,14 +72,6 @@ impl MultiPathManagerConfig {
 
         Ok(())
     }
-}
-
-/// Errors that can occur when getting a path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum GetPathError {
-    /// No paths are available for the given src-dst pair.
-    #[error("no paths are available for the given src-dst pair")]
-    NoPaths,
 }
 
 // TODO : Implement path fingerprinting by hop fields instead of requiring metadata
@@ -123,26 +115,26 @@ impl<F: PathFetcher> MultiPathManager<F> {
     /// If no active path is set, returns None.
     ///
     /// If the src-dst pair is not yet managed, starts managing it.
-    pub fn try_get_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime) -> Option<Path> {
-        let guard = scc::Guard::new();
-
-        // Active path should never be expired
-        match self
+    pub fn try_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime) -> Option<Path> {
+        let try_path = self
             .0
             .managed_paths
-            .peek(&(src, dst), &guard)?
-            .try_active_path()
-            .as_ref()
-        {
+            .peek_with(&(src, dst), |_, path_set| {
+                path_set.try_active_path().as_deref().map(|p| p.0.clone())
+            })
+            .flatten();
+
+        match try_path {
             Some(active) => {
                 // XXX(ake): Since the Paths are actively managed, they should never be expired
                 // here.
-                let expired = active.0.is_expired(now.into()).unwrap_or(true);
+                let expired = active.is_expired(now.into()).unwrap_or(true);
                 debug_assert!(!expired, "Returned expired path from try_get_path");
 
-                Some(active.0.clone())
+                Some(active)
             }
             None => {
+                // Start managing paths for the src-dst pair
                 self.fast_ensure_managed_paths(src, dst);
                 None
             }
@@ -154,28 +146,58 @@ impl<F: PathFetcher> MultiPathManager<F> {
     /// If the src-dst pair is not yet managed, starts managing it, possibly waiting for the first
     /// path fetch.
     ///
-    /// If no paths are available, either because of failure or non-existence, returns None.
-    pub async fn get_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime) -> Option<Path> {
-        // Get currently active path
-        if let Some(path) = self.try_get_path(src, dst, now) {
-            return Some(path);
+    /// Returns an error if no path is available after waiting.
+    pub async fn path(
+        &self,
+        src: IsdAsn,
+        dst: IsdAsn,
+        now: SystemTime,
+    ) -> Result<Path, Arc<PathFetchError>> {
+        let try_path = self
+            .0
+            .managed_paths
+            .peek_with(&(src, dst), |_, path_set| {
+                path_set.try_active_path().as_deref().map(|p| p.0.clone())
+            })
+            .flatten();
+
+        let res = match try_path {
+            Some(active) => Ok(active),
+            None => {
+                // Ensure paths are being managed
+                let path_set = self.ensure_managed_paths(src, dst);
+
+                // Try to get active path, possibly waiting for initialization/update
+                let active = path_set.active_path().await.as_ref().map(|p| p.0.clone());
+
+                // Check active path after waiting
+                match active {
+                    Some(active) => Ok(active),
+                    None => {
+                        // No active path even after waiting, return last error if any
+                        let last_error = path_set.last_error();
+                        match last_error {
+                            Some(e) => Err(e),
+                            None => {
+                                // There is a chance for a race here, where the error was cleared
+                                // between the wait and now. In that case, we assume no paths were
+                                // found.
+                                Err(Arc::new(PathFetchError::NoPathsFound))
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        if let Ok(active) = &res {
+            // XXX(ake): Since the Paths are actively managed, they should never be expired
+            // here.
+            let expired = active.is_expired(now.into()).unwrap_or(true);
+            debug_assert!(!expired, "Returned expired path from get_path");
         }
 
-        // Ensure the src-dst pair is managed and await active path
-        let managed = self.ensure_managed_paths(src, dst);
-
-        // Await path update if necessary
-
-        let span = span!(tracing::Level::DEBUG, "get_path", %src, %dst);
-        managed.maybe_await_path_update(now).instrument(span).await;
-
-        // Get active path again
-        let active = managed.try_active_path().as_ref().map(|p| p.0.clone())?;
-
-        let expired = active.is_expired(now.into()).unwrap_or(true);
-        debug_assert!(!expired, "Returned expired path from get_path");
-
-        Some(active)
+        res
     }
 
     /// Creates a weak reference to this MultiPathManager.
@@ -250,7 +272,7 @@ impl<F: PathFetcher> SyncPathManager for MultiPathManager<F> {
         dst: IsdAsn,
         now: chrono::DateTime<chrono::Utc>,
     ) -> std::io::Result<Option<Path<bytes::Bytes>>> {
-        Ok(self.try_get_path(src, dst, now.into()))
+        Ok(self.try_path(src, dst, now.into()))
     }
 }
 
@@ -262,9 +284,24 @@ impl<F: PathFetcher> PathManager for MultiPathManager<F> {
         now: chrono::DateTime<chrono::Utc>,
     ) -> impl crate::types::ResFut<'_, Path<bytes::Bytes>, super::manager::PathWaitError> {
         async move {
-            self.get_path(src, dst, now.into())
-                .await
-                .ok_or(super::manager::PathWaitError::NoPathFound)
+            match self.path(src, dst, now.into()).await {
+                Ok(path) => Ok(path),
+                Err(e) => {
+                    match &*e {
+                        PathFetchError::FetchSegments(error) => {
+                            Err(super::manager::PathWaitError::FetchFailed(format!(
+                                "{error}"
+                            )))
+                        }
+                        PathFetchError::InternalError(msg) => {
+                            Err(super::manager::PathWaitError::FetchFailed(msg.to_string()))
+                        }
+                        PathFetchError::NoPathsFound => {
+                            Err(super::manager::PathWaitError::NoPathFound)
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -328,6 +365,7 @@ struct PathSet<F: PathFetcher> {
     max_idle_period: Duration,
     /// Backoff for path fetch failures
     backoff: ExponentialBackoff,
+
     /// Parent multipath manager
     manager: MultiPathManagerRef<F>,
 
@@ -338,17 +376,27 @@ struct PathSet<F: PathFetcher> {
     was_used_in_idle_period: AtomicBool,
 
     /// Internal state
-    state: tokio::sync::Mutex<PathSetState>,
+    state: Mutex<PathSetState>,
+    /// Seperate state for update notifications
+    update_state: Mutex<PathSetUpdateState>,
+}
+
+#[derive(Debug, Default)]
+struct PathSetUpdateState {
+    /// Initial fetch was completed
+    initialized: bool,
+    /// Ongoing fetch start time
+    ongoing_start: Option<SystemTime>,
+    /// Fetch completion notifier
+    completed_notify: Arc<Notify>,
 }
 
 /// Internal state of the managed path set.
 struct PathSetState {
     /// Cached paths
     cached_paths: Vec<PathSetEntry>,
-    /// Last time paths were refetched
-    last_refetch: SystemTime,
     /// Last error encountered during path fetch
-    last_error: Option<PathFetchError>,
+    last_error: Option<Arc<PathFetchError>>,
     /// Number of consecutive failed fetch attempts
     failed_attempts: u32,
     /// Next time to refetch paths
@@ -356,6 +404,7 @@ struct PathSetState {
     /// Next time to check for idleness
     next_idle_check: SystemTime,
 }
+
 // Public api
 impl<F: PathFetcher> PathSet<F> {
     pub fn new(
@@ -377,9 +426,8 @@ impl<F: PathFetcher> PathSet<F> {
             backoff: ExponentialBackoff::new_from_config(backoff),
             min_expiry_threshold,
             max_idle_period,
-            state: tokio::sync::Mutex::new(PathSetState {
+            state: Mutex::new(PathSetState {
                 cached_paths: Vec::new(),
-                last_refetch: SystemTime::UNIX_EPOCH,
                 last_error: None,
                 failed_attempts: 0,
                 next_refetch: SystemTime::now(),
@@ -387,10 +435,11 @@ impl<F: PathFetcher> PathSet<F> {
             }),
             active_path: ArcSwapOption::from(None),
             was_used_in_idle_period: AtomicBool::new(true),
+            update_state: Mutex::new(PathSetUpdateState::default()),
         }
     }
 
-    /// Tries to get the currently active path without refetching.
+    /// Tries to get the currently active path without awaiting ongoing updates.
     pub fn try_active_path(
         &self,
     ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, PathFingerprint)>>> {
@@ -398,6 +447,64 @@ impl<F: PathFetcher> PathSet<F> {
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
         self.active_path.load()
+    }
+
+    /// Gets the currently active path, awaiting ongoing updates if necessary.
+    pub async fn active_path(
+        &self,
+    ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, PathFingerprint)>>> {
+        self.was_used_in_idle_period
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        {
+            let active_guard = self.active_path.load();
+            if active_guard.is_some() {
+                return active_guard;
+            }
+        }
+
+        self.await_ongoing_update().await;
+
+        self.active_path.load()
+    }
+
+    pub fn last_error(&self) -> Option<Arc<PathFetchError>> {
+        let guard = self.state.lock().unwrap();
+        guard.last_error.clone()
+    }
+
+    /// Awaits ongoing path updates or initialization if necessary.
+    pub async fn await_ongoing_update(&self) {
+        let finish_notification = {
+            let notify_guard = self.update_state.lock().unwrap();
+
+            // No ongoing update and is initialized
+            if notify_guard.ongoing_start.is_none() && notify_guard.initialized {
+                return;
+            }
+
+            // Ongoing update or not initialized, wait for completion
+            notify_guard.completed_notify.clone().notified_owned()
+        };
+
+        finish_notification.await;
+    }
+
+    /// Awaits initial path fetch completion.
+    #[expect(unused)]
+    pub async fn wait_initialized(&self) {
+        let finish_notification = {
+            let notify_guard = self.update_state.lock().unwrap();
+
+            // Already initialized
+            if notify_guard.initialized {
+                return;
+            }
+
+            notify_guard.completed_notify.clone().notified_owned()
+        };
+
+        finish_notification.await;
     }
 }
 // Management task
@@ -413,38 +520,17 @@ impl<F: PathFetcher> PathSet<F> {
 
             async move {
                 // Update the managed path tuple on start
-                this.maybe_refetch_and_update(SystemTime::now()).await;
+                this.fetch_and_update(SystemTime::now()).await;
 
                 loop {
                     let now = SystemTime::now();
                     tracing::trace!("Managed paths task tick");
-
-                    let (next_refetch, next_idle_check) = {
-                        let guard = this.state.lock().await;
-                        (guard.next_refetch, guard.next_idle_check)
-                    };
-                    // Determine the next fetch timeout
-                    let next_fetch_timeout = next_refetch
-                        .duration_since(now)
-                        .unwrap_or_else(|_| Duration::from_secs(0)); // If time is in the past, fetch immediately
-
-                    let next_idle_timeout = next_idle_check
-                        .duration_since(now)
-                        .unwrap_or_else(|_| Duration::from_secs(0)); // If time is in the past, check immediately
+                    let next_tick = this.next_maintain(now).await;
 
                     select! {
-                        // Next fetch timeout
-                        _ = tokio::time::sleep(next_fetch_timeout) => {
-                            this.maybe_refetch_and_update(now).await;
-                        }
-                        // Idle timeout
-                        _ = tokio::time::sleep(next_idle_timeout) => {
-                            if this.idle_check(now).await {
-                                if let Some(mgr) = this.manager.get() {
-                                    mgr.stop_managing_paths(this.src, this.dst);
-                                }
-                                break;
-                            }
+                        // Maintenance Tick
+                        _ = tokio::time::sleep(next_tick) => {
+                            this.maintain(SystemTime::now()).await;
                         }
                         // Cancellation
                         _ = cancel_token.cancelled() => {
@@ -463,41 +549,48 @@ impl<F: PathFetcher> PathSet<F> {
             cancel_token,
         }
     }
-}
-// Internal management
-impl<F: PathFetcher> PathSet<F> {
-    /// If no active path is set, ensures that paths are up to date and waits for the update to
-    /// complete.
-    async fn maybe_await_path_update(&self, now: SystemTime) {
-        if self.active_path.load().is_some() {
-            // Active path is already set, no need to await update
-            return;
-        }
 
-        self.maybe_refetch_and_update(now).await;
+    async fn next_maintain(&self, now: SystemTime) -> Duration {
+        let (next_refetch, next_idle_check) = {
+            let guard = self.state.lock().unwrap();
+            (guard.next_refetch, guard.next_idle_check)
+        };
+
+        // If time is in the past, tick immediately
+        std::cmp::min(next_refetch, next_idle_check)
+            .duration_since(now)
+            .unwrap_or_else(|_| Duration::from_secs(0))
     }
 
-    /// Conditionally refetches paths and updates the cache
+    /// Maintains the path set by checking for idle paths and refetching if necessary.
     ///
-    /// If currently fetching, waits for the fetch to complete
-    async fn maybe_refetch_and_update(&self, now: SystemTime) {
-        // Acquire lock and check if refetch is needed
-        // Since a running refetch holds the lock, this also ensures we wait for ongoing refetches
-        let mut guard = self.state.lock().await;
+    /// Returns true if the path set is idle and should be removed.
+    async fn maintain(&self, now: SystemTime) -> bool {
+        let (next_refetch, next_idle_check) = {
+            let guard = self.state.lock().unwrap();
+            (guard.next_refetch, guard.next_idle_check)
+        };
 
-        // No refetch if minimum delay has not passed
-        if guard.last_refetch + self.min_refetch_delay > now {
-            tracing::trace!(last_fetch = ?guard.last_refetch, now = ?now, "Skipping path refetch, refetch delay not passed");
-            return;
+        if now >= next_idle_check && self.idle_check(now).await {
+            if let Some(mgr) = self.manager.get() {
+                mgr.stop_managing_paths(self.src, self.dst);
+            }
+
+            return true;
         }
 
-        // Proceed with refetch
-        self.locked_refetch_and_update(&mut guard, now).await
-    }
+        if now >= next_refetch {
+            self.fetch_and_update(now).await;
+        }
 
+        false
+    }
+}
+// Internal
+impl<F: PathFetcher> PathSet<F> {
     /// Checks if the path tuple is idle and should be removed.
     async fn idle_check(&self, now: SystemTime) -> bool {
-        let mut guard = self.state.lock().await;
+        let mut guard = self.state.lock().unwrap();
 
         // Was called before idle timeout, do nothing
         if now < guard.next_idle_check {
@@ -521,12 +614,25 @@ impl<F: PathFetcher> PathSet<F> {
             true
         }
     }
-}
-// Internal support functions
-impl<F: PathFetcher> PathSet<F> {
+
     /// Refetches paths and updates the cache
-    async fn locked_refetch_and_update(&self, state: &mut PathSetState, now: SystemTime) {
+    async fn fetch_and_update(&self, now: SystemTime) {
         tracing::debug!("Refetching paths for src-dst pair");
+
+        // Set ongoing update state
+        {
+            let mut notify_guard = self.update_state.lock().unwrap();
+            if notify_guard.ongoing_start.is_some() {
+                debug_assert!(
+                    false,
+                    "Path refetch already ongoing, this should not happen"
+                );
+                tracing::warn!("Path refetch already ongoing, this should not happen");
+                return;
+            }
+
+            notify_guard.ongoing_start = Some(now);
+        }
 
         let path_fetch = async {
             let fetched_paths = self.fetch_and_filter_paths().await?;
@@ -541,7 +647,10 @@ impl<F: PathFetcher> PathSet<F> {
             Ok(fetched_paths)
         };
 
-        match path_fetch.await {
+        let result = path_fetch.await;
+        let mut state = self.state.lock().unwrap();
+
+        match result {
             // Successful fetch and ingestion, at least one path available
             Ok(fetched_paths) => {
                 debug_assert!(
@@ -549,9 +658,9 @@ impl<F: PathFetcher> PathSet<F> {
                     "Must have at least one path after successful fetch and filter"
                 );
 
-                self.locked_update_path_cache(state, fetched_paths, now);
+                self.locked_update_path_cache(&mut state, fetched_paths, now);
                 let earliest_expiry = self
-                    .locked_earliest_expiry(state)
+                    .locked_earliest_expiry(&state)
                     .expect("should have a path available, as new paths were ingested");
 
                 // Reset error state
@@ -567,7 +676,7 @@ impl<F: PathFetcher> PathSet<F> {
             // Failed to fetch, might have no paths available
             Err(e) => {
                 // Maintain path cache with no new paths
-                self.locked_update_path_cache(state, vec![], now);
+                self.locked_update_path_cache(&mut state, vec![], now);
 
                 state.failed_attempts += 1;
                 // Schedule next refetch after a delay
@@ -584,13 +693,22 @@ impl<F: PathFetcher> PathSet<F> {
                     "Failed to fetch new paths"
                 );
 
-                state.last_error = Some(e);
+                state.last_error = Some(Arc::new(e));
             }
         }
 
         // Always update ranking, and possibly active path
-        self.locked_rerank(state);
-        self.locked_maybe_update_active_path(state, now);
+        self.locked_rerank(&mut state);
+        self.locked_maybe_update_active_path(&mut state, now);
+
+        // Set ongoing update state
+        {
+            let mut notify_guard = self.update_state.lock().unwrap();
+            notify_guard.ongoing_start = None;
+            notify_guard.initialized = true;
+            notify_guard.completed_notify.notify_waiters();
+        }
+
         tracing::debug!("Completed path refetch and update");
     }
 

@@ -65,8 +65,8 @@ const PATH_REFETCH_INTERVAL: Duration = Duration::from_secs(60 * 30); // 30 minu
 #[derive(Debug, Error)]
 pub enum PathToError {
     /// Path fetch failed.
-    #[error("fetching paths: {0}")]
-    FetchPaths(String),
+    #[error("path fetch failed: {0}")]
+    FetchFailed(String),
     /// No path found.
     #[error("no path found")]
     NoPathFound,
@@ -83,10 +83,24 @@ pub enum PathWaitError {
     NoPathFound,
 }
 
+/// Path wait errors.
+#[derive(Debug, Clone, Error)]
+pub enum PathWaitTimeoutError {
+    /// Path fetch failed.
+    #[error("path fetch failed: {0}")]
+    FetchFailed(String),
+    /// No path found.
+    #[error("no path found")]
+    NoPathFound,
+    /// Waiting for path timed out
+    #[error("waiting for path timed out")]
+    Timeout,
+}
+
 impl From<PathToError> for PathWaitError {
     fn from(error: PathToError) -> Self {
         match error {
-            PathToError::FetchPaths(msg) => PathWaitError::FetchFailed(msg),
+            PathToError::FetchFailed(msg) => PathWaitError::FetchFailed(msg),
             PathToError::NoPathFound => PathWaitError::NoPathFound,
         }
     }
@@ -102,6 +116,33 @@ pub trait PathManager: SyncPathManager {
         dst: IsdAsn,
         now: DateTime<Utc>,
     ) -> impl ResFut<'_, Path<Bytes>, PathWaitError>;
+
+    /// Returns a path to the destination from the path cache or requests a new path from the SCION
+    /// Control Plane, with a maximum wait time.
+    fn path_timeout(
+        &self,
+        src: IsdAsn,
+        dst: IsdAsn,
+        now: DateTime<Utc>,
+        timeout: Duration,
+    ) -> impl ResFut<'_, Path<Bytes>, PathWaitTimeoutError> {
+        let fut = self.path_wait(src, dst, now);
+        async move {
+            match tokio::time::timeout(timeout, fut).await {
+                Ok(result) => {
+                    result.map_err(|e| {
+                        match e {
+                            PathWaitError::FetchFailed(msg) => {
+                                PathWaitTimeoutError::FetchFailed(msg)
+                            }
+                            PathWaitError::NoPathFound => PathWaitTimeoutError::NoPathFound,
+                        }
+                    })
+                }
+                Err(_) => Err(PathWaitTimeoutError::Timeout),
+            }
+        }
+    }
 }
 
 /// Trait for active path management with sync interface. Implementors of this trait should be
