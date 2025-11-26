@@ -18,6 +18,7 @@
 //! to work together, avoiding circular dependencies.
 
 use std::{
+    collections::BTreeMap,
     num::NonZeroU16,
     time::{Duration, SystemTime},
 };
@@ -103,10 +104,14 @@ pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTes
             pstate.add_router(
                 ia132,
                 vec![NonZeroU16::new(1).unwrap(), NonZeroU16::new(2).unwrap()],
+                vec![],
+                BTreeMap::new(),
             );
             pstate.add_router(
                 ia212,
                 vec![NonZeroU16::new(3).unwrap(), NonZeroU16::new(4).unwrap()],
+                vec![],
+                BTreeMap::new(),
             );
         }
     }

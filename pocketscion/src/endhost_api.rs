@@ -236,7 +236,7 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZero, str::FromStr, time::SystemTime};
+    use std::{collections::BTreeMap, num::NonZero, str::FromStr, time::SystemTime};
 
     use anyhow::Ok;
     use rand::SeedableRng;
@@ -339,10 +339,10 @@ mod tests {
 
         let nz = NonZero::new(1).expect("Last time I checked 1 was not 0");
 
-        let rid = state.add_router(ia1, vec![nz]);
+        let rid = state.add_router(ia1, vec![nz], vec![], BTreeMap::new());
         io.set_router_socket_addr(rid, ips.router_addrs.0);
 
-        let rid = state.add_router(ia2, vec![nz]);
+        let rid = state.add_router(ia2, vec![nz], vec![], BTreeMap::new());
         io.set_router_socket_addr(rid, ips.router_addrs.1);
 
         Ok((state, io, ips))

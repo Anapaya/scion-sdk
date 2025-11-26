@@ -325,13 +325,25 @@ impl SharedPocketScionState {
 // Router Mode
 impl SharedPocketScionState {
     /// Adds a new router.
-    pub fn add_router(&mut self, isd_as: IsdAsn, if_ids: Vec<NonZero<u16>>) -> RouterId {
+    pub fn add_router(
+        &mut self,
+        isd_as: IsdAsn,
+        if_ids: Vec<NonZero<u16>>,
+        snap_data_plane_excludes: Vec<IpNet>,
+        snap_data_plane_interfaces: BTreeMap<String, SocketAddr>,
+    ) -> RouterId {
         let mut sstate = self.system_state.write().unwrap();
         let router_id = RouterId::from_usize(sstate.routers.len());
 
-        sstate
-            .routers
-            .insert(router_id, RouterState { isd_as, if_ids });
+        sstate.routers.insert(
+            router_id,
+            RouterState {
+                isd_as,
+                if_ids,
+                snap_data_plane_excludes,
+                snap_data_plane_interfaces,
+            },
+        );
         router_id
     }
 
@@ -341,16 +353,20 @@ impl SharedPocketScionState {
         sstate.routers.clone()
     }
 
+    /// Returns the cloned state of the given router
+    pub(crate) fn router(&self, router_id: RouterId) -> Option<RouterState> {
+        self.system_state
+            .read()
+            .unwrap()
+            .routers
+            .get(&router_id)
+            .cloned()
+    }
+
     /// Returns a vec of all RouterIds
     pub(crate) fn router_ids(&self) -> Vec<RouterId> {
         let sstate = self.system_state.read().unwrap();
         sstate.routers.keys().cloned().collect()
-    }
-
-    /// Returns the IsdAsn of a Router
-    pub(crate) fn router_ias(&self, router_id: RouterId) -> Option<IsdAsn> {
-        let sstate = self.system_state.read().unwrap();
-        sstate.routers.get(&router_id).map(|router| router.isd_as)
     }
 }
 // Network Sim
@@ -614,6 +630,12 @@ pub struct RouterState {
     pub isd_as: IsdAsn,
     /// The SCION interface IDs of the router.
     pub if_ids: Vec<NonZero<u16>>,
+    /// The SNAP data planes that are connected to the router.
+    /// Data plane ID -> udp underlay address
+    pub snap_data_plane_interfaces: BTreeMap<String, SocketAddr>,
+    /// Networks towards which SCION traffic will not be routed through
+    /// the available SNAPs.
+    pub snap_data_plane_excludes: Vec<IpNet>,
 }
 
 impl From<&RouterState> for RouterStateDto {
@@ -621,6 +643,16 @@ impl From<&RouterState> for RouterStateDto {
         Self {
             isd_as: value.isd_as,
             if_ids: value.if_ids.iter().map(|if_id| if_id.get()).collect(),
+            snap_data_plane_excludes: value
+                .snap_data_plane_excludes
+                .iter()
+                .map(|network| network.to_string())
+                .collect(),
+            snap_data_plane_interfaces: value
+                .snap_data_plane_interfaces
+                .iter()
+                .map(|(id, addr)| (id.clone(), addr.to_string()))
+                .collect(),
         }
     }
 }
@@ -638,7 +670,24 @@ impl TryFrom<RouterStateDto> for RouterState {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Self { isd_as, if_ids })
+        let mut snap_data_plane_interfaces = BTreeMap::new();
+        for (dp_id, addr) in value.snap_data_plane_interfaces.into_iter() {
+            snap_data_plane_interfaces.insert(
+                dp_id,
+                addr.parse::<SocketAddr>().context("invalid address")?,
+            );
+        }
+
+        Ok(Self {
+            isd_as,
+            if_ids,
+            snap_data_plane_excludes: value
+                .snap_data_plane_excludes
+                .into_iter()
+                .map(|network| network.parse::<IpNet>().context("invalid IP network"))
+                .collect::<Result<Vec<_>, _>>()?,
+            snap_data_plane_interfaces,
+        })
     }
 }
 
@@ -953,6 +1002,11 @@ mod tests {
         let _router_id = pstate.add_router(
             isd_as,
             vec![NonZeroU16::new(1).unwrap(), NonZeroU16::new(2).unwrap()],
+            vec!["192.168.0.0/16".parse().unwrap()],
+            BTreeMap::from([(
+                "test-snap-data-plane".to_string(),
+                "127.0.0.1:0".parse().unwrap(),
+            )]),
         );
         let before = pstate.system_state.read().unwrap().clone();
 

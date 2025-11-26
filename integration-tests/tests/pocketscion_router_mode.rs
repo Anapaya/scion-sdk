@@ -14,12 +14,14 @@
 //! Integration tests for PocketSCION in router mode.
 
 use std::{
+    collections::BTreeMap,
     num::NonZeroU16,
     time::{Duration, SystemTime},
     vec,
 };
 
 use bytes::Bytes;
+use ipnet::IpNet;
 use pocketscion::{
     runtime::{PocketScionRuntime, PocketScionRuntimeBuilder},
     state::{RouterId, SharedPocketScionState},
@@ -41,11 +43,13 @@ struct PocketscionTestEnv {
     pub _rid_110: RouterId,
     pub _rid_111: RouterId,
     pub raddr_110: std::net::SocketAddr,
-    #[expect(unused)]
     pub raddr_111: std::net::SocketAddr,
 }
 
-async fn minimal_pocketscion_setup() -> PocketscionTestEnv {
+async fn minimal_pocketscion_setup_router(
+    snap_data_plane_interfaces: BTreeMap<String, std::net::SocketAddr>,
+    snap_data_plane_excludes: Vec<IpNet>,
+) -> PocketscionTestEnv {
     let mut pstate = SharedPocketScionState::new(SystemTime::now());
 
     let ia_110: IsdAsn = "1-ff00:0:110".parse().unwrap();
@@ -54,10 +58,14 @@ async fn minimal_pocketscion_setup() -> PocketscionTestEnv {
     let rid_110 = pstate.add_router(
         ia_110,
         vec![NonZeroU16::new(1).unwrap(), NonZeroU16::new(2).unwrap()],
+        snap_data_plane_excludes,
+        snap_data_plane_interfaces,
     );
     let rid_111 = pstate.add_router(
         ia_111,
         vec![NonZeroU16::new(3).unwrap(), NonZeroU16::new(4).unwrap()],
+        vec![],
+        BTreeMap::new(),
     );
 
     let pocketscion = PocketScionRuntimeBuilder::new()
@@ -90,6 +98,10 @@ async fn minimal_pocketscion_setup() -> PocketscionTestEnv {
         raddr_110,
         raddr_111,
     }
+}
+
+async fn minimal_pocketscion_setup() -> PocketscionTestEnv {
+    minimal_pocketscion_setup_router(BTreeMap::new(), vec![]).await
 }
 
 // Test implementing a simple echo of an echo client and echo server using pocketscion in router
@@ -399,4 +411,346 @@ fn scion_path() -> EncodedStandardPath {
     path.add_segment(info, vec![hop1, hop2])
         .expect("Failed to add segment to SCION path");
     path.into()
+}
+
+// Test 1: SNAP interface forwarding
+//
+// Test that SCION packets are forwarded to the SNAP udp ip interface if it is configured.
+//
+// Topology:
+//   ┌──────────────────────AS1 (1-ff00:0:110) ─┐
+//   │ endhost_behind_snap                      │
+//   │          │                               |
+//   │          ↓                               |
+//   │     snap_socket                          |
+//   │    (127.0.0.1:...)                       |
+//   │         ↕                                |
+//   └─── router_110#1 ─────────────────────────┘
+//             ↕
+//        [core link]
+//             ↕
+//   ┌─── router_111#3 ─────AS2 (1-ff00:0:111)─┐
+//   |         ↕                               |
+//   │     remote_socket                       |
+//   │     (127.0.0.1:...)                     │
+//   └─────────────────────────────────────────┘
+//
+// Test sends two packets:
+//   1. remote_socket → router_111 → router_110 → snap_socket (packet dest: 10.0.0.42:8080)
+//   2. snap_socket → router_110 → router_111 → remote_socket (packet source: 10.0.0.42:8080)
+//
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn snap_interface_forwarding() {
+    // Bind sockets
+    let snap_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind snap socket");
+    let snap_addr = snap_socket.local_addr().unwrap();
+
+    let remote_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind remote socket");
+    let remote_addr = remote_socket.local_addr().unwrap();
+
+    // Setup PocketSCION with SNAP interface
+    let env =
+        minimal_pocketscion_setup_router(BTreeMap::from([("dp-0".to_string(), snap_addr)]), vec![])
+            .await;
+
+    // Hypothetical endhost behind the SNAP (packets to this address are forwarded to snap_socket)
+    let endhost_behind_snap_addr = "10.0.0.42:8080".parse::<std::net::SocketAddr>().unwrap();
+    let endhost_behind_snap_scion_addr = SocketAddr::from_std(env.ia_110, endhost_behind_snap_addr);
+
+    tracing::info!(
+        %snap_addr,
+        %remote_addr,
+        %endhost_behind_snap_addr,
+        "Starting SNAP interface forwarding test"
+    );
+
+    let remote_scion_addr = SocketAddr::from_std(env.ia_111, remote_addr);
+    let test_payload_1 = b"Test from remote to endhost behind SNAP";
+    let test_payload_2 = b"Response from endhost behind SNAP to remote";
+
+    // Spawn SNAP receiver task - snap_socket emulates the udp_ip interface of a SNAP
+    let snap_task = tokio::spawn(async move {
+        // Test Case 1a: Receive packet from remote destined for endhost behind SNAP
+        let mut buf = vec![0u8; 2048];
+        let (len, src_addr) = timeout(Duration::from_secs(3), snap_socket.recv_from(&mut buf))
+            .await
+            .expect("Timeout waiting for packet at SNAP socket")
+            .expect("Failed to receive at SNAP socket");
+        buf.truncate(len);
+
+        tracing::info!(%src_addr, "SNAP socket received packet");
+
+        let packet = ScionPacketUdp::decode(&mut buf.as_slice())
+            .expect("Failed to decode SCION UDP packet at SNAP socket");
+
+        assert_eq!(
+            packet.payload().as_ref(),
+            test_payload_1,
+            "SNAP socket received incorrect payload"
+        );
+        assert_eq!(
+            packet.destination().unwrap(),
+            endhost_behind_snap_scion_addr,
+            "Packet destination should be the endhost behind SNAP"
+        );
+
+        tracing::info!("SNAP socket verified payload, now sending response");
+
+        // Test Case 1b: SNAP Socket → remote
+        let reversed_path = packet
+            .headers
+            .path
+            .to_reversed()
+            .expect("Failed to reverse path");
+
+        let response_pkt = ScionPacketUdp::new(
+            ByEndpoint {
+                source: endhost_behind_snap_scion_addr,
+                destination: packet.source().unwrap(),
+            },
+            reversed_path,
+            test_payload_2.as_ref().into(),
+        )
+        .expect("Failed to create response packet");
+
+        let response_raw = response_pkt.encode_to_bytes_vec().concat();
+        snap_socket
+            .send_to(&response_raw, env.raddr_110)
+            .await
+            .expect("Failed to send from SNAP socket to router");
+
+        tracing::info!("SNAP socket sent response");
+    });
+
+    // Test Case 1a: remote → endhost behind SNAP
+    let packet_to_snap = ScionPacketUdp::new(
+        ByEndpoint {
+            source: remote_scion_addr,
+            destination: endhost_behind_snap_scion_addr,
+        },
+        DataPlanePath::Standard(scion_path()),
+        test_payload_1.as_ref().into(),
+    )
+    .expect("Failed to create packet to endhost behind SNAP");
+
+    let pkt_raw = packet_to_snap.encode_to_bytes_vec().concat();
+    remote_socket
+        .send_to(&pkt_raw, env.raddr_111)
+        .await
+        .expect("Failed to send from remote");
+    tracing::info!("Remote sent packet to endhost behind SNAP");
+
+    // Wait for SNAP task to complete
+    snap_task.await.expect("SNAP task panicked");
+
+    // Test Case 1b: Receive response from SNAP
+    let mut recv_buf = vec![0u8; 2048];
+    let (len, _) = timeout(
+        Duration::from_secs(3),
+        remote_socket.recv_from(&mut recv_buf),
+    )
+    .await
+    .expect("Timeout waiting for response at remote")
+    .expect("Failed to receive at remote socket");
+    recv_buf.truncate(len);
+
+    let response_pkt =
+        ScionPacketUdp::decode(&mut recv_buf.as_slice()).expect("Failed to decode response packet");
+
+    tracing::info!("Remote received response from endhost behind SNAP");
+
+    assert_eq!(
+        response_pkt.payload().as_ref(),
+        test_payload_2,
+        "Remote received incorrect payload from endhost behind SNAP"
+    );
+    assert_eq!(
+        response_pkt.source().unwrap(),
+        endhost_behind_snap_scion_addr,
+        "Response source should be the endhost behind SNAP"
+    );
+
+    tracing::info!("SNAP interface forwarding test completed successfully");
+}
+
+// Test 2: Excluded networks
+//
+// Test that SCION packets are not forwarded to the SNAP udp ip interface if
+// the destination is in the exclude list.
+//
+// Topology:
+//   ┌ AS1 (1-ff00:0:110) ──────────────────────────────┐
+//   |                                                  |
+//   │snap_socket (not used) excluded_socket            |
+//   │ (127.0.0.1:...)       (127.0.0.1:...)            |
+//   |       |                  ↑                       |
+//   │       └─────────────┐    ↓                       |
+//   └──────────────────── router_110#1 ────────────────┘
+//                              ↕
+//                         [core link]
+//                              ↕
+//   ┌ AS2 (1-ff00:0:111)──── router_111#3 ─────────────┐
+//   |                          ↕                       |
+//   │                     remote_socket                |
+//   │                     (127.0.0.1:...)              │
+//   └──────────────────────────────────────────────────┘
+//
+// Config: router_110 has SNAP interface configured, but also has
+//         exclude list: 127.0.0.1/32 (bypasses SNAP for local traffic)
+//
+// Test sends two packets:
+//   1. remote_socket → router_111 → router_110 → excluded_socket (snap_socket does NOT receive)
+//   2. excluded_socket → router_110 → router_111 → remote_socket
+//
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn snap_excluded_networks() {
+    // Bind sockets
+    let snap_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind snap socket");
+    let snap_addr = snap_socket.local_addr().unwrap();
+
+    let excluded_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind excluded socket");
+    let excluded_addr = excluded_socket.local_addr().unwrap();
+
+    let remote_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind remote socket");
+    let remote_addr = remote_socket.local_addr().unwrap();
+
+    // Setup PocketSCION with SNAP interface and exclude list
+    let env = minimal_pocketscion_setup_router(
+        BTreeMap::from([("dp-0".to_string(), snap_addr)]),
+        vec!["127.0.0.1/32".parse::<IpNet>().unwrap()],
+    )
+    .await;
+
+    tracing::info!(
+        %excluded_addr,
+        %remote_addr,
+        "Starting SNAP excluded networks test"
+    );
+
+    let excluded_scion_addr = SocketAddr::from_std(env.ia_110, excluded_addr);
+    let remote_scion_addr = SocketAddr::from_std(env.ia_111, remote_addr);
+    let test_payload_1 = b"Test from remote to excluded";
+    let test_payload_2 = b"Response from excluded to remote";
+
+    let raddr_110 = env.raddr_110;
+    let raddr_111 = env.raddr_111;
+    let ia_110 = env.ia_110;
+
+    // Spawn excluded receiver task
+    let excluded_task = tokio::spawn(async move {
+        // Try to receive on snap_socket with timeout to verify it doesn't get the packet
+        let snap_timeout_result = timeout(Duration::from_millis(200), async {
+            let mut buf = vec![0u8; 2048];
+            snap_socket.recv_from(&mut buf).await
+        })
+        .await;
+
+        if snap_timeout_result.is_ok() {
+            panic!("SNAP socket received packet but it should have been excluded");
+        }
+        tracing::info!("SNAP socket correctly did not receive packet (timeout as expected)");
+
+        // Now receive on excluded socket
+        let mut buf = vec![0u8; 2048];
+        let (len, src_addr) = timeout(Duration::from_secs(3), excluded_socket.recv_from(&mut buf))
+            .await
+            .expect("Timeout waiting for packet at excluded socket")
+            .expect("Failed to receive at excluded socket");
+        buf.truncate(len);
+
+        tracing::info!("Excluded socket received packet from {}", src_addr);
+
+        let packet = ScionPacketUdp::decode(&mut buf.as_slice())
+            .expect("Failed to decode SCION UDP packet at excluded socket");
+
+        assert_eq!(
+            packet.payload().as_ref(),
+            test_payload_1,
+            "Excluded socket received incorrect payload"
+        );
+
+        tracing::info!("Excluded socket verified payload, now sending response");
+
+        // Test Case 2b: Excluded Socket → remote
+        let reversed_path = packet
+            .headers
+            .path
+            .to_reversed()
+            .expect("Failed to reverse path");
+
+        let response_pkt = ScionPacketUdp::new(
+            ByEndpoint {
+                source: SocketAddr::from_std(ia_110, excluded_addr),
+                destination: packet.source().unwrap(),
+            },
+            reversed_path,
+            test_payload_2.as_ref().into(),
+        )
+        .expect("Failed to create response packet");
+
+        let response_raw = response_pkt.encode_to_bytes_vec().concat();
+        excluded_socket
+            .send_to(&response_raw, raddr_110)
+            .await
+            .expect("Failed to send from excluded socket to router");
+
+        tracing::info!("Excluded socket sent response");
+    });
+
+    // Test Case 2a: remote → Excluded Socket
+    let packet_to_excluded = ScionPacketUdp::new(
+        ByEndpoint {
+            source: remote_scion_addr,
+            destination: excluded_scion_addr,
+        },
+        DataPlanePath::Standard(scion_path()),
+        test_payload_1.as_ref().into(),
+    )
+    .expect("Failed to create packet to excluded");
+
+    let pkt_raw = packet_to_excluded.encode_to_bytes_vec().concat();
+    remote_socket
+        .send_to(&pkt_raw, raddr_111)
+        .await
+        .expect("Failed to send from remote");
+    tracing::info!("Remote sent packet to excluded socket");
+
+    // Wait for excluded task to complete
+    excluded_task.await.expect("Excluded task panicked");
+
+    // Test Case 2b: Receive response from excluded
+    let mut recv_buf = vec![0u8; 2048];
+    let (len, _) = timeout(
+        Duration::from_secs(3),
+        remote_socket.recv_from(&mut recv_buf),
+    )
+    .await
+    .expect("Timeout waiting for response at remote")
+    .expect("Failed to receive at remote socket");
+    recv_buf.truncate(len);
+
+    let response_pkt =
+        ScionPacketUdp::decode(&mut recv_buf.as_slice()).expect("Failed to decode response packet");
+
+    tracing::info!("Remote received response from excluded");
+
+    assert_eq!(
+        response_pkt.payload().as_ref(),
+        test_payload_2,
+        "Remote received incorrect payload from excluded"
+    );
+
+    tracing::info!("SNAP excluded networks test completed successfully");
 }

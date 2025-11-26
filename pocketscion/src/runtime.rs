@@ -289,16 +289,22 @@ impl PocketScionRuntimeBuilder {
                 socket
             };
 
-            let ias = pstate
-                .router_ias(sock_id)
-                .expect("We iterate through existing routers, should exist");
+            let router_state = pstate
+                .router(sock_id)
+                .expect("We iterate over existing routers, Router should exist");
 
-            let router_dispatcher = AsNetSimDispatcher::new(ias, pstate.clone());
-            let router_socket = RouterSocket::new(udp_socket, Arc::new(router_dispatcher)).await?;
+            let router_dispatcher = AsNetSimDispatcher::new(router_state.isd_as, pstate.clone());
+            let router_socket = RouterSocket::new(
+                udp_socket,
+                router_state.snap_data_plane_interfaces,
+                router_state.snap_data_plane_excludes,
+                Arc::new(router_dispatcher),
+            )
+            .await?;
             let router_socket = SharedRouterSocket::new(router_socket);
 
             pstate
-                .add_wildcard_sim_receiver(ias, Arc::new(router_socket.clone()))
+                .add_wildcard_sim_receiver(router_state.isd_as, Arc::new(router_socket.clone()))
                 .expect("Failed to add wildcard receiver");
 
             task_set.spawn_cancellable_task(async move { router_socket.run().await });

@@ -171,9 +171,7 @@ components:
           type: string
           description: The ID of the token that was used to retrieve this address grant.
         on_hold_until:
-          type:
-          - string
-          - 'null'
+          type: string
           description: The duration for which the grant is kept on hold.
     AddressManagerDto:
       type: object
@@ -313,9 +311,7 @@ components:
       description: The I/O configuration of the Auth server.
       properties:
         addr:
-          type:
-          - string
-          - 'null'
+          type: string
     IoConfigDto:
       type: object
       description: The pocket SCION I/O configuration.
@@ -360,18 +356,14 @@ components:
       description: The I/O configuration of a SNAP control plane.
       properties:
         api_addr:
-          type:
-          - string
-          - 'null'
+          type: string
           description: The Control plane API address.
     IoDataPlaneConfigDto:
       type: object
       description: The I/O configuration of a SNAP data plane.
       properties:
         addr:
-          type:
-          - string
-          - 'null'
+          type: string
           description: The data plane address.
     IoSnapConfigDto:
       type: object
@@ -453,6 +445,20 @@ components:
         isd_as:
           $ref: '#/components/schemas/IsdAsn'
           description: The ISD-AS of the router.
+        snap_data_plane_excludes:
+          type: array
+          items:
+            type: string
+          description: |-
+            The list of networks towards which SCION traffic will not be routed through
+            the available SNAPs.
+        snap_data_plane_interfaces:
+          type: object
+          description: The SNAP data planes that are connected to the router.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
     ScionAsDto:
       type: object
       description: Human readable Pocket SCION AS
@@ -604,10 +610,8 @@ components:
       - endhost_apis
       properties:
         auth_server_state:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/AuthServerStateDto'
-            description: Test authentication server.
+          $ref: '#/components/schemas/AuthServerStateDto'
+          description: Test authentication server.
         endhost_apis:
           type: object
           description: The list of Endhost APIs
@@ -639,10 +643,8 @@ components:
             description: The SNAP identifier.
             minimum: 0
         topology:
-          oneOf:
-          - type: 'null'
-          - $ref: '#/components/schemas/ScionTopologyDto'
-            description: Scion Topology used for routing
+          $ref: '#/components/schemas/ScionTopologyDto'
+          description: Scion Topology used for routing
     TokenExchangerConfigDto:
       type: object
       description: Token exchanger configuration.

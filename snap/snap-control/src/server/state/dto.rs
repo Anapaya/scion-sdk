@@ -23,6 +23,8 @@ use crate::server::state::ControlPlaneIoConfig;
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct IoControlPlaneConfigDto {
     /// The Control plane API address.
+    #[schema(nullable = false)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub api_addr: Option<String>,
 }
 

@@ -365,6 +365,13 @@ mod tests {
 
     use super::*;
 
+    /// Test that the generated OpenAPI specification matches the expected spec file.
+    ///
+    /// If this test fails, it means the OpenAPI spec has changed. To update the expected
+    /// spec file, run:
+    /// ```bash
+    /// UPDATE=true cargo test --lib -p pocketscion api::admin::api::tests::should_generate_valid_openapi_spec
+    /// ```
     #[test]
     fn should_generate_valid_openapi_spec() {
         let update = std::env::var("UPDATE").is_ok();

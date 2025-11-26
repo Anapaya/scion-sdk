@@ -47,6 +47,8 @@ pub struct SystemStateDto {
     /// The public key (PEM format) to verify SNAP tokens.
     pub snap_token_public_key: String,
     /// Test authentication server.
+    #[schema(nullable = false)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auth_server_state: Option<AuthServerStateDto>,
     /// The list of SNAPs in the system.
     pub snaps: BTreeMap<SnapId, SnapStateDto>,
@@ -55,6 +57,8 @@ pub struct SystemStateDto {
     /// The list of Endhost APIs
     pub endhost_apis: BTreeMap<EndhostApiId, EndhostApiState>,
     /// Scion Topology used for routing
+    #[schema(nullable = false)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub topology: Option<ScionTopologyDto>,
 }
 
@@ -108,6 +112,8 @@ pub struct IoConfigDto {
 /// The I/O configuration of the Auth server.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct IoAuthServerConfigDto {
+    #[schema(nullable = false)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) addr: Option<String>,
 }
 
@@ -138,4 +144,11 @@ pub struct RouterStateDto {
     pub isd_as: IsdAsn,
     /// The list of interface IDs of the router.
     pub if_ids: Vec<u16>,
+    /// The SNAP data planes that are connected to the router.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
+    pub snap_data_plane_interfaces: BTreeMap<String, String>,
+    /// The list of networks towards which SCION traffic will not be routed through
+    /// the available SNAPs.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub snap_data_plane_excludes: Vec<String>,
 }

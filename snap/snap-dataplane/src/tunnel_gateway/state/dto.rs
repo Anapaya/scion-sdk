@@ -23,6 +23,8 @@ use crate::tunnel_gateway::state::TunnelGatewayIoConfig;
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct IoDataPlaneConfigDto {
     /// The data plane address.
+    #[schema(nullable = false)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub addr: Option<String>,
 }
 

@@ -13,8 +13,9 @@
 // limitations under the License.
 //! RouterSocket emulates a real internal UDP interface of a router.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
+use ipnet::IpNet;
 use scion_proto::{
     packet::{ScionPacketRaw, classify_scion_packet},
     wire_encoding::WireDecode,
@@ -30,14 +31,28 @@ use crate::network::local::receivers::Receiver;
 pub struct RouterSocket<D> {
     /// The underlying UDP socket.
     socket: tokio::net::UdpSocket,
+    /// Snap data planes, snap data plane id -> internal address
+    snap_data_plane_interfaces: BTreeMap<String, SocketAddr>,
+    /// Excluded addresses
+    snap_data_plane_excludes: Vec<IpNet>,
     /// Dispatcher to which packets received from the UDP socket are sent.
     dispatcher: Arc<D>,
 }
 
 impl<D> RouterSocket<D> {
     /// Creates a new `RouterSocket` bound to the specified address.
-    pub async fn new(socket: tokio::net::UdpSocket, dispatcher: Arc<D>) -> std::io::Result<Self> {
-        Ok(Self { socket, dispatcher })
+    pub async fn new(
+        socket: tokio::net::UdpSocket,
+        snap_data_plane_interfaces: BTreeMap<String, SocketAddr>,
+        snap_data_plane_excludes: Vec<IpNet>,
+        dispatcher: Arc<D>,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            socket,
+            snap_data_plane_interfaces,
+            snap_data_plane_excludes,
+            dispatcher,
+        })
     }
 
     /// Returns the address the socket is bound to.
@@ -117,6 +132,22 @@ impl<D: Dispatcher> Receiver for SharedRouterSocket<D> {
             }
         };
 
+        // Forward to the first SNAP data plane if there is one and the destination address is not
+        // excluded.
+        // XXX(uniquefine): this will change once we implement rendevouz routing.
+        let forward_to = if let Some(snap_internal_addr) =
+            self.0.snap_data_plane_interfaces.values().next()
+            && !self
+                .0
+                .snap_data_plane_excludes
+                .iter()
+                .any(|net| net.contains(&dst_addr.ip()))
+        {
+            *snap_internal_addr
+        } else {
+            dst_addr
+        };
+
         let src_addr = self.0.socket.local_addr().expect("no fail");
 
         tracing::debug!(?dst_addr, ?src_addr, "Router socket dispatching packet");
@@ -124,7 +155,7 @@ impl<D: Dispatcher> Receiver for SharedRouterSocket<D> {
         // Send the packet on the UDP socket.
         // XXX(shitz): This allocates a new buffer for each packet.
         let raw = classified_packet.encode_to_vec();
-        if let Err(e) = self.0.socket.try_send_to(&raw, dst_addr) {
+        if let Err(e) = self.0.socket.try_send_to(&raw, forward_to) {
             tracing::error!(error = %e, %dst_addr, "Failed to send packet");
         }
     }
