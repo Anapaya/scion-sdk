@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use chrono::Utc;
@@ -26,13 +26,8 @@ use scion_proto::{
 
 use super::{NetworkError, UnderlaySocket};
 use crate::{
-    path::{
-        PathStrategy,
-        manager::{CachingPathManager, PathManager, PathWaitError},
-        policy::PathPolicy,
-        ranking::PathRanking,
-    },
-    scionstack::{ScionSocketReceiveError, ScionSocketSendError},
+    path::manager::{CachingPathManager, PathManager, PathWaitError},
+    scionstack::{ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError},
 };
 
 /// A path unaware UDP SCION socket.
@@ -320,48 +315,11 @@ impl RawScionSocket {
     }
 }
 
-/// Configuration for a path aware socket.
-#[derive(Default)]
-pub struct SocketConfig {
-    pub(crate) path_strategy: PathStrategy,
-}
-impl SocketConfig {
-    /// Creates a new default socket configuration.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds a path policy.
-    ///
-    /// Path policies can restrict the set of usable paths based on their characteristics.
-    /// E.g. filtering out paths that go through certain ASes.
-    ///
-    /// See [`HopPatternPolicy`](scion_proto::path::policy::hop_pattern::HopPatternPolicy) and
-    /// [`AclPolicy`](scion_proto::path::policy::acl::AclPolicy)
-    pub fn with_path_policy(mut self, policy: impl PathPolicy) -> Self {
-        self.path_strategy.add_policy(policy);
-        self
-    }
-
-    /// Add a path ranking strategy.
-    ///
-    /// Path Rankings prioritize paths based on their characteristics.
-    ///
-    /// Ranking priority is determined by the order in which they are added to the stack, the first
-    /// having the highest priority.
-    ///
-    /// If no ranking strategies are added, ranking will default to
-    /// [`Shortest`](crate::path::ranking::Shortest).
-    pub fn with_path_ranking(mut self, ranking: impl PathRanking) -> Self {
-        self.path_strategy.add_ranking(ranking);
-        self
-    }
-}
-
 /// A path aware UDP socket generic over the underlay socket and path manager.
 pub struct UdpScionSocket<P: PathManager = CachingPathManager> {
     socket: PathUnawareUdpScionSocket,
     pather: Arc<P>,
+    connect_timeout: Duration,
     remote_addr: Option<SocketAddr>,
 }
 
@@ -379,21 +337,38 @@ impl<P: PathManager> UdpScionSocket<P> {
     pub fn new(
         socket: PathUnawareUdpScionSocket,
         pather: Arc<P>,
-        remote_addr: Option<SocketAddr>,
+        connect_timeout: Duration,
     ) -> Self {
         Self {
             socket,
             pather,
-            remote_addr,
+            connect_timeout,
+            remote_addr: None,
         }
     }
 
     /// Connects the socket to a remote address.
-    pub fn connect(self, remote_addr: SocketAddr) -> Self {
-        Self {
+    ///
+    /// Ensures a Path to the Destination exists, returns an error if not.
+    ///
+    /// Timeouts after configured `connect_timeout`
+    pub async fn connect(self, remote_addr: SocketAddr) -> Result<Self, ScionSocketConnectError> {
+        // Check that a path exists to destination
+        let _path = self
+            .pather
+            .path_timeout(
+                self.socket.local_addr().isd_asn(),
+                remote_addr.isd_asn(),
+                Utc::now(),
+                self.connect_timeout,
+            )
+            .await
+            .map_err(|e| e.to_string());
+
+        Ok(Self {
             remote_addr: Some(remote_addr),
             ..self
-        }
+        })
     }
 
     /// Send a datagram to the connected remote address.

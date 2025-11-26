@@ -114,7 +114,7 @@
 //!
 //! ```
 //! // Implement your own path selection logic
-//! use std::sync::Arc;
+//! use std::{sync::Arc, time::Duration};
 //!
 //! use bytes::Bytes;
 //! use chrono::{DateTime, Utc};
@@ -174,7 +174,11 @@
 //!
 //! let scion_stack = builder.build().await?;
 //! let path_unaware_socket = scion_stack.bind_path_unaware(Some(bind_addr)).await?;
-//! let socket = UdpScionSocket::new(path_unaware_socket, Arc::new(MyCustomPathManager), None);
+//! let socket = UdpScionSocket::new(
+//!     path_unaware_socket,
+//!     Arc::new(MyCustomPathManager),
+//!     Duration::from_secs(30),
+//! );
 //! socket.send_to(b"hello", destination).await?;
 //!
 //! # Ok(())
@@ -206,9 +210,7 @@ use scion_proto::{
     packet::ScionPacketRaw,
     path::Path,
 };
-pub use socket::{
-    PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, SocketConfig, UdpScionSocket,
-};
+pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
 
 // Re-export the main types from the modules
 pub use self::builder::ScionStackBuilder;
@@ -216,7 +218,8 @@ pub use self::scmp_handler::{DefaultScmpHandler, ScmpHandler};
 use crate::path::{
     PathStrategy,
     manager::{CachingPathManager, ConnectRpcSegmentFetcher, PathFetcherImpl},
-    ranking::Shortest,
+    policy::PathPolicy,
+    ranking::{PathRanking, Shortest},
 };
 
 /// Default duration to reserve a port when binding a socket.
@@ -292,7 +295,11 @@ impl ScionStack {
             fetcher,
         ));
 
-        Ok(UdpScionSocket::new(socket, pather, None))
+        Ok(UdpScionSocket::new(
+            socket,
+            pather,
+            socket_config.connect_timeout,
+        ))
     }
 
     /// Create a connected path-aware SCION socket with automatic path management.
@@ -308,9 +315,9 @@ impl ScionStack {
         &self,
         remote_addr: SocketAddr,
         bind_addr: Option<SocketAddr>,
-    ) -> Result<UdpScionSocket, ScionSocketBindError> {
+    ) -> Result<UdpScionSocket, ScionSocketConnectError> {
         let socket = self.bind(bind_addr).await?;
-        Ok(socket.connect(remote_addr))
+        socket.connect(remote_addr).await
     }
 
     /// Create a connected path-aware SCION socket with custom configuration.
@@ -328,9 +335,9 @@ impl ScionStack {
         remote_addr: SocketAddr,
         bind_addr: Option<SocketAddr>,
         socket_config: SocketConfig,
-    ) -> Result<UdpScionSocket, ScionSocketBindError> {
+    ) -> Result<UdpScionSocket, ScionSocketConnectError> {
         let socket = self.bind_with_config(bind_addr, socket_config).await?;
-        Ok(socket.connect(remote_addr))
+        socket.connect(remote_addr).await
     }
 
     /// Bind a socket with controlled time for port allocation.
@@ -345,11 +352,12 @@ impl ScionStack {
             .underlay
             .bind_socket_with_time(SocketKind::Udp, bind_addr, now)
             .await?;
+
         let pather = self.create_path_manager();
         Ok(UdpScionSocket::new(
             PathUnawareUdpScionSocket::new(socket),
             pather,
-            None,
+            DEFAULT_CONNECT_TIMEOUT,
         ))
     }
 
@@ -524,6 +532,59 @@ impl ScionStack {
     }
 }
 
+/// Default timeout for creating a connected socket
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Configuration for a path aware socket.
+#[derive(Default)]
+pub struct SocketConfig {
+    pub(crate) path_strategy: PathStrategy,
+    pub(crate) connect_timeout: Duration,
+}
+
+impl SocketConfig {
+    /// Creates a new default socket configuration.
+    pub fn new() -> Self {
+        Self {
+            path_strategy: Default::default(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+        }
+    }
+
+    /// Adds a path policy.
+    ///
+    /// Path policies can restrict the set of usable paths based on their characteristics.
+    /// E.g. filtering out paths that go through certain ASes.
+    ///
+    /// See [`HopPatternPolicy`](scion_proto::path::policy::hop_pattern::HopPatternPolicy) and
+    /// [`AclPolicy`](scion_proto::path::policy::acl::AclPolicy)
+    pub fn with_path_policy(mut self, policy: impl PathPolicy) -> Self {
+        self.path_strategy.add_policy(policy);
+        self
+    }
+
+    /// Add a path ranking strategy.
+    ///
+    /// Path Rankings prioritize paths based on their characteristics.
+    ///
+    /// Ranking priority is determined by the order in which they are added to the stack, the first
+    /// having the highest priority.
+    ///
+    /// If no ranking strategies are added, ranking will default to [Shortest]
+    pub fn with_path_ranking(mut self, ranking: impl PathRanking) -> Self {
+        self.path_strategy.add_ranking(ranking);
+        self
+    }
+
+    /// Sets connection timeout for `connect` functions
+    ///
+    /// Defaults to [DEFAULT_CONNECT_TIMEOUT]
+    pub fn with_connection_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+}
+
 /// Error return when binding a socket.
 #[derive(Debug, thiserror::Error)]
 pub enum ScionSocketBindError {
@@ -645,6 +706,17 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
     fn local_addresses(&self) -> Vec<EndhostAddr> {
         <Self as UnderlayStack>::local_addresses(self)
     }
+}
+
+/// SCION socket connect errors.
+#[derive(Debug, thiserror::Error)]
+pub enum ScionSocketConnectError {
+    /// Could not get a path to the destination
+    #[error("failed to get path to destination: {0}")]
+    PathLookupError(Cow<'static, str>),
+    /// Could not bind the socket
+    #[error(transparent)]
+    BindError(#[from] ScionSocketBindError),
 }
 
 /// SCION socket send errors.
