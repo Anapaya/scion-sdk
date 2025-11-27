@@ -88,6 +88,7 @@ reqwest = { version = "0.12", features = [
     "rustls-tls",
     "rustls-tls-native-roots",
 ], default-features = false }
+ring = "0.17.14"
 rustls = { version = "0.23", features = [
     "ring",
     "std",
@@ -120,6 +121,7 @@ utoipa-redoc = { version = "6.0", features = ["axum"] }
 uuid = "1.16"
 walkdir = "2.5"
 x509-cert = "0.2"
+zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
 
 
 [workspace.lints.clippy]

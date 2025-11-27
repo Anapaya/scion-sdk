@@ -1,0 +1,16 @@
+[package]
+name = "dhsd"
+version = "0.2.0"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "SCION endhost SDK observability utilities"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+
+[dependencies]
+ring = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true
