@@ -477,7 +477,7 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManagerState<F> {
                         None
                     }
                     ExpiryState::NeedsRefresh => {
-                        drop(self.get_or_create_inflight_request(src, dst, now, "refresh"));
+                        drop(self.get_or_create_inflight_request(src, dst, now, "expired"));
 
                         Some(cached.path.scion_path().clone())
                     }
@@ -514,15 +514,29 @@ impl<F: PathFetcher + Send + Sync + 'static> CachingPathManagerState<F> {
             Entry::Vacant(entry) => {
                 tracing::debug!(%src, %dst, %reason, "New path fetch initiated");
                 let self_c = self.clone();
-                entry.insert_entry(
-                    async move {
-                        let result = self_c.do_fetch_and_cache(src, dst, now).await;
-                        self_c.inflight.remove_sync(&(src, dst));
-                        result
+
+                let fut = async move {
+                    let result = self_c.do_fetch_and_cache(src, dst, now).await;
+                    self_c.inflight.remove_sync(&(src, dst));
+                    result
+                }
+                .boxed()
+                .shared();
+
+                let fut_clone = fut.clone();
+                tokio::spawn(async move {
+                    match fut_clone.await {
+                        Ok(_) => {
+                            tracing::debug!(%src, %dst, "Path fetch succeeded");
+                        }
+                        Err(err) => {
+                            tracing::warn!(%src, %dst, %err, "Path fetch failed");
+                        }
                     }
-                    .boxed()
-                    .shared(),
-                )
+                });
+
+                // Insert and return the shared future
+                entry.insert_entry(fut)
             }
         }
         .get()
@@ -746,6 +760,7 @@ impl<F: PathFetcher + Send + Sync + 'static> PathManagerTask<F> {
                 }
             }
         }
+
         // Check if there is an in-flight request for the same source and destination
         if self.state.request_inflight(request.src, request.dst) {
             tracing::debug!("Path request already in flight, skipping prefetch");
