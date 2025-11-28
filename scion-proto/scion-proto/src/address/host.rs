@@ -18,7 +18,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use super::ServiceAddr;
 
 /// The AS-local host identifier of a SCION address.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum HostAddr {
     /// An IPv4 host address.
     V4(Ipv4Addr),

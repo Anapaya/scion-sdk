@@ -207,6 +207,58 @@ where
             .as_ref()
             .and_then(|i| i.interfaces.as_ref().map(|intfs| intfs.len()))
     }
+
+    /// Returns the first hop egress interface of the path, if available.
+    pub fn first_hop_egress_interface(&self) -> Option<PathInterface> {
+        match self
+            .metadata
+            .as_ref()
+            .and_then(|m| m.interfaces.as_ref())
+            .and_then(|intfs| intfs.first())
+        {
+            Some(intf) => Some(*intf),
+            None => {
+                // Extract from data plane path if possible
+                match &self.data_plane_path {
+                    DataPlanePath::Standard(path) => {
+                        let info = path.info_fields().next()?;
+                        let hf = path.hop_fields().next()?;
+                        Some(PathInterface {
+                            isd_asn: self.source(),
+                            id: hf.egress_interface(info)?.into(),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// Returns the last hop ingress interface of the path, if available.
+    pub fn last_hop_ingress_interface(&self) -> Option<PathInterface> {
+        match self
+            .metadata
+            .as_ref()
+            .and_then(|m| m.interfaces.as_ref())
+            .and_then(|intfs| intfs.iter().next_back())
+        {
+            Some(intf) => Some(*intf),
+            None => {
+                // Extract from data plane path if possible
+                match &self.data_plane_path {
+                    DataPlanePath::Standard(path) => {
+                        let info = path.info_fields().next_back()?;
+                        let hf = path.hop_fields().next_back()?;
+                        Some(PathInterface {
+                            isd_asn: self.destination(),
+                            id: hf.ingress_interface(info)?.into(),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
 }
 
 impl<T> Path<T>
