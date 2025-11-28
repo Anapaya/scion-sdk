@@ -20,10 +20,9 @@ use derive_more::Display;
 use scion_proto::{
     address::{IsdAsn, ScionAddr},
     packet::ScionPacketRaw,
+    path::crypto::ForwardingKey,
     scmp::ScmpErrorMessage,
 };
-
-use crate::network::scion::crypto::ForwardingKey;
 
 pub mod spec;
 

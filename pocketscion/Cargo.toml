@@ -30,14 +30,12 @@ endhost-api-models = { workspace = true }
 
 # General Dependencies
 async-trait = { workspace = true }
-aes = { workspace = true }
 axum = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 derive_more = { workspace = true }
-cmac = { workspace = true }
 ed25519-dalek = { workspace = true }
 http = { workspace = true }
 ipnet = { workspace = true, features = ["serde"] }

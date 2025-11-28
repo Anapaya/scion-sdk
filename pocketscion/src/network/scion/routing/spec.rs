@@ -23,7 +23,8 @@ use scion_proto::{
         layout::{BitOffset, ScionPacketOffset},
     },
     path::{
-        DataPlanePath, HopField, HopFieldIndex, InfoField, InfoFieldIndex, MetaHeader, StandardPath,
+        DataPlanePath, HopField, HopFieldIndex, InfoField, InfoFieldIndex, MetaHeader,
+        StandardPath, crypto::ForwardingKey,
     },
     scmp::{
         ParameterProblemCode, ScmpErrorMessage, ScmpExternalInterfaceDown, ScmpParameterProblem,
@@ -32,12 +33,9 @@ use scion_proto::{
 };
 use tracing::info_span;
 
-use crate::network::scion::{
-    crypto::ForwardingKey,
-    routing::{
-        AsRoutingAction, AsRoutingInterfaceState, AsRoutingLinkType as LinkType,
-        LocalAsRoutingAction, RoutingLogic, ScionNetworkTime,
-    },
+use crate::network::scion::routing::{
+    AsRoutingAction, AsRoutingInterfaceState, AsRoutingLinkType as LinkType, LocalAsRoutingAction,
+    RoutingLogic, ScionNetworkTime,
 };
 
 /// Routing Logic based on the Scion Specification.
@@ -669,7 +667,7 @@ fn calculate_hop_mac(
     info_field: &InfoField,
     forwarding_key: &ForwardingKey,
 ) -> [u8; 6] {
-    crate::network::scion::crypto::calculate_hop_mac(
+    scion_proto::path::crypto::calculate_hop_mac(
         info_field.seg_id,
         info_field.timestamp_epoch,
         hop_field.exp_time,
@@ -970,10 +968,9 @@ mod tests {
     use std::str::FromStr;
 
     use helper::*;
-    use scion_proto::address::EndhostAddr;
+    use scion_proto::{address::EndhostAddr, path::test_builder::TestPathBuilder};
 
     use super::*;
-    use crate::network::scion::util::test_builder::TestBuilder;
 
     const SECONDS_PER_EXP_UNIT: u32 = 337;
 
@@ -981,10 +978,9 @@ mod tests {
     fn should_correctly_route_empty_path() {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-        let test_ctx =
-            TestBuilder::new()
-                .using_info_timestamp(0)
-                .build(src_address, dst_address, 1);
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            .using_info_timestamp(0)
+            .build(1);
 
         let action = SpecRoutingLogic::route(
             IsdAsn(0),
@@ -1010,14 +1006,14 @@ mod tests {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .up()
             .using_forwarding_key([3; 16].into())
             .add_hop(0, 1)
             .using_forwarding_key([1; 16].into())
             .add_hop(2, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
@@ -1030,12 +1026,12 @@ mod tests {
             )));
 
         // Final Egress interface can also be non 0
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .up()
             .add_hop(0, 1)
             .add_hop(2, 4)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
@@ -1052,7 +1048,7 @@ mod tests {
     fn should_correctly_route_segment_changes() {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .up()
             .add_hop(0, 1)
@@ -1063,7 +1059,7 @@ mod tests {
             .down()
             .add_hop(0, 3)
             .add_hop(4, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         helper::SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
@@ -1086,7 +1082,7 @@ mod tests {
     fn should_fail_on_invalid_segment_change() {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .core()
             .add_hop(0, 1)
@@ -1094,14 +1090,14 @@ mod tests {
             .up()
             .add_hop(0, 3)
             .add_hop(4, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         helper::SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(None)
             .next_hop_should_fail()
             .expect_parameter_problem(ParameterProblemCode::InvalidSegmentChange);
 
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .down()
             .add_hop(0, 1)
@@ -1109,14 +1105,14 @@ mod tests {
             .up()
             .add_hop(0, 3)
             .add_hop(4, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         helper::SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(None)
             .next_hop_should_fail()
             .expect_parameter_problem(ParameterProblemCode::InvalidSegmentChange);
 
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .up()
             .add_hop(0, 1)
@@ -1124,7 +1120,7 @@ mod tests {
             .up()
             .add_hop(0, 3)
             .add_hop(4, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         helper::SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(None)
@@ -1137,12 +1133,12 @@ mod tests {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .up()
             .add_hop(0, 1)
             .add_hop(2, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         helper::SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(None)
@@ -1155,12 +1151,12 @@ mod tests {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .down()
             .add_hop(0, 1)
             .add_hop(2, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         SpecTestCtx::new(test_ctx)
             .with_custom_link_lookup(|_| None)
@@ -1173,12 +1169,12 @@ mod tests {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .down()
             .add_hop_with_egress_down(0, 1)
             .add_hop(2, 0)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         SpecTestCtx::new(test_ctx)
             .next_hop_should_fail()
@@ -1190,14 +1186,14 @@ mod tests {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .up()
             .using_forwarding_key([3; 16].into())
             .add_hop(0, 1)
             .using_forwarding_key([1; 16].into())
             .add_hop(2, 0)
-            .build_with_path_modifier(src_address, dst_address, 1, |mut p| {
+            .build_with_path_modifier(1, |mut p| {
                 p.hop_fields[0].mac = [0; 6]; // Invalid MAC
                 p
             });
@@ -1211,11 +1207,11 @@ mod tests {
     fn should_fail_with_a_single_hop() {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-        let test_ctx = TestBuilder::new()
+        let test_ctx = TestPathBuilder::new(src_address, dst_address)
             .using_info_timestamp(0)
             .core()
             .add_hop(0, 1)
-            .build(src_address, dst_address, 1);
+            .build(1);
 
         // Note: This hits a debug_assert in the egress code - on release it will drop the packet
         helper::SpecTestCtx::new(test_ctx).next_hop_should_fail();
@@ -1231,25 +1227,25 @@ mod tests {
 
             // Timestamp in future
             helper::SpecTestCtx::new(
-                TestBuilder::new()
+                TestPathBuilder::new(src_address, dst_address)
                     .using_info_timestamp(1)
                     .up()
                     .add_hop(0, 1)
                     .add_hop(2, 0)
-                    .build(src_address, dst_address, 0),
+                    .build(0),
             )
             .next_hop_should_fail()
             .expect_parameter_problem(ParameterProblemCode::InvalidPath);
 
             // Timestamp expired
             helper::SpecTestCtx::new(
-                TestBuilder::new()
+                TestPathBuilder::new(src_address, dst_address)
                     .using_info_timestamp(0)
                     .with_hop_expiry(0)
                     .up()
                     .add_hop(0, 1)
                     .add_hop(2, 0)
-                    .build(src_address, dst_address, SECONDS_PER_EXP_UNIT + 1),
+                    .build(SECONDS_PER_EXP_UNIT + 1),
             )
             .next_hop_should_fail()
             .expect_parameter_problem(ParameterProblemCode::PathExpired);
@@ -1261,13 +1257,13 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             helper::SpecTestCtx::new(
-                TestBuilder::new()
+                TestPathBuilder::new(src_address, dst_address)
                     .using_info_timestamp(0)
                     .with_hop_expiry(0)
                     .up()
                     .add_hop(0, 1)
                     .add_hop(2, 0)
-                    .build(src_address, dst_address, SECONDS_PER_EXP_UNIT),
+                    .build(SECONDS_PER_EXP_UNIT),
             )
             .next_hop_should_succeed(None);
         }
@@ -1280,12 +1276,12 @@ mod tests {
         fn should_handle_ingress_scmp_requests() {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestBuilder::new()
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
                 .add_hop_with_alerts(2, true, 0, false)
-                .build(src_address, dst_address, 1);
+                .build(1);
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
@@ -1301,13 +1297,13 @@ mod tests {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestBuilder::new()
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
                 .add_hop_with_alerts(2, false, 3, true)
                 .add_hop(4, 5)
-                .build(src_address, dst_address, 1);
+                .build(1);
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
@@ -1324,12 +1320,12 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // No egress scmp on final hop
-            let test_ctx = TestBuilder::new()
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
                 .add_hop_with_alerts(2, false, 0, true)
-                .build(src_address, dst_address, 1);
+                .build(1);
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
@@ -1348,12 +1344,12 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // No ingress scmp on first hop
-            let test_ctx = TestBuilder::new()
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop_with_alerts(0, true, 1, false)
                 .add_hop(2, 0)
-                .build(src_address, dst_address, 1);
+                .build(1);
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
@@ -1372,7 +1368,7 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // Not before segment change
-            let test_ctx = TestBuilder::new()
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1380,7 +1376,7 @@ mod tests {
                 .down()
                 .add_hop(2, 0)
                 .add_hop(4, 0)
-                .build(src_address, dst_address, 1);
+                .build(1);
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
@@ -1388,7 +1384,7 @@ mod tests {
                 .expect_parameter_problem(ParameterProblemCode::ErroneousHeaderField);
 
             // Not after segment change
-            let test_ctx = TestBuilder::new()
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1396,7 +1392,7 @@ mod tests {
                 .down()
                 .add_hop_with_alerts(3, true, 4, false)
                 .add_hop(5, 0)
-                .build(src_address, dst_address, 1);
+                .build(1);
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
@@ -1409,28 +1405,28 @@ mod tests {
         use scion_proto::{
             address::IsdAsn,
             packet::ScionPacketRaw,
-            path::DataPlanePath,
+            path::{
+                DataPlanePath,
+                test_builder::{TestPathBuilderHopField, TestPathContext},
+            },
             scmp::{ParameterProblemCode, ScmpErrorMessage},
         };
 
-        use crate::network::scion::{
-            routing::{
-                AsRoutingAction, AsRoutingInterfaceState, RoutingLogic, ScionNetworkTime,
-                spec::SpecRoutingLogic,
-            },
-            util::test_builder::{TestBuilderHopField, TestContext},
+        use crate::network::scion::routing::{
+            AsRoutingAction, AsRoutingInterfaceState, RoutingLogic, ScionNetworkTime,
+            spec::SpecRoutingLogic,
         };
 
         /// Helper to iterate over test steps
         pub struct SpecTestCtx {
-            pub test_context: TestContext,
+            pub test_context: TestPathContext,
             pub packet: ScionPacketRaw,
             pub last_error: Option<ScmpErrorMessage>,
             pub custom_link_lookup: Option<Box<dyn Fn(u16) -> Option<AsRoutingInterfaceState>>>,
         }
 
         impl SpecTestCtx {
-            pub fn new(test_context: TestContext) -> Self {
+            pub fn new(test_context: TestPathContext) -> Self {
                 Self {
                     packet: test_context.scion_packet_udp(&[1, 2], 22222, 11111).into(),
                     test_context,
@@ -1455,7 +1451,7 @@ mod tests {
             /// field to be used.
             fn lookup_interface(
                 custom_link_lookup: Option<impl Fn(u16) -> Option<AsRoutingInterfaceState>>,
-                hop_fields: &[TestBuilderHopField],
+                hop_fields: &[TestPathBuilderHopField],
                 current_hop_index: usize,
                 interface_id: u16,
             ) -> Option<AsRoutingInterfaceState> {
@@ -1469,7 +1465,7 @@ mod tests {
                     val if current.ingress_if == val => {
                         return current.ingress_link_type.map(|l| {
                             AsRoutingInterfaceState {
-                                link_type: l,
+                                link_type: l.into(),
                                 is_up: !current.egress_interface_down,
                             }
                         });
@@ -1477,7 +1473,7 @@ mod tests {
                     val if current.egress_if == val => {
                         return current.egress_link_type.map(|l| {
                             AsRoutingInterfaceState {
-                                link_type: l,
+                                link_type: l.into(),
                                 is_up: !current.egress_interface_down,
                             }
                         });
@@ -1496,7 +1492,7 @@ mod tests {
                     val if next.ingress_if == val => {
                         return next.ingress_link_type.map(|l| {
                             AsRoutingInterfaceState {
-                                link_type: l,
+                                link_type: l.into(),
                                 is_up: !current.egress_interface_down,
                             }
                         });
@@ -1504,7 +1500,7 @@ mod tests {
                     val if next.egress_if == val => {
                         return next.egress_link_type.map(|l| {
                             AsRoutingInterfaceState {
-                                link_type: l,
+                                link_type: l.into(),
                                 is_up: !current.egress_interface_down,
                             }
                         });

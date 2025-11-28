@@ -13,7 +13,6 @@
 // limitations under the License.
 //! SCION Network Simulation Functionality
 
-pub mod crypto;
 pub mod routing;
 pub mod segment;
 pub mod simulator;

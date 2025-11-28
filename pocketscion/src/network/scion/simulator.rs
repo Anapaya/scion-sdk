@@ -18,10 +18,9 @@
 //! Returns the Action the Packet has to take at the final AS
 
 use anyhow::Context;
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
+use scion_proto::{address::IsdAsn, packet::ScionPacketRaw, path::crypto::ForwardingKey};
 
 use crate::network::scion::{
-    crypto::ForwardingKey,
     routing::{
         AsRoutingAction, AsRoutingInterfaceState, AsRoutingLinkType, LocalAsRoutingAction,
         RoutingLogic, ScionNetworkTime,

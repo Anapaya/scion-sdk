@@ -140,13 +140,11 @@ mod test {
     use scion_proto::{
         address::{EndhostAddr, ScionAddr},
         packet::classify_scion_packet,
+        path::test_builder::{TestPathBuilder, TestPathContext},
     };
 
     use super::*;
-    use crate::network::{
-        local::receivers::Receiver,
-        scion::util::test_builder::{TestBuilder, TestContext},
-    };
+    use crate::network::local::receivers::Receiver;
 
     struct TestSetup {
         src: ScionAddr,
@@ -154,14 +152,14 @@ mod test {
         #[expect(unused)]
         dst: ScionAddr,
         dst_dp: Arc<MockReceiver>,
-        ctx: TestContext,
+        ctx: TestPathContext,
         targets: NetworkReceiverRegistry,
         packet: ScionPacketRaw,
     }
 
     /// Sets up a bidirectional test with two endpoints, each having a MockReceiver.
     fn setup(
-        builder: TestBuilder,
+        builder_cb: impl FnOnce(EndhostAddr, EndhostAddr) -> TestPathBuilder,
         timestamp: u32,
         overwrite_dst: Option<EndhostAddr>,
     ) -> TestSetup {
@@ -188,11 +186,12 @@ mod test {
             .add_receiver(dst_ia, dst_ip_net, dst_dp.clone())
             .unwrap();
 
-        let test = builder.build(
-            src.try_into().unwrap(),
-            overwrite_dst.unwrap_or(dst.try_into().unwrap()),
-            timestamp,
+        let builder = builder_cb(
+            EndhostAddr::try_from(src).unwrap(),
+            overwrite_dst.unwrap_or_else(|| EndhostAddr::try_from(dst).unwrap()),
         );
+
+        let test = builder.build(timestamp);
 
         TestSetup {
             src,
@@ -209,15 +208,18 @@ mod test {
         use scion_proto::scmp::{ScmpEchoRequest, ScmpMessage};
 
         use super::*;
+        use crate::network::scion::util::test_topology_ext::TestPathContextTopologyExt;
 
         #[test_log::test]
         fn should_dispatch_scmp_reply_for_echo_requests() {
-            let test = TestBuilder::new()
-                .up()
-                .add_hop(0, 1)
-                .add_hop(2, 3)
-                .add_hop_with_alerts(1, true, 2, false)
-                .add_hop(1, 0);
+            let test = |src, dst| {
+                TestPathBuilder::new(src, dst)
+                    .up()
+                    .add_hop(0, 1)
+                    .add_hop(2, 3)
+                    .add_hop_with_alerts(1, true, 2, false)
+                    .add_hop(1, 0)
+            };
 
             let test = setup(test, 0, None);
 
@@ -277,10 +279,20 @@ mod test {
         };
 
         use super::*;
+        use crate::network::scion::util::test_topology_ext::TestPathContextTopologyExt;
 
         #[test_log::test]
         fn should_dispatch_outgoing_packet() {
-            let test = setup(TestBuilder::new().up().add_hop(0, 1).add_hop(1, 0), 0, None);
+            let test = setup(
+                |src, dst| {
+                    TestPathBuilder::new(src, dst)
+                        .up()
+                        .add_hop(0, 1)
+                        .add_hop(1, 0)
+                },
+                0,
+                None,
+            );
             let topology = test.ctx.build_topology();
             let sim = NetworkSimulator::new(&test.targets, Some(&topology));
 
@@ -296,7 +308,16 @@ mod test {
 
         #[test_log::test]
         fn should_dispatch_outgoing_packet_without_topo() {
-            let test = setup(TestBuilder::new().up().add_hop(0, 1).add_hop(1, 0), 0, None);
+            let test = setup(
+                |src, dst| {
+                    TestPathBuilder::new(src, dst)
+                        .up()
+                        .add_hop(0, 1)
+                        .add_hop(1, 0)
+                },
+                0,
+                None,
+            );
             let sim = NetworkSimulator::new(&test.targets, None);
 
             sim.dispatch(
@@ -312,7 +333,12 @@ mod test {
         #[test_log::test]
         fn should_respond_with_destination_unreachable_when_ip_not_bound() {
             let test = setup(
-                TestBuilder::new().up().add_hop(0, 1).add_hop(1, 0),
+                |src, dst| {
+                    TestPathBuilder::new(src, dst)
+                        .up()
+                        .add_hop(0, 1)
+                        .add_hop(1, 0)
+                },
                 0,
                 Some("1-99,1.2.3.4".parse().unwrap()), // Invalid destination IP
             );
@@ -352,7 +378,12 @@ mod test {
         #[test_log::test]
         fn should_respond_with_destination_unreachable_when_ip_not_bound_with_topo() {
             let test = setup(
-                TestBuilder::new().up().add_hop(0, 1).add_hop(1, 0),
+                |src, dst| {
+                    TestPathBuilder::new(src, dst)
+                        .up()
+                        .add_hop(0, 1)
+                        .add_hop(1, 0)
+                },
                 0,
                 Some("1-99,1.2.3.4".parse().unwrap()), // Invalid destination IP
             );
@@ -389,7 +420,12 @@ mod test {
 
         #[test_log::test]
         fn should_respond_with_scmp_error_if_routing_failed_locally() {
-            let test = TestBuilder::new().up().add_hop(0, 1).add_hop(1, 0);
+            let test = |src, dst| {
+                TestPathBuilder::new(src, dst)
+                    .up()
+                    .add_hop(0, 1)
+                    .add_hop(1, 0)
+            };
             let test = setup(test, 1234567, None); // Packet TTL expired - fails directly
 
             let topology = test.ctx.build_topology();
@@ -406,11 +442,13 @@ mod test {
 
         #[test_log::test]
         fn should_respond_with_scmp_error_if_routing_failed_on_route() {
-            let test = TestBuilder::new()
-                .up()
-                .add_hop(0, 1)
-                .add_hop_with_egress_down(1, 2)
-                .add_hop(1, 0);
+            let test = |src, dst| {
+                TestPathBuilder::new(src, dst)
+                    .up()
+                    .add_hop(0, 1)
+                    .add_hop_with_egress_down(1, 2)
+                    .add_hop(1, 0)
+            };
 
             let test = setup(test, 1234567, None);
 

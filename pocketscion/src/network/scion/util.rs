@@ -13,5 +13,5 @@
 // limitations under the License.
 //! Utilities
 
-pub mod test_builder;
 pub mod test_helper;
+pub mod test_topology_ext;

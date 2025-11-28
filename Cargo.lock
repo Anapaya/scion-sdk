@@ -1958,14 +1958,12 @@ dependencies = [
 name = "pocketscion"
 version = "0.2.0"
 dependencies = [
- "aes",
  "anyhow",
  "async-trait",
  "axum",
  "bytes",
  "chrono",
  "clap",
- "cmac",
  "derive_more",
  "ed25519-dalek",
  "endhost-api",
@@ -2695,8 +2693,10 @@ dependencies = [
 name = "scion-proto"
 version = "0.2.0"
 dependencies = [
+ "aes",
  "bytes",
  "chrono",
+ "cmac",
  "criterion",
  "prost",
  "prost-types",

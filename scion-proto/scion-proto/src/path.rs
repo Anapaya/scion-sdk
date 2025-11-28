@@ -75,6 +75,9 @@ pub use metadata::{GeoCoordinates, LinkType, Metadata, PathInterface};
 mod meta_header;
 pub use meta_header::{HopFieldIndex, InfoFieldIndex, MetaHeader, MetaReserved, SegmentLength};
 
+pub mod crypto;
+pub mod test_builder;
+
 /// Minimum MTU along any path or within any AS.
 pub const PATH_MIN_MTU: u16 = 1280;
 

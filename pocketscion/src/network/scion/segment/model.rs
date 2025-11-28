@@ -22,13 +22,13 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use scion_proto::{
     address::IsdAsn,
-    path::{ASEntry, HopEntry, PathSegment, PeerEntry, SegmentHopField, SignedMessage},
+    path::{
+        ASEntry, HopEntry, PathSegment, PeerEntry, SegmentHopField, SignedMessage,
+        crypto::{ForwardingKey, calculate_hop_mac, mac_chaining_step},
+    },
 };
 
-use crate::network::scion::{
-    crypto::{ForwardingKey, calculate_hop_mac, mac_chaining_step},
-    topology::{DirectedScionLink, ScionLinkType, ScionTopology},
-};
+use crate::network::scion::topology::{DirectedScionLink, ScionLinkType, ScionTopology};
 
 /// More general representation of a [scion_proto::path::PathSegment]
 ///

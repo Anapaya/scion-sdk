@@ -11,11 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 //! Cryptographic utilities for creating and validating SCION paths.
 
 use aes::cipher::{consts::U16, generic_array::GenericArray};
-use anyhow::bail;
-use scion_proto::path::{HopField, InfoField};
+use thiserror::Error;
+
+use crate::path::{HopField, InfoField};
 
 /// 16 Byte Forwarding Key
 pub type ForwardingKey = GenericArray<u8, U16>;
@@ -105,7 +107,7 @@ pub fn validate_segment_macs(
     info: &InfoField,
     fields: &[(HopField, ForwardingKey)],
     is_construction_direction: bool,
-) -> anyhow::Result<()> {
+) -> Result<(), MacValidateError> {
     let mut accumulator = if is_construction_direction {
         info.seg_id
     } else {
@@ -134,10 +136,13 @@ pub fn validate_segment_macs(
         );
 
         if expected_mac != hop.mac {
-            bail!(
-                "MAC mismatch at hop {i}: {hop:?} expected {expected_mac:?} got {:?} current accumulator {accumulator} construction direction {is_construction_direction}",
-                hop.mac
-            );
+            return Err(MacValidateError {
+                hop_index: i,
+                expected_mac,
+                actual_mac: hop.mac,
+                accumulator,
+                is_construction_direction,
+            });
         }
 
         if is_construction_direction {
@@ -146,4 +151,20 @@ pub fn validate_segment_macs(
     }
 
     Ok(())
+}
+
+/// Error returned when MAC validation fails for a hop.
+#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+#[error("MAC mismatch at hop {hop_index}")]
+pub struct MacValidateError {
+    /// Index of the hop where the MAC validation failed.
+    pub hop_index: usize,
+    /// The expected MAC value.
+    pub expected_mac: [u8; 6],
+    /// The actual MAC value found in the HopField.
+    pub actual_mac: [u8; 6],
+    /// The accumulator value at the point of failure.
+    pub accumulator: u16,
+    /// Whether the validation was done in construction direction.
+    pub is_construction_direction: bool,
 }

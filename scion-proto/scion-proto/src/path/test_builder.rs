@@ -13,9 +13,9 @@
 // limitations under the License.
 //! Utility for constructing deterministic tests for SCION packets
 //!
-//! The [`TestBuilder`] defines:
+//! The [`TestPathBuilder`] defines:
 //! - the exact sequence and state of hops a packet takes
-//! - a consistent [`ScionTopology`] so packets remain valid in a simulated network.
+//! - the path metadata such as expiration and interfaces
 //!
 //!  #### To create a basic path
 //! ```ignore
@@ -24,7 +24,7 @@
 //! let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
 //! let dst_address = EndhostAddr::from_str("1-10,4.4.4.4").unwrap();
 //!
-//! let context: TestContext = TestBuilder::new()
+//! let context: TestContext = TestPathBuilder::new()
 //!     .using_info_timestamp(segment_creation_timestamp)
 //!     .up()
 //!     .add_hop(0, 1)
@@ -32,24 +32,6 @@
 //!     .build(src_address, dst_address, routing_timestamp);
 //! ```
 //!
-//! ----
-//!
-//! #### Building a Topology from the Context
-//!
-//! Easiest way to work with the [`TestBuilder`] is to use a topology built from it.
-//!
-//! ```ignore
-//! let ctx_topology = context.build_topology();
-//! println!("{}", ctx_topology.format_mermaid());
-//! ```
-//!
-//! The packets created by the TestContext will be valid on this topology.
-//!
-//! You can use [`ScionTopology::format_mermaid`] to visualize it.
-//!
-//! If you want to use an existing Topology, you will have to make sure that you are:
-//! - using valid interface indexes in the hop fields
-//! - using the correct Forwarding Keys for each hop
 //! ----
 //!
 //! #### Creating SCION Packets
@@ -98,102 +80,157 @@
 //!
 //! #### More Complex Use Cases
 //!
-//! [`TestContext`] exposes the [`TestBuilderSegment`] it used to build the Path
+//! [`TestPathContext`] exposes the [`TestPathBuilderSegment`] it used to build the Path
 //!
-//! You can use these to build wrappers around the TestContext for specialized use cases. \
-//! See [`crate::network::scion::routing::spec::SpecRoutingLogic`] tests for an example of one
-//! such wrapper.
+//! You can use these to build wrappers around the TestPathContext for specialized use
+//! cases.
 
-use scion_proto::{
+use std::time::Duration;
+
+use chrono::DateTime;
+
+use crate::{
     address::{Asn, EndhostAddr, Isd, IsdAsn, SocketAddr},
     packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
-    path::{DataPlanePath, HopField, InfoField, SegmentLength, StandardPath},
+    path::{
+        DataPlanePath, HopField, InfoField, MetaHeader, Metadata, Path, PathInterface,
+        SegmentLength, StandardPath,
+        crypto::{ForwardingKey, calculate_hop_mac, mac_chaining_step, validate_segment_macs},
+    },
     scmp::ScmpMessage,
-};
-
-use crate::network::scion::{
-    crypto::{ForwardingKey, calculate_hop_mac, mac_chaining_step, validate_segment_macs},
-    routing::AsRoutingLinkType,
-    topology::{ScionAs, ScionLink, ScionLinkType, ScionTopology},
 };
 
 /// A builder for constructing deterministic SCION Path tests.
 ///
-/// The `TestBuilder` lets you define the exact hop sequence a packet
+/// The [`TestPathBuilder`] lets you define the exact hop sequence a packet
 /// will traverse in a simulated SCION network.
 ///
-/// It produces a [`TestContext`] which supplies valid packets and a consistent [`ScionTopology`].
+/// It produces a [`TestPathContext`] which supplies valid packets.
 ///
 /// This is intended for tests only, not for constructing production paths.
-#[derive(Debug, Default)]
-pub struct TestBuilder {
-    segments: Vec<TestBuilderSegment>,
+#[derive(Debug)]
+pub struct TestPathBuilder {
+    segments: Vec<TestPathBuilderSegment>,
+    src_address: EndhostAddr,
+    dst_address: EndhostAddr,
+    current_isd: u16,
+    current_asn: u32,
     default_timestamp: u32,
     default_hop_expiry: u8,
     default_key: ForwardingKey,
 }
-impl TestBuilder {
+
+impl TestPathBuilder {
+    /// Creates a new TestBuilder
     #[allow(unused)]
-    pub(crate) fn new() -> Self {
-        TestBuilder {
+    pub fn new(src_address: EndhostAddr, dst_address: EndhostAddr) -> Self {
+        let current_isd = src_address.isd_asn().isd().0;
+        let current_asn = src_address.isd_asn().asn().0 as u32;
+
+        TestPathBuilder {
+            src_address,
+            dst_address,
+            current_isd,
+            current_asn,
             default_timestamp: 0,
             default_hop_expiry: 255,
-            ..Default::default()
+            segments: Vec::new(),
+            default_key: [0u8; 16].into(),
         }
     }
 
+    /// Sets the timestamp used in the following info fields
     #[allow(unused)]
-    pub(crate) fn using_info_timestamp(mut self, timestamp: u32) -> Self {
+    pub fn using_info_timestamp(mut self, timestamp: u32) -> Self {
         self.default_timestamp = timestamp;
         self
     }
 
+    /// Sets the hop expiry time used in the following hop fields
     #[allow(unused)]
-    pub(crate) fn with_hop_expiry(mut self, exp_time: u8) -> Self {
+    pub fn with_hop_expiry(mut self, exp_time: u8) -> Self {
         self.default_hop_expiry = exp_time;
         self
     }
 
+    /// Sets the forwarding key used in the following hop fields
     #[allow(unused)]
-    pub(crate) fn using_forwarding_key(mut self, key: ForwardingKey) -> Self {
+    pub fn using_forwarding_key(mut self, key: ForwardingKey) -> Self {
         self.default_key = key;
         self
     }
 
-    #[allow(unused)]
-    pub(crate) fn down(mut self) -> Self {
-        self.add_segment(true, self.default_timestamp, AsRoutingLinkType::LinkToChild);
+    /// Sets the ISD used in the next hops
+    ///
+    /// Note: This can make the path invalid if the ISD changes do not align with segment changes
+    pub fn with_isd(mut self, isd: u16) -> Self {
+        self.current_isd = isd;
         self
     }
 
-    #[allow(unused)]
-    pub(crate) fn core(mut self) -> Self {
-        self.add_segment(true, self.default_timestamp, AsRoutingLinkType::LinkToCore);
+    /// Sets the ASN used for the next hop
+    ///
+    /// ASN is automatically incremented when adding a hop
+    ///
+    /// The set ASN will be ignored on the last hop of the path, which is always set to the
+    /// destination isd-asn.
+    ///
+    /// Note: This can make the path invalid if the first or last ASNs do not match the source or
+    /// destination addresses
+    pub fn with_asn(mut self, asn: u32) -> Self {
+        self.current_asn = asn;
         self
     }
 
+    /// Adds a down segment to the path
     #[allow(unused)]
-    pub(crate) fn up(mut self) -> Self {
+    pub fn down(mut self) -> Self {
         self.add_segment(
-            false,
+            true,
             self.default_timestamp,
-            AsRoutingLinkType::LinkToParent,
+            TestRoutingLinkType::LinkToChild,
         );
         self
     }
 
+    /// Adds a core segment to the path
     #[allow(unused)]
-    pub(crate) fn add_hop(self, ingress_if: u16, egress_if: u16) -> Self {
+    pub fn core(mut self) -> Self {
+        self.add_segment(
+            true,
+            self.default_timestamp,
+            TestRoutingLinkType::LinkToCore,
+        );
+        self
+    }
+
+    /// Adds an up segment to the path
+    #[allow(unused)]
+    pub fn up(mut self) -> Self {
+        self.add_segment(
+            false,
+            self.default_timestamp,
+            TestRoutingLinkType::LinkToParent,
+        );
+        self
+    }
+
+    /// Adds a hop to the current segment with given ingress and egress interfaces
+    #[allow(unused)]
+    pub fn add_hop(self, ingress_if: u16, egress_if: u16) -> Self {
         self.add_hop_internal(ingress_if, false, egress_if, false, false)
     }
 
+    /// Adds a hop to the current segment with given ingress and egress interface where the egress
+    /// is down
     #[allow(unused)]
-    pub(crate) fn add_hop_with_egress_down(self, ingress_if: u16, egress_if: u16) -> Self {
+    pub fn add_hop_with_egress_down(self, ingress_if: u16, egress_if: u16) -> Self {
         self.add_hop_internal(ingress_if, false, egress_if, false, true)
     }
 
+    /// Adds a hop to the current segment with given ingress and egress interfaces and router alerts
     #[allow(unused)]
-    pub(crate) fn add_hop_with_alerts(
+    pub fn add_hop_with_alerts(
         self,
         ingress_if: u16,
         ingress_alert: bool,
@@ -215,6 +252,23 @@ impl TestBuilder {
             .segments
             .last_mut()
             .expect("Path must have at least one segment");
+
+        let isd = self.current_isd;
+        let asn = self.current_asn;
+
+        // Increment ASN for next hop, only if we are not at beginning of a segment change
+        if egress_if != 0 {
+            self.current_asn += 1;
+        }
+
+        let dst_isd = self.dst_address.isd_asn().isd();
+
+        // If we are in a core segment, change current ISD to destination ISD after first hop
+        // User still can override ISD with `with_isd` before adding each hop
+        if current_segment.uplink_type == TestRoutingLinkType::LinkToCore {
+            self.current_isd = dst_isd.0;
+        }
+
         let cons_dir = current_segment.info_field.cons_dir;
 
         let (ingress_link_type, egress_link_type) = match (ingress_if, egress_if) {
@@ -229,7 +283,8 @@ impl TestBuilder {
             }
         };
 
-        current_segment.hop_fields.push(TestBuilderHopField {
+        current_segment.hop_fields.push(TestPathBuilderHopField {
+            isd_asn: IsdAsn::new(Isd(isd), Asn(asn as u64)),
             cons_dir,
             ingress_link_type,
             ingress_if,
@@ -246,28 +301,29 @@ impl TestBuilder {
         self
     }
 
+    /// Creates a test context
+    ///
+    /// Contains a valid SCION packet derived from the segments defined in the builder.
+    ///
+    /// Will set the last hop's ISD-AS to the destination address's ISD-AS.
     #[allow(unused)]
-    pub(crate) fn build(
-        self,
-        src_address: EndhostAddr,
-        dst_address: EndhostAddr,
-        routing_timestamp: u32,
-    ) -> TestContext {
-        self.build_with_path_modifier(src_address, dst_address, routing_timestamp, |p| p)
+    pub fn build(self, routing_timestamp: u32) -> TestPathContext {
+        self.build_with_path_modifier(routing_timestamp, |p| p)
     }
 
     /// Creates a test context
     ///
     /// Contains a valid SCION packet derived from the segments defined in the builder.
     ///
-    /// `routing_timestamp` is the timestamp of when the packet is received
+    /// Will set the last hop's ISD-AS to the destination address's ISD-AS.
     pub fn build_with_path_modifier(
-        self,
-        src_address: EndhostAddr,
-        dst_address: EndhostAddr,
+        mut self,
         routing_timestamp: u32,
         path_modifier: impl FnOnce(StandardPath) -> StandardPath,
-    ) -> TestContext {
+    ) -> TestPathContext {
+        let src_address = self.src_address;
+        let dst_address = self.dst_address;
+
         let mut segment_lengths: [SegmentLength; 3] = [SegmentLength::new_unchecked(0); 3];
         self.segments.iter().enumerate().for_each(|(i, segment)| {
             segment_lengths[i] = SegmentLength::new(segment.hop_fields.len() as u8)
@@ -280,17 +336,25 @@ impl TestBuilder {
                 let mut segment_hops = Vec::new();
                 let mut segments_seg_ids = Vec::new();
 
+                // Set IsdAsn of last hop to destination AS
+                if let Some(last_segment) = self.segments.iter_mut().last()
+                    && let Some(last_hop) = last_segment.hop_fields.iter_mut().last()
+                {
+                    last_hop.isd_asn = dst_address.isd_asn();
+                }
+
                 // Calculate MACs and build the hops
                 for segment in &self.segments {
                     let mut previous_accumulator = segment.info_field.seg_id;
                     let mut accumulator = segment.info_field.seg_id;
 
                     // Calculating the macs has to happen in order of construction
-                    let const_dir_iter: Box<dyn DoubleEndedIterator<Item = &TestBuilderHopField>> =
-                        match segment.info_field.cons_dir {
-                            true => Box::new(segment.hop_fields.iter()),
-                            false => Box::new(segment.hop_fields.iter().rev()),
-                        };
+                    let const_dir_iter: Box<
+                        dyn DoubleEndedIterator<Item = &TestPathBuilderHopField>,
+                    > = match segment.info_field.cons_dir {
+                        true => Box::new(segment.hop_fields.iter()),
+                        false => Box::new(segment.hop_fields.iter().rev()),
+                    };
 
                     // Calculate the MACs
                     let mut hops = const_dir_iter
@@ -323,7 +387,7 @@ impl TestBuilder {
                 }
 
                 let path = path_modifier(StandardPath {
-                    path_meta: scion_proto::path::MetaHeader {
+                    path_meta: MetaHeader {
                         current_info_field: 0.into(),
                         current_hop_field: 0.into(),
                         reserved: 0.into(),
@@ -349,8 +413,56 @@ impl TestBuilder {
             }
         };
 
-        TestContext {
-            path,
+        // Find expiration of this path - lowest expiration of all hops
+        let expiration = self
+            .segments
+            .iter()
+            .flat_map(|seg| {
+                seg.hop_fields.iter().map(|hop| {
+                    seg.info_field.timestamp_epoch
+                        + (EXP_TIME_UNIT * (hop.exp_time as u32)).as_secs() as u32
+                })
+            })
+            .min()
+            .unwrap_or(u32::MAX);
+
+        // Collect interfaces for metadata
+        let mut interfaces = Vec::new();
+        for segment in &self.segments {
+            for hop in &segment.hop_fields {
+                let isd_asn = hop.isd_asn;
+                if hop.ingress_if != 0 {
+                    interfaces.push(PathInterface {
+                        isd_asn,
+                        id: hop.ingress_if,
+                    });
+                }
+
+                if hop.egress_if != 0 {
+                    interfaces.push(PathInterface {
+                        isd_asn,
+                        id: hop.egress_if,
+                    });
+                }
+            }
+        }
+
+        let path_meta = Metadata {
+            expiration: DateTime::from_timestamp_secs(expiration as i64).expect("Valid timestamp"),
+            mtu: 1280,
+            interfaces: Some(interfaces),
+            latency: None,
+            bandwidth_kbps: None,
+            geo: None,
+            link_type: None,
+            internal_hops: None,
+            notes: None,
+            epic_auths: None,
+        };
+
+        TestPathContext {
+            data_plane_path: path,
+            path_meta,
             timestamp: routing_timestamp,
             test_segments: self.segments,
             dst_address,
@@ -362,7 +474,7 @@ impl TestBuilder {
         &mut self,
         is_construction_dir: bool,
         timestamp: u32,
-        uplink_type: AsRoutingLinkType,
+        uplink_type: TestRoutingLinkType,
     ) {
         if self.segments.len() >= 3 {
             panic!("Path can not have more than 3 segments");
@@ -382,7 +494,7 @@ impl TestBuilder {
                 .segment_change_next = true;
         }
 
-        self.segments.push(TestBuilderSegment {
+        self.segments.push(TestPathBuilderSegment {
             hop_fields: Vec::new(),
             info_field,
             uplink_type,
@@ -390,20 +502,26 @@ impl TestBuilder {
     }
 }
 
-/// Test Context providing a SCION Packet and relevant per hop information
-pub struct TestContext {
-    pub(crate) path: DataPlanePath,
+/// Test Context providing a Path and relevant per hop information
+pub struct TestPathContext {
+    /// The path used in the SCION packets
+    pub data_plane_path: DataPlanePath,
+    /// The metadata for the path
+    pub path_meta: Metadata,
+    /// The timestamp used when simulating the packet traversal
     #[allow(unused)]
-    pub(crate) timestamp: u32,
+    pub timestamp: u32,
 
     /// Defines the segments used to build the packet
-    pub(crate) test_segments: Vec<TestBuilderSegment>,
+    pub test_segments: Vec<TestPathBuilderSegment>,
 
-    pub(crate) src_address: EndhostAddr,
-    pub(crate) dst_address: EndhostAddr,
+    /// The source address of the packet
+    pub src_address: EndhostAddr,
+    /// The destination address of the packet
+    pub dst_address: EndhostAddr,
 }
 
-impl TestContext {
+impl TestPathContext {
     /// Creates a raw SCION packet with the given payload
     ///
     /// The packet will use the path and addresses defined in the builder
@@ -413,7 +531,7 @@ impl TestContext {
                 source: self.src_address.into(),
                 destination: self.dst_address.into(),
             },
-            self.path.clone(),
+            self.data_plane_path.clone(),
             payload.to_owned().into(),
             0,
             FlowId::default(),
@@ -430,7 +548,7 @@ impl TestContext {
                 source: SocketAddr::new(self.src_address.into(), src_port),
                 destination: SocketAddr::new(self.dst_address.into(), dst_port),
             },
-            self.path.clone(),
+            self.data_plane_path.clone(),
             payload.to_owned().into(),
         )
         .expect("Failed to create SCION UDP packet")
@@ -445,223 +563,75 @@ impl TestContext {
                 source: self.src_address.into(),
                 destination: self.dst_address.into(),
             },
-            self.path.clone(),
+            self.data_plane_path.clone(),
             message,
         )
         .expect("Failed to create SCION SCMP packet")
     }
 
-    /// Builds a simple test topology where the packet in this context is valid
-    ///
-    /// If SRC and DST are in different ISDs, a Core Segment with at least 3 hops is required.
-    ///
-    /// Function will inject at least one Core AS to the topology.
-    pub fn build_topology(&self) -> ScionTopology {
-        let mut topology = ScionTopology::new();
-
-        let src_as = self.src_address.isd_asn();
-        let dst_as = self.dst_address.isd_asn();
-
-        let mut using_isd = src_as.isd().to_u16();
-        let mut as_counter = src_as.asn().to_u64();
-
-        let mut previous_egress: Option<(IsdAsn, u16, bool)> = None;
-
-        let mut after_segment_change = false;
-        let mut has_changed_isd = false;
-
-        // Determine the final hop
-        let Some(final_hop) = self.test_segments.iter().flat_map(|s| &s.hop_fields).last() else {
-            assert_eq!(
-                src_as, dst_as,
-                "If path is empty, src and dst AS must be the same"
-            );
-
-            let other_as = IsdAsn::new(Isd::new(using_isd), Asn::new(as_counter + 1));
-            // If the path is empty, we just create a basic topolo`gy with two ASes
-            topology
-                .add_as(ScionAs::new_core(src_as))
-                .unwrap()
-                .add_as(ScionAs::new_core(other_as))
-                .unwrap()
-                .add_link(ScionLink::new(src_as, 1, ScionLinkType::Core, other_as, 1).unwrap())
-                .unwrap();
-
-            return topology;
-        };
-
-        for (seg_idx, segment) in self.test_segments.iter().enumerate() {
-            for hop in &segment.hop_fields {
-                if after_segment_change {
-                    // If we switched to core segment - check if we need to change ISD
-                    if hop.egress_link_type == Some(AsRoutingLinkType::LinkToCore)
-                        && dst_as.isd() != src_as.isd()
-                    {
-                        assert!(
-                            segment.hop_fields.len() >= 3,
-                            "Need at least three core hops to change ISDs"
-                        );
-                        using_isd = dst_as.isd().to_u16();
-                        has_changed_isd = true;
-                    }
-
-                    // update previous egress interface
-                    let (isd, ..) = previous_egress
-                        .take()
-                        .expect("Previous egress should be set");
-
-                    previous_egress = Some((isd, hop.egress_if, hop.egress_interface_down));
-
-                    after_segment_change = false;
-                    continue;
-                }
-
-                after_segment_change = hop.segment_change_next;
-
-                // Get the next ASN
-                let curr_as = if std::ptr::eq(hop, final_hop) {
-                    dst_as // use our dst AS at the final hop
-                } else {
-                    // Count up from src AS
-                    let mut next = IsdAsn::new(Isd::new(using_isd), Asn::new(as_counter));
-
-                    // Avoid overlap with destination AS
-                    if next == dst_as {
-                        as_counter += 1;
-                        next = IsdAsn::new(Isd::new(using_isd), Asn::new(as_counter));
-                    }
-
-                    as_counter += 1;
-                    next
-                };
-
-                // Create a new AS for each hop
-                let scion_as = match segment.uplink_type {
-                    AsRoutingLinkType::LinkToCore => ScionAs::new_core(curr_as),
-                    _ => {
-                        // If this is a segment change, we need to see if the next AS might need to
-                        // be a core
-                        match hop.segment_change_next {
-                            false => ScionAs::new(curr_as),
-                            true => {
-                                let next_segment = self
-                                    .test_segments
-                                    .get(seg_idx + 1)
-                                    .expect("Next segment should exist on segment change");
-
-                                if next_segment.uplink_type == AsRoutingLinkType::LinkToCore {
-                                    ScionAs::new_core(curr_as)
-                                } else {
-                                    ScionAs::new(curr_as)
-                                }
-                            }
-                        }
-                    }
-                };
-
-                topology
-                    .add_as(scion_as.with_forwarding_key(hop.forwarding_key.into()))
-                    .expect("Should not fail to add AS");
-
-                // Update previous AS
-                let prev_as =
-                    previous_egress.replace((curr_as, hop.egress_if, hop.egress_interface_down));
-                let Some((prev_as, prev_egress, link_down)) = prev_as else {
-                    // If this is the first hop no need to create a link
-                    continue;
-                };
-
-                // Create a link between the previous AS and the current AS
-                let link_type = match hop.ingress_link_type {
-                    Some(link_type) => {
-                        match link_type {
-                            AsRoutingLinkType::LinkToCore => ScionLinkType::Core,
-                            AsRoutingLinkType::LinkToParent => ScionLinkType::Parent,
-                            AsRoutingLinkType::LinkToChild => ScionLinkType::Child,
-                            AsRoutingLinkType::LinkToPeer => ScionLinkType::Peer,
-                        }
-                    }
-                    None => continue, // Segment change
-                };
-
-                let mut link =
-                    ScionLink::new(prev_as, prev_egress, link_type, curr_as, hop.ingress_if)
-                        .expect("Should not fail to create links");
-
-                link.set_is_up(!link_down);
-
-                topology
-                    .add_link(link)
-                    .expect("Should not fail to add link");
-            }
+    /// Creates a [Path] from the context
+    pub fn path(&self) -> Path {
+        Path {
+            data_plane_path: self.data_plane_path.clone(),
+            underlay_next_hop: None,
+            isd_asn: ByEndpoint {
+                source: self.src_address.isd_asn(),
+                destination: self.dst_address.isd_asn(),
+            },
+            metadata: Some(self.path_meta.clone()),
         }
-
-        // Check if we have done a required ISD change
-        if dst_as.isd() != src_as.isd() && !has_changed_isd {
-            panic!(
-                "If dst_ia is set, and ISD is not the same as start, the path must have at least one core segment with 3 hops to change ISD"
-            );
-        }
-
-        // If there is no core AS, add one
-        if !topology.as_map.values().any(|as_entry| as_entry.core) {
-            let core_ia = IsdAsn::new(
-                Isd::new(using_isd),
-                Asn::new(as_counter.saturating_add(100)),
-            ); // Could collide with another AS, not worth to worry about
-
-            let core_as = ScionAs::new_core(core_ia);
-            topology.add_as(core_as).expect("Failed to add core AS");
-
-            // Add links from both src and dst AS to the core AS
-            // Will make sure there are no orphans along the way
-            let src_link = ScionLink::new(src_as, 50, ScionLinkType::Child, core_ia, 50)
-                .expect("Failed to create link");
-            let dst_link = ScionLink::new(dst_as, 51, ScionLinkType::Child, core_ia, 51)
-                .expect("Failed to create link");
-            topology.add_link(src_link).expect("Failed to add link");
-            topology.add_link(dst_link).expect("Failed to add link");
-        }
-
-        topology
     }
 }
 
+// MaxTTL / 256 (5m38.5s) see the following for reference:
+// https://datatracker.ietf.org/doc/html/draft-dekater-scion-dataplane#name-hop-field
+const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
+
 /// General Definition of a Hop Field
 ///
-/// Together with [TestBuilderSegment], this contains all relevant information to build a [HopField]
+/// Together with [TestPathBuilderSegment], this contains all relevant information to build a
+/// [HopField]
 ///
 /// For fields which mirror hop fields, see [HopField] for documentation
 #[derive(Debug, Clone)]
-pub struct TestBuilderHopField {
+pub struct TestPathBuilderHopField {
+    /// The ISD-AS of this Hop
+    pub isd_asn: IsdAsn,
+
     /// If the Hop field is defined in Construction direction
     /// ingress/egress in this struct are travel direction
-    pub(crate) cons_dir: bool,
+    pub cons_dir: bool,
 
-    pub(crate) ingress_if: u16,
+    /// Ingress interface (normalized to travel direction)
+    pub ingress_if: u16,
     /// The link type to the ingress interface (None = Local)
     /// If e.g. LinkToParent, we are the Parent
-    pub(crate) ingress_link_type: Option<AsRoutingLinkType>,
-    pub(crate) ingress_router_alert: bool,
+    pub ingress_link_type: Option<TestRoutingLinkType>,
+    /// If true, the ingress interface of this Hop will have a router alert
+    pub ingress_router_alert: bool,
 
-    pub(crate) egress_if: u16,
+    /// Egress interface (normalized to travel direction)
+    pub egress_if: u16,
     /// The link type from the egress interface (None = Local)
     /// If e.g. LinkToParent, we are the Child
-    pub(crate) egress_link_type: Option<AsRoutingLinkType>,
-    pub(crate) egress_router_alert: bool,
+    pub egress_link_type: Option<TestRoutingLinkType>,
+    /// If true, the egress interface of this Hop will have a router alert
+    pub egress_router_alert: bool,
 
     /// If true, the egress interface of this Hop will be down
-    pub(crate) egress_interface_down: bool,
+    pub egress_interface_down: bool,
 
-    pub(crate) exp_time: u8,
+    /// Expiration time units for this hop
+    pub exp_time: u8,
 
     /// Forwarding key to use to authenticate this packet
-    pub(crate) forwarding_key: ForwardingKey,
+    pub forwarding_key: ForwardingKey,
 
     /// If after this Hop there will be a segment change
-    pub(crate) segment_change_next: bool,
+    pub segment_change_next: bool,
 }
-impl TestBuilderHopField {
+
+impl TestPathBuilderHopField {
     fn into_hop_field(self, mac_beta: u16, timestamp: u32) -> HopField {
         let (cons_ingress, cons_egress) = match self.cons_dir {
             true => (self.ingress_if, self.egress_if),
@@ -695,9 +665,78 @@ impl TestBuilderHopField {
 ///
 /// Contains all relevant information to build a PathSegment
 #[derive(Debug)]
-pub struct TestBuilderSegment {
-    pub(crate) info_field: InfoField,
-    pub(crate) hop_fields: Vec<TestBuilderHopField>,
-    // Link type all egress interfaces have in this segment
-    pub(crate) uplink_type: AsRoutingLinkType,
+pub struct TestPathBuilderSegment {
+    /// Information field for this segment
+    pub info_field: InfoField,
+    /// Hop fields for this segment
+    pub hop_fields: Vec<TestPathBuilderHopField>,
+    /// Link type all egress interfaces have in this segment
+    pub uplink_type: TestRoutingLinkType,
+}
+
+/// Defines the Link Type of a given Interface
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TestRoutingLinkType {
+    /// Link to a core AS.
+    LinkToCore,
+    /// Link to a parent AS.
+    LinkToParent,
+    /// Link to a child AS.
+    LinkToChild,
+    /// Link to a peer AS.
+    LinkToPeer,
+}
+
+impl TestRoutingLinkType {
+    /// Returns the reverse link type of the current link type.
+    pub fn reverse(&self) -> Self {
+        match self {
+            TestRoutingLinkType::LinkToCore => TestRoutingLinkType::LinkToCore,
+            TestRoutingLinkType::LinkToParent => TestRoutingLinkType::LinkToChild,
+            TestRoutingLinkType::LinkToChild => TestRoutingLinkType::LinkToParent,
+            TestRoutingLinkType::LinkToPeer => TestRoutingLinkType::LinkToPeer,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::address::{Asn, EndhostAddr, Isd, IsdAsn};
+
+    #[test]
+    fn should_generate_correct_interfaces() {
+        let ctx = super::TestPathBuilder::new(
+            EndhostAddr::new(IsdAsn::new(Isd(1), Asn(2)), [192, 168, 0, 1].into()),
+            EndhostAddr::new(IsdAsn::new(Isd(2), Asn(2)), [10, 0, 0, 1].into()),
+        )
+        .using_info_timestamp(1000)
+        .up()
+        .add_hop(0, 1) // ISD 1-2
+        .with_asn(8)
+        .add_hop(2, 3) // ISD 1-3
+        .with_asn(4)
+        .add_hop(4, 0) // ISD 1-4
+        .core()
+        .add_hop(0, 5) // ISD 1-4
+        .add_hop(6, 7) // ISD 2-5
+        .add_hop(8, 0) // ISD 2-2
+        .build(2000);
+
+        let expected_interfaces = vec![
+            (IsdAsn::new(Isd(1), Asn(2)), 1),
+            (IsdAsn::new(Isd(1), Asn(8)), 2),
+            (IsdAsn::new(Isd(1), Asn(8)), 3),
+            (IsdAsn::new(Isd(1), Asn(4)), 4),
+            (IsdAsn::new(Isd(1), Asn(4)), 5),
+            (IsdAsn::new(Isd(2), Asn(5)), 6),
+            (IsdAsn::new(Isd(2), Asn(5)), 7),
+            (IsdAsn::new(Isd(2), Asn(2)), 8),
+        ]
+        .into_iter()
+        .map(|(isd_asn, id)| crate::path::PathInterface { isd_asn, id })
+        .collect::<Vec<_>>();
+
+        let interfaces = ctx.path_meta.interfaces.as_ref().unwrap();
+        assert_eq!(expected_interfaces, *interfaces);
+    }
 }
