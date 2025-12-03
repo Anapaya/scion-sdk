@@ -86,7 +86,7 @@ pub const PATH_MIN_MTU: u16 = 1280;
 /// `Path`s are generic over the underlying representation used by the [`DataPlanePath`]. By
 /// default, this is a [`Bytes`] object which allows relatively cheap copying of the overall path
 /// as the Path data can then be shared across several `Path` instances.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Path<T = Bytes> {
     /// The raw bytes to be added as the path header to SCION data plane packets.
     pub data_plane_path: DataPlanePath<T>,
@@ -96,6 +96,43 @@ pub struct Path<T = Bytes> {
     pub isd_asn: ByEndpoint<IsdAsn>,
     /// Path metadata.
     pub metadata: Option<Metadata>,
+}
+
+impl<T> std::fmt::Debug for Path<T>
+where
+    T: Deref<Target = [u8]>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.data_plane_path {
+            DataPlanePath::EmptyPath => {
+                write!(
+                    f,
+                    "EmptyPath: {} -> {}",
+                    self.isd_asn.source, self.isd_asn.destination
+                )
+            }
+            DataPlanePath::Unsupported { .. } => {
+                write!(
+                    f,
+                    "UnsupportedPath: {} -> {}",
+                    self.isd_asn.source, self.isd_asn.destination
+                )
+            }
+            DataPlanePath::Standard(_) => {
+                if let Some(metadata) = &self.metadata {
+                    write!(f, "StandardPath Hops: ")?;
+                    metadata.format_interfaces(f)?;
+                    write!(f, " MTU: {}", metadata.mtu)
+                } else {
+                    write!(
+                        f,
+                        "StandardPath: {} -> {} (no metadata)",
+                        self.isd_asn.source, self.isd_asn.destination
+                    )
+                }
+            }
+        }
+    }
 }
 
 impl<T> Path<T>
