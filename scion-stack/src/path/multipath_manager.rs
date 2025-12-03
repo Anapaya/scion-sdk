@@ -12,13 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Multi-path manager
+//! Multipath manager for SCION path selection.
 //!
-//! Manages multiple paths per src-dst pair, including path fetching, caching, and selection.
+//! Runs one task per (src,dst) pair. Each task fetches paths, filters them, applies issue
+//! penalties, ranks candidates, and picks an active path.
 //!
-//! Uses a background task per src-dst pair to manage path fetching and refreshing.
+//! Tasks track expiry, refetch intervals, backoff after failures, and drop entries that go
+//! idle. The Active path for a (src,dst) pair is exposed lock-free via `ArcSwap`.
+//!
+//! All path data comes from the provided `PathFetcher`. Issue reports feed
+//! into reliability scoring and can trigger immediate re-ranking.
+//!
+//! ## Issue Handling & Penalties
+//!
+//! Incoming issues are applied to cached paths immediately and can trigger an active-path
+//! switch. Issues are cached with a timestamp and applied to newly fetched paths.
+//!
+//! Penalties on individual paths and individual cached issues decay over time. Allowing paths
+//! to recover.
+//!
+//! ## Active Path Switching
+//!
+//! If no active path exists, the highest-ranked valid path is selected.
+//! Active path is replaced when it expires, nears expiry, or falls behind the best candidate
+//! by a configured score margin.
+
+// Internal:
+//
+// ## Core components
+//
+// MultiPathManager: Central entry point. Holds configuration, the global issue manager, and a
+// concurrent map from (src, dst) to worker. Spawns a worker on first access and provides lock-free
+// reads to workers.
+//
+// PathSet: Per-tuple worker. Fetches paths, filters them, applies issue penalties, ranks
+// candidates, and maintains an active path. Runs a periodic maintenance loop handling refetch,
+// backoff, and idle shutdown.
+//
+// PathIssueManager:  Global issue cache and broadcast system. Deduplicates issues and notifies all
+// workers of incoming issues.
+//
+// IssueKind / IssueMarker: Describe concrete path problems (SCMP, socket errors). Compute the
+// affected hop or full path, assign a penalty, and support deduplication and decay.
 
 use std::{
+    cmp::Ordering,
     collections::{HashMap, VecDeque, hash_map},
     hash::RandomState,
     sync::{Arc, Mutex, Weak, atomic::AtomicBool},
@@ -53,9 +91,10 @@ use crate::path::{
 };
 
 /// Configuration for the MultiPathManager.
+#[derive(Debug, Clone, Copy)]
 pub struct MultiPathManagerConfig {
     /// Maximum number of cached paths per src-dst pair.
-    _max_cached_paths_per_pair: usize,
+    max_cached_paths_per_pair: usize,
     /// Interval between path refetches
     refetch_interval: Duration,
     /// Minimum duration between path refetches.
@@ -72,7 +111,10 @@ pub struct MultiPathManagerConfig {
     issue_broadcast_size: usize,
     /// Time window to ignore duplicate issues
     issue_deduplication_window: Duration,
+    /// Score difference after which active path should be replaced
+    path_swap_score_threshold: f32,
 }
+
 impl MultiPathManagerConfig {
     /// Validates the configuration.
     fn validate(&self) -> Result<(), &'static str> {
@@ -263,11 +305,7 @@ impl<F: PathFetcher> MultiPathManager<F> {
                     src,
                     dst,
                     self.weak_ref(),
-                    self.0.config.refetch_interval,
-                    self.0.config.min_refetch_delay,
-                    self.0.config.min_expiry_threshold,
-                    self.0.config.max_idle_period,
-                    self.0.config.fetch_failure_backoff,
+                    self.0.config,
                     self.0.issue_manager.lock().unwrap().issues_subscriber(),
                 );
 
@@ -584,21 +622,21 @@ struct PathSetEntry {
     reliability: ReliabilityScore,
 }
 
+impl PathSetEntry {
+    /// returns the total score of this entry
+    fn combined_score(&self, now: SystemTime) -> f32 {
+        self.reliability.score(now)
+    }
+}
+
 /// Manages paths for a specific src-dst pair.
 struct PathSet<F: PathFetcher> {
-    // Immutable
     /// Source ISD-AS
     src: IsdAsn,
     /// Destination ISD-AS
     dst: IsdAsn,
-    /// Interval between path refetches
-    refetch_interval: Duration,
-    /// Minimum duration between refetches
-    min_refetch_delay: Duration,
-    /// Minimum expiry threshold before refetching paths
-    min_expiry_threshold: Duration,
-    /// Maximum idle period before the ManagedPathTuple is removed
-    max_idle_period: Duration,
+    /// Config
+    config: MultiPathManagerConfig,
     /// Backoff for path fetch failures
     backoff: ExponentialBackoff,
     /// Parent multipath manager
@@ -650,29 +688,26 @@ impl<F: PathFetcher> PathSet<F> {
         src: IsdAsn,
         dst: IsdAsn,
         manager: MultiPathManagerRef<F>,
-        refetch_interval: Duration,
-        min_refetch_delay: Duration,
-        min_expiry_threshold: Duration,
-        max_idle_period: Duration,
-        backoff: BackoffConfig,
+        config: MultiPathManagerConfig,
         issue_rx: broadcast::Receiver<(u64, IssueMarker)>,
     ) -> Self {
+        let backoff = ExponentialBackoff::new_from_config(config.fetch_failure_backoff);
+
+        let internal = PathSetInternal {
+            cached_paths: Vec::new(),
+            failed_attempts: 0,
+            next_refetch: SystemTime::now(),
+            next_idle_check: SystemTime::now() + config.max_idle_period,
+            issue_rx,
+        };
+
         PathSet {
             src,
             dst,
-            refetch_interval,
-            min_refetch_delay,
-            min_expiry_threshold,
-            max_idle_period,
-            backoff: ExponentialBackoff::new_from_config(backoff),
+            config,
+            backoff,
             manager,
-            internal: PathSetInternal {
-                cached_paths: Vec::new(),
-                failed_attempts: 0,
-                next_refetch: SystemTime::now(),
-                next_idle_check: SystemTime::now() + max_idle_period,
-                issue_rx,
-            },
+            internal,
             shared: Arc::new(PathSetSharedState {
                 active_path: ArcSwapOption::new(None),
                 was_used_in_idle_period: AtomicBool::new(true),
@@ -700,6 +735,8 @@ impl<F: PathFetcher> PathSet<F> {
                 // Update the managed path tuple on start
                 self.fetch_and_update(SystemTime::now()).await;
 
+                let exit_reason: &'static str;
+
                 loop {
                     let now = SystemTime::now();
                     tracing::trace!("Managed paths task tick");
@@ -708,22 +745,32 @@ impl<F: PathFetcher> PathSet<F> {
                     select! {
                         // Issue Notifications
                         issue = self.internal.issue_rx.recv() => {
-                            if !self.handle_issue_rx(SystemTime::now(), issue) {
+                            if let Some(reason) = self.handle_issue_rx(SystemTime::now(), issue) {
+                                exit_reason = reason;
                                 break;
                             }
                         }
                         // Maintenance Tick
                         _ = tokio::time::sleep(next_tick) => {
-                            self.maintain(SystemTime::now()).await;
+                            if let Some(reason) = self.maintain(SystemTime::now()).await {
+                                exit_reason = reason;
+                                break;
+                            }
                         }
                         // Cancellation
                         _ = cancel_token.cancelled() => {
+                            exit_reason = "cancel token triggered";
                             break;
                         }
                     }
                 }
 
-                tracing::info!("Managed paths task exiting");
+                // If manager still exists, drop the PathSet entry
+                if let Some(mgr) = self.manager.get() {
+                    mgr.stop_managing_paths(self.src, self.dst);
+                }
+
+                tracing::info!(exit_reason, "Managed paths task exiting");
             }
         };
 
@@ -738,28 +785,28 @@ impl<F: PathFetcher> PathSet<F> {
 
     /// Handles received path issues.
     ///
-    /// Returns false if the task should exit.
+    /// Returns a string containing a reason if task should be stopped
     fn handle_issue_rx(
         &mut self,
         now: SystemTime,
         recv: Result<(u64, IssueMarker), broadcast::error::RecvError>,
-    ) -> bool {
+    ) -> Option<&'static str> {
         // Sadly we don't have a way to peek broadcast so we have to handle first recv separately
         let (_, issue) = match recv {
             Ok(issue) => issue,
             Err(broadcast::error::RecvError::Lagged(_)) => {
                 tracing::warn!("Missed path issue notifications");
-                return true;
+                return None; // Will immediately receive next notification
             }
             Err(broadcast::error::RecvError::Closed) => {
                 tracing::info!("Issue notification channel closed, exiting managed paths task");
-                return false;
+                return Some("issue channel closed");
             }
         };
 
         // Check if issue applies to this path set
         if !issue.target.applies_to_path(self.src, self.dst) {
-            return true;
+            return None;
         }
 
         let mut res = self.ingest_path_issue(now, &issue);
@@ -772,11 +819,11 @@ impl<F: PathFetcher> PathSet<F> {
 
         if res.active_path_affected {
             tracing::info!("Active path affected by path issues, re-evaluating");
-            self.rerank();
+            self.rerank(now);
             self.maybe_update_active_path(now);
         }
 
-        true
+        None
     }
 
     /// Drains the issue channel and applies all pending issues.
@@ -827,21 +874,22 @@ impl<F: PathFetcher> PathSet<F> {
 
     /// Maintains the path set by checking for idle paths and refetching if necessary.
     ///
-    /// Returns true if the path set is idle and should be removed.
-    async fn maintain(&mut self, now: SystemTime) -> bool {
-        if now >= self.internal.next_idle_check && self.idle_check(now).await {
-            if let Some(mgr) = self.manager.get() {
-                mgr.stop_managing_paths(self.src, self.dst);
-            }
+    /// Returns Some with a reason if the path set should be dropped
+    async fn maintain(&mut self, now: SystemTime) -> Option<&'static str> {
+        // Check that manager still exists,
+        if self.manager.get().is_none() {
+            return Some("manager was dropped");
+        };
 
-            return true;
+        if now >= self.internal.next_idle_check && self.idle_check(now).await {
+            return Some("idle");
         }
 
         if now >= self.internal.next_refetch {
             self.fetch_and_update(now).await;
         }
 
-        false
+        None
     }
 }
 // Internal
@@ -863,11 +911,11 @@ impl<F: PathFetcher> PathSet<F> {
             self.shared
                 .was_used_in_idle_period
                 .store(false, std::sync::atomic::Ordering::Relaxed);
-            self.internal.next_idle_check = now + self.max_idle_period;
+            self.internal.next_idle_check = now + self.config.max_idle_period;
             false
         } else {
             // Path tuple is idle, remove it
-            let unused_since = self.internal.next_idle_check - self.max_idle_period;
+            let unused_since = self.internal.next_idle_check - self.config.max_idle_period;
             tracing::info!(?unused_since, "Path tuple is idle, removing");
             true
         }
@@ -877,7 +925,7 @@ impl<F: PathFetcher> PathSet<F> {
     async fn fetch_and_update(&mut self, now: SystemTime) {
         tracing::debug!("Refetching paths for src-dst pair");
 
-        // Update update state
+        // Set update state
         {
             let mut notify_guard = self.shared.sync.lock().unwrap();
             if notify_guard.ongoing_start.is_some() {
@@ -925,9 +973,9 @@ impl<F: PathFetcher> PathSet<F> {
                 // Update next refetch time
                 self.internal.next_refetch =
                     // Either after refetch interval, or before earliest expiry
-                    (now + self.refetch_interval).min(earliest_expiry - self.min_expiry_threshold)
+                    (now + self.config.refetch_interval).min(earliest_expiry - self.config.min_expiry_threshold)
                     // But at least after min refetch delay
-                    .max(now + self.min_refetch_delay);
+                    .max(now + self.config.min_refetch_delay);
             }
             // Failed to fetch, might have no paths available
             Err(e) => {
@@ -940,7 +988,7 @@ impl<F: PathFetcher> PathSet<F> {
                     + self
                         .backoff
                         .duration(self.internal.failed_attempts)
-                        .max(self.min_refetch_delay);
+                        .max(self.config.min_refetch_delay);
 
                 tracing::error!(
                     attempt = self.internal.failed_attempts,
@@ -954,10 +1002,10 @@ impl<F: PathFetcher> PathSet<F> {
         }
 
         // Always update ranking, and possibly active path
-        self.rerank();
+        self.rerank(now);
         self.maybe_update_active_path(now);
 
-        // Update update state
+        // Set update state
         {
             let mut notify_guard = self.shared.sync.lock().unwrap();
             notify_guard.ongoing_start = None;
@@ -1017,12 +1065,9 @@ impl<F: PathFetcher> PathSet<F> {
     /// Updates the path cache with new paths
     ///
     /// Possibly updates or removes the active path
-    fn update_path_cache(&mut self, new_paths: Vec<Path>, now: SystemTime) {
-        // TODO: Currently caches every path, should Reduce paths to max cached paths per pair
-        // But this requires another path ranking, possibly focussed on diversity
-
-        let mut new_paths: HashMap<PathFingerprint, Path, RandomState> =
-            HashMap::from_iter(new_paths.into_iter().map(|path| {
+    fn update_path_cache(&mut self, fetched_paths: Vec<Path>, now: SystemTime) {
+        let mut fetched_paths: HashMap<PathFingerprint, Path, RandomState> =
+            HashMap::from_iter(fetched_paths.into_iter().map(|path| {
                 let fingerprint = path.fingerprint().unwrap();
                 (fingerprint, path)
             }));
@@ -1031,21 +1076,16 @@ impl<F: PathFetcher> PathSet<F> {
 
         // Update cached paths
         self.internal.cached_paths.retain_mut(|cached_path| {
+            let mut keep = true;
             let fp = cached_path.fingerprint;
 
-            // Take path from new paths if it exists
-            let mut keep = match new_paths.remove(&fp) {
-                // Update existing
-                Some(new_path) => {
-                    cached_path.path = new_path;
-                    true
-                }
-                // TODO: When path Reduction is implemented, this might have to be changed
-                None => true,
+            // Update existing path if it exists
+            if let Some(matching_path) = fetched_paths.remove(&fp) {
+                cached_path.path = matching_path
             };
 
             // Don't keep expired paths
-            if check_path_expiry(&cached_path.path, now, self.min_expiry_threshold)
+            if check_path_expiry(&cached_path.path, now, self.config.min_expiry_threshold)
                 == ExpiryState::Expired
             {
                 tracing::info!(?fp, "Removing expired path from cache");
@@ -1075,7 +1115,7 @@ impl<F: PathFetcher> PathSet<F> {
         });
 
         // Work on new paths
-        if !new_paths.is_empty() {
+        if !fetched_paths.is_empty() {
             let manager = match self.manager.get() {
                 Some(mgr) => mgr,
                 None => {
@@ -1096,51 +1136,72 @@ impl<F: PathFetcher> PathSet<F> {
                 );
             }
 
-            // Take issues cache lock
-            let issues_guard = manager.0.issue_manager.lock().unwrap();
+            // Apply cached issues to fetched paths
+            let mut new_path_candidates = {
+                // Take issues cache lock
+                let issues_guard = manager.0.issue_manager.lock().unwrap();
 
-            // Drain issue channel again to catch any issues that arrived during lock acquisition
-            let (issue_count, res) = self.drain_and_apply_issue_channel(now);
-            if issue_count > 0 {
-                tracing::debug!(
-                    count = issue_count,
-                    ?res,
-                    "Ingested path issues before applying to new paths after lock acquisition"
-                );
-            }
+                // Drain issue channel again to catch any issues that arrived during lock
+                // acquisition
+                let (issue_count, res) = self.drain_and_apply_issue_channel(now);
+                if issue_count > 0 {
+                    tracing::debug!(
+                        count = issue_count,
+                        ?res,
+                        "Ingested path issues before applying to new paths after lock acquisition"
+                    );
+                }
 
-            // Insert and update new paths
-            for (new_fp, new_path) in new_paths {
-                let mut entry = PathSetEntry {
-                    fingerprint: new_fp,
-                    path: new_path,
-                    reliability: ReliabilityScore::new_with_time(now),
-                };
+                // Apply the issues to new paths
+                // XXX(ake): This could be pretty expensive if we have a lot of new path candidates.
+                // Possibly we need to reduce the candidates before this in the future
+                fetched_paths
+                    .into_iter()
+                    .map(|(fp, path)| {
+                        let mut entry = PathSetEntry {
+                            path,
+                            fingerprint: fp,
+                            reliability: ReliabilityScore::new_with_time(now),
+                        };
+                        issues_guard.apply_cached_issues(&mut entry, now);
+                        entry
+                    })
+                    .collect::<Vec<_>>()
+            };
 
-                // Apply cached issues to new paths
-                issues_guard.apply_cached_issues(&mut entry, now);
-                self.internal.cached_paths.push(entry);
-            }
+            rerank_algo(&manager.0.path_strategy, &mut new_path_candidates, now);
+
+            let active_fp = self.shared.active_path.load().as_ref().map(|p| p.1);
+
+            // Merge new paths into cache
+            merge_new_paths_algo(
+                &mut self.internal.cached_paths,
+                &mut new_path_candidates,
+                active_fp,
+                self.config.max_cached_paths_per_pair,
+                &manager.0.path_strategy,
+            );
         }
     }
 
     // Applies path ranking and selects active path if necessary.
-    fn rerank(&mut self) {
-        // TODO: just a placeholder ranking for now - by reliability score
-        self.internal.cached_paths.sort_by(|a, b| {
-            b.reliability
-                .score()
-                .total_cmp(&a.reliability.score())
-                .then_with(|| a.fingerprint.cmp(&b.fingerprint))
-        });
+    fn rerank(&mut self, now: SystemTime) {
+        let Some(manager) = self.manager.get() else {
+            // Manager dropped, cancellation token is triggered, so we can just return
+            return;
+        };
 
-        // Rank paths
-        // TODO: For ranking, path_strategy type needs to be changed
+        rerank_algo(
+            &manager.0.path_strategy,
+            &mut self.internal.cached_paths,
+            now,
+        );
     }
 
     /// Updates the active path if required
     fn maybe_update_active_path(&self, now: SystemTime) {
         /// Decision on active path update, including reason
+        #[derive(PartialEq, Eq)]
         enum Decision {
             /// No change needed
             NoChange,
@@ -1154,17 +1215,13 @@ impl<F: PathFetcher> PathSet<F> {
         let active_path = active_path_guard.as_ref();
         let best_path = self.best_path(now);
 
-        // Determine if active path needs replacement
-        let decision = match active_path {
+        // Determine if active path needs replacement - just by active path
+        let mut decision = match active_path {
             // No active path, set best available path
             None => Decision::Replace("no active path"),
-            // We have active path, only update if there is a much better path
             Some(active) => {
-                match check_path_expiry(&active.0, now, self.min_expiry_threshold) {
-                    ExpiryState::Valid => {
-                        // TODO: Check if best path is better than active path
-                        Decision::NoChange
-                    }
+                match check_path_expiry(&active.0, now, self.config.min_expiry_threshold) {
+                    ExpiryState::Valid => Decision::NoChange,
                     // Near expiry, should be replaced
                     ExpiryState::NearExpiry => Decision::Replace("active path near expiry"),
                     // Expired, must be replaced
@@ -1172,6 +1229,30 @@ impl<F: PathFetcher> PathSet<F> {
                 }
             }
         };
+
+        // If no reason to change, and we have a best path, check if there is a reason to switch
+        if Decision::NoChange == decision
+            && let Some(best_path) = best_path
+        {
+            match self.active_path_entry() {
+                Some(active_entry) => {
+                    let active_score = active_entry.combined_score(now);
+                    let best_score = best_path.combined_score(now);
+                    let diff = best_score - active_score;
+
+                    if diff > self.config.path_swap_score_threshold {
+                        decision = Decision::Replace("swap threshold reached")
+                    }
+                }
+                None => {
+                    debug_assert!(
+                        false,
+                        "failed to find active path entry, but active path is set"
+                    );
+                    tracing::warn!("no active path entry, but active path is set, unexpected")
+                }
+            }
+        }
 
         let active_fp = active_path
             .map(|p| p.1.to_string())
@@ -1213,7 +1294,9 @@ impl<F: PathFetcher> PathSet<F> {
 
         for path in path_iter {
             // Only consider paths that are not near expiry
-            if check_path_expiry(&path.path, now, self.min_expiry_threshold) != ExpiryState::Valid {
+            if check_path_expiry(&path.path, now, self.config.min_expiry_threshold)
+                != ExpiryState::Valid
+            {
                 continue;
             }
 
@@ -1222,7 +1305,102 @@ impl<F: PathFetcher> PathSet<F> {
 
         None
     }
+
+    /// Returns the entry of the current active path
+    fn active_path_entry(&self) -> Option<&PathSetEntry> {
+        let active_path_fp = self.shared.active_path.load().as_ref().map(|p| p.1)?;
+
+        self.internal
+            .cached_paths
+            .iter()
+            .find(|e| e.fingerprint == active_path_fp)
+    }
 }
+
+/// Reranks paths according to the given strategy
+fn rerank_algo(_strategy: &PathStrategy, paths: &mut [PathSetEntry], now: SystemTime) {
+    // TODO: just a placeholder ranking for now - by reliability score
+    paths.sort_by(|a, b| {
+        b.reliability
+            .score(now)
+            .total_cmp(&a.reliability.score(now))
+            .then_with(|| a.fingerprint.cmp(&b.fingerprint))
+    });
+}
+
+/// Merges paths from `new_paths` and `existing_paths` by path ranking.
+/// Resulting in an updated `existing_paths` containing the best paths from both vectors.
+/// The active path, if provided, is always retained in `existing_paths`.
+///
+/// Both path vectors should be in ranked order (best first).
+/// No paths from new_paths should be present in existing_paths.
+///
+/// Total number of paths after merge will be at most `target_path_count`.
+fn merge_new_paths_algo(
+    existing_paths: &mut Vec<PathSetEntry>,
+    new_paths: &mut Vec<PathSetEntry>,
+    active_fp: Option<PathFingerprint>,
+    target_path_count: usize,
+    path_strategy: &PathStrategy,
+) {
+    // Handle the active path.
+    // If it exists, swap it to the front (index 0) and start kept count at 1.
+    let mut kept_existing = 0;
+
+    if let Some(fp) = active_fp {
+        if let Some(idx) = existing_paths.iter().position(|p| p.fingerprint == fp) {
+            existing_paths.swap(0, idx);
+            kept_existing = 1;
+        } else {
+            debug_assert!(
+                false,
+                "Active path fingerprint must be present in existing paths"
+            );
+        }
+    }
+
+    let mut kept_new = 0;
+
+    // Select the best remaining paths until we reach target count.
+    let is_existing_better = |e: &PathSetEntry, n: &PathSetEntry| -> bool {
+        let ord = path_strategy.rank_order(
+            &PathManagerPath {
+                path: e.path.clone(),
+                from_registration: false,
+            },
+            &PathManagerPath {
+                path: n.path.clone(),
+                from_registration: false,
+            },
+        );
+        // Prefer existing on tie to reduce churn
+        ord != Ordering::Greater
+    };
+
+    while kept_existing + kept_new < target_path_count {
+        match (existing_paths.get(kept_existing), new_paths.get(kept_new)) {
+            (Some(e), Some(n)) => {
+                if is_existing_better(e, n) {
+                    kept_existing += 1;
+                } else {
+                    kept_new += 1;
+                }
+            }
+            (Some(_), None) => kept_existing += 1,
+            (None, Some(_)) => kept_new += 1,
+            (None, None) => break,
+        }
+    }
+
+    // Truncate to the calculated cutoff points.
+    existing_paths.truncate(kept_existing);
+    new_paths.truncate(kept_new);
+
+    // Merge
+    let truncated_new = new_paths.drain(..);
+    existing_paths.extend(truncated_new);
+}
+
 // Error handling support
 #[derive(Debug)]
 struct PathIssueIngestResult {
@@ -1331,7 +1509,7 @@ mod issues {
 
     use crate::{
         path::multipath_manager::{algo::exponential_decay, types::Score},
-        scionstack::ScionSocketSendError,
+        scionstack::{NetworkError, ScionSocketSendError},
     };
 
     /// Marker for a path issue
@@ -1622,7 +1800,7 @@ mod issues {
                         ScmpErrorMessage::ParameterProblem(_) => None,
                     }
                 }
-                IssueKind::Icmp { .. } => todo!(), //TODO
+                IssueKind::Icmp { .. } => None,
                 IssueKind::Socket { err } => {
                     let Some(path) = path else {
                         debug_assert!(false, "Path must be provided on SCMP errors");
@@ -1632,12 +1810,10 @@ mod issues {
                     match err.deref() {
                         ScionSocketSendError::NetworkUnreachable(network_error) => {
                             match network_error {
-                                crate::scionstack::NetworkError::DestinationUnreachable(_) => {
-                                    // TODO: Seems to be used in mixed contexts, need more info to
-                                    // interpret
-                                    None
-                                }
-                                crate::scionstack::NetworkError::UnderlayNextHopUnreachable {
+                                // XXX(ake): Destination Unreachable is used for multiple errors,
+                                // which are not relevant for paths
+                                NetworkError::DestinationUnreachable(_) => None,
+                                NetworkError::UnderlayNextHopUnreachable {
                                     isd_as,
                                     interface_id,
                                     msg: _,
@@ -1807,8 +1983,13 @@ mod reliability {
     }
 
     impl ReliabilityScore {
-        pub fn score(&self) -> f32 {
-            self.score.value()
+        pub fn score(&self, now: SystemTime) -> f32 {
+            exponential_decay(
+                self.score.value(),
+                now.duration_since(self.last_updated)
+                    .unwrap_or_else(|_| Duration::from_secs(0)),
+                EXPONENTIAL_DECAY_HALFLIFE,
+            )
         }
 
         pub fn new_with_time(now: SystemTime) -> Self {
@@ -1818,18 +1999,9 @@ mod reliability {
             }
         }
 
-        pub fn get_score(&self, now: SystemTime) -> f32 {
-            exponential_decay(
-                self.score.value(),
-                now.duration_since(self.last_updated)
-                    .unwrap_or_else(|_| Duration::from_secs(0)),
-                EXPONENTIAL_DECAY_HALFLIFE,
-            )
-        }
-
         /// Updates the reliability score based on the reported issue.
         pub fn update(&mut self, penalty: Score, now: SystemTime) {
-            let current_score = self.get_score(now); // Get decayed score
+            let current_score = self.score(now); // Get decayed score
             let new_score = current_score + penalty.value(); // Apply penalty
             self.score = Score::new_clamped(new_score);
             self.last_updated = now;
@@ -1838,9 +2010,11 @@ mod reliability {
 }
 
 // LeftoverTodos:
-// [] Path Reduction on Fetch
-// [] Implement proper issue target extraction from IssueKind
-// [] Implement proper penalty calculation in IssueKind
-// [] Implement proper performance scoring
+// [] Tests
+// [] File Split up
 // [] Integration
-// [] Change types for path_strategy to support ranking and filtering
+//  [] Change types for path_strategy to support ranking and filtering
+
+// Future Todos:
+// [] Performance Scoring
+// [] ICMP
