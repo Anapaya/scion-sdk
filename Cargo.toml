@@ -76,7 +76,9 @@ prometheus = { version = "0.14", features = ["process"] }
 prost = "0.14"
 prost-build = "0.14"
 prost-types = "0.14"
-quinn = "0.11"
+# We maintain our own fork of quinn. If you want to update the dependency,
+# follow the instructions in the documentation.
+quinn = "0.11.9"
 rand = "0.9"
 rand_chacha = { version = "0.9", features = ["serde"] }
 rand_xorshift = "0.4"
@@ -136,3 +138,6 @@ ignored = ["foldhash", "scion-proto"]
 [profile.ci]
 inherits = "dev"            # https://doc.rust-lang.org/cargo/reference/profiles.html#dev
 incremental = false         # Disable incremental compilation to allow caching dependencies
+
+[patch.crates-io]
+quinn = { git = "https://github.com/Anapaya/quinn.git", branch = "quinn-0.11.9-ana" }
