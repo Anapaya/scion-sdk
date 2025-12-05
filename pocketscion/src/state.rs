@@ -16,7 +16,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     num::NonZero,
     str::FromStr,
     sync::{Arc, RwLock, RwLockReadGuard},
@@ -34,7 +34,7 @@ use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snap_control::{
     crpc_api::api_service::model::SessionGrant,
-    model::{CreateSessionError, DataPlaneDiscovery, SessionGranter, SnapDataPlane, UdpDataPlane},
+    model::{CreateSessionError, SessionGranter, SnapUnderlay, UdpUnderlay, UnderlayDiscovery},
 };
 use snap_dataplane::{
     session::{
@@ -779,8 +779,8 @@ pub(crate) struct SnapDataPlaneDiscoveryHandle {
     io_config: SharedPocketScionIoConfig,
 }
 
-impl DataPlaneDiscovery for SnapDataPlaneDiscoveryHandle {
-    fn list_snap_data_planes(&self) -> Vec<SnapDataPlane> {
+impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
+    fn list_snap_underlays(&self) -> Vec<SnapUnderlay> {
         let sstate = self.system_state.read().unwrap();
         let snap = sstate.snaps.get(&self.snap_id).expect("SNAP not found");
 
@@ -795,12 +795,12 @@ impl DataPlaneDiscovery for SnapDataPlaneDiscoveryHandle {
 
                 self.io_config
                     .snap_data_plane_addr(SnapDataPlaneId::new(self.snap_id, *dp_id))
-                    .map(|address| SnapDataPlane { address, isd_ases })
+                    .map(|address| SnapUnderlay { address, isd_ases })
             })
             .collect()
     }
 
-    fn list_udp_data_planes(&self) -> Vec<UdpDataPlane> {
+    fn list_udp_underlays(&self) -> Vec<UdpUnderlay> {
         vec![] // XXX(ake): Currently no mixed mode with both UDP and SNAP data planes is supported
     }
 }
@@ -815,38 +815,37 @@ pub(crate) struct SessionManagerHandle {
 }
 
 impl SessionGranter for SessionManagerHandle {
-    fn create_session(
+    // Issue a grant for _every_ available data plane for which a socket address
+    // is configured in the io layer of pocket scion.
+    fn create_sessions(
         &self,
-        address: SocketAddr,
+        // In the case of PocketSCION, the endhost ip addr is ignored.
+        _endhost_ip_addr: IpAddr,
         snap_token: SnapTokenClaims,
-    ) -> Result<SessionGrant, CreateSessionError> {
-        let dp_id = {
-            let data_planes = self.io_config.list_snap_data_planes(self.snap_id);
-            data_planes
-                .iter()
-                .find(|(_dp_id, addr)| *addr == Some(address))
-                .map(|(dp_id, _)| *dp_id)
-                .ok_or(CreateSessionError::DataPlaneNotFound)?
-        };
+    ) -> Result<Vec<SessionGrant>, CreateSessionError> {
+        let mut sstate = self.system_state.write().unwrap();
+        self.io_config
+            .list_snap_data_planes(self.snap_id)
+            .into_iter()
+            .filter_map(|(dp_id, addr)| addr.map(move |a| (dp_id, a)))
+            .map(|(dp_id, address)| {
+                let snap = sstate.snaps.get_mut(&self.snap_id).expect("SNAP not found");
 
-        let session_token = {
-            let mut sstate = self.system_state.write().unwrap();
-            let snap = sstate.snaps.get_mut(&self.snap_id).expect("SNAP not found");
+                // open a data plane session
+                let session_grant = snap
+                    .session_manager
+                    .open(snap_token.pssid.clone(), dp_id.data_plane())?;
 
-            // open a data plane session
-            let session_grant = snap
-                .session_manager
-                .open(snap_token.pssid.clone(), dp_id.data_plane())?;
+                // issue a session token
+                let token = snap.session_issuer.issue(
+                    snap_token.pssid.clone(),
+                    dp_id.data_plane(),
+                    session_grant,
+                )?;
 
-            // issue a session token
-            snap.session_issuer
-                .issue(snap_token.pssid, dp_id.data_plane(), session_grant)?
-        };
-
-        Ok(SessionGrant {
-            address,
-            token: session_token,
-        })
+                Ok(SessionGrant { address, token })
+            })
+            .collect()
     }
 }
 

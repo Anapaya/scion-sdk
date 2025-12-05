@@ -13,7 +13,7 @@
 // limitations under the License.
 //! SNAP control plane models.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 #[cfg(test)]
 use mockall::{automock, predicate::*};
@@ -26,30 +26,35 @@ use crate::crpc_api::api_service::model::SessionGrant;
 
 /// List the available data planes.
 #[cfg_attr(test, automock)]
-pub trait DataPlaneDiscovery: Send + Sync {
+pub trait UnderlayDiscovery: Send + Sync {
     /// List all SNAP data planes.
-    fn list_snap_data_planes(&self) -> Vec<SnapDataPlane>;
+    fn list_snap_underlays(&self) -> Vec<SnapUnderlay>;
     /// List all UDP data planes.
-    fn list_udp_data_planes(&self) -> Vec<UdpDataPlane>;
+    fn list_udp_underlays(&self) -> Vec<UdpUnderlay>;
 }
 
 /// Data plane session granter.
 #[cfg_attr(test, automock)]
 pub trait SessionGranter: Send + Sync {
-    /// Create a SNAP data plane session for the given address and SNAP token.
-    fn create_session(
+    /// Authorizes the usage of a (set of) data planes based on the requesting
+    /// endhost's IP address and returns a session grant for each such data
+    /// plane.
+    fn create_sessions(
         &self,
-        addr: SocketAddr,
+        endhost_ip_addr: IpAddr,
         snap_token: SnapTokenClaims,
-    ) -> Result<SessionGrant, CreateSessionError>;
+    ) -> Result<Vec<SessionGrant>, CreateSessionError>;
 }
 
 /// Session creation error.
 #[derive(Debug, Error)]
 pub enum CreateSessionError {
-    /// Data plane not found.
-    #[error("no data plane with matching address exists")]
-    DataPlaneNotFound,
+    /// No data plane available
+    #[error("open session error: {reason}")]
+    NoDataPlaneAvailable {
+        /// The reason no data plane could be found.
+        reason: String,
+    },
     /// Failed to open session.
     #[error("open session error: {0}")]
     OpenSession(#[from] SessionOpenError),
@@ -59,7 +64,7 @@ pub enum CreateSessionError {
 }
 
 /// SNAP data plane information.
-pub struct SnapDataPlane {
+pub struct SnapUnderlay {
     /// The listener address of the data plane.
     pub address: SocketAddr,
     /// The ISD-ASes of the data plane.
@@ -67,7 +72,7 @@ pub struct SnapDataPlane {
 }
 
 /// UDP data plane information.
-pub struct UdpDataPlane {
+pub struct UdpUnderlay {
     /// The UDP socket address of the data plane.
     pub endpoint: SocketAddr,
     /// The ISD-ASes and their associated interfaces for this UDP data plane.

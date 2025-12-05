@@ -13,7 +13,11 @@
 // limitations under the License.
 //! SNAP control plane API server.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::anyhow;
 use axum::{BoxError, Router, error_handling::HandleErrorLayer};
@@ -38,7 +42,7 @@ use crate::{
         model::{SessionGrant, SessionManager},
         nest_snap_control_api,
     },
-    model::{CreateSessionError, DataPlaneDiscovery, SessionGranter, SnapDataPlane},
+    model::{CreateSessionError, SessionGranter, UnderlayDiscovery},
     server::{
         auth::AuthMiddlewareLayer,
         metrics::{Metrics, PrometheusMiddlewareLayer},
@@ -67,7 +71,7 @@ pub async fn start<DP, SM, SL>(
     metrics: Metrics,
 ) -> std::io::Result<()>
 where
-    DP: DataPlaneDiscovery + 'static + Send + Sync,
+    DP: UnderlayDiscovery + 'static + Send + Sync,
     SM: SessionGranter + 'static + Send + Sync,
     SL: PathDiscovery + 'static + Send + Sync,
 {
@@ -103,10 +107,7 @@ where
 
     let router = nest_snap_control_api(
         router,
-        Arc::new(SessionManagerAdapter::new(
-            session_manager.clone(),
-            dp_discovery.clone(),
-        )),
+        Arc::new(SessionManagerAdapter::new(session_manager.clone())),
     );
 
     let router = router.layer(
@@ -134,9 +135,12 @@ where
 
     tracing::info!(addr=%snap_cp_addr, "Starting control plane API");
 
-    if let Err(e) = axum::serve(listener, router.into_make_service())
-        .with_graceful_shutdown(cancellation_token.cancelled_owned())
-        .await
+    if let Err(e) = axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(cancellation_token.cancelled_owned())
+    .await
     {
         tracing::error!(error=%e, "Control plane API server unexpectedly stopped");
     }
@@ -147,12 +151,12 @@ where
 }
 
 /// Adapter implementing UnderlayDiscovery for any DataPlaneDiscovery.
-struct UnderlayDiscoveryAdapter<T: DataPlaneDiscovery> {
+struct UnderlayDiscoveryAdapter<T: UnderlayDiscovery> {
     dp_discovery: Arc<T>,
     snap_cp_api: Url,
 }
 
-impl<T: DataPlaneDiscovery> UnderlayDiscoveryAdapter<T> {
+impl<T: UnderlayDiscovery> UnderlayDiscoveryAdapter<T> {
     fn new(dp_discovery: Arc<T>, snap_cp_api: Url) -> Self {
         Self {
             dp_discovery,
@@ -161,9 +165,9 @@ impl<T: DataPlaneDiscovery> UnderlayDiscoveryAdapter<T> {
     }
 }
 
-impl<T: DataPlaneDiscovery> endhost_api_models::UnderlayDiscovery for UnderlayDiscoveryAdapter<T> {
+impl<T: UnderlayDiscovery> endhost_api_models::UnderlayDiscovery for UnderlayDiscoveryAdapter<T> {
     fn list_underlays(&self, isd_as: IsdAsn) -> Underlays {
-        let dps = self.dp_discovery.list_udp_data_planes();
+        let dps = self.dp_discovery.list_udp_underlays();
         let mut udp_underlay = Vec::new();
         for dp in dps {
             for router_as in dp.isd_ases {
@@ -179,7 +183,7 @@ impl<T: DataPlaneDiscovery> endhost_api_models::UnderlayDiscovery for UnderlayDi
             }
         }
 
-        let sus = self.dp_discovery.list_snap_data_planes();
+        let sus = self.dp_discovery.list_snap_underlays();
         if sus.is_empty() {
             return Underlays {
                 udp_underlay,
@@ -205,85 +209,66 @@ impl<T: DataPlaneDiscovery> endhost_api_models::UnderlayDiscovery for UnderlayDi
 
 /// Adapter implementing SessionManager for any SessionManagerDeprecated.
 struct SessionManagerAdapter {
-    session_manager: Arc<dyn SessionGranter>,
-    dp_discovery: Arc<dyn DataPlaneDiscovery>,
+    session_granter: Arc<dyn SessionGranter>,
 }
 
 impl SessionManagerAdapter {
-    fn new(
-        session_manager: Arc<dyn SessionGranter>,
-        dp_discovery: Arc<dyn DataPlaneDiscovery>,
-    ) -> Self {
-        Self {
-            session_manager,
-            dp_discovery,
-        }
+    fn new(session_granter: Arc<dyn SessionGranter>) -> Self {
+        Self { session_granter }
     }
 }
 
 impl SessionManager for SessionManagerAdapter {
-    fn create_session(
+    fn create_sessions(
         &self,
+        endhost_ip_addr: IpAddr,
         snap_token: SnapTokenClaims,
     ) -> Result<Vec<SessionGrant>, (StatusCode, anyhow::Error)> {
-        let dps = self.dp_discovery.list_snap_data_planes();
-
-        let mut grants: Vec<SessionGrant> = Vec::with_capacity(dps.len());
-        for dp in dps.iter() {
-            let res = self
-                .session_manager
-                .create_session(dp.address, snap_token.clone());
-
-            // XXX(bunert): We currently fail the entire request if creating a session for any data
-            // plane fails. Eventually we want to return partial results here.
-            match res {
-                Ok(grant) => grants.push(grant),
-                Err(err) => return Err(handle_session_error(dp, err)),
-            }
+        match self
+            .session_granter
+            .create_sessions(endhost_ip_addr, snap_token.clone())
+        {
+            Ok(grants) => Ok(grants),
+            Err(e) => Err(handle_session_error(e)),
         }
-
-        Ok(grants)
     }
 
     fn renew_session(
         &self,
-        address: SocketAddr,
+        dataplane_addr: SocketAddr,
+        endhost_ip_addr: IpAddr,
         snap_token: SnapTokenClaims,
     ) -> Result<SessionGrant, (StatusCode, anyhow::Error)> {
-        let dps = self.dp_discovery.list_snap_data_planes();
-        let Some(dp) = dps.iter().find(|dp| dp.address == address) else {
-            return Err((
-                StatusCode::NOT_FOUND,
-                anyhow!("No data plane with address {address}."),
-            ));
+        let grants = match self
+            .session_granter
+            .create_sessions(endhost_ip_addr, snap_token.clone())
+        {
+            Ok(grants) => grants,
+            Err(e) => return Err(handle_session_error(e)),
         };
 
-        let res = self.session_manager.create_session(dp.address, snap_token);
-
-        match res {
-            Ok(grant) => Ok(grant),
-            Err(err) => Err(handle_session_error(dp, err)),
-        }
+        let Some(grant) = grants.into_iter().find(|dp| dp.address == dataplane_addr) else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                anyhow!("No data plane with address {dataplane_addr}."),
+            ));
+        };
+        Ok(grant)
     }
 }
 
-fn handle_session_error(
-    dp: &SnapDataPlane,
-    error: CreateSessionError,
-) -> (StatusCode, anyhow::Error) {
+fn handle_session_error(error: CreateSessionError) -> (StatusCode, anyhow::Error) {
     match error {
-        CreateSessionError::DataPlaneNotFound => {
-            (
-                StatusCode::NOT_FOUND,
-                anyhow!("no data plane with address {}", dp.address),
-            )
-        }
         CreateSessionError::IssueSessionToken(SessionTokenError::EncodingError(err)) => {
             tracing::error!(%err, "Failed to encode session token");
             (StatusCode::INTERNAL_SERVER_ERROR, anyhow!("internal error"))
         }
         CreateSessionError::OpenSession(session_open_error) => {
             tracing::error!(err=%session_open_error, "Failed to open session");
+            (StatusCode::INTERNAL_SERVER_ERROR, anyhow!("internal error"))
+        }
+        CreateSessionError::NoDataPlaneAvailable { reason } => {
+            tracing::error!(reason=%reason, "No data plane available");
             (StatusCode::INTERNAL_SERVER_ERROR, anyhow!("internal error"))
         }
     }

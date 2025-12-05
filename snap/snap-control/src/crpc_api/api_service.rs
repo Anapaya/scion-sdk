@@ -15,7 +15,11 @@
 
 use std::sync::Arc;
 
-use axum::{Extension, Router, extract::State, http::StatusCode};
+use axum::{
+    Extension, Router,
+    extract::{ConnectInfo, State},
+    http::StatusCode,
+};
 use scion_sdk_axum_connect_rpc::{error::CrpcError, extractor::ConnectRpc};
 use snap_tokens::snap_token::SnapTokenClaims;
 
@@ -29,7 +33,7 @@ use crate::{
 
 /// SNAP control plane API models.
 pub mod model {
-    use std::net::SocketAddr;
+    use std::net::{IpAddr, SocketAddr};
 
     use axum::http::StatusCode;
     use snap_tokens::snap_token::SnapTokenClaims;
@@ -37,14 +41,16 @@ pub mod model {
     /// Session manager trait.
     pub trait SessionManager: Send + Sync {
         /// Create a SNAP data plane session for the given SNAP token.
-        fn create_session(
+        fn create_sessions(
             &self,
+            endhost_ip_addr: IpAddr,
             snap_token: SnapTokenClaims,
         ) -> Result<Vec<SessionGrant>, (StatusCode, anyhow::Error)>;
         /// Renew a SNAP data plane session for the given address and SNAP token.
         fn renew_session(
             &self,
-            address: SocketAddr,
+            dataplane_addr: SocketAddr,
+            endhost_ip_addr: IpAddr,
             snap_token: SnapTokenClaims,
         ) -> Result<SessionGrant, (StatusCode, anyhow::Error)>;
     }
@@ -152,9 +158,10 @@ pub fn nest_snap_control_api(
 async fn add_snap_data_plane_session_handler(
     State(session_manager): State<Arc<dyn SessionManager>>,
     snap_token: Extension<SnapTokenClaims>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     ConnectRpc(_request): ConnectRpc<GetSnapDataPlaneSessionGrantRequest>,
 ) -> Result<ConnectRpc<GetSnapDataPlaneSessionGrantResponse>, CrpcError> {
-    let grants = session_manager.create_session(snap_token.0.clone())?;
+    let grants = session_manager.create_sessions(addr.ip(), snap_token.0.clone())?;
     Ok(ConnectRpc(GetSnapDataPlaneSessionGrantResponse {
         grants: grants.into_iter().map(Into::into).collect(),
     }))
@@ -163,6 +170,7 @@ async fn add_snap_data_plane_session_handler(
 async fn renew_snap_data_plane_session_handler(
     State(session_manager): State<Arc<dyn SessionManager>>,
     snap_token: Extension<SnapTokenClaims>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     ConnectRpc(request): ConnectRpc<RenewSnapDataPlaneSessionGrantRequest>,
 ) -> Result<ConnectRpc<RenewSnapDataPlaneSessionGrantResponse>, CrpcError> {
     let address = request.address.parse().map_err(|e| {
@@ -172,7 +180,7 @@ async fn renew_snap_data_plane_session_handler(
         )
     })?;
 
-    let grant = session_manager.renew_session(address, snap_token.0.clone())?;
+    let grant = session_manager.renew_session(address, addr.ip(), snap_token.0.clone())?;
     Ok(ConnectRpc(RenewSnapDataPlaneSessionGrantResponse {
         grant: Some(grant.into()),
     }))
