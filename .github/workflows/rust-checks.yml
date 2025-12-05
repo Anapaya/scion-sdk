@@ -3,6 +3,7 @@ env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: "25.6"
   NIGHTLY_VERSION: nightly-2025-11-06
+  RUST_BACKTRACE: "1"
   workspace: .
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -122,7 +123,7 @@ jobs:
         run: cargo clippy_ci
         if: runner.os == 'Linux'
       - name: Run tests
-        run: RUST_BACKTRACE=1 cargo test_ci
+        run: cargo test_ci
       - name: Check documentation
         run: RUSTDOCFLAGS="-D warnings" cargo doc_ci
         if: runner.os == 'Linux'
