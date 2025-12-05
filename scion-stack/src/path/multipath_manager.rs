@@ -58,6 +58,7 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, VecDeque, hash_map},
+    fmt::Display,
     hash::RandomState,
     sync::{Arc, Mutex, Weak, atomic::AtomicBool},
     time::{Duration, SystemTime},
@@ -588,7 +589,7 @@ impl PathSetHandle {
     }
 
     /// Awaits initial path fetch completion.
-    #[expect(unused)]
+    #[allow(unused)]
     pub async fn wait_initialized(&self) {
         let finish_notification = {
             let notify_guard = self.shared.sync.lock().unwrap();
@@ -616,6 +617,7 @@ impl Drop for PathSetTask {
 }
 
 /// Entry in the path set cache.
+#[derive(Debug)]
 struct PathSetEntry {
     path: Path,
     fingerprint: PathFingerprint,
@@ -691,13 +693,24 @@ impl<F: PathFetcher> PathSet<F> {
         config: MultiPathManagerConfig,
         issue_rx: broadcast::Receiver<(u64, IssueMarker)>,
     ) -> Self {
+        Self::new_with_time(src, dst, manager, config, issue_rx, SystemTime::now())
+    }
+
+    fn new_with_time(
+        src: IsdAsn,
+        dst: IsdAsn,
+        manager: MultiPathManagerRef<F>,
+        config: MultiPathManagerConfig,
+        issue_rx: broadcast::Receiver<(u64, IssueMarker)>,
+        now: SystemTime,
+    ) -> Self {
         let backoff = ExponentialBackoff::new_from_config(config.fetch_failure_backoff);
 
         let internal = PathSetInternal {
             cached_paths: Vec::new(),
             failed_attempts: 0,
-            next_refetch: SystemTime::now(),
-            next_idle_check: SystemTime::now() + config.max_idle_period,
+            next_refetch: now,
+            next_idle_check: now + config.max_idle_period,
             issue_rx,
         };
 
@@ -710,7 +723,7 @@ impl<F: PathFetcher> PathSet<F> {
             internal,
             shared: Arc::new(PathSetSharedState {
                 active_path: ArcSwapOption::new(None),
-                was_used_in_idle_period: AtomicBool::new(true),
+                was_used_in_idle_period: AtomicBool::new(false),
                 sync: Mutex::new(PathSetSyncState {
                     initialized: false,
                     ongoing_start: None,
@@ -740,15 +753,14 @@ impl<F: PathFetcher> PathSet<F> {
                 loop {
                     let now = SystemTime::now();
                     tracing::trace!("Managed paths task tick");
-                    let next_tick = self.next_maintain(now).await;
+                    let next_tick = self.next_maintain(now);
 
                     select! {
-                        // Issue Notifications
-                        issue = self.internal.issue_rx.recv() => {
-                            if let Some(reason) = self.handle_issue_rx(SystemTime::now(), issue) {
-                                exit_reason = reason;
-                                break;
-                            }
+                        biased;
+                        // Cancellation
+                        _ = cancel_token.cancelled() => {
+                            exit_reason = "cancelled";
+                            break;
                         }
                         // Maintenance Tick
                         _ = tokio::time::sleep(next_tick) => {
@@ -757,10 +769,12 @@ impl<F: PathFetcher> PathSet<F> {
                                 break;
                             }
                         }
-                        // Cancellation
-                        _ = cancel_token.cancelled() => {
-                            exit_reason = "cancel token triggered";
-                            break;
+                        // Issue Notifications
+                        issue = self.internal.issue_rx.recv() => {
+                            if let Some(reason) = self.handle_issue_rx(SystemTime::now(), issue) {
+                                exit_reason = reason;
+                                break;
+                            }
                         }
                     }
                 }
@@ -769,6 +783,20 @@ impl<F: PathFetcher> PathSet<F> {
                 if let Some(mgr) = self.manager.get() {
                     mgr.stop_managing_paths(self.src, self.dst);
                 }
+
+                // Ensure no waiting tasks remain
+                let mut sync_guard = self.shared.sync.lock().unwrap();
+                sync_guard.ongoing_start = None;
+                sync_guard.initialized = true;
+                sync_guard.completed_notify.notify_waiters();
+
+                // On exit, set error state - handles could still be around
+                sync_guard.current_error = Some(Arc::new(PathFetchError::InternalError(
+                    format!("PathSet task exited: {exit_reason}").into(),
+                )));
+
+                // Clear active path
+                self.shared.active_path.store(None);
 
                 tracing::info!(exit_reason, "Managed paths task exiting");
             }
@@ -800,7 +828,7 @@ impl<F: PathFetcher> PathSet<F> {
             }
             Err(broadcast::error::RecvError::Closed) => {
                 tracing::info!("Issue notification channel closed, exiting managed paths task");
-                return Some("issue channel closed");
+                return Some("issue channel closed, manager was likely dropped");
             }
         };
 
@@ -865,7 +893,7 @@ impl<F: PathFetcher> PathSet<F> {
         (applied_issue_count, agg)
     }
 
-    async fn next_maintain(&self, now: SystemTime) -> Duration {
+    fn next_maintain(&self, now: SystemTime) -> Duration {
         // If time is in the past, tick immediately
         std::cmp::min(self.internal.next_refetch, self.internal.next_idle_check)
             .duration_since(now)
@@ -1088,7 +1116,7 @@ impl<F: PathFetcher> PathSet<F> {
             if check_path_expiry(&cached_path.path, now, self.config.min_expiry_threshold)
                 == ExpiryState::Expired
             {
-                tracing::info!(?fp, "Removing expired path from cache");
+                tracing::debug!(fp = format!("{fp:#}"), "Removing expired path from cache");
                 keep = false;
             }
 
@@ -1096,14 +1124,14 @@ impl<F: PathFetcher> PathSet<F> {
             if Some(fp) == active_path_fp {
                 match keep {
                     true => {
-                        tracing::debug!(?fp, "Keeping updated active path");
+                        tracing::debug!(fp = format!("{fp:#}"), "Keeping updated active path");
                         self.shared
                             .active_path
                             .store(Some(Arc::new((cached_path.path.clone(), fp))));
                     }
                     false => {
                         tracing::info!(
-                            ?active_path_fp,
+                            fp = format!("{fp:#}"),
                             "Active path is expired, clearing active path"
                         );
                         self.shared.active_path.store(None);
@@ -1198,19 +1226,11 @@ impl<F: PathFetcher> PathSet<F> {
         );
     }
 
-    /// Updates the active path if required
-    fn maybe_update_active_path(&self, now: SystemTime) {
-        /// Decision on active path update, including reason
-        #[derive(PartialEq, Eq)]
-        enum Decision {
-            /// No change needed
-            NoChange,
-            /// Active path should be replaced if a better path is available
-            Replace(&'static str),
-            /// Active path must be removed, even if no better path is available
-            ForceReplace(&'static str),
-        }
-
+    /// Creates the decision for whether to update the active path and returns the best candidate.
+    fn decide_active_path_update(
+        &self,
+        now: SystemTime,
+    ) -> (ActivePathDecision, Option<&PathSetEntry>) {
         let active_path_guard = self.shared.active_path.load();
         let active_path = active_path_guard.as_ref();
         let best_path = self.best_path(now);
@@ -1218,20 +1238,26 @@ impl<F: PathFetcher> PathSet<F> {
         // Determine if active path needs replacement - just by active path
         let mut decision = match active_path {
             // No active path, set best available path
-            None => Decision::Replace("no active path"),
+            None => ActivePathDecision::Replace("no active path"),
             Some(active) => {
                 match check_path_expiry(&active.0, now, self.config.min_expiry_threshold) {
-                    ExpiryState::Valid => Decision::NoChange,
+                    ExpiryState::Valid => ActivePathDecision::NoChange,
                     // Near expiry, should be replaced
-                    ExpiryState::NearExpiry => Decision::Replace("active path near expiry"),
+                    // XXX(ake): Ranking does not consider expiry currently, so falling over when
+                    // near expiry might fail, as it keeps wanting to use the
+                    // same path. Not a big deal, as near expiry is an edgecase
+                    // which should be rare.
+                    ExpiryState::NearExpiry => {
+                        ActivePathDecision::Replace("active path near expiry")
+                    }
                     // Expired, must be replaced
-                    ExpiryState::Expired => Decision::ForceReplace("active path expired"),
+                    ExpiryState::Expired => ActivePathDecision::ForceReplace("active path expired"),
                 }
             }
         };
 
         // If no reason to change, and we have a best path, check if there is a reason to switch
-        if Decision::NoChange == decision
+        if ActivePathDecision::NoChange == decision
             && let Some(best_path) = best_path
         {
             match self.active_path_entry() {
@@ -1241,7 +1267,7 @@ impl<F: PathFetcher> PathSet<F> {
                     let diff = best_score - active_score;
 
                     if diff > self.config.path_swap_score_threshold {
-                        decision = Decision::Replace("swap threshold reached")
+                        decision = ActivePathDecision::Replace("swap threshold reached")
                     }
                 }
                 None => {
@@ -1254,29 +1280,48 @@ impl<F: PathFetcher> PathSet<F> {
             }
         }
 
-        let active_fp = active_path
-            .map(|p| p.1.to_string())
-            .unwrap_or_else(|| "None".into());
+        (decision, best_path)
+    }
+
+    /// Executes the decision to update the active path.
+    fn apply_active_path_decision(
+        &self,
+        decision: ActivePathDecision,
+        mut best_path: Option<&PathSetEntry>,
+    ) {
+        let active_path_guard = self.shared.active_path.load();
+        let active_path = active_path_guard.as_ref();
+
+        let active_fp = format_option(&active_path.map(|p| p.1));
+        let best_fp = format_option(&best_path.map(|p| p.fingerprint));
+        tracing::trace!(?decision, %active_fp, %best_fp, "Active path update decision");
+
+        // If best path is the active path, ignore it
+        if active_path.map(|p| p.1) == best_path.map(|p| p.fingerprint) {
+            // Best path is active path
+            best_path = None;
+        }
 
         // Apply update if needed
         match (decision, best_path) {
             // No reason to replace active path
-            (Decision::NoChange, _) => {}
+            (ActivePathDecision::NoChange, _) => {}
             // No better path available
-            (Decision::Replace(reason), None) => {
+            (ActivePathDecision::Replace(reason), None) => {
                 tracing::warn!(%active_fp, %reason, "Active path should be replaced, but no better path is available");
             }
-            (Decision::ForceReplace(reason), None) => {
+            (ActivePathDecision::ForceReplace(reason), None) => {
                 tracing::warn!(%active_fp, %reason, "Active path must be replaced, but no better path is available");
                 self.shared.active_path.store(None);
             }
             // We have a reason and a better path
-            (Decision::ForceReplace(reason) | Decision::Replace(reason), Some(best_path)) => {
-                let active_detail = active_path
-                    .map(|p| p.0.to_string())
-                    .unwrap_or_else(|| "None".into());
+            (
+                ActivePathDecision::ForceReplace(reason) | ActivePathDecision::Replace(reason),
+                Some(best_path),
+            ) => {
+                let active_detail = format_option(&active_path.map(|p| &p.0));
 
-                tracing::info!(%active_fp, best_fp=?best_path.fingerprint, %reason, "Replacing active path");
+                tracing::info!(%active_fp, %best_fp, %reason, "Replacing active path");
                 tracing::debug!("Old active path: {}", active_detail);
                 tracing::debug!("New active path: {}", best_path.path);
 
@@ -1288,7 +1333,15 @@ impl<F: PathFetcher> PathSet<F> {
         }
     }
 
+    /// Updates the active path if required
+    fn maybe_update_active_path(&self, now: SystemTime) {
+        let (decision, best_path) = self.decide_active_path_update(now);
+        self.apply_active_path_decision(decision, best_path);
+    }
+
     /// Selects the best path from the cached paths
+    ///
+    /// Expects paths to be ranked already
     fn best_path(&self, now: SystemTime) -> Option<&PathSetEntry> {
         let path_iter = self.internal.cached_paths.iter();
 
@@ -1315,6 +1368,27 @@ impl<F: PathFetcher> PathSet<F> {
             .iter()
             .find(|e| e.fingerprint == active_path_fp)
     }
+
+    #[allow(dead_code)]
+    fn mut_active_path_entry(&mut self) -> Option<&mut PathSetEntry> {
+        let active_path_fp = self.shared.active_path.load().as_ref().map(|p| p.1)?;
+
+        self.internal
+            .cached_paths
+            .iter_mut()
+            .find(|e| e.fingerprint == active_path_fp)
+    }
+}
+
+/// Decision on active path update, including reason
+#[derive(Debug, PartialEq, Eq)]
+enum ActivePathDecision {
+    /// No change needed
+    NoChange,
+    /// Active path should be replaced if a better path is available
+    Replace(&'static str),
+    /// Active path must be removed, even if no better path is available
+    ForceReplace(&'static str),
 }
 
 /// Reranks paths according to the given strategy
@@ -1336,13 +1410,15 @@ fn rerank_algo(_strategy: &PathStrategy, paths: &mut [PathSetEntry], now: System
 /// No paths from new_paths should be present in existing_paths.
 ///
 /// Total number of paths after merge will be at most `target_path_count`.
+///
+/// Returns (kept_existing_count, kept_new_count)
 fn merge_new_paths_algo(
     existing_paths: &mut Vec<PathSetEntry>,
     new_paths: &mut Vec<PathSetEntry>,
     active_fp: Option<PathFingerprint>,
     target_path_count: usize,
     path_strategy: &PathStrategy,
-) {
+) -> (usize, usize) {
     // Handle the active path.
     // If it exists, swap it to the front (index 0) and start kept count at 1.
     let mut kept_existing = 0;
@@ -1399,6 +1475,8 @@ fn merge_new_paths_algo(
     // Merge
     let truncated_new = new_paths.drain(..);
     existing_paths.extend(truncated_new);
+
+    (kept_existing, kept_new)
 }
 
 // Error handling support
@@ -1485,8 +1563,16 @@ fn check_path_expiry(path: &Path, now: SystemTime, threshold: Duration) -> Expir
 
     match expiry.duration_since(now) {
         Err(_) => ExpiryState::Expired,
+        Ok(time_left) if time_left == Duration::from_secs(0) => ExpiryState::Expired,
         Ok(time_left) if time_left <= threshold => ExpiryState::NearExpiry,
         Ok(_) => ExpiryState::Valid,
+    }
+}
+
+fn format_option<T: Display>(opt: &Option<T>) -> String {
+    match opt {
+        Some(v) => format!("{v:#}"),
+        None => "None".into(),
     }
 }
 
@@ -2009,8 +2095,1643 @@ mod reliability {
     }
 }
 
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    mod helpers {
+        use std::{
+            hash::{DefaultHasher, Hash, Hasher},
+            net::{IpAddr, Ipv4Addr},
+            sync::{Arc, Mutex},
+            time::{Duration, SystemTime},
+        };
+
+        use scion_proto::{
+            address::{Asn, EndhostAddr, Isd, IsdAsn},
+            path::{Path, test_builder::TestPathBuilder},
+        };
+
+        use super::*;
+
+        pub const SRC_ADDR: EndhostAddr = EndhostAddr::new(
+            IsdAsn::new(Isd(1), Asn(1)),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        );
+        pub const DST_ADDR: EndhostAddr = EndhostAddr::new(
+            IsdAsn::new(Isd(2), Asn(1)),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
+        );
+
+        pub const DEFAULT_EXP_UNITS: u8 = 100;
+        pub const BASE_TIME: SystemTime = SystemTime::UNIX_EPOCH;
+
+        pub fn dummy_path(hop_count: u16, timestamp: u32, exp_units: u8, asn_seed: u32) -> Path {
+            let mut builder = TestPathBuilder::new(SRC_ADDR, DST_ADDR)
+                .using_info_timestamp(timestamp)
+                .with_hop_expiry(exp_units)
+                .up();
+
+            builder = builder.add_hop(0, 1);
+
+            for cnt in 0..hop_count {
+                let mut hash = DefaultHasher::new();
+                asn_seed.hash(&mut hash);
+                cnt.hash(&mut hash);
+                let hash = hash.finish() as u32;
+
+                builder = builder.with_asn(hash).add_hop(cnt + 1, cnt + 2);
+            }
+
+            builder = builder.add_hop(1, 0);
+
+            builder.build(timestamp).path()
+        }
+
+        pub fn base_config() -> MultiPathManagerConfig {
+            MultiPathManagerConfig {
+                max_cached_paths_per_pair: 5,
+                refetch_interval: Duration::from_secs(100),
+                min_refetch_delay: Duration::from_secs(1),
+                min_expiry_threshold: Duration::from_secs(5),
+                max_idle_period: Duration::from_secs(30),
+                fetch_failure_backoff: BackoffConfig {
+                    minimum_delay_secs: 1.0,
+                    maximum_delay_secs: 10.0,
+                    factor: 2.0,
+                    jitter_secs: 0.0,
+                },
+                issue_cache_size: 64,
+                issue_broadcast_size: 64,
+                issue_deduplication_window: Duration::from_secs(10),
+                path_swap_score_threshold: 0.1,
+            }
+        }
+
+        pub fn generate_responses(
+            path_count: u16,
+            path_seed: u32,
+            timestamp: SystemTime,
+            exp_units: u8,
+        ) -> Result<Vec<Path>, String> {
+            let mut paths = Vec::new();
+            for resp_id in 0..path_count {
+                paths.push(dummy_path(
+                    2,
+                    timestamp
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as u32,
+                    exp_units,
+                    path_seed + resp_id as u32,
+                ));
+            }
+
+            Ok(paths)
+        }
+
+        pub struct MockFetcher {
+            next_response: Result<Vec<Path>, String>,
+            pub received_requests: usize,
+            pub wait_till_notify: bool,
+            pub notify_to_resolve: Arc<Notify>,
+        }
+        impl MockFetcher {
+            pub fn new(response: Result<Vec<Path>, String>) -> Arc<Mutex<Self>> {
+                Arc::new(Mutex::new(Self {
+                    next_response: response,
+                    received_requests: 0,
+                    wait_till_notify: false,
+                    notify_to_resolve: Arc::new(Notify::new()),
+                }))
+            }
+
+            pub fn set_response(&mut self, response: Result<Vec<Path>, String>) {
+                self.next_response = response;
+            }
+
+            pub fn wait_till_notify(&mut self, wait: bool) {
+                self.wait_till_notify = wait;
+            }
+
+            pub fn notify(&self) {
+                self.notify_to_resolve.notify_waiters();
+            }
+        }
+
+        impl PathFetcher for Arc<Mutex<MockFetcher>> {
+            async fn fetch_paths(
+                &self,
+                _src: IsdAsn,
+                _dst: IsdAsn,
+            ) -> Result<Vec<Path>, PathFetchError> {
+                let response;
+                // Wait for notification if needed
+                let notify = {
+                    let mut guard = self.lock().unwrap();
+
+                    guard.received_requests += 1;
+                    response = guard.next_response.clone();
+
+                    // maybe wait till notified
+                    if guard.wait_till_notify {
+                        let notif = guard.notify_to_resolve.clone().notified_owned();
+                        Some(notif)
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(notif) = notify {
+                    notif.await;
+                }
+
+                match response {
+                    Ok(paths) if paths.is_empty() => Err(PathFetchError::NoPathsFound),
+                    Ok(paths) => Ok(paths),
+                    Err(e) => Err(PathFetchError::InternalError(e.into())),
+                }
+            }
+        }
+
+        pub fn manual_pathset<F: PathFetcher>(
+            now: SystemTime,
+            fetcher: F,
+            cfg: MultiPathManagerConfig,
+            strategy: Option<PathStrategy>,
+        ) -> (MultiPathManager<F>, PathSet<F>) {
+            let mgr_inner = MultiPathManagerInner {
+                config: cfg,
+                fetcher,
+                path_strategy: strategy.unwrap_or_default(),
+                issue_manager: Mutex::new(PathIssueManager::new(64, 64, Duration::from_secs(10))),
+                managed_paths: HashIndex::new(),
+            };
+            let mgr = MultiPathManager(Arc::new(mgr_inner));
+            let issue_rx = mgr.0.issue_manager.lock().unwrap().issues_subscriber();
+            let mgr_ref = mgr.weak_ref();
+            (
+                mgr,
+                PathSet::new_with_time(
+                    SRC_ADDR.isd_asn(),
+                    DST_ADDR.isd_asn(),
+                    mgr_ref,
+                    cfg,
+                    issue_rx,
+                    now,
+                ),
+            )
+        }
+    }
+
+    mod path_set {
+        use super::{helpers::*, *};
+        use crate::path::multipath_manager::types::Score;
+
+        // --------------------------------------------------------------------
+        // Tests (direct PathSet, driving maintain() with synthetic time)
+        // --------------------------------------------------------------------
+
+        // Test Cases
+
+        /// Basic path fetching, caching and active path setting
+        mod basic {
+            use super::*;
+
+            // Should successfully fetch, set active path and reduce cache to max paths
+            // A maintain call before next refetch should do nothing
+            #[tokio::test]
+            #[test_log::test]
+
+            async fn should_fetch_and_cache_paths() {
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(10, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+                assert_eq!(fetcher.lock().unwrap().received_requests, 1);
+
+                // Check cached paths
+                assert_eq!(
+                    path_set.internal.cached_paths.len(),
+                    cfg.max_cached_paths_per_pair
+                );
+
+                // Check active path
+                let active_path = path_set.shared.active_path.load();
+                assert!(active_path.is_some());
+
+                let active_fp = active_path.as_ref().unwrap().1;
+                assert!(
+                    path_set
+                        .internal
+                        .cached_paths
+                        .iter()
+                        .any(|p| p.fingerprint == active_fp),
+                    "Active path should be in cached paths"
+                );
+
+                let expected_next_refetch = BASE_TIME + cfg.refetch_interval;
+                assert_eq!(path_set.internal.next_refetch, expected_next_refetch);
+
+                let expected_next_idle_check = BASE_TIME + cfg.max_idle_period;
+                assert_eq!(path_set.internal.next_idle_check, expected_next_idle_check);
+
+                // second maintain should not trigger fetch
+                path_set.maintain(BASE_TIME).await;
+                assert_eq!(fetcher.lock().unwrap().received_requests, 1);
+            }
+
+            // Refetch should keep active path if it's not expired
+            // If the same path is available, it should remain active and be updated
+            #[tokio::test]
+            #[test_log::test]
+            async fn should_update_active_path_on_refetch() {
+                // INIT
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(10, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+                let handle = PathSetHandle {
+                    shared: path_set.shared.clone(),
+                };
+                // Get active path to ensure no idle removal
+                let active = handle.try_active_path().clone();
+                assert!(active.is_some());
+                let first_active_fp = active.as_ref().unwrap().1;
+                let first_active_expiry = active.as_ref().unwrap().0.expiry_time().unwrap();
+
+                let next_refetch = path_set.internal.next_refetch;
+
+                // Next fetch with same paths but updated expiry
+                fetcher.lock().unwrap().set_response(generate_responses(
+                    10,
+                    0,
+                    next_refetch,
+                    DEFAULT_EXP_UNITS,
+                ));
+
+                path_set.maintain(next_refetch).await;
+
+                // Should have fetched again
+                assert_eq!(fetcher.lock().unwrap().received_requests, 2);
+                // Should still have max cached paths
+                assert_eq!(
+                    path_set.internal.cached_paths.len(),
+                    cfg.max_cached_paths_per_pair
+                );
+
+                // Active path should be same
+                let new_active_path = path_set.shared.active_path.load();
+                assert!(new_active_path.is_some());
+
+                let new_active_fp = new_active_path.as_ref().unwrap().1;
+                assert_eq!(
+                    first_active_fp, new_active_fp,
+                    "Active path fingerprint should be the same after refetch"
+                );
+                let new_active_expiry = new_active_path.as_ref().unwrap().0.expiry_time().unwrap();
+                assert_ne!(
+                    first_active_expiry, new_active_expiry,
+                    "Active path expiry should not be the same after refetch"
+                );
+            }
+
+            // If initial fetch has less than max paths, refetch with more paths should restock
+            // cache without touching active path
+            #[tokio::test]
+            #[test_log::test]
+            async fn should_restock_cache_on_refetch() {
+                // INIT - start with only 2 paths
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(2, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+                assert_eq!(fetcher.lock().unwrap().received_requests, 1);
+
+                // Should have only 2 cached paths
+                assert_eq!(path_set.internal.cached_paths.len(), 2);
+
+                let active_path = path_set.shared.active_path.load();
+                assert!(active_path.is_some());
+                let first_active_fp = active_path.as_ref().unwrap().1;
+
+                let next_refetch = path_set.internal.next_refetch;
+
+                // Fetch with more paths but same seed to fill up cache
+                fetcher.lock().unwrap().set_response(generate_responses(
+                    10,
+                    0,
+                    BASE_TIME,
+                    DEFAULT_EXP_UNITS,
+                ));
+
+                // Mark as used in idle period
+                path_set
+                    .shared
+                    .was_used_in_idle_period
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                path_set.maintain(next_refetch).await;
+
+                // Should have fetched again
+                assert_eq!(fetcher.lock().unwrap().received_requests, 2);
+                // Should now have max cached paths
+                assert_eq!(
+                    path_set.internal.cached_paths.len(),
+                    cfg.max_cached_paths_per_pair
+                );
+
+                // Active path should remain unchanged
+                let active_path = path_set.shared.active_path.load();
+                assert!(active_path.is_some());
+                let new_active_fp = active_path.as_ref().unwrap().1;
+                assert_eq!(
+                    first_active_fp, new_active_fp,
+                    "Active path should not change"
+                );
+            }
+
+            // Refetch should keep active path if it's not expired
+            // If the same path is not available, but active path is still valid, it should remain
+            // active
+            #[tokio::test]
+            #[test_log::test]
+            async fn should_keep_active_path_if_not_expired_even_if_not_in_new_fetch() {
+                // INIT
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(2, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+                let active_path = path_set.shared.active_path.load();
+                assert!(active_path.is_some());
+                let first_active_fp = active_path.as_ref().unwrap().1;
+
+                let next_refetch = path_set.internal.next_refetch;
+
+                // Next fetch with completely different paths (different seed)
+                fetcher.lock().unwrap().set_response(generate_responses(
+                    5,
+                    100, // Different seed = different paths
+                    BASE_TIME,
+                    DEFAULT_EXP_UNITS,
+                ));
+
+                // Mark as used in idle period
+                path_set
+                    .shared
+                    .was_used_in_idle_period
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                path_set.maintain(next_refetch).await;
+
+                // Should have fetched again
+                assert_eq!(fetcher.lock().unwrap().received_requests, 2);
+
+                // Active path should still be the same (kept from cache even though not in new
+                // fetch)
+                let active_path = path_set.shared.active_path.load();
+                assert!(active_path.is_some());
+                let new_active_fp = active_path.as_ref().unwrap().1;
+                assert_eq!(
+                    first_active_fp, new_active_fp,
+                    "Active path should remain if still valid"
+                );
+            }
+        }
+
+        /// Decisions around active path replacement
+        mod active_path_replacement {
+
+            use super::*;
+            // ACTIVE PATH REPLACEMENT
+
+            // If active path is near expiry, and another valid path is available, it should be
+            // replaced
+            #[tokio::test]
+            #[test_log::test]
+            async fn should_create_correct_decisions_based_on_active_path_expiry() {
+                // INIT with paths that will expire soon
+                let cfg = base_config();
+                let short_exp = 2;
+                let path = dummy_path(1, 0, short_exp, 0);
+                let fetcher = MockFetcher::new(Ok(vec![path.clone()]));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+                let active_path = path_set.shared.active_path.load();
+                assert!(active_path.is_some());
+
+                // Check decisions
+                let expiry: SystemTime = path.expiry_time().unwrap().into();
+                let near_expiry_time = expiry - cfg.min_expiry_threshold;
+                let not_near_expiry_time =
+                    expiry - cfg.min_expiry_threshold - Duration::from_secs(1);
+
+                let (decision_not_near, _) =
+                    path_set.decide_active_path_update(not_near_expiry_time);
+                assert_eq!(
+                    decision_not_near,
+                    ActivePathDecision::NoChange,
+                    "Active path should be kept when not near expiry"
+                );
+
+                let (decision, _) = path_set.decide_active_path_update(near_expiry_time);
+                assert_eq!(
+                    decision,
+                    ActivePathDecision::Replace("active path near expiry"),
+                    "Active path should be replaced when near expiry"
+                );
+
+                let (decision, _) = path_set.decide_active_path_update(expiry);
+                assert_eq!(
+                    decision,
+                    ActivePathDecision::ForceReplace("active path expired"),
+                    "Active path should be force replaced when expired"
+                );
+            }
+
+            // If active path's score is much worse than the best path, it should be replaced
+            // Should be tied to path_swap_score_threshold
+            #[tokio::test]
+            #[test_log::test]
+            async fn should_replace_active_path_if_much_worse_than_best() {
+                // INIT
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                path_set.maintain(BASE_TIME).await;
+
+                let active_path = path_set.shared.active_path.load();
+                let active_fp = active_path.as_ref().unwrap().1;
+
+                // Apply a significant penalty to the active path
+                let active_entry = path_set
+                    .internal
+                    .cached_paths
+                    .iter_mut()
+                    .find(|e| e.fingerprint == active_fp)
+                    .expect("Active path should be in cache");
+
+                active_entry
+                    .reliability
+                    .update(Score::new_clamped(-1.0), BASE_TIME);
+
+                // Re-rank
+                path_set.rerank(BASE_TIME);
+
+                // Check decision
+                let (decision, best) = path_set.decide_active_path_update(BASE_TIME);
+                assert_eq!(
+                    decision,
+                    ActivePathDecision::Replace("swap threshold reached"),
+                    "Active path should be replaced due to low score"
+                );
+
+                assert!(
+                    best.is_some(),
+                    "There should be a best path available to replace active path"
+                );
+                assert_ne!(
+                    best.unwrap().fingerprint,
+                    active_fp,
+                    "Best path should not be the active path"
+                );
+            }
+
+            #[tokio::test]
+            #[test_log::test]
+            async fn path_replacement_decision_should_be_applied() {
+                // INIT
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                path_set.maintain(BASE_TIME).await;
+
+                let active_path = path_set.shared.active_path.load();
+
+                let fake_better_path = path_set.internal.cached_paths.get(1).unwrap();
+
+                // No change case
+                path_set.apply_active_path_decision(ActivePathDecision::NoChange, None);
+                let active_path_after = path_set.shared.active_path.load();
+                assert_eq!(
+                    active_path.as_ref().unwrap().1,
+                    active_path_after.as_ref().unwrap().1,
+                    "Active path should remain unchanged in no change case"
+                );
+                // Replace no better path case
+                path_set.apply_active_path_decision(
+                    ActivePathDecision::Replace("no better path"),
+                    None,
+                );
+                let active_path_after = path_set.shared.active_path.load();
+                assert_eq!(
+                    active_path.as_ref().unwrap().1,
+                    active_path_after.as_ref().unwrap().1,
+                    "Active path should remain unchanged in replace no better path case"
+                );
+
+                // Force replace no better path case
+                path_set.apply_active_path_decision(
+                    ActivePathDecision::ForceReplace("must replace"),
+                    None,
+                );
+                let active_path_after = path_set.shared.active_path.load();
+                assert!(
+                    active_path_after.is_none(),
+                    "Active path should be None after force replace with no better path"
+                );
+
+                // Replace with better path case
+                path_set.shared.active_path.store(active_path.clone()); // Restore active path
+                path_set.apply_active_path_decision(
+                    ActivePathDecision::Replace("better path available"),
+                    Some(fake_better_path),
+                );
+                let active_path_after = path_set.shared.active_path.load();
+                assert_eq!(
+                    active_path_after.as_ref().unwrap().1,
+                    fake_better_path.fingerprint,
+                    "Active path should be replaced with better path"
+                );
+
+                // Force replace with better path case
+                path_set.shared.active_path.store(active_path.clone()); // Restore active path
+                path_set.apply_active_path_decision(
+                    ActivePathDecision::ForceReplace("must replace with better path"),
+                    Some(fake_better_path),
+                );
+                let active_path_after = path_set.shared.active_path.load();
+                assert_eq!(
+                    active_path_after.as_ref().unwrap().1,
+                    fake_better_path.fingerprint,
+                    "Active path should be replaced with better path"
+                );
+            }
+        }
+
+        // TIMING
+        mod timing {
+            use super::*;
+
+            // If a cached path is near expiry, next refetch should be scheduled before expiry
+            // If the near expiry fetch fails the next refetch should still be before expiry,
+            #[tokio::test]
+            #[test_log::test]
+            async fn next_refetch_should_detect_near_expiry() {
+                // INIT with short expiry paths
+                let cfg = base_config();
+                let short_exp = 3; // 10 EXP_TIME_UNITs
+                let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, short_exp));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+
+                let earliest_expiry = path_set.earliest_expiry().expect("Should have paths");
+                let next_refetch = path_set.internal.next_refetch;
+
+                // Next refetch should be scheduled before earliest expiry minus threshold
+                let expected_refetch_deadline = earliest_expiry - cfg.min_expiry_threshold;
+                assert!(
+                    next_refetch <= expected_refetch_deadline,
+                    "Next refetch should be before expiry threshold. next_refetch: {:?}, deadline: {:?}",
+                    next_refetch,
+                    expected_refetch_deadline
+                );
+            }
+
+            // If fetching paths fails, backoff should be applied to next refetch time
+            #[tokio::test]
+            #[test_log::test]
+            async fn should_do_backoff_on_fetch_failure() {
+                // INIT
+                let cfg = base_config();
+                let fetcher = MockFetcher::new(Err("Fetch failed".to_string()));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+
+                // Should have failed
+                assert_eq!(fetcher.lock().unwrap().received_requests, 1);
+                assert_eq!(path_set.internal.failed_attempts, 1);
+                assert!(
+                    path_set
+                        .shared
+                        .sync
+                        .lock()
+                        .unwrap()
+                        .current_error
+                        .as_ref()
+                        .map(|e| e.to_string())
+                        .unwrap()
+                        .contains("Fetch failed")
+                );
+
+                let first_next_refetch = path_set.internal.next_refetch;
+
+                // Next refetch should be scheduled with backoff
+                let backoff = ExponentialBackoff::new_from_config(cfg.fetch_failure_backoff);
+
+                let expected_next_refetch = BASE_TIME + backoff.duration(1);
+
+                assert_eq!(
+                    first_next_refetch, expected_next_refetch,
+                    "Next refetch should apply backoff delay"
+                );
+
+                // Fail again - with no paths
+                fetcher.lock().unwrap().set_response(Ok(vec![]));
+
+                // Mark as used in idle period
+                path_set
+                    .shared
+                    .was_used_in_idle_period
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                path_set.maintain(first_next_refetch).await;
+                assert_eq!(path_set.internal.failed_attempts, 2);
+
+                let second_next_refetch = first_next_refetch + backoff.duration(2);
+
+                // Second failure should have longer backoff
+                assert!(
+                    path_set.internal.next_refetch == second_next_refetch,
+                    "Backoff should increase with consecutive failures"
+                );
+            }
+
+            // If the next refetch time is later than next idle check, next tick should be set to
+            // idle check
+            #[tokio::test]
+            #[test_log::test]
+            async fn should_set_next_tick_to_idle_check() {
+                // INIT
+                let mut cfg = base_config();
+                cfg.max_idle_period = Duration::from_secs(10); // Short idle period
+                cfg.refetch_interval = Duration::from_secs(100); // Long refetch interval
+
+                let fetcher =
+                    MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+
+                let next_refetch = path_set.internal.next_refetch;
+                let next_idle_check = path_set.internal.next_idle_check;
+
+                // Idle check should be before refetch
+                assert!(next_idle_check < next_refetch);
+
+                // Next maintain time should be idle check
+                let next_maintain = path_set.next_maintain(BASE_TIME);
+                assert_eq!(
+                    next_maintain,
+                    next_idle_check.duration_since(BASE_TIME).unwrap(),
+                    "Next maintain should be at idle check time"
+                );
+            }
+        }
+
+        // If the pathset was not used during idle period, it should be removed
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_remove_pathset_on_idle() {
+            // INIT
+            let mut cfg = base_config();
+            cfg.max_idle_period = Duration::from_secs(10);
+            let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+            let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+            path_set.maintain(BASE_TIME).await;
+
+            // Don't use the path (don't call try_active_path or active_path)
+            let idle_check_time = path_set.internal.next_idle_check;
+
+            // Maintain at idle check time
+            let result = path_set.maintain(idle_check_time).await;
+
+            // Should return Some("idle")
+            assert_eq!(
+                result,
+                Some("idle"),
+                "PathSet should be marked for removal when idle"
+            );
+        }
+
+        // If the pathset was used during idle period, it should not be removed
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_not_remove_pathset_if_used_in_idle_period() {
+            // INIT
+            let mut cfg = base_config();
+            cfg.max_idle_period = Duration::from_secs(10);
+            let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+            let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+            path_set.maintain(BASE_TIME).await;
+
+            let handle = PathSetHandle {
+                shared: path_set.shared.clone(),
+            };
+
+            // Use the path during idle period
+            let _active = handle.try_active_path();
+            let idle_check_time = path_set.internal.next_idle_check;
+
+            // Maintain at idle check time
+            let result = path_set.maintain(idle_check_time).await;
+
+            // Should return None (not removed)
+            assert_eq!(
+                result, None,
+                "PathSet should not be removed if used during idle period"
+            );
+        }
+
+        mod initialization {
+            use std::task::Poll;
+
+            use futures::poll;
+            use tokio::{task::yield_now, time::timeout};
+
+            use super::*;
+            // INITIALIZATION
+
+            // The Path Handle active_path() call should wait for initialization
+            #[tokio::test]
+            #[test_log::test]
+            async fn handle_active_path_should_wait_for_initialization() {
+                // INIT - don't call maintain yet
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                let handle = PathSetHandle {
+                    shared: path_set.shared.clone(),
+                };
+
+                let future = handle.active_path();
+                // first poll must not complete
+                tokio::pin!(future);
+                let poll_result = poll!(&mut future);
+                assert!(
+                    poll_result.is_pending(),
+                    "Should be pending before initialization"
+                );
+
+                path_set.maintain(BASE_TIME).await; // Initialize
+
+                // Single poll after initialization must complete
+                let poll_result = poll!(&mut future);
+                assert!(
+                    poll_result.is_ready(),
+                    "Should be ready after initialization"
+                );
+            }
+
+            // The Path Handle active_path() call should wait for ongoing update if no active path
+            // is set
+            #[tokio::test]
+            #[test_log::test]
+            async fn handle_active_path_should_wait_for_ongoing_update_if_no_active_path() {
+                // INIT
+                let cfg = base_config();
+                let fetcher = MockFetcher::new(Ok(vec![])); // No paths initially
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+
+                let handle = PathSetHandle {
+                    shared: path_set.shared.clone(),
+                };
+
+                // Verify no active path
+                assert!(handle.try_active_path().is_none());
+
+                // Set up a fetch that will return paths
+                fetcher.lock().unwrap().set_response(generate_responses(
+                    5,
+                    0,
+                    BASE_TIME,
+                    DEFAULT_EXP_UNITS,
+                ));
+
+                // Make fetcher wait till notified
+                fetcher.lock().unwrap().wait_till_notify(true);
+
+                // Trigger update
+                let next_refetch = path_set.internal.next_refetch;
+                let maintain_notif = path_set
+                    .shared
+                    .sync
+                    .lock()
+                    .unwrap()
+                    .completed_notify
+                    .clone()
+                    .notified_owned();
+                let path_set_shared = path_set.shared.clone();
+
+                tokio::spawn(async move {
+                    path_set.maintain(next_refetch).await;
+                });
+
+                // Yield till update started
+                while path_set_shared.sync.lock().unwrap().ongoing_start.is_none() {
+                    yield_now().await;
+                }
+
+                // first poll must not complete
+                let wait_future = handle.active_path();
+
+                println!("Polling active_path future, should be pending");
+                tokio::pin!(wait_future);
+                let poll_result = poll!(&mut wait_future);
+                println!("Poll result: {:?}", poll_result);
+                assert!(
+                    poll_result.is_pending(),
+                    "Should be pending while waiting for update"
+                );
+
+                // Notify fetcher to proceed
+                fetcher.lock().unwrap().notify_to_resolve.notify_waiters();
+
+                // Wait for maintain to complete
+                timeout(Duration::from_millis(100), maintain_notif)
+                    .await
+                    .expect("Timeout waiting for maintain to complete");
+
+                // Single poll after update must complete
+                let poll_result = poll!(&mut wait_future);
+                match poll_result {
+                    Poll::Ready(res) => {
+                        assert!(
+                            res.is_some(),
+                            "Should have active path after waiting for update"
+                        );
+                    }
+                    Poll::Pending => {
+                        panic!("Should be ready after update");
+                    }
+                }
+            }
+        }
+
+        mod error_handling {
+            use std::task::Poll;
+
+            use futures::poll;
+
+            use super::*;
+            // The Path Handle active_path() call should return the last fetch error if no active
+            // path is set
+            #[tokio::test]
+            #[test_log::test]
+            async fn handle_active_path_should_return_error_if_no_active_path() {
+                // INIT with fetch error
+                let cfg = base_config();
+                let fetcher = MockFetcher::new(Err("Fetch failed".to_string()));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+
+                let handle = PathSetHandle {
+                    shared: path_set.shared.clone(),
+                };
+
+                // Should have no active path
+                assert!(handle.try_active_path().is_none());
+
+                // Should have an error
+                let error = handle.current_error();
+                assert!(error.is_some(), "Should have fetch error");
+
+                // active should immediately return the error in a single poll
+                let future = handle.active_path();
+                tokio::pin!(future);
+                let poll_result = poll!(&mut future);
+                match poll_result {
+                    Poll::Ready(res) => {
+                        assert!(
+                            res.is_none(),
+                            "Should have no active path due to fetch error"
+                        );
+                    }
+                    Poll::Pending => {
+                        panic!("Should be ready with error");
+                    }
+                }
+            }
+
+            // The Path Handle active_path() call should return active path if set, even if there
+            // is a fetch error
+            #[tokio::test]
+            #[test_log::test]
+            async fn handle_active_path_should_return_active_path_even_if_error() {
+                // INIT with good paths
+                let cfg = base_config();
+                let fetcher =
+                    MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+
+                let handle = PathSetHandle {
+                    shared: path_set.shared.clone(),
+                };
+
+                // Should have active path
+                let active = handle.try_active_path();
+                assert!(active.is_some());
+                let active_fp = active.as_ref().unwrap().1;
+
+                // Now make fetcher fail
+                fetcher
+                    .lock()
+                    .unwrap()
+                    .set_response(Err("Fetch failed".to_string()));
+
+                let next_refetch = path_set.internal.next_refetch;
+                path_set.maintain(next_refetch).await;
+
+                // Should have error
+                assert!(handle.current_error().is_some());
+
+                // But should still have active path (old one kept in cache)
+                let active = handle.try_active_path();
+                assert!(
+                    active.is_some(),
+                    "Should keep active path even with fetch error"
+                );
+                assert_eq!(
+                    active.as_ref().unwrap().1,
+                    active_fp,
+                    "Active path should be unchanged"
+                );
+            }
+
+            // The Path Handle should have access to an error if no paths are available
+            // paths were filtered out
+            #[tokio::test]
+            #[test_log::test]
+            async fn handle_active_path_should_return_error_if_no_paths_found() {
+                // INIT - fetcher returns empty (simulates all paths filtered out)
+                let cfg = base_config();
+                let fetcher = MockFetcher::new(Ok(vec![])); // No paths = simulates filtering
+
+                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+                path_set.maintain(BASE_TIME).await;
+
+                let handle = PathSetHandle {
+                    shared: path_set.shared.clone(),
+                };
+
+                // Should have no active path (all filtered out)
+                assert!(handle.try_active_path().is_none());
+
+                // Should have error indicating no paths found
+                let error = handle.current_error();
+                assert!(error.is_some(), "Should have error when all paths filtered");
+
+                // Check it's the right error type
+                match error.as_ref().unwrap().as_ref() {
+                    PathFetchError::NoPathsFound => {} // Expected
+                    other => panic!("Expected NoPathsFound error, got: {:?}", other),
+                }
+            }
+        }
+
+        mod merge_algo {
+            use super::*;
+
+            fn make_path_vec(fpr_base: u16, count: u16) -> Vec<PathSetEntry> {
+                (0..count)
+                    .map(|i| {
+                        PathSetEntry {
+                            fingerprint: PathFingerprint::local(IsdAsn((fpr_base + i) as u64)),
+                            path: dummy_path(i, 0, 100, (fpr_base + i) as u32),
+                            reliability: ReliabilityScore::new_with_time(BASE_TIME),
+                        }
+                    })
+                    .collect()
+            }
+
+            #[test]
+            fn should_keep_correct_number_of_paths() {
+                let mut existing_paths = make_path_vec(0, 10);
+                let mut new_paths = make_path_vec(100, 10);
+
+                let mut strat = PathStrategy::default();
+                // Add a ranking that alternates between paths to force equal ranking
+                strat.add_ranking(Box::new(|_: &PathManagerPath, _: &PathManagerPath| {
+                    static mut CALLED_TIMES: usize = 0;
+                    unsafe {
+                        CALLED_TIMES += 1;
+                        match CALLED_TIMES % 2 {
+                            0 => std::cmp::Ordering::Greater,
+                            _ => {
+                                // Equal should be handled as less to keep existing paths
+                                match CALLED_TIMES % 4 {
+                                    0 => std::cmp::Ordering::Less,
+                                    _ => std::cmp::Ordering::Equal,
+                                }
+                            }
+                        }
+                    }
+                }));
+
+                let (kept_new, kept_existing) =
+                    merge_new_paths_algo(&mut existing_paths, &mut new_paths, None, 10, &strat);
+
+                assert_eq!(
+                    existing_paths.len(),
+                    10,
+                    "Total paths should be reduced to exactly 10"
+                );
+                assert_eq!(kept_existing, 5, "should keep 5 existing paths");
+                assert_eq!(kept_new, 5, "should take 5 new paths");
+            }
+
+            #[test]
+            fn should_ensure_active_path_is_kept() {
+                let mut existing_paths = make_path_vec(0, 10);
+                let mut new_paths = make_path_vec(100, 10);
+
+                // Use path which would be removed without active path consideration
+                let active_fp = existing_paths[9].fingerprint;
+
+                let mut strat = PathStrategy::default();
+                // Add a ranking that ranks all new paths better than existing paths
+                strat.add_ranking(Box::new(|_: &PathManagerPath, _: &PathManagerPath| {
+                    std::cmp::Ordering::Greater
+                }));
+
+                let (kept_existing, kept_new) = merge_new_paths_algo(
+                    &mut existing_paths,
+                    &mut new_paths,
+                    Some(active_fp),
+                    10,
+                    &strat,
+                );
+
+                let total_paths = existing_paths.len() + new_paths.len();
+                assert_eq!(
+                    total_paths, 10,
+                    "Total paths should be reduced to exactly 10"
+                );
+                assert_eq!(
+                    kept_existing, 1,
+                    "Should have taken 1 existing path (the active path)"
+                );
+                assert!(
+                    existing_paths.iter().any(|e| e.fingerprint == active_fp),
+                    "Active path should be kept in existing paths"
+                );
+                assert_eq!(kept_new, 9, "Should have taken 9 new paths");
+            }
+        }
+    }
+
+    mod issue_handling {
+        use scion_proto::address::{Asn, Isd};
+
+        use super::{helpers::*, *};
+        use crate::path::multipath_manager::types::Score;
+
+        // When an issue is ingested, affected paths should have their reliability scores updated
+        // appropriately The issue should be in the issue cache
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_ingest_issues_and_apply_to_existing_paths() {
+            let cfg = base_config();
+            let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+            let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+            path_set.maintain(BASE_TIME).await;
+
+            // Get the first path to create an issue for
+            let first_path = &path_set.internal.cached_paths[0];
+            let first_fp = first_path.fingerprint;
+
+            // Create an issue targeting the first hop of the first path
+            let issue = IssueKind::Socket {
+                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
+                    crate::scionstack::NetworkError::UnderlayNextHopUnreachable {
+                        isd_as: first_path.path.source(),
+                        interface_id: first_path.path.first_hop_egress_interface().unwrap().id,
+                        msg: "test".into(),
+                    },
+                )),
+            };
+
+            let penalty = Score::new_clamped(-0.3);
+            let marker = IssueMarker {
+                target: issue.target_type(Some(&first_path.path)).unwrap(),
+                timestamp: BASE_TIME,
+                penalty,
+            };
+
+            {
+                let mut issues_guard = mgr.0.issue_manager.lock().unwrap();
+                // Add issue to manager
+                issues_guard.add_issue(issue, marker);
+                // Check issue is in cache
+                assert!(!issues_guard.cache.is_empty(), "Issue should be in cache");
+            }
+            // Handle the issue in path_set
+            let recv_result = path_set.internal.issue_rx.recv().await;
+            path_set.handle_issue_rx(BASE_TIME, recv_result);
+
+            // Check that the path's score was updated
+            let updated_path = path_set
+                .internal
+                .cached_paths
+                .iter()
+                .find(|e| e.fingerprint == first_fp)
+                .expect("Path should still exist");
+
+            let updated_score = updated_path.combined_score(BASE_TIME);
+
+            assert!(
+                updated_score == penalty.value(),
+                "Path score should be updated by penalty. Expected: {}, Got: {}",
+                penalty.value(),
+                updated_score
+            );
+
+            // Should decay over time
+            let later_time = BASE_TIME + Duration::from_secs(30);
+            let decayed_score = updated_path.combined_score(later_time);
+            assert!(
+                decayed_score > updated_score,
+                "Path score should recover over time. Updated: {}, Decayed: {}",
+                updated_score,
+                decayed_score
+            );
+        }
+
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_deduplicate_issues_within_window() {
+            let cfg = base_config();
+            let mgr_inner = MultiPathManagerInner {
+                config: cfg,
+                fetcher: MockFetcher::new(Ok(vec![])),
+                path_strategy: PathStrategy::default(),
+                issue_manager: Mutex::new(PathIssueManager::new(64, 64, Duration::from_secs(10))),
+                managed_paths: HashIndex::new(),
+            };
+            let mgr = MultiPathManager(Arc::new(mgr_inner));
+
+            let issue_marker = IssueMarker {
+                target: IssueMarkerTarget::FirstHop {
+                    isd_asn: SRC_ADDR.isd_asn(),
+                    egress_interface: 1,
+                },
+                timestamp: BASE_TIME,
+                penalty: Score::new_clamped(-0.3),
+            };
+
+            let issue = IssueKind::Socket {
+                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
+                    crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
+                )),
+            };
+
+            // Add issue first time
+            mgr.0
+                .issue_manager
+                .lock()
+                .unwrap()
+                .add_issue(issue.clone(), issue_marker.clone());
+            let cache_size_1 = mgr.0.issue_manager.lock().unwrap().cache.len();
+            assert_eq!(cache_size_1, 1);
+
+            // Add same issue within dedup window (should be ignored)
+            let issue_marker_2 = IssueMarker {
+                timestamp: BASE_TIME + Duration::from_secs(1), // Within 10s window
+                ..issue_marker.clone()
+            };
+            mgr.0
+                .issue_manager
+                .lock()
+                .unwrap()
+                .add_issue(issue.clone(), issue_marker_2);
+
+            let fifo_size = mgr.0.issue_manager.lock().unwrap().fifo_issues.len();
+            let cache_size_2 = mgr.0.issue_manager.lock().unwrap().cache.len();
+            assert_eq!(cache_size_2, 1, "Duplicate issue should be ignored");
+            assert_eq!(
+                fifo_size, 1,
+                "FIFO queue size should remain unchanged on duplicate issue"
+            );
+
+            // Add same issue outside dedup window (should be added)
+            let issue_marker_3 = IssueMarker {
+                timestamp: BASE_TIME + Duration::from_secs(11), // Outside 10s window
+                ..issue_marker
+            };
+            mgr.0
+                .issue_manager
+                .lock()
+                .unwrap()
+                .add_issue(issue, issue_marker_3);
+
+            let fifo_size_3 = mgr.0.issue_manager.lock().unwrap().fifo_issues.len();
+            let cache_size_3 = mgr.0.issue_manager.lock().unwrap().cache.len();
+            assert_eq!(
+                cache_size_3, 1,
+                "Issue outside dedup window should update existing"
+            );
+            assert_eq!(
+                fifo_size_3, 2,
+                "FIFO queue size should increase for new issue outside dedup window"
+            );
+        }
+
+        // When new paths are fetched, existing issues in the issue cache should be applied to them
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_apply_issues_to_new_paths_on_fetch() {
+            let cfg = base_config();
+            let fetcher = MockFetcher::new(Ok(vec![]));
+            let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+            path_set.maintain(BASE_TIME).await;
+
+            // Create an issue
+            let issue_marker = IssueMarker {
+                target: IssueMarkerTarget::FirstHop {
+                    isd_asn: SRC_ADDR.isd_asn(),
+                    egress_interface: 1,
+                },
+                timestamp: BASE_TIME,
+                penalty: Score::new_clamped(-0.5),
+            };
+
+            let issue = IssueKind::Socket {
+                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
+                    crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
+                )),
+            };
+
+            // Add to manager's issue cache
+            mgr.0
+                .issue_manager
+                .lock()
+                .unwrap()
+                .add_issue(issue, issue_marker);
+
+            // Drain issue channel so no issues are pending
+            path_set.drain_and_apply_issue_channel(BASE_TIME);
+
+            // Now fetch paths again - the issue should be applied to the newly fetched path
+            fetcher.lock().unwrap().set_response(generate_responses(
+                3,
+                0,
+                BASE_TIME + Duration::from_secs(1),
+                DEFAULT_EXP_UNITS,
+            ));
+
+            let next_refetch = path_set.internal.next_refetch;
+            path_set.maintain(next_refetch).await;
+
+            // The newly fetched path should have the penalty applied
+            let affected_path = path_set
+                .internal
+                .cached_paths
+                .first()
+                .expect("Path should exist");
+
+            let score = affected_path.combined_score(BASE_TIME + Duration::from_secs(1));
+            assert!(
+                score < 0.0,
+                "Newly fetched path should have cached issue applied. Score: {}",
+                score
+            );
+        }
+
+        // If the active path is affected by an issue, it should be re-evaluated
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_trigger_active_path_reevaluation_on_issue() {
+            let cfg = base_config();
+            let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+            let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+            path_set.maintain(BASE_TIME).await;
+
+            let active_fp = path_set.shared.active_path.load().as_ref().unwrap().1;
+
+            // Create a severe issue targeting the active path
+            let issue_marker = IssueMarker {
+                target: IssueMarkerTarget::FullPath {
+                    fingerprint: active_fp,
+                },
+                timestamp: BASE_TIME,
+                penalty: Score::new_clamped(-1.0), // Severe penalty
+            };
+
+            let issue = IssueKind::Socket {
+                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
+                    crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
+                )),
+            };
+
+            // Add issue
+            mgr.0
+                .issue_manager
+                .lock()
+                .unwrap()
+                .add_issue(issue, issue_marker);
+
+            // Handle issue
+            let recv_result = path_set.internal.issue_rx.recv().await;
+            path_set.handle_issue_rx(BASE_TIME, recv_result);
+
+            // Active path should have changed
+            let new_active_fp = path_set.shared.active_path.load().as_ref().unwrap().1;
+            assert_ne!(
+                active_fp, new_active_fp,
+                "Active path should change when severely penalized"
+            );
+        }
+
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_swap_to_better_path_if_one_appears() {
+            let cfg = base_config();
+            let fetcher = MockFetcher::new(generate_responses(1, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+            let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+
+            path_set.maintain(BASE_TIME).await;
+
+            // mark as used to prevent idle removal
+            path_set
+                .shared
+                .was_used_in_idle_period
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+
+            let active_fp = path_set.shared.active_path.load().as_ref().unwrap().1;
+
+            // add issue to active path to lower its score
+            let issue_marker = IssueMarker {
+                target: IssueMarkerTarget::FullPath {
+                    fingerprint: active_fp,
+                },
+                timestamp: BASE_TIME,
+                penalty: Score::new_clamped(-0.8),
+            };
+
+            mgr.0.issue_manager.lock().unwrap().add_issue(
+                IssueKind::Socket {
+                    err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
+                        crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
+                    )),
+                },
+                issue_marker,
+            );
+
+            // active path should be the same
+            let active_fp_after_issue = path_set.shared.active_path.load().as_ref().unwrap().1;
+            assert_eq!(
+                active_fp, active_fp_after_issue,
+                "Active path should remain the same if no better path exists"
+            );
+
+            // Now fetch a better path
+            fetcher.lock().unwrap().set_response(generate_responses(
+                1,
+                100,
+                BASE_TIME + Duration::from_secs(1),
+                DEFAULT_EXP_UNITS,
+            ));
+
+            path_set.maintain(path_set.internal.next_refetch).await;
+            // mark as used to prevent idle removal
+            path_set
+                .shared
+                .was_used_in_idle_period
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+
+            // Active path should have changed
+            let new_active_fp = path_set.shared.active_path.load().as_ref().unwrap().1;
+            assert_ne!(
+                active_fp, new_active_fp,
+                "Active path should change when a better path appears"
+            );
+
+            // Should also work for positive score changes
+            let positive_score = Score::new_clamped(0.8);
+            let mut reliability = ReliabilityScore::new_with_time(path_set.internal.next_refetch);
+            reliability.update(positive_score, path_set.internal.next_refetch);
+
+            // Change old paths reliability to be better
+            path_set
+                .internal
+                .cached_paths
+                .iter_mut()
+                .find(|e| e.fingerprint == active_fp)
+                .unwrap()
+                .reliability = reliability;
+
+            path_set.maintain(path_set.internal.next_refetch).await;
+
+            assert_eq!(
+                active_fp,
+                path_set.shared.active_path.load().as_ref().unwrap().1,
+                "Active path should change on positive score diff"
+            );
+        }
+
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_keep_max_issue_cache_size() {
+            let max_size = 10;
+            let mut issue_mgr = PathIssueManager::new(max_size, 64, Duration::from_secs(10));
+
+            // Add more issues than max_size
+            for i in 0..20u16 {
+                let issue_marker = IssueMarker {
+                    target: IssueMarkerTarget::FirstHop {
+                        isd_asn: IsdAsn::new(Isd(1), Asn(1)),
+                        egress_interface: i,
+                    },
+                    timestamp: BASE_TIME + Duration::from_secs(i as u64),
+                    penalty: Score::new_clamped(-0.1),
+                };
+
+                let issue = IssueKind::Socket {
+                    err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
+                        crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
+                    )),
+                };
+
+                issue_mgr.add_issue(issue, issue_marker);
+            }
+
+            // Cache should not exceed max_size
+            assert!(
+                issue_mgr.cache.len() <= max_size,
+                "Cache size {} should not exceed max {}",
+                issue_mgr.cache.len(),
+                max_size
+            );
+
+            // FIFO queue should match cache size
+            assert_eq!(issue_mgr.cache.len(), issue_mgr.fifo_issues.len());
+        }
+    }
+
+    mod manager {
+        use tokio::time::timeout;
+
+        use super::{helpers::*, *};
+
+        // The manager should create path sets on request
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_create_pathset_on_request() {
+            let cfg = base_config();
+            let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+
+            let mgr = MultiPathManager::new(cfg, fetcher, PathStrategy::default())
+                .expect("Should create manager");
+
+            // Initially no managed paths
+            assert!(mgr.0.managed_paths.is_empty());
+
+            // Request a path - should create path set
+            let path = mgr.try_path(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn(), BASE_TIME);
+            // First call returns None (not yet initialized)
+            assert!(path.is_none());
+
+            // But path set should be created
+            assert!(
+                mgr.0
+                    .managed_paths
+                    .contains(&(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn()))
+            );
+        }
+
+        // The manager should remove idle path sets
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_remove_idle_pathsets() {
+            let mut cfg = base_config();
+            cfg.max_idle_period = Duration::from_millis(10); // Short idle period for testing
+
+            let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+
+            let mgr = MultiPathManager::new(cfg, fetcher, PathStrategy::default())
+                .expect("Should create manager");
+
+            // Create path set
+            let handle = mgr.ensure_managed_paths(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn());
+
+            // Should exist
+            assert!(
+                mgr.0
+                    .managed_paths
+                    .contains(&(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn()))
+            );
+
+            // Wait for idle timeout plus some margin
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            // Path set should be removed by idle check
+            let contains = mgr
+                .0
+                .managed_paths
+                .contains(&(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn()));
+
+            assert!(!contains, "Idle path set should be removed");
+
+            let err = handle.current_error();
+            assert!(
+                err.is_some(),
+                "Handle should report error after path set removal"
+            );
+            println!("Error after idle removal: {:?}", err);
+            assert!(
+                err.unwrap().to_string().contains("idle"),
+                "Error message should indicate idle removal"
+            );
+        }
+
+        // Dropping the manager should cancel all path set maintenance tasks
+        #[tokio::test]
+        #[test_log::test]
+        async fn should_cancel_pathset_tasks_on_drop() {
+            let cfg: MultiPathManagerConfig = base_config();
+            let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+
+            let mgr = MultiPathManager::new(cfg, fetcher, PathStrategy::default())
+                .expect("Should create manager");
+
+            // ensure path set exists and initialized
+            let handle = mgr.ensure_managed_paths(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn());
+            handle.wait_initialized().await;
+
+            let mut set_entry = mgr
+                .0
+                .managed_paths
+                .get_sync(&(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn()))
+                .unwrap();
+
+            let task_handle = unsafe {
+                // swap join handle with a fake one, only possible since the manager doesn't use the
+                // handle
+                let swap_handle = tokio::spawn(async {});
+                std::mem::replace(&mut set_entry.get_mut().1._task, swap_handle)
+            };
+
+            let cancel_token = set_entry.get().1.cancel_token.clone();
+
+            let count = mgr.0.managed_paths.len();
+            assert_eq!(count, 1, "Should have 1 managed path set");
+
+            // Drop the manager
+            drop(mgr);
+            // Cancel token should be triggered
+            assert!(
+                cancel_token.is_cancelled(),
+                "Cancel token should be triggered"
+            );
+
+            // Give tasks time to detect manager drop and exit
+            timeout(Duration::from_millis(50), task_handle)
+                .await
+                .unwrap()
+                .unwrap();
+
+            let err = handle
+                .shared
+                .sync
+                .lock()
+                .unwrap()
+                .current_error
+                .clone()
+                .expect("Should have error after manager drop");
+
+            // XXX(ake): exit reason may vary between "cancelled" and "manager dropped" because of
+            // select!
+            assert!(
+                err.to_string().contains("cancelled") || err.to_string().contains("dropped"),
+                "Error message should indicate cancellation or manager drop"
+            );
+        }
+    }
+}
 // LeftoverTodos:
-// [] Tests
 // [] File Split up
 // [] Integration
 //  [] Change types for path_strategy to support ranking and filtering

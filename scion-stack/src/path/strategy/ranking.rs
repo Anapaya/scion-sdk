@@ -34,6 +34,16 @@ pub trait PathRanking: 'static + Send + Sync {
     fn rank_order(&self, this: &PathManagerPath, other: &PathManagerPath) -> Ordering;
 }
 
+// Allow any closure that matches the signature to be a PathRanking.
+impl<F> PathRanking for F
+where
+    F: 'static + Send + Sync + Fn(&PathManagerPath, &PathManagerPath) -> Ordering,
+{
+    fn rank_order(&self, this: &PathManagerPath, other: &PathManagerPath) -> Ordering {
+        (self)(this, other)
+    }
+}
+
 /// Selects the shortest path based on the number of hops.
 pub struct Shortest;
 

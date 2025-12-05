@@ -85,8 +85,6 @@
 //! You can use these to build wrappers around the TestPathContext for specialized use
 //! cases.
 
-use std::time::Duration;
-
 use chrono::DateTime;
 
 use crate::{
@@ -96,6 +94,7 @@ use crate::{
         DataPlanePath, HopField, InfoField, MetaHeader, Metadata, Path, PathInterface,
         SegmentLength, StandardPath,
         crypto::{ForwardingKey, calculate_hop_mac, mac_chaining_step, validate_segment_macs},
+        exp_time_to_duration,
     },
     scmp::ScmpMessage,
 };
@@ -420,7 +419,7 @@ impl TestPathBuilder {
             .flat_map(|seg| {
                 seg.hop_fields.iter().map(|hop| {
                     seg.info_field.timestamp_epoch
-                        + (EXP_TIME_UNIT * (hop.exp_time as u32)).as_secs() as u32
+                        + exp_time_to_duration(hop.exp_time).as_secs() as u32
                 })
             })
             .min()
@@ -582,10 +581,6 @@ impl TestPathContext {
         }
     }
 }
-
-// MaxTTL / 256 (5m38.5s) see the following for reference:
-// https://datatracker.ietf.org/doc/html/draft-dekater-scion-dataplane#name-hop-field
-const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
 
 /// General Definition of a Hop Field
 ///

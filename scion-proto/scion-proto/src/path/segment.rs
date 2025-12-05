@@ -33,7 +33,8 @@ const MAX_TTL: Duration = Duration::from_secs(86400);
 
 // MaxTTL / 256 (5m38.5s) see the following for reference:
 // https://datatracker.ietf.org/doc/html/draft-dekater-scion-dataplane#name-hop-field
-const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
+/// Expiration Duration per ExpTime unit on a HopField.
+pub const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
 
 /// Path segment error.
 #[derive(Debug)]
