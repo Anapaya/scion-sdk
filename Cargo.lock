@@ -51,6 +51,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "anapaya-quinn"
+version = "0.11.9-ana.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ddb3b7040c0a7c5eceddff046895003684d1e4e00fd9c3db652594a0337fa0e"
+dependencies = [
+ "anapaya-quinn-proto",
+ "bytes",
+ "cfg_aliases",
+ "pin-project-lite",
+ "quinn-udp",
+ "rustc-hash",
+ "rustls",
+ "socket2",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "web-time",
+]
+
+[[package]]
+name = "anapaya-quinn-proto"
+version = "0.11.13-ana.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df03dea9c2219f4368fcc22eadf4776468c94c62f5db9da941a05dbb7ef88c4e"
+dependencies = [
+ "bytes",
+ "fastbloom",
+ "getrandom 0.3.4",
+ "lru-slab",
+ "rand",
+ "ring",
+ "rustc-hash",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
+ "slab",
+ "thiserror 2.0.17",
+ "tinyvec",
+ "tracing",
+ "web-time",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1412,12 +1455,12 @@ dependencies = [
 name = "integration-tests"
 version = "0.0.0"
 dependencies = [
+ "anapaya-quinn",
  "bytes",
  "chrono",
  "ipnet",
  "ntest",
  "pocketscion",
- "quinn",
  "rand",
  "rand_chacha",
  "rustls",
@@ -1897,6 +1940,7 @@ dependencies = [
 name = "pocketscion"
 version = "0.2.0"
 dependencies = [
+ "anapaya-quinn",
  "anyhow",
  "async-trait",
  "axum",
@@ -1913,7 +1957,6 @@ dependencies = [
  "jsonwebtoken",
  "ntest",
  "pem",
- "quinn",
  "rand",
  "rand_chacha",
  "reqwest",
@@ -2169,7 +2212,8 @@ dependencies = [
 [[package]]
 name = "quinn"
 version = "0.11.9"
-source = "git+https://github.com/Anapaya/quinn.git?branch=quinn-0.11.9-ana#273db7bc0077f8fb62827a541303540138628de5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9e20a958963c291dc322d98411f541009df2ced7b5a4f2bd52337638cfccf20"
 dependencies = [
  "bytes",
  "cfg_aliases",
@@ -2188,10 +2232,10 @@ dependencies = [
 [[package]]
 name = "quinn-proto"
 version = "0.11.13"
-source = "git+https://github.com/Anapaya/quinn.git?branch=quinn-0.11.9-ana#273db7bc0077f8fb62827a541303540138628de5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
 dependencies = [
  "bytes",
- "fastbloom",
  "getrandom 0.3.4",
  "lru-slab",
  "rand",
@@ -2199,7 +2243,6 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "rustls-pki-types",
- "rustls-platform-verifier",
  "slab",
  "thiserror 2.0.17",
  "tinyvec",
@@ -2210,14 +2253,15 @@ dependencies = [
 [[package]]
 name = "quinn-udp"
 version = "0.5.14"
-source = "git+https://github.com/Anapaya/quinn.git?branch=quinn-0.11.9-ana#273db7bc0077f8fb62827a541303540138628de5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "addec6a0dcad8a8d96a771f815f0eaf55f9d1805756410b39f5fa81332574cbd"
 dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2757,10 +2801,10 @@ dependencies = [
 name = "scion-sdk-utils"
 version = "0.2.0"
 dependencies = [
+ "anapaya-quinn",
  "ed25519-dalek",
  "num-traits",
  "pem",
- "quinn",
  "rand",
  "rand_chacha",
  "rcgen",
@@ -2777,6 +2821,7 @@ dependencies = [
 name = "scion-stack"
 version = "0.2.0"
 dependencies = [
+ "anapaya-quinn",
  "anyhow",
  "arc-swap",
  "bytes",
@@ -2788,7 +2833,6 @@ dependencies = [
  "futures",
  "pin-project-lite",
  "prost",
- "quinn",
  "rand",
  "rand_chacha",
  "rustls",
@@ -3090,13 +3134,13 @@ dependencies = [
 name = "snap-dataplane"
 version = "0.2.0"
 dependencies = [
+ "anapaya-quinn",
  "anyhow",
  "bytes",
  "ed25519-dalek",
  "jsonwebtoken",
  "pem",
  "prometheus",
- "quinn",
  "rand",
  "scion-proto",
  "scion-sdk-address-manager",
@@ -3132,6 +3176,7 @@ dependencies = [
 name = "snap-tun"
 version = "0.2.0"
 dependencies = [
+ "anapaya-quinn",
  "assert_matches",
  "bytes",
  "chrono",
@@ -3142,7 +3187,6 @@ dependencies = [
  "pem",
  "prometheus",
  "prost",
- "quinn",
  "rcgen",
  "scion-proto",
  "scion-sdk-observability",
