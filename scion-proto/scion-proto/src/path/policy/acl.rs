@@ -126,15 +126,24 @@ impl AclPolicy {
     pub fn matches(&self, path: &[PathPolicyHop]) -> bool {
         for entry in &self.entries {
             for hop in path {
-                match entry.matches(hop) {
-                    AclMatchResult::Allow => return true,
-                    AclMatchResult::Deny => return false,
-                    AclMatchResult::Impartial => {}
+                let allowed = match entry.matches(hop) {
+                    AclMatchResult::Allow => true,
+                    // Immediate deny
+                    AclMatchResult::Deny => false,
+                    // No match, continue checking
+                    AclMatchResult::Impartial => self.default == AclEntryOperator::Allow,
+                };
+
+                // If any hop is denied, the whole path is denied
+                match allowed {
+                    true => continue,      // check next hop
+                    false => return false, // deny path
                 }
             }
         }
 
-        matches!(self.default, AclEntryOperator::Allow)
+        // No entry denied the path, allow
+        true
     }
 }
 impl FromStr for AclPolicy {
@@ -296,6 +305,81 @@ mod test {
             expect_parse_fail("+ +"); // Missing hop predicate
             expect_parse_fail("- 1 + -"); // Missing hop predicate
             expect_parse_fail("- 0-0 + 2 +"); // Wildcard not last
+        }
+
+        #[test]
+        fn should_make_correct_decision() {
+            // "- 1 +" : deny ISD 1, default allow
+            expect_decision("- 1 +", false, &[hop(0, "1-1", 0)]); // matches deny
+            expect_decision("- 1 +", true, &[hop(0, "2-1", 0)]); // does not match, default allow
+
+            // "- 1 + 0" : deny ISD 1, allow wildcard
+            expect_decision("- 1 + 0", false, &[hop(0, "1-3", 0)]); // matches deny
+            expect_decision("- 1 + 0", true, &[hop(0, "9-9", 0)]); // wildcard allows
+
+            // "- 1 + 0-0" : deny ISD 1, allow wildcard hop exact
+            expect_decision("- 1 + 0-0", false, &[hop(0, "1-2", 0)]); // matches deny
+            expect_decision("- 1 + 0-0", true, &[hop(0, "3-3", 0)]); // wildcard allows
+            // "- 1 + 0-0#0" : deny ISD 1, allow wildcard with single iface
+            expect_decision("- 1 + 0-0#0", false, &[hop(0, "1-2", 0)]); // matches deny
+            expect_decision("- 1 + 0-0#0", true, &[hop(0, "3-3", 0)]); // wildcard allows
+
+            // "- 1 + 0-0#0,0" : deny ISD 1, allow wildcard with both ifaces
+            expect_decision("- 1 + 0-0#0,0", false, &[hop(2, "1-2", 3)]); // matches deny
+            expect_decision("- 1 + 0-0#0,0", true, &[hop(1, "3-3", 2)]); // wildcard allows
+
+            // "- 1-2 +" : deny ISD-AS 1-2, default allow
+            expect_decision("- 1-2 +", false, &[hop(0, "1-2", 0)]); // matches deny
+            expect_decision("- 1-2 +", true, &[hop(0, "1-3", 0)]); // does not match
+
+            // "- 2 - 3-1#1,2 +" : deny ISD 2, deny 3-1 with ifaces 1,2, default allow
+            expect_decision("- 2 - 3-1#1,2 +", false, &[hop(1, "2-7", 2)]); // matches first deny
+            expect_decision("- 2 - 3-1#1,2 +", false, &[hop(1, "3-1", 2)]); // matches second deny
+            expect_decision("- 2 - 3-1#1,2 +", true, &[hop(2, "3-1", 1)]); // default allow
+
+            // "- 1-2#1,2 +" : deny 1-2 with ifaces 1,2, default allow
+            expect_decision("- 1-2#1,2 +", false, &[hop(1, "1-2", 2)]); // matches deny
+            expect_decision("- 1-2#1,2 +", true, &[hop(2, "1-2", 1)]); // does not match - allow
+
+            // duplicate "- 1 +" in list
+            expect_decision("- 1 +", false, &[hop(0, "1-9", 0)]); // deny
+            expect_decision("- 1 +", true, &[hop(0, "9-1", 0)]); // allow
+
+            // "- 1 - 2-2#1 +" : deny ISD 1, deny 2-2 with ingress 1, default allow
+            expect_decision("- 1 - 2-2#1 +", false, &[hop(0, "1-3", 0)]); // first deny
+            expect_decision("- 1 - 2-2#1 +", false, &[hop(1, "2-2", 0)]); // second deny
+            expect_decision("- 1 - 2-2#1 +", true, &[hop(2, "2-2", 3)]); // does not match any deny
+
+            // "- 1 - 2-2#1,2 +" : deny ISD 1, deny 2-2 with ifaces 1,2, default allow
+            expect_decision("- 1 - 2-2#1,2 +", false, &[hop(0, "1-3", 0)]); // first deny
+            expect_decision("- 1 - 2-2#1,2 +", false, &[hop(1, "2-2", 2)]); // second deny
+            expect_decision("- 1 - 2-2#1,2 +", true, &[hop(2, "2-2", 1)]); // different iface order -> allow
+
+            // Multiple hops in path
+            expect_decision("- 1 +", false, &[hop(0, "2-1", 0), hop(0, "1-1", 0)]); // one hop matches deny
+            expect_decision("- 1 +", true, &[hop(0, "2-1", 0), hop(0, "3-1", 0)]); // no hop matches deny
+
+            expect_decision("+ 1 -", true, &[hop(0, "1-1", 0), hop(0, "1-2", 0)]); // all hop match allow
+            expect_decision("+ 1 -", false, &[hop(0, "1-1", 0), hop(0, "2-1", 0)]); // one hop matches allow - deny
+            expect_decision("+ 1 -", false, &[hop(0, "2-1", 0), hop(0, "3-1", 0)]); // no hop matches allow
+
+            fn hop(isg: u16, isd_asn: &'static str, egress: u16) -> PathPolicyHop {
+                PathPolicyHop {
+                    isd_asn: isd_asn.parse().unwrap(),
+                    ingress: isg,
+                    egress,
+                }
+            }
+
+            fn expect_decision(s: &str, expected: bool, path_hops: &[PathPolicyHop]) {
+                let acl = expect_parse(s);
+                let decision = acl.matches(path_hops);
+                assert_eq!(
+                    decision, expected,
+                    "ACL: {s}, Hops: {:?}, Expected: {}, Got: {}",
+                    path_hops, expected, decision
+                );
+            }
         }
     }
 }
