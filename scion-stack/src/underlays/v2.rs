@@ -11,8 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! SCION stack underlay implementations.
+//! Underlay stack v2. This will replace the current underlay stack implementations
+//! as soon as it is stable.
 
-pub mod snap;
-pub mod udp;
-pub mod v2;
+pub mod discovery;
