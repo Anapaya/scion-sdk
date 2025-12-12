@@ -44,7 +44,7 @@ use snap_dataplane::{
     state::{DataPlaneId, DataPlaneState, Id},
     tunnel_gateway::state::SharedTunnelGatewayState,
 };
-use snap_tokens::{session_token::SessionTokenClaims, snap_token::SnapTokenClaims};
+use snap_tokens::snap_token::SnapTokenClaims;
 use utoipa::ToSchema;
 
 use crate::{
@@ -976,7 +976,7 @@ impl Id for RouterId {
 
 /// Map of all tunnel gateway states indexed by SNAP ID and SNAP data plane ID.
 pub type TunnelGatewayStates =
-    BTreeMap<SnapId, BTreeMap<SnapDataPlaneId, SharedTunnelGatewayState<SessionTokenClaims>>>;
+    BTreeMap<SnapId, BTreeMap<SnapDataPlaneId, SharedTunnelGatewayState<SnapTokenClaims>>>;
 
 #[cfg(test)]
 mod tests {

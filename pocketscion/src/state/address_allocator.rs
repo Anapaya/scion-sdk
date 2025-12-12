@@ -22,7 +22,7 @@ use ipnet::IpNet;
 use scion_proto::address::{EndhostAddr, IsdAsn};
 use scion_sdk_address_manager::manager::AddressManager;
 use scion_sdk_token_validator::validator::Token;
-use snap_tokens::session_token::SessionTokenClaims;
+use snap_tokens::snap_token::SnapTokenClaims;
 use snap_tun::{AddressAllocation, AddressAllocationId};
 
 use crate::state::{AllocationError, SharedPocketScionState, SnapDataPlaneId, SystemState};
@@ -139,12 +139,12 @@ impl StateSnapAddressAllocator {
     }
 }
 
-impl snap_tun::AddressAllocator<SessionTokenClaims> for StateSnapAddressAllocator {
+impl snap_tun::AddressAllocator<SnapTokenClaims> for StateSnapAddressAllocator {
     fn allocate(
         &self,
         isd_as: IsdAsn,
         prefix: IpNet,
-        claims: SessionTokenClaims,
+        claims: SnapTokenClaims,
     ) -> Result<snap_tun::AddressAllocation, snap_tun::AddressAllocationError> {
         if claims.exp_time() < SystemTime::now() {
             return Err(snap_tun::AddressAllocationError::AddressAllocationRejected);
@@ -255,9 +255,8 @@ mod tests {
         // Get address allocator for the snap
         let allocator = StateSnapAddressAllocator::new(state, snap_dp_id);
 
-        let session_token = SessionTokenClaims {
+        let snap_token = SnapTokenClaims {
             pssid: Pssid(Uuid::new_v4()),
-            data_plane_id: 0,
             exp: SystemTime::now()
                 .checked_add(Duration::from_secs(1000000000))
                 .unwrap()
@@ -271,7 +270,7 @@ mod tests {
         let result = allocator.allocate(
             isd_as,
             Ipv4Net::new_assert(requested_ipv4, 32).into(),
-            session_token.clone(),
+            snap_token.clone(),
         );
         check_explicit_allocation(result, isd_as, requested_ipv4.into());
 
@@ -280,7 +279,7 @@ mod tests {
         let result = allocator.allocate(
             isd_as,
             Ipv6Net::new_assert(requested_ipv6, 128).into(),
-            session_token.clone(),
+            snap_token.clone(),
         );
         check_explicit_allocation(result, isd_as, requested_ipv6.into());
 
@@ -288,7 +287,7 @@ mod tests {
         let result = allocator.allocate(
             isd_as,
             IpAddr::V4(Ipv4Addr::UNSPECIFIED).into(),
-            session_token.clone(),
+            snap_token.clone(),
         );
         check_wildcard_allocation(result, isd_as, IPV4_PREFIX);
 
@@ -296,7 +295,7 @@ mod tests {
         let result = allocator.allocate(
             isd_as,
             IpAddr::V6(Ipv6Addr::UNSPECIFIED).into(),
-            session_token.clone(),
+            snap_token.clone(),
         );
         check_wildcard_allocation(result, isd_as, IPV6_PREFIX);
 
@@ -304,7 +303,7 @@ mod tests {
         let result = allocator.allocate(
             isd_as,
             Ipv4Net::new_assert(Ipv4Addr::new(10, 0, 0, 10), 30).into(),
-            session_token.clone(),
+            snap_token.clone(),
         );
         assert!(matches!(
             result,
@@ -314,7 +313,7 @@ mod tests {
         let result = allocator.allocate(
             isd_as,
             Ipv6Net::new_assert(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10), 120).into(),
-            session_token.clone(),
+            snap_token.clone(),
         );
         assert!(matches!(
             result,

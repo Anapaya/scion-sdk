@@ -140,6 +140,10 @@ impl PocketScionRuntimeBuilder {
         let io_config = self.io_config.load().await?;
         let io_config = SharedPocketScionIoConfig::from_state(io_config);
 
+        let snap_token_decoding_key =
+            DecodingKey::from_ed_pem(pem::encode(&pstate.snap_token_public_key()).as_bytes())
+                .unwrap();
+
         // Start Control plane API for each SNAP
         for (snap_id, snap_state) in pstate.snaps() {
             let token = task_set.cancellation_token();
@@ -164,9 +168,7 @@ impl PocketScionRuntimeBuilder {
 
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
             let session_manager = pstate.snap_session_manager(snap_id, io_config.clone());
-            let decoding_key =
-                DecodingKey::from_ed_pem(pem::encode(&pstate.snap_token_public_key()).as_bytes())
-                    .unwrap();
+            let decoding_key = snap_token_decoding_key.clone();
 
             let local_ases = snap_state.isd_ases();
 
@@ -200,7 +202,11 @@ impl PocketScionRuntimeBuilder {
 
         for snap_id in pstate.snaps_ids() {
             let (_, session_decoding_key) = insecure_const_session_key_pair(snap_id.as_usize());
-            let validator = Arc::new(Validator::new(session_decoding_key, None));
+            // XXX(session-token-rework): single decoding key after SNAP dp session token removal
+            let validator = Arc::new(Validator::new_with_keys(
+                vec![snap_token_decoding_key.clone(), session_decoding_key],
+                None,
+            ));
 
             // Start TunnelGateway for each SNAP data plane
             for snap_dp_id in pstate.snap_data_planes(snap_id) {
