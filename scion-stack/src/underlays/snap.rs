@@ -21,7 +21,7 @@ use std::{
 use demultiplexer::DemultiplexerHost;
 use futures::future::BoxFuture;
 use rand_chacha::ChaCha8Rng;
-use scion_proto::address::{EndhostAddr, SocketAddr};
+use scion_proto::address::{EndhostAddr, IsdAsn, SocketAddr};
 use snap_control::{client::ControlPlaneApi, crpc_api::api_service::model::SessionGrant};
 use socket::{SnapAsyncUdpSocket, SnapUnderlaySocket};
 use tokio::sync::mpsc;
@@ -309,7 +309,15 @@ impl UnderlayStack for SnapUnderlayStack {
         })
     }
 
-    fn local_addresses(&self) -> Vec<EndhostAddr> {
-        self.tunnel.assigned_addresses()
+    fn local_ases(&self) -> Vec<IsdAsn> {
+        let mut isd_ases: Vec<IsdAsn> = self
+            .tunnel
+            .assigned_addresses()
+            .into_iter()
+            .map(|addr| addr.isd_asn())
+            .collect();
+        isd_ases.sort();
+        isd_ases.dedup();
+        isd_ases
     }
 }

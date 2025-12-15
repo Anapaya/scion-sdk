@@ -25,7 +25,7 @@ use pocketscion::{
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use scion_proto::address::{IsdAsn, SocketAddr};
+use scion_proto::address::IsdAsn;
 use scion_stack::scionstack::ScionStackBuilder;
 use snap_tokens::snap_token::dummy_snap_token;
 
@@ -37,8 +37,6 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     let server_snap_ip_net = "10.2.0.0/24".parse()?;
     let client_snap_ip_net = "10.1.0.0/24".parse()?;
-
-    let server_virtual_port = 8008;
 
     const MESSAGE_LEN: usize = 64;
 
@@ -118,13 +116,8 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
         .build()
         .await?;
 
-    let server_ip = *server_stack
-        .local_addresses()
-        .first()
-        .context("missing IP")?;
-
-    let server_addr = SocketAddr::new(server_ip.into(), server_virtual_port);
-    let server_socket = server_stack.bind(Some(server_addr)).await?;
+    let server_socket = server_stack.bind(None).await?;
+    let server_addr = server_socket.local_addr();
 
     //
     // Setup client

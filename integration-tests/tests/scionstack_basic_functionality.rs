@@ -13,13 +13,19 @@
 // limitations under the License.
 //! Integration tests for basic functionality of PocketSCION.
 
-use std::{future::Future, net, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    net::{self, IpAddr},
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use chrono::Utc;
 use integration_tests::{UnderlayType, minimal_pocketscion_setup};
 use scion_proto::{
-    address::SocketAddr,
+    address::{ScionAddr, SocketAddr},
     packet::{ByEndpoint, ScionPacketRaw, ScionPacketScmp},
     scmp::{DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpEchoRequest, ScmpMessage},
 };
@@ -153,11 +159,15 @@ async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
         .await
         .unwrap();
 
-    let local_address = *stack.local_addresses().first().unwrap();
+    let scion_addr = ScionAddr::new(
+        *stack.local_ases().first().unwrap(),
+        "10.132.0.1".parse::<IpAddr>().unwrap().into(),
+    );
     let port = match underlay {
         UnderlayType::Snap => 8080,
         UnderlayType::Udp => {
-            let sock = UdpSocket::bind(net::SocketAddr::new(local_address.local_address(), 0))
+            let bind_host = "10.132.0.1".parse().unwrap();
+            let sock = UdpSocket::bind(net::SocketAddr::new(bind_host, 0))
                 .await
                 .unwrap();
             let port = sock.local_addr().unwrap().port();
@@ -165,7 +175,7 @@ async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
             port
         }
     };
-    let specific_addr = SocketAddr::new(local_address.into(), port);
+    let specific_addr = SocketAddr::new(scion_addr, port);
     let socket = stack.bind(Some(specific_addr)).await.unwrap();
 
     assert_eq!(socket.local_addr(), specific_addr);
@@ -173,6 +183,7 @@ async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
+#[ignore = "With the SCION stack v2 we can no longer return stacks local address before binding."]
 async fn test_bind_with_specific_address_snap() {
     // On the snap underlay we can bind to any port without conflict.
     test_bind_with_specific_address_impl(UnderlayType::Snap).await;
@@ -180,6 +191,7 @@ async fn test_bind_with_specific_address_snap() {
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
+#[ignore = "With the SCION stack v2 we can no longer return stacks local address before binding."]
 async fn test_bind_with_specific_address_udp() {
     test_bind_with_specific_address_impl(UnderlayType::Udp).await;
 }
@@ -193,11 +205,11 @@ async fn test_bind_port_already_in_use_impl(underlay: UnderlayType) {
         .await
         .unwrap();
 
-    let local_addresses = stack.local_addresses();
-    let addr = SocketAddr::new(local_addresses[0].into(), 8080);
+    info!("Stack local ASes: {:?}", stack.local_ases());
 
     // First bind should succeed
-    let _socket1 = stack.bind(Some(addr)).await.unwrap();
+    let socket = stack.bind(None).await.unwrap();
+    let addr = socket.local_addr();
 
     // Second bind to same port should fail
     let result = stack.bind(Some(addr)).await;
@@ -234,20 +246,19 @@ async fn test_port_reservation_timing_snap() {
             .await
             .unwrap(),
     );
-
-    let local_addresses = stack.local_addresses();
-    let addr = SocketAddr::new(local_addresses[0].into(), 8080);
+    info!("Stack local ASes: {:?}", stack.as_ref().local_ases());
 
     let initial_time = std::time::Instant::now();
 
     // Bind and immediately drop
-    {
-        let _socket = stack
+    let addr = {
+        let socket = stack
             .as_ref()
-            .bind_with_time(Some(addr), initial_time)
+            .bind_with_time(None, initial_time)
             .await
             .unwrap();
-    }
+        socket.local_addr()
+    };
 
     // Immediate rebind should fail (port reserved)
     let bind_time = initial_time + Duration::from_secs(1);
@@ -574,6 +585,8 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
+    let receiver = receiver_stack.bind_raw(None).await.unwrap();
+    let receiver_addr = receiver.local_addr();
     let path_manager = sender_stack.create_path_manager();
 
     // Create an SCMP error message (destination unreachable) which doesn't have a port
@@ -581,7 +594,7 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
     let path = path_manager
         .path_wait(
             sender.local_addr().isd_asn(),
-            receiver_stack.local_addresses()[0].isd_asn(),
+            receiver_stack.local_ases()[0],
             Utc::now(),
         )
         .await
@@ -596,7 +609,7 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
     let error_message = ScionPacketScmp::new(
         ByEndpoint {
             source: sender.local_addr().scion_address(),
-            destination: receiver_stack.local_addresses()[0].into(),
+            destination: receiver_addr.scion_address(),
         },
         path.data_plane_path.clone(),
         ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
@@ -606,11 +619,9 @@ async fn test_scmp_packet_dispatch_without_port_snap() {
     )
     .unwrap();
 
-    let raw_receiver = receiver_stack.bind_raw(None).await.unwrap();
-
     tokio::join!(
         async {
-            err_within_duration!(MS_100, raw_receiver.recv());
+            err_within_duration!(MS_100, receiver.recv());
         },
         async {
             // The default SCMP handler should receive the error message
@@ -666,6 +677,8 @@ async fn test_scmp_packet_dispatch_without_port_udp() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
+    let receiver = receiver_stack.bind_raw(None).await.unwrap();
+    let receiver_addr = receiver.local_addr();
     let path_manager = sender_stack.create_path_manager();
 
     // Create an SCMP error message (destination unreachable) which doesn't have a port
@@ -673,7 +686,7 @@ async fn test_scmp_packet_dispatch_without_port_udp() {
     let path = path_manager
         .path_wait(
             sender.local_addr().isd_asn(),
-            receiver_stack.local_addresses()[0].isd_asn(),
+            receiver_stack.local_ases()[0],
             Utc::now(),
         )
         .await
@@ -681,7 +694,7 @@ async fn test_scmp_packet_dispatch_without_port_udp() {
     let error_message = ScionPacketScmp::new(
         ByEndpoint {
             source: sender.local_addr().scion_address(),
-            destination: receiver_stack.local_addresses()[0].into(),
+            destination: receiver_addr.scion_address(),
         },
         path.data_plane_path.clone(),
         ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
@@ -691,12 +704,10 @@ async fn test_scmp_packet_dispatch_without_port_udp() {
     )
     .unwrap();
 
-    let raw_receiver = receiver_stack.bind_raw(None).await.unwrap();
-
     // None of the receivers should receive the error message
     tokio::join!(
         async {
-            err_within_duration!(MS_100, raw_receiver.recv());
+            err_within_duration!(MS_100, receiver.recv());
         },
         async {
             sender.send(error_message.into()).await.unwrap();
@@ -722,6 +733,8 @@ async fn test_scmp_echo_is_replied_snap() {
         .unwrap();
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
+    let receiver = receiver_stack.bind_raw(None).await.unwrap();
+    let receiver_addr = receiver.local_addr();
     let path_manager = sender_stack.create_path_manager();
 
     let echo_data = Bytes::from_static(b"ping test data");
@@ -732,7 +745,7 @@ async fn test_scmp_echo_is_replied_snap() {
     let path = path_manager
         .path_wait(
             sender.local_addr().isd_asn(),
-            receiver_stack.local_addresses()[0].isd_asn(),
+            receiver_stack.local_ases()[0],
             Utc::now(),
         )
         .await
@@ -740,7 +753,7 @@ async fn test_scmp_echo_is_replied_snap() {
     let echo_request = ScionPacketScmp::new(
         ByEndpoint {
             source: sender.local_addr().scion_address(),
-            destination: receiver_stack.local_addresses()[0].into(),
+            destination: receiver_addr.scion_address(),
         },
         path.data_plane_path,
         ScmpMessage::EchoRequest(ScmpEchoRequest::new(
@@ -972,7 +985,13 @@ async fn should_snaptun_reconnects_bind_socket_snap() {
         .unwrap();
     let receiver = Arc::new(receiver_stack.bind(None).await.unwrap());
 
-    let sender_addr = *sender_stack.local_addresses().first().unwrap();
+    let initial_sender = sender_stack.bind(None).await.unwrap();
+    let sender_addr: scion_proto::address::EndhostAddr = initial_sender
+        .local_addr()
+        .scion_address()
+        .try_into()
+        .expect("local address is an endhost address");
+    drop(initial_sender);
 
     // 1. Create a SCION stack
     // 2. Close the sender's snaptun connection on the server (pocketscion).

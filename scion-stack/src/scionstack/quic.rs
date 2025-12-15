@@ -53,6 +53,7 @@ pub struct Endpoint {
     inner: quinn::Endpoint,
     path_prefetcher: Arc<dyn PathPrefetcher + Send + Sync>,
     address_translator: Arc<AddressTranslator>,
+    local_scion_addr: scion_proto::address::SocketAddr,
 }
 
 impl Endpoint {
@@ -61,6 +62,7 @@ impl Endpoint {
         config: quinn::EndpointConfig,
         server_config: Option<quinn::ServerConfig>,
         socket: Arc<dyn quinn::AsyncUdpSocket>,
+        local_scion_addr: scion_proto::address::SocketAddr,
         runtime: Arc<dyn quinn::Runtime>,
         pather: Arc<dyn PathPrefetcher + Send + Sync>,
         address_translator: Arc<AddressTranslator>,
@@ -74,6 +76,7 @@ impl Endpoint {
             )?,
             path_prefetcher: pather,
             address_translator,
+            local_scion_addr,
         })
     }
 
@@ -144,6 +147,11 @@ impl Endpoint {
     /// Returns the local socket address of the endpoint.
     pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
         self.inner.local_addr()
+    }
+
+    /// Returns the local SCION address of the endpoint.
+    pub fn local_scion_addr(&self) -> scion_proto::address::SocketAddr {
+        self.local_scion_addr
     }
 }
 

@@ -22,7 +22,7 @@ use std::{
 use anyhow::Context as _;
 use demultiplexer::Demultiplexer;
 use futures::future::BoxFuture;
-use scion_proto::address::{EndhostAddr, IsdAsn, ScionAddr, SocketAddr};
+use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
 use tokio::sync::mpsc;
 use underlay_resolver::UdpUnderlayResolver;
 
@@ -176,20 +176,15 @@ impl UnderlayStack for UdpUnderlayStack {
         })
     }
 
-    fn local_addresses(&self) -> Vec<EndhostAddr> {
-        let local_ips = self.local_ip_resolver.local_ips();
-        if local_ips.is_empty() {
-            return vec![];
-        }
-        let isd_ases = self.underlay_next_hop_resolver.isd_ases();
-        isd_ases
+    fn local_ases(&self) -> Vec<IsdAsn> {
+        let mut isd_ases: Vec<IsdAsn> = self
+            .underlay_next_hop_resolver
+            .isd_ases()
             .into_iter()
-            .flat_map(|isd_as| {
-                local_ips
-                    .iter()
-                    .map(move |ip| EndhostAddr::new(isd_as, *ip))
-            })
-            .collect()
+            .collect();
+        isd_ases.sort();
+        isd_ases.dedup();
+        isd_ases
     }
 }
 

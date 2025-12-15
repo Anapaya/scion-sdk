@@ -206,7 +206,7 @@ use endhost_api_client::client::EndhostApiClient;
 use futures::future::BoxFuture;
 use quic::{AddressTranslator, Endpoint, ScionAsyncUdpSocket};
 use scion_proto::{
-    address::{EndhostAddr, IsdAsn, SocketAddr},
+    address::{IsdAsn, SocketAddr},
     packet::ScionPacketRaw,
     path::Path,
 };
@@ -491,6 +491,8 @@ impl ScionStack {
             Arc::new(CachingPathManager::start(strategy, fetcher))
         };
 
+        let local_scion_addr = socket.local_addr();
+
         let socket = Arc::new(ScionAsyncUdpSocket::new(
             socket,
             path_manager.clone(),
@@ -506,19 +508,20 @@ impl ScionStack {
             config,
             server_config,
             socket,
+            local_scion_addr,
             runtime,
             path_manager,
             address_translator,
         )?)
     }
 
-    /// Get the list of local addresses assigned to the endhost.
+    /// Get the list of local ISD-ASes available on the endhost.
     ///
     /// # Returns
     ///
-    /// A list of local addresses assigned to the endhost.
-    pub fn local_addresses(&self) -> Vec<EndhostAddr> {
-        self.underlay.local_addresses()
+    /// A list of local ISD-AS identifiers.
+    pub fn local_ases(&self) -> Vec<IsdAsn> {
+        self.underlay.local_ases()
     }
 
     /// Creates a path manager with default configuration.
@@ -642,8 +645,9 @@ pub(crate) trait UnderlayStack: Send + Sync {
         &self,
         bind_addr: Option<SocketAddr>,
     ) -> BoxFuture<'_, Result<Self::AsyncUdpSocket, ScionSocketBindError>>;
-    /// Get the list of local addresses assigned to or configured on the endhost.
-    fn local_addresses(&self) -> Vec<EndhostAddr>;
+
+    /// Get the list of local ISD-ASes available on the endhost.
+    fn local_ases(&self) -> Vec<IsdAsn>;
 }
 
 /// Dyn safe trait for an underlay stack.
@@ -666,7 +670,7 @@ pub(crate) trait DynUnderlayStack: Send + Sync {
         bind_addr: Option<SocketAddr>,
     ) -> BoxFuture<'_, Result<Arc<dyn AsyncUdpUnderlaySocket>, ScionSocketBindError>>;
 
-    fn local_addresses(&self) -> Vec<EndhostAddr>;
+    fn local_ases(&self) -> Vec<IsdAsn>;
 }
 
 impl<U: UnderlayStack> DynUnderlayStack for U {
@@ -703,8 +707,8 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
         })
     }
 
-    fn local_addresses(&self) -> Vec<EndhostAddr> {
-        <Self as UnderlayStack>::local_addresses(self)
+    fn local_ases(&self) -> Vec<IsdAsn> {
+        <Self as UnderlayStack>::local_ases(self)
     }
 }
 

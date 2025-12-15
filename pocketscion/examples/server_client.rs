@@ -36,7 +36,7 @@
 //! - A SCION Network Topology, which defines Autonomous Systems (ASes) and how they are connected.
 
 use std::{
-    net::SocketAddr,
+    net::Ipv4Addr,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -57,7 +57,7 @@ use pocketscion::{
 use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig, rustls::RootCertStore};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use scion_proto::address::IsdAsn;
+use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_utils::test::install_rustls_crypto_provider;
 use scion_stack::{
     quic::{QuinnConn, ScionQuinnConn},
@@ -185,22 +185,13 @@ async fn main() -> Result<(), anyhow::Error> {
         let (server_certificate, server_config) =
             scion_sdk_utils::test::generate_cert([42u8; 32], vec!["localhost".into()], vec![]);
 
-        // Since we did not request a specific address, the SNAP will assign one
-        let server_addr = server_network_stack
-            .local_addresses()
-            .first()
-            .cloned()
-            .context("server did not get any address assigned")?;
-
-        let server_address =
-            scion_proto::address::SocketAddr::new(server_addr.into(), cfg.server.bind_port);
-
-        tracing::info!("Binding Server to: {:?}", server_address);
-
         // Create a QUIC endpoint on top of the SCION network stack
         let server_quick_endpoint: scion_stack::scionstack::quic::Endpoint = server_network_stack
             .quic_endpoint(
-                Some(server_address),
+                Some(SocketAddr::new(
+                    ScionAddr::new(IsdAsn::WILDCARD, Ipv4Addr::UNSPECIFIED.into()),
+                    cfg.server.bind_port,
+                )),
                 EndpointConfig::default(),
                 Some(server_config),
                 None,
@@ -208,6 +199,9 @@ async fn main() -> Result<(), anyhow::Error> {
             .in_current_span()
             .await
             .context("error creating SCION QUIC endpoint")?;
+
+        // Since we did not request a specific address, the SNAP will assign one
+        let server_address = server_quick_endpoint.local_scion_addr();
 
         // The given Endpoint is a normal Quic endpoint
         let server_task = tokio::spawn(
@@ -234,11 +228,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 .await
                 .context("error building client SCION stack")?;
 
-        let addr = client_network_stack
-            .local_addresses()
-            .first()
-            .cloned()
-            .context("client did not get any address assigned")?;
+        let addr = client_network_stack.bind(None).await?.local_addr();
         tracing::info!("Client address: {}", addr);
 
         // Create a QUIC endpoint on top of the SCION network stack
@@ -669,7 +659,7 @@ struct SnapConfig {
     /// Example internal name of the SNAP
     name: String,
     /// Listening address for the SNAP's control plane
-    listening_addr: SocketAddr,
+    listening_addr: std::net::SocketAddr,
     /// This SNAP's data planes
     data_planes: Vec<DataPlaneConfig>,
 }
@@ -682,7 +672,7 @@ struct ClientConfig {
 struct DataPlaneConfig {
     isd_as: IsdAsn,
     /// The LAN address this data plane should listen on
-    listening_addr: SocketAddr,
+    listening_addr: std::net::SocketAddr,
     /// The (virtual) IP addresses this data plane can assign to its clients
     address_range: Vec<IpNet>,
 }

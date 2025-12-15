@@ -171,16 +171,16 @@ async fn multi_client_multi_snap() {
         .await
         .unwrap();
 
-    info!(
-        "Server addr: {}, client1 addr: {}, client2 addr: {}",
-        server_stack.local_addresses().first().unwrap(),
-        stack1.local_addresses().first().unwrap(),
-        stack2.local_addresses().first().unwrap()
-    );
-    let server_addr = SocketAddr::new(server_stack.local_addresses()[0].into(), 9007);
-    let server_socket = server_stack.bind(Some(server_addr)).await.unwrap();
+    let server_socket = server_stack.bind(None).await.unwrap();
     let socket1 = stack1.bind(None).await.unwrap();
     let socket2 = stack2.bind(None).await.unwrap();
+    let server_addr = server_socket.local_addr();
+    info!(
+        "Server addr: {}, client1 addr: {}, client2 addr: {}",
+        server_addr,
+        socket1.local_addr(),
+        socket2.local_addr()
+    );
 
     let payload1 = Bytes::from_static(b"SCION payload from client 1");
     let payload2 = Bytes::from_static(b"SCION payload from client 2");
@@ -285,13 +285,6 @@ async fn quic_on_quic() {
         .await
         .unwrap();
 
-    info!(
-        "Server addr: {}, client addr: {}",
-        server_stack.local_addresses().first().unwrap(),
-        client_stack.local_addresses().first().unwrap()
-    );
-    let server_addr = SocketAddr::new(server_stack.local_addresses()[0].into(), 9007);
-
     let cancellation_token = CancellationToken::new();
     let server_cancellation_token = cancellation_token.clone();
     let reader_cancellation_token = cancellation_token.clone();
@@ -315,16 +308,15 @@ async fn quic_on_quic() {
         .await
         .unwrap();
     client_endpoint.set_default_client_config(client_config);
+    let client_addr = client_endpoint.local_scion_addr();
 
     let server_endpoint = server_stack
-        .quic_endpoint(
-            Some(server_addr),
-            EndpointConfig::default(),
-            Some(server_config),
-            None,
-        )
+        .quic_endpoint(None, EndpointConfig::default(), Some(server_config), None)
         .await
         .unwrap();
+    let server_addr = server_endpoint.local_scion_addr();
+
+    info!("Server addr: {}, client addr: {}", server_addr, client_addr);
 
     let payload_size = 1100;
 
