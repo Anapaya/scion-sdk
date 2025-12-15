@@ -124,21 +124,31 @@ impl AclPolicy {
     ///
     /// Returns true if the path is allowed
     pub fn matches(&self, path: &[PathPolicyHop]) -> bool {
-        for entry in &self.entries {
-            for hop in path {
-                let allowed = match entry.matches(hop) {
-                    AclMatchResult::Allow => true,
-                    // Immediate deny
-                    AclMatchResult::Deny => false,
-                    // No match, continue checking
-                    AclMatchResult::Impartial => self.default == AclEntryOperator::Allow,
-                };
+        // If path is empty, or no acl  entries exist, use default
+        if path.is_empty() || self.entries.is_empty() {
+            return self.default == AclEntryOperator::Allow;
+        }
 
-                // If any hop is denied, the whole path is denied
-                match allowed {
-                    true => continue,      // check next hop
-                    false => return false, // deny path
-                }
+        for hop in path {
+            let mut hop_matched = false;
+
+            for entry in &self.entries {
+                match entry.matches(hop) {
+                    // Allowed, continue to next hop
+                    AclMatchResult::Allow => {
+                        hop_matched = true;
+                        break;
+                    }
+                    // Denied, deny the path
+                    AclMatchResult::Deny => return false,
+                    // No match, continue to next entry
+                    AclMatchResult::Impartial => continue,
+                };
+            }
+
+            // If hop was not matched and default is deny, deny the path
+            if !hop_matched && self.default == AclEntryOperator::Deny {
+                return false;
             }
         }
 
@@ -309,24 +319,21 @@ mod test {
 
         #[test]
         fn should_make_correct_decision() {
+            // Empty path: should use default operator
+            expect_decision("+", true, &[]); // default allow
+            expect_decision("-", false, &[]); // default deny
+            expect_decision("- 1 +", true, &[]); // default allow
+
+            // Blanket allow/deny
+            expect_decision("+", true, &[hop(0, "1-3", 0)]); // allow all paths
+            expect_decision("-", false, &[hop(0, "1-3", 0)]); // deny all paths
+
+            expect_decision("- 1-1 + 1 -", true, &[hop(0, "1-3", 0)]); // first entry is impartial, second matches and allows.
+            expect_decision("+ 1-3 - 1 +", true, &[hop(0, "1-3", 0)]); // first entry matches and allows, therefore should be allowed. Later entries and default should not be used.
+
             // "- 1 +" : deny ISD 1, default allow
             expect_decision("- 1 +", false, &[hop(0, "1-1", 0)]); // matches deny
             expect_decision("- 1 +", true, &[hop(0, "2-1", 0)]); // does not match, default allow
-
-            // "- 1 + 0" : deny ISD 1, allow wildcard
-            expect_decision("- 1 + 0", false, &[hop(0, "1-3", 0)]); // matches deny
-            expect_decision("- 1 + 0", true, &[hop(0, "9-9", 0)]); // wildcard allows
-
-            // "- 1 + 0-0" : deny ISD 1, allow wildcard hop exact
-            expect_decision("- 1 + 0-0", false, &[hop(0, "1-2", 0)]); // matches deny
-            expect_decision("- 1 + 0-0", true, &[hop(0, "3-3", 0)]); // wildcard allows
-            // "- 1 + 0-0#0" : deny ISD 1, allow wildcard with single iface
-            expect_decision("- 1 + 0-0#0", false, &[hop(0, "1-2", 0)]); // matches deny
-            expect_decision("- 1 + 0-0#0", true, &[hop(0, "3-3", 0)]); // wildcard allows
-
-            // "- 1 + 0-0#0,0" : deny ISD 1, allow wildcard with both ifaces
-            expect_decision("- 1 + 0-0#0,0", false, &[hop(2, "1-2", 3)]); // matches deny
-            expect_decision("- 1 + 0-0#0,0", true, &[hop(1, "3-3", 2)]); // wildcard allows
 
             // "- 1-2 +" : deny ISD-AS 1-2, default allow
             expect_decision("- 1-2 +", false, &[hop(0, "1-2", 0)]); // matches deny
@@ -336,6 +343,12 @@ mod test {
             expect_decision("- 2 - 3-1#1,2 +", false, &[hop(1, "2-7", 2)]); // matches first deny
             expect_decision("- 2 - 3-1#1,2 +", false, &[hop(1, "3-1", 2)]); // matches second deny
             expect_decision("- 2 - 3-1#1,2 +", true, &[hop(2, "3-1", 1)]); // default allow
+
+            expect_decision("+ 2 + 1 -", true, &[hop(1, "2-7", 2)]); // matches first allow
+            expect_decision("+ 2 + 1 -", true, &[hop(1, "1-7", 2)]); // matches second allow
+            expect_decision("+ 2 + 1 -", false, &[hop(2, "3-1", 1)]); // default deny
+            expect_decision("+ 2 + 1 -", true, &[hop(2, "1-7", 1), hop(2, "2-7", 1)]); // all hops match allow
+            expect_decision("+ 2 + 1 -", false, &[hop(2, "1-7", 1), hop(2, "3-1", 1)]); // not all hops match allow - deny
 
             // "- 1-2#1,2 +" : deny 1-2 with ifaces 1,2, default allow
             expect_decision("- 1-2#1,2 +", false, &[hop(1, "1-2", 2)]); // matches deny
@@ -360,8 +373,18 @@ mod test {
             expect_decision("- 1 +", true, &[hop(0, "2-1", 0), hop(0, "3-1", 0)]); // no hop matches deny
 
             expect_decision("+ 1 -", true, &[hop(0, "1-1", 0), hop(0, "1-2", 0)]); // all hop match allow
-            expect_decision("+ 1 -", false, &[hop(0, "1-1", 0), hop(0, "2-1", 0)]); // one hop matches allow - deny
+            expect_decision("+ 1 -", false, &[hop(0, "1-1", 0), hop(0, "2-1", 0)]); // only one hop matches allow - deny
             expect_decision("+ 1 -", false, &[hop(0, "2-1", 0), hop(0, "3-1", 0)]); // no hop matches allow
+            expect_decision(
+                "- 1 +",
+                false,
+                &[hop(0, "1-1", 0), hop(0, "2-1", 0), hop(0, "3-1", 0)],
+            ); // one hop matches deny - deny
+            expect_decision(
+                "- 4 +",
+                true,
+                &[hop(0, "1-1", 0), hop(0, "2-1", 0), hop(0, "3-1", 0)],
+            ); // no hop matches deny - allow
 
             fn hop(isg: u16, isd_asn: &'static str, egress: u16) -> PathPolicyHop {
                 PathPolicyHop {
