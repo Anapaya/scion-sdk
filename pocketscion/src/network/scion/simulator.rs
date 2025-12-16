@@ -149,7 +149,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
             self.now,
             &self.current_forwarding_key,
             |if_id| {
-                let link = self.topology.get_scion_link(&processing_as, if_id)?;
+                let link = self.topology.scion_link(&processing_as, if_id)?;
                 let link_type = link.get_link_type(&processing_as)?;
 
                 // ScionLinkType states that this is the X of something, InterfaceLinkType states
@@ -174,7 +174,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
             // If the decision is to forward, prepare current variables for the next iteration
             let uplink = self
                 .topology
-                .get_scion_link(&self.current_as, link_interface_id)
+                .scion_link(&self.current_as, link_interface_id)
                 .with_context(|| {
                     format!(
                         "no link for {}#{} to AS does not exist in the topology",

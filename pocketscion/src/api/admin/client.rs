@@ -17,12 +17,16 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use reqwest::ClientBuilder;
-use scion_proto::address::EndhostAddr;
+use scion_proto::address::{EndhostAddr, IsdAsn};
 use thiserror::Error;
 use url::Url;
 
 use super::api::{AuthServerResponse, SnapsResponse, StatusResponse};
-use crate::{api::admin::api::EndhostApisResponse, dto::IoConfigDto, state::SnapId};
+use crate::{
+    api::admin::api::{EndhostApisResponse, SetLinkStateRequest},
+    dto::IoConfigDto,
+    state::SnapId,
+};
 
 /// A client for interacting with the PocketScion API.
 #[derive(Debug, Clone)]
@@ -75,6 +79,33 @@ impl ApiClient {
     /// Retrieves the authorization server.
     pub async fn get_auth_server(&self) -> Result<AuthServerResponse, ClientError> {
         self.get("auth_server").await
+    }
+
+    /// Sets the state of a link in PocketSCION.
+    ///
+    /// If no topology is set or the specified link does not exist, an error is returned.
+    pub async fn set_link_state(
+        &self,
+        isd_as: IsdAsn,
+        interface_id: u16,
+        up: bool,
+    ) -> Result<(), ClientError> {
+        let url = self.api.join("link_state")?;
+        let body = SetLinkStateRequest {
+            isd_as,
+            interface_id,
+            up,
+        };
+        let response = self.client.post(url).json(&body).send().await?;
+        match response.status() {
+            reqwest::StatusCode::OK => Ok(()),
+            _ => {
+                Err(ClientError::InvalidResponseStatus(
+                    response.status(),
+                    response.bytes().await?,
+                ))
+            }
+        }
     }
 
     /// Closes a snap connection on the snap in pocketSCION.

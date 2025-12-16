@@ -26,7 +26,10 @@ use scion_proto::{
 
 use super::{NetworkError, UnderlaySocket};
 use crate::{
-    path::manager::{CachingPathManager, PathManager, PathWaitError},
+    path::manager::{
+        MultiPathManager,
+        traits::{PathManager, PathWaitError},
+    },
     scionstack::{ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError},
 };
 
@@ -316,7 +319,7 @@ impl RawScionSocket {
 }
 
 /// A path aware UDP socket generic over the underlay socket and path manager.
-pub struct UdpScionSocket<P: PathManager = CachingPathManager> {
+pub struct UdpScionSocket<P: PathManager = MultiPathManager> {
     socket: PathUnawareUdpScionSocket,
     pather: Arc<P>,
     connect_timeout: Duration,

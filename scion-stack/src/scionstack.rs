@@ -123,14 +123,14 @@
 //!     path::Path,
 //! };
 //! use scion_stack::{
-//!     path::manager::PathManager,
+//!     path::manager::traits::PathManager,
 //!     scionstack::{ScionStack, ScionStackBuilder, UdpScionSocket},
 //!     types::ResFut,
 //! };
 //!
 //! struct MyCustomPathManager;
 //!
-//! impl scion_stack::path::manager::SyncPathManager for MyCustomPathManager {
+//! impl scion_stack::path::manager::traits::SyncPathManager for MyCustomPathManager {
 //!     fn register_path(
 //!         &self,
 //!         _src: IsdAsn,
@@ -151,13 +151,14 @@
 //!     }
 //! }
 //!
-//! impl scion_stack::path::manager::PathManager for MyCustomPathManager {
+//! impl scion_stack::path::manager::traits::PathManager for MyCustomPathManager {
 //!     fn path_wait(
 //!         &self,
 //!         src: IsdAsn,
 //!         _dst: IsdAsn,
 //!         _now: DateTime<Utc>,
-//!     ) -> impl ResFut<'_, Path<Bytes>, scion_stack::path::manager::PathWaitError> {
+//!     ) -> impl ResFut<'_, Path<Bytes>, scion_stack::path::manager::traits::PathWaitError>
+//!     {
 //!         async move { Ok(Path::local(src)) }
 //!     }
 //! }
@@ -217,9 +218,10 @@ pub use self::builder::ScionStackBuilder;
 pub use self::scmp_handler::{DefaultScmpHandler, ScmpHandler};
 use crate::path::{
     PathStrategy,
-    manager::{CachingPathManager, ConnectRpcSegmentFetcher, PathFetcherImpl},
+    fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl},
+    manager::{MultiPathManager, MultiPathManagerConfig},
     policy::PathPolicy,
-    ranking::{PathRanking, Shortest},
+    scoring::PathScoring,
 };
 
 /// Default duration to reserve a port when binding a socket.
@@ -285,19 +287,21 @@ impl ScionStack {
         let socket = self.bind_path_unaware(bind_addr).await?;
         let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
 
-        // Default to Shortest path ranking if no ranking is configured.
-        if socket_config.path_strategy.ranking.is_empty() {
-            socket_config.path_strategy.add_ranking(Shortest);
+        // Use default scorers if none are configured.
+        if socket_config.path_strategy.scoring.is_empty() {
+            socket_config.path_strategy.scoring.use_default_scorers();
         }
 
-        let pather = Arc::new(CachingPathManager::start(
-            socket_config.path_strategy,
+        let pather = MultiPathManager::new(
+            MultiPathManagerConfig::default(),
             fetcher,
-        ));
+            socket_config.path_strategy,
+        )
+        .expect("should not fail with default configuration");
 
         Ok(UdpScionSocket::new(
             socket,
-            pather,
+            Arc::new(pather),
             socket_config.connect_timeout,
         ))
     }
@@ -354,9 +358,10 @@ impl ScionStack {
             .await?;
 
         let pather = self.create_path_manager();
+
         Ok(UdpScionSocket::new(
             PathUnawareUdpScionSocket::new(socket),
-            pather,
+            Arc::new(pather),
             DEFAULT_CONNECT_TIMEOUT,
         ))
     }
@@ -482,13 +487,16 @@ impl ScionStack {
         let path_manager = {
             let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
 
-            // Default to Shortest path ranking if no ranking is configured.
+            // Use default scorers if none are configured.
             let mut strategy = socket_config.path_strategy;
-            if strategy.ranking.is_empty() {
-                strategy.add_ranking(Shortest);
+            if strategy.scoring.is_empty() {
+                strategy.scoring.use_default_scorers();
             }
 
-            Arc::new(CachingPathManager::start(strategy, fetcher))
+            Arc::new(
+                MultiPathManager::new(MultiPathManagerConfig::default(), fetcher, strategy)
+                    .map_err(|e| anyhow::anyhow!("failed to create path manager: {}", e))?,
+            )
         };
 
         let local_scion_addr = socket.local_addr();
@@ -525,13 +533,14 @@ impl ScionStack {
     }
 
     /// Creates a path manager with default configuration.
-    pub fn create_path_manager(&self) -> Arc<CachingPathManager> {
+    pub fn create_path_manager(&self) -> MultiPathManager {
         let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
         let mut strategy = PathStrategy::default();
 
-        strategy.add_ranking(Shortest);
+        strategy.scoring.use_default_scorers();
 
-        Arc::new(CachingPathManager::start(strategy, fetcher))
+        MultiPathManager::new(MultiPathManagerConfig::default(), fetcher, strategy)
+            .expect("should not fail with default configuration")
     }
 }
 
@@ -566,16 +575,17 @@ impl SocketConfig {
         self
     }
 
-    /// Add a path ranking strategy.
+    /// Add a path scoring strategy.
     ///
-    /// Path Rankings prioritize paths based on their characteristics.
+    /// Path scores signal which paths to prioritize based on their characteristics.
     ///
-    /// Ranking priority is determined by the order in which they are added to the stack, the first
-    /// having the highest priority.
+    /// `scoring` - The path scoring strategy to add.
+    /// `impact` - The impact weight of the scoring strategy. Higher values increase the influence
     ///
-    /// If no ranking strategies are added, ranking will default to [Shortest]
-    pub fn with_path_ranking(mut self, ranking: impl PathRanking) -> Self {
-        self.path_strategy.add_ranking(ranking);
+    /// If no scoring strategies are added, scoring defaults to preferring shorter and more reliable
+    /// paths.
+    pub fn with_path_scoring(mut self, scoring: impl PathScoring, impact: f32) -> Self {
+        self.path_strategy.scoring = self.path_strategy.scoring.with_scorer(scoring, impact);
         self
     }
 

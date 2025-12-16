@@ -83,13 +83,119 @@ use tracing::{Instrument, instrument};
 
 use crate::path::{
     PathStrategy,
-    manager::{PathFetchError, PathFetcher, PathManager, SyncPathManager},
+    fetcher::{
+        PathFetcherImpl,
+        traits::{PathFetchError, PathFetcher},
+    },
     multipath_manager::{
         issues::{IssueKind, IssueMarker, IssueMarkerTarget},
         reliability::ReliabilityScore,
+        traits::{PathManager, PathPrefetcher, PathWaitError, SyncPathManager},
     },
     types::PathManagerPath,
 };
+
+/// Path fetcher traits and types.
+pub mod traits {
+
+    use std::{io, time::Duration};
+
+    use bytes::Bytes;
+    use chrono::{DateTime, Utc};
+    use scion_proto::{address::IsdAsn, path::Path};
+    use thiserror::Error;
+    use tracing::error;
+
+    use crate::types::ResFut;
+
+    /// Trait for active path management with async interface.
+    pub trait PathManager: SyncPathManager {
+        /// Returns a path to the destination from the path cache or requests a new path from the
+        /// SCION Control Plane.
+        fn path_wait(
+            &self,
+            src: IsdAsn,
+            dst: IsdAsn,
+            now: DateTime<Utc>,
+        ) -> impl ResFut<'_, Path<Bytes>, PathWaitError>;
+
+        /// Returns a path to the destination from the path cache or requests a new path from the
+        /// SCION Control Plane, with a maximum wait time.
+        fn path_timeout(
+            &self,
+            src: IsdAsn,
+            dst: IsdAsn,
+            now: DateTime<Utc>,
+            timeout: Duration,
+        ) -> impl ResFut<'_, Path<Bytes>, PathWaitTimeoutError> {
+            let fut = self.path_wait(src, dst, now);
+            async move {
+                match tokio::time::timeout(timeout, fut).await {
+                    Ok(result) => {
+                        result.map_err(|e| {
+                            match e {
+                                PathWaitError::FetchFailed(msg) => {
+                                    PathWaitTimeoutError::FetchFailed(msg)
+                                }
+                                PathWaitError::NoPathFound => PathWaitTimeoutError::NoPathFound,
+                            }
+                        })
+                    }
+                    Err(_) => Err(PathWaitTimeoutError::Timeout),
+                }
+            }
+        }
+    }
+
+    /// Path wait errors.
+    #[derive(Debug, Clone, Error)]
+    pub enum PathWaitError {
+        /// Path fetch failed.
+        #[error("path fetch failed: {0}")]
+        FetchFailed(String),
+        /// No path found.
+        #[error("no path found")]
+        NoPathFound,
+    }
+
+    /// Path wait errors.
+    #[derive(Debug, Clone, Error)]
+    pub enum PathWaitTimeoutError {
+        /// Path fetch failed.
+        #[error("path fetch failed: {0}")]
+        FetchFailed(String),
+        /// No path found.
+        #[error("no path found")]
+        NoPathFound,
+        /// Waiting for path timed out
+        #[error("waiting for path timed out")]
+        Timeout,
+    }
+
+    /// Trait for active path management with sync interface. Implementors of this trait should be
+    /// able to be used in sync and async context. The functions must not block.
+    pub trait SyncPathManager {
+        /// Add a path to the path cache. This can be used to register reverse paths.
+        fn register_path(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>, path: Path<Bytes>);
+
+        /// Returns a path to the destination from the path cache.
+        /// If the path is not in the cache, it returns Ok(None), possibly causing the path to be
+        /// fetched in the background. If the cache is locked an io error WouldBlock is
+        /// returned.
+        fn try_cached_path(
+            &self,
+            src: IsdAsn,
+            dst: IsdAsn,
+            now: DateTime<Utc>,
+        ) -> io::Result<Option<Path<Bytes>>>;
+    }
+
+    /// Trait for prefetching paths in the path manager.
+    pub trait PathPrefetcher {
+        /// Prefetch a paths for the given source and destination.
+        fn prefetch_path(&self, src: IsdAsn, dst: IsdAsn);
+    }
+}
 
 /// Configuration for the MultiPathManager.
 #[derive(Debug, Clone, Copy)]
@@ -114,6 +220,29 @@ pub struct MultiPathManagerConfig {
     issue_deduplication_window: Duration,
     /// Score difference after which active path should be replaced
     path_swap_score_threshold: f32,
+}
+
+impl Default for MultiPathManagerConfig {
+    fn default() -> Self {
+        MultiPathManagerConfig {
+            max_cached_paths_per_pair: 50,
+            refetch_interval: Duration::from_secs(60 * 30), // 30 minutes
+            min_refetch_delay: Duration::from_secs(60),
+            min_expiry_threshold: Duration::from_secs(60 * 5), // 5 minutes
+            max_idle_period: Duration::from_secs(60 * 2),      // 2 minutes
+            fetch_failure_backoff: BackoffConfig {
+                minimum_delay_secs: 60.0,
+                maximum_delay_secs: 300.0,
+                factor: 1.5,
+                jitter_secs: 5.0,
+            },
+            issue_cache_size: 100,
+            issue_broadcast_size: 10,
+            // Same issue within 10s is duplicate
+            issue_deduplication_window: Duration::from_secs(10),
+            path_swap_score_threshold: 0.5,
+        }
+    }
 }
 
 impl MultiPathManagerConfig {
@@ -143,7 +272,8 @@ pub enum GetPathError {
 
 // TODO : Implement path fingerprinting by hop fields instead of requiring metadata
 /// Path manager managing multiple paths per src-dst pair.
-pub struct MultiPathManager<F: PathFetcher>(Arc<MultiPathManagerInner<F>>);
+pub struct MultiPathManager<F: PathFetcher = PathFetcherImpl>(Arc<MultiPathManagerInner<F>>);
+
 impl<F> Clone for MultiPathManager<F>
 where
     F: PathFetcher,
@@ -381,27 +511,29 @@ impl<F: PathFetcher> PathManager for MultiPathManager<F> {
         src: IsdAsn,
         dst: IsdAsn,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> impl crate::types::ResFut<'_, Path<bytes::Bytes>, super::manager::PathWaitError> {
+    ) -> impl crate::types::ResFut<'_, Path<bytes::Bytes>, PathWaitError> {
         async move {
             match self.path(src, dst, now.into()).await {
                 Ok(path) => Ok(path),
                 Err(e) => {
                     match &*e {
                         PathFetchError::FetchSegments(error) => {
-                            Err(super::manager::PathWaitError::FetchFailed(format!(
-                                "{error}"
-                            )))
+                            Err(PathWaitError::FetchFailed(format!("{error}")))
                         }
                         PathFetchError::InternalError(msg) => {
-                            Err(super::manager::PathWaitError::FetchFailed(msg.to_string()))
+                            Err(PathWaitError::FetchFailed(msg.to_string()))
                         }
-                        PathFetchError::NoPathsFound => {
-                            Err(super::manager::PathWaitError::NoPathFound)
-                        }
+                        PathFetchError::NoPathsFound => Err(PathWaitError::NoPathFound),
                     }
                 }
             }
         }
+    }
+}
+
+impl<F: PathFetcher> PathPrefetcher for MultiPathManager<F> {
+    fn prefetch_path(&self, src: IsdAsn, dst: IsdAsn) {
+        self.ensure_managed_paths(src, dst);
     }
 }
 
@@ -498,7 +630,7 @@ impl PathIssueManager {
     ///
     /// Returns true if any issues were applied.
     /// Returns the max
-    pub fn apply_cached_issues(&self, entry: &mut PathSetEntry, now: SystemTime) -> bool {
+    pub fn apply_cached_issues(&self, entry: &mut PathManagerPath, now: SystemTime) -> bool {
         let mut applied = false;
         for issue in self.cache.values() {
             if issue.target.matches_path(&entry.path, &entry.fingerprint) {
@@ -610,24 +742,10 @@ struct PathSetTask {
     _task: JoinHandle<()>,
     cancel_token: tokio_util::sync::CancellationToken,
 }
+
 impl Drop for PathSetTask {
     fn drop(&mut self) {
         self.cancel_token.cancel();
-    }
-}
-
-/// Entry in the path set cache.
-#[derive(Debug)]
-struct PathSetEntry {
-    path: Path,
-    fingerprint: PathFingerprint,
-    reliability: ReliabilityScore,
-}
-
-impl PathSetEntry {
-    /// returns the total score of this entry
-    fn combined_score(&self, now: SystemTime) -> f32 {
-        self.reliability.score(now)
     }
 }
 
@@ -673,7 +791,7 @@ struct PathSetSyncState {
 /// Internal state of the managed path set.
 struct PathSetInternal {
     /// Cached paths
-    cached_paths: Vec<PathSetEntry>,
+    cached_paths: Vec<PathManagerPath>,
     /// Number of consecutive failed fetch attempts
     failed_attempts: u32,
     /// Next time to refetch paths
@@ -734,6 +852,7 @@ impl<F: PathFetcher> PathSet<F> {
         }
     }
 }
+
 // Management task
 impl<F: PathFetcher> PathSet<F> {
     #[instrument(name = "path-set", skip(self), fields(src= ?self.src, dst= ?self.dst))]
@@ -745,39 +864,51 @@ impl<F: PathFetcher> PathSet<F> {
             let cancel_token = cancel_token.clone();
 
             async move {
-                // Update the managed path tuple on start
-                self.fetch_and_update(SystemTime::now()).await;
+                let maintain = async {
+                    // Update the managed path tuple on start
+                    {
+                        let Some(manager) = self.manager.get() else {
+                            return "manager dropped";
+                        };
+                        self.fetch_and_update(SystemTime::now(), &manager).await;
+                    }
 
-                let exit_reason: &'static str;
+                    loop {
+                        let now = SystemTime::now();
+                        tracing::trace!("Managed paths task tick");
+                        let next_tick = self.next_maintain(now);
 
-                loop {
-                    let now = SystemTime::now();
-                    tracing::trace!("Managed paths task tick");
-                    let next_tick = self.next_maintain(now);
-
-                    select! {
-                        biased;
-                        // Cancellation
-                        _ = cancel_token.cancelled() => {
-                            exit_reason = "cancelled";
-                            break;
-                        }
-                        // Maintenance Tick
-                        _ = tokio::time::sleep(next_tick) => {
-                            if let Some(reason) = self.maintain(SystemTime::now()).await {
-                                exit_reason = reason;
-                                break;
+                        select! {
+                            biased;
+                            // Cancellation
+                            _ = cancel_token.cancelled() => {
+                                return "cancelled";
                             }
-                        }
-                        // Issue Notifications
-                        issue = self.internal.issue_rx.recv() => {
-                            if let Some(reason) = self.handle_issue_rx(SystemTime::now(), issue) {
-                                exit_reason = reason;
-                                break;
+                            // Maintenance Tick
+                            _ = tokio::time::sleep(next_tick) => {
+                                let Some(manager) = self.manager.get() else {
+                                    return "manager dropped";
+                                };
+
+                                if let Some(reason) = self.maintain(SystemTime::now(), &manager).await {
+                                    return reason;
+                                }
+                            }
+                            // Issue Notifications
+                            issue = self.internal.issue_rx.recv() => {
+                                let Some(manager) = self.manager.get() else {
+                                    return "manager dropped";
+                                };
+
+                                if let Some(reason) = self.handle_issue_rx(SystemTime::now(), issue, &manager) {
+                                    return reason;
+                                }
                             }
                         }
                     }
-                }
+                };
+
+                let exit_reason = maintain.await;
 
                 // If manager still exists, drop the PathSet entry
                 if let Some(mgr) = self.manager.get() {
@@ -818,6 +949,7 @@ impl<F: PathFetcher> PathSet<F> {
         &mut self,
         now: SystemTime,
         recv: Result<(u64, IssueMarker), broadcast::error::RecvError>,
+        manager: &MultiPathManager<F>,
     ) -> Option<&'static str> {
         // Sadly we don't have a way to peek broadcast so we have to handle first recv separately
         let (_, issue) = match recv {
@@ -827,7 +959,6 @@ impl<F: PathFetcher> PathSet<F> {
                 return None; // Will immediately receive next notification
             }
             Err(broadcast::error::RecvError::Closed) => {
-                tracing::info!("Issue notification channel closed, exiting managed paths task");
                 return Some("issue channel closed, manager was likely dropped");
             }
         };
@@ -847,8 +978,8 @@ impl<F: PathFetcher> PathSet<F> {
 
         if res.active_path_affected {
             tracing::info!("Active path affected by path issues, re-evaluating");
-            self.rerank(now);
-            self.maybe_update_active_path(now);
+            self.rerank(now, manager);
+            self.maybe_update_active_path(now, manager);
         }
 
         None
@@ -903,23 +1034,23 @@ impl<F: PathFetcher> PathSet<F> {
     /// Maintains the path set by checking for idle paths and refetching if necessary.
     ///
     /// Returns Some with a reason if the path set should be dropped
-    async fn maintain(&mut self, now: SystemTime) -> Option<&'static str> {
-        // Check that manager still exists,
-        if self.manager.get().is_none() {
-            return Some("manager was dropped");
-        };
-
+    async fn maintain(
+        &mut self,
+        now: SystemTime,
+        manager: &MultiPathManager<F>,
+    ) -> Option<&'static str> {
         if now >= self.internal.next_idle_check && self.idle_check(now).await {
             return Some("idle");
         }
 
         if now >= self.internal.next_refetch {
-            self.fetch_and_update(now).await;
+            self.fetch_and_update(now, manager).await;
         }
 
         None
     }
 }
+
 // Internal
 impl<F: PathFetcher> PathSet<F> {
     /// Checks if the path tuple is idle and should be removed.
@@ -950,7 +1081,7 @@ impl<F: PathFetcher> PathSet<F> {
     }
 
     /// Refetches paths and updates the cache
-    async fn fetch_and_update(&mut self, now: SystemTime) {
+    async fn fetch_and_update(&mut self, now: SystemTime, manager: &MultiPathManager<F>) {
         tracing::debug!("Refetching paths for src-dst pair");
 
         // Set update state
@@ -969,7 +1100,7 @@ impl<F: PathFetcher> PathSet<F> {
         }
 
         let path_fetch = async {
-            let fetched_paths = self.fetch_and_filter_paths().await?;
+            let fetched_paths = self.fetch_and_filter_paths(manager).await?;
 
             if fetched_paths.is_empty() {
                 // If no paths were found or all were filtered out
@@ -990,7 +1121,7 @@ impl<F: PathFetcher> PathSet<F> {
                     "Must have at least one path after successful fetch and filter"
                 );
 
-                self.update_path_cache(fetched_paths, now);
+                self.update_path_cache(fetched_paths, now, manager);
                 let earliest_expiry = self
                     .earliest_expiry()
                     .expect("should have a path available, as new paths were ingested");
@@ -1008,7 +1139,7 @@ impl<F: PathFetcher> PathSet<F> {
             // Failed to fetch, might have no paths available
             Err(e) => {
                 // Maintain path cache with no new paths
-                self.update_path_cache(vec![], now);
+                self.update_path_cache(vec![], now, manager);
 
                 self.internal.failed_attempts += 1;
                 // Schedule next refetch after a delay
@@ -1030,8 +1161,8 @@ impl<F: PathFetcher> PathSet<F> {
         }
 
         // Always update ranking, and possibly active path
-        self.rerank(now);
-        self.maybe_update_active_path(now);
+        self.rerank(now, manager);
+        self.maybe_update_active_path(now, manager);
 
         // Set update state
         {
@@ -1055,27 +1186,15 @@ impl<F: PathFetcher> PathSet<F> {
     }
 
     /// Fetches paths from the fetcher and applies path selection filtering.
-    async fn fetch_and_filter_paths(&self) -> Result<Vec<Path>, PathFetchError> {
-        let manager = match self.manager.get() {
-            Some(mgr) => mgr,
-            None => {
-                return Err(PathFetchError::InternalError(
-                    "Parent path manager has been dropped".into(),
-                ));
-            }
-        };
-
+    async fn fetch_and_filter_paths(
+        &self,
+        manager: &MultiPathManager<F>,
+    ) -> Result<Vec<Path>, PathFetchError> {
         let mut paths = manager.0.fetcher.fetch_paths(self.src, self.dst).await?;
 
         let before_filter_count = paths.len();
 
-        paths.retain(|p| {
-            // TODO: predicate type needs to be changed, this is temporary
-            manager.0.path_strategy.predicate(&PathManagerPath {
-                path: p.clone(),
-                from_registration: false,
-            })
-        });
+        paths.retain(|p| manager.0.path_strategy.predicate(p));
 
         tracing::info!(
             total_paths = before_filter_count,
@@ -1093,7 +1212,12 @@ impl<F: PathFetcher> PathSet<F> {
     /// Updates the path cache with new paths
     ///
     /// Possibly updates or removes the active path
-    fn update_path_cache(&mut self, fetched_paths: Vec<Path>, now: SystemTime) {
+    fn update_path_cache(
+        &mut self,
+        fetched_paths: Vec<Path>,
+        now: SystemTime,
+        manager: &MultiPathManager<F>,
+    ) {
         let mut fetched_paths: HashMap<PathFingerprint, Path, RandomState> =
             HashMap::from_iter(fetched_paths.into_iter().map(|path| {
                 let fingerprint = path.fingerprint().unwrap();
@@ -1124,7 +1248,7 @@ impl<F: PathFetcher> PathSet<F> {
             if Some(fp) == active_path_fp {
                 match keep {
                     true => {
-                        tracing::debug!(fp = format!("{fp:#}"), "Keeping updated active path");
+                        tracing::trace!(fp = format!("{fp:#}"), "Keeping updated active path");
                         self.shared
                             .active_path
                             .store(Some(Arc::new((cached_path.path.clone(), fp))));
@@ -1144,16 +1268,6 @@ impl<F: PathFetcher> PathSet<F> {
 
         // Work on new paths
         if !fetched_paths.is_empty() {
-            let manager = match self.manager.get() {
-                Some(mgr) => mgr,
-                None => {
-                    tracing::info!(
-                        "Parent path manager has been dropped, skipping path cache update"
-                    );
-                    return;
-                }
-            };
-
             // Drain issue channel before lock to reduce lock time
             let (issue_count, res) = self.drain_and_apply_issue_channel(now);
             if issue_count > 0 {
@@ -1186,7 +1300,7 @@ impl<F: PathFetcher> PathSet<F> {
                 fetched_paths
                     .into_iter()
                     .map(|(fp, path)| {
-                        let mut entry = PathSetEntry {
+                        let mut entry = PathManagerPath {
                             path,
                             fingerprint: fp,
                             reliability: ReliabilityScore::new_with_time(now),
@@ -1197,7 +1311,11 @@ impl<F: PathFetcher> PathSet<F> {
                     .collect::<Vec<_>>()
             };
 
-            rerank_algo(&manager.0.path_strategy, &mut new_path_candidates, now);
+            // Rank new paths
+            manager
+                .0
+                .path_strategy
+                .rank_inplace(&mut new_path_candidates, now);
 
             let active_fp = self.shared.active_path.load().as_ref().map(|p| p.1);
 
@@ -1208,29 +1326,25 @@ impl<F: PathFetcher> PathSet<F> {
                 active_fp,
                 self.config.max_cached_paths_per_pair,
                 &manager.0.path_strategy,
+                now,
             );
         }
     }
 
     // Applies path ranking and selects active path if necessary.
-    fn rerank(&mut self, now: SystemTime) {
-        let Some(manager) = self.manager.get() else {
-            // Manager dropped, cancellation token is triggered, so we can just return
-            return;
-        };
-
-        rerank_algo(
-            &manager.0.path_strategy,
-            &mut self.internal.cached_paths,
-            now,
-        );
+    fn rerank(&mut self, now: SystemTime, manager: &MultiPathManager<F>) {
+        manager
+            .0
+            .path_strategy
+            .rank_inplace(&mut self.internal.cached_paths, now);
     }
 
     /// Creates the decision for whether to update the active path and returns the best candidate.
     fn decide_active_path_update(
         &self,
         now: SystemTime,
-    ) -> (ActivePathDecision, Option<&PathSetEntry>) {
+        manager: &MultiPathManager<F>,
+    ) -> (ActivePathDecision, Option<&PathManagerPath>) {
         let active_path_guard = self.shared.active_path.load();
         let active_path = active_path_guard.as_ref();
         let best_path = self.best_path(now);
@@ -1262,9 +1376,16 @@ impl<F: PathFetcher> PathSet<F> {
         {
             match self.active_path_entry() {
                 Some(active_entry) => {
-                    let active_score = active_entry.combined_score(now);
-                    let best_score = best_path.combined_score(now);
+                    let active_score = manager.0.path_strategy.scoring.score(active_entry, now);
+                    let best_score = manager.0.path_strategy.scoring.score(best_path, now);
                     let diff = best_score - active_score;
+
+                    tracing::trace!(
+                        active_score = %active_score,
+                        best_score = %best_score,
+                        score_diff = %diff,
+                        "Active path score comparison"
+                    );
 
                     if diff > self.config.path_swap_score_threshold {
                         decision = ActivePathDecision::Replace("swap threshold reached")
@@ -1287,8 +1408,11 @@ impl<F: PathFetcher> PathSet<F> {
     fn apply_active_path_decision(
         &self,
         decision: ActivePathDecision,
-        mut best_path: Option<&PathSetEntry>,
+        mut best_path: Option<&PathManagerPath>,
+        now: SystemTime,
+        manager: &MultiPathManager<F>,
     ) {
+        let scorer = &manager.0.path_strategy.scoring;
         let active_path_guard = self.shared.active_path.load();
         let active_path = active_path_guard.as_ref();
 
@@ -1319,11 +1443,18 @@ impl<F: PathFetcher> PathSet<F> {
                 ActivePathDecision::ForceReplace(reason) | ActivePathDecision::Replace(reason),
                 Some(best_path),
             ) => {
-                let active_detail = format_option(&active_path.map(|p| &p.0));
-
                 tracing::info!(%active_fp, %best_fp, %reason, "Replacing active path");
-                tracing::debug!("Old active path: {}", active_detail);
-                tracing::debug!("New active path: {}", best_path.path);
+
+                // Try printing score details
+                if let Some(active_entry) = self.active_path_entry() {
+                    let active_score = scorer.score_report(active_entry, now);
+                    tracing::debug!("Active path score: {active_score}");
+                    tracing::debug!("{}", active_entry.path);
+                }
+
+                let best_score = scorer.score_report(best_path, now);
+                tracing::debug!("New path score: {best_score} ({})", best_path.path);
+                tracing::debug!("{}", best_path.path);
 
                 self.shared.active_path.store(Some(Arc::new((
                     best_path.path.clone(),
@@ -1334,15 +1465,15 @@ impl<F: PathFetcher> PathSet<F> {
     }
 
     /// Updates the active path if required
-    fn maybe_update_active_path(&self, now: SystemTime) {
-        let (decision, best_path) = self.decide_active_path_update(now);
-        self.apply_active_path_decision(decision, best_path);
+    fn maybe_update_active_path(&self, now: SystemTime, mgr: &MultiPathManager<F>) {
+        let (decision, best_path) = self.decide_active_path_update(now, mgr);
+        self.apply_active_path_decision(decision, best_path, now, mgr);
     }
 
     /// Selects the best path from the cached paths
     ///
     /// Expects paths to be ranked already
-    fn best_path(&self, now: SystemTime) -> Option<&PathSetEntry> {
+    fn best_path(&self, now: SystemTime) -> Option<&PathManagerPath> {
         let path_iter = self.internal.cached_paths.iter();
 
         for path in path_iter {
@@ -1360,7 +1491,7 @@ impl<F: PathFetcher> PathSet<F> {
     }
 
     /// Returns the entry of the current active path
-    fn active_path_entry(&self) -> Option<&PathSetEntry> {
+    fn active_path_entry(&self) -> Option<&PathManagerPath> {
         let active_path_fp = self.shared.active_path.load().as_ref().map(|p| p.1)?;
 
         self.internal
@@ -1370,7 +1501,7 @@ impl<F: PathFetcher> PathSet<F> {
     }
 
     #[allow(dead_code)]
-    fn mut_active_path_entry(&mut self) -> Option<&mut PathSetEntry> {
+    fn mut_active_path_entry(&mut self) -> Option<&mut PathManagerPath> {
         let active_path_fp = self.shared.active_path.load().as_ref().map(|p| p.1)?;
 
         self.internal
@@ -1391,17 +1522,6 @@ enum ActivePathDecision {
     ForceReplace(&'static str),
 }
 
-/// Reranks paths according to the given strategy
-fn rerank_algo(_strategy: &PathStrategy, paths: &mut [PathSetEntry], now: SystemTime) {
-    // TODO: just a placeholder ranking for now - by reliability score
-    paths.sort_by(|a, b| {
-        b.reliability
-            .score(now)
-            .total_cmp(&a.reliability.score(now))
-            .then_with(|| a.fingerprint.cmp(&b.fingerprint))
-    });
-}
-
 /// Merges paths from `new_paths` and `existing_paths` by path ranking.
 /// Resulting in an updated `existing_paths` containing the best paths from both vectors.
 /// The active path, if provided, is always retained in `existing_paths`.
@@ -1413,11 +1533,12 @@ fn rerank_algo(_strategy: &PathStrategy, paths: &mut [PathSetEntry], now: System
 ///
 /// Returns (kept_existing_count, kept_new_count)
 fn merge_new_paths_algo(
-    existing_paths: &mut Vec<PathSetEntry>,
-    new_paths: &mut Vec<PathSetEntry>,
+    existing_paths: &mut Vec<PathManagerPath>,
+    new_paths: &mut Vec<PathManagerPath>,
     active_fp: Option<PathFingerprint>,
     target_path_count: usize,
     path_strategy: &PathStrategy,
+    now: SystemTime,
 ) -> (usize, usize) {
     // Handle the active path.
     // If it exists, swap it to the front (index 0) and start kept count at 1.
@@ -1438,17 +1559,8 @@ fn merge_new_paths_algo(
     let mut kept_new = 0;
 
     // Select the best remaining paths until we reach target count.
-    let is_existing_better = |e: &PathSetEntry, n: &PathSetEntry| -> bool {
-        let ord = path_strategy.rank_order(
-            &PathManagerPath {
-                path: e.path.clone(),
-                from_registration: false,
-            },
-            &PathManagerPath {
-                path: n.path.clone(),
-                from_registration: false,
-            },
-        );
+    let is_existing_better = |e: &PathManagerPath, n: &PathManagerPath| -> bool {
+        let ord = path_strategy.rank_order(e, n, now);
         // Prefer existing on tie to reduce churn
         ord != Ordering::Greater
     };
@@ -1594,7 +1706,7 @@ mod issues {
     };
 
     use crate::{
-        path::multipath_manager::{algo::exponential_decay, types::Score},
+        path::{multipath_manager::algo::exponential_decay, types::Score},
         scionstack::{NetworkError, ScionSocketSendError},
     };
 
@@ -1996,40 +2108,6 @@ mod issues {
     }
 }
 
-mod types {
-    /// Float with range -1.0 to 1.0
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct Score(f32);
-
-    impl Eq for Score {}
-
-    impl Ord for Score {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.0
-                .partial_cmp(&other.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
-    }
-    impl PartialOrd for Score {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl Score {
-        pub fn new_clamped(value: f32) -> Self {
-            let value = match value.is_nan() {
-                true => 0.0,
-                false => value,
-            };
-            Score(value.clamp(-1.0, 1.0))
-        }
-
-        pub fn value(&self) -> f32 {
-            self.0
-        }
-    }
-}
 mod algo {
     use std::time::Duration;
 
@@ -2052,44 +2130,58 @@ mod algo {
         base * decay_factor
     }
 }
-mod reliability {
+
+/// Path reliability tracking
+pub mod reliability {
     use std::time::{Duration, SystemTime};
 
-    use super::types::Score;
-    use crate::path::multipath_manager::algo::exponential_decay;
+    use crate::path::{multipath_manager::algo::exponential_decay, types::Score};
 
     /// Duration after which the reliability score decays to half its value.
     /// After 20 half-lives, the score approaches zero.
     const EXPONENTIAL_DECAY_HALFLIFE: Duration = Duration::from_secs(90); // Full decay in ~30 min
 
+    /// Reliability score for a path
+    ///
+    /// A reliability score indicates how reliable a path is, based on reported issues.
+    /// The score decays over time, allowing paths to recover over time if no further issues are
+    /// reported.
     #[derive(Debug, Clone)]
     pub struct ReliabilityScore {
-        score: Score,
+        score: f32,
         last_updated: SystemTime,
     }
 
     impl ReliabilityScore {
-        pub fn score(&self, now: SystemTime) -> f32 {
-            exponential_decay(
-                self.score.value(),
+        /// Returns the current reliability score, decayed to `now`.
+        pub fn score(&self, now: SystemTime) -> Score {
+            Score::new_clamped(exponential_decay(
+                self.score,
                 now.duration_since(self.last_updated)
                     .unwrap_or_else(|_| Duration::from_secs(0)),
                 EXPONENTIAL_DECAY_HALFLIFE,
-            )
+            ))
         }
 
+        /// Creates a new ReliabilityScore with initial score of 0.0
+        ///
+        /// `now` is the current time for initialization, used for decay calculations.
         pub fn new_with_time(now: SystemTime) -> Self {
             ReliabilityScore {
-                score: Score::new_clamped(0.0),
+                score: 0.0,
                 last_updated: now,
             }
         }
 
         /// Updates the reliability score based on the reported issue.
+        ///
+        /// `penalty` is the penalty score to apply usually a negative value.
+        /// `now` is the current time for decay calculations.
         pub fn update(&mut self, penalty: Score, now: SystemTime) {
             let current_score = self.score(now); // Get decayed score
-            let new_score = current_score + penalty.value(); // Apply penalty
-            self.score = Score::new_clamped(new_score);
+            let new_score = current_score.value() + penalty.value(); // Apply penalty
+
+            self.score = new_score.clamp(-1000.0, 1000.0); // For sanity, clamp score
             self.last_updated = now;
         }
     }
@@ -2264,7 +2356,11 @@ mod tests {
             let mgr_inner = MultiPathManagerInner {
                 config: cfg,
                 fetcher,
-                path_strategy: strategy.unwrap_or_default(),
+                path_strategy: strategy.unwrap_or_else(|| {
+                    let mut ps = PathStrategy::default();
+                    ps.scoring.use_default_scorers();
+                    ps
+                }),
                 issue_manager: Mutex::new(PathIssueManager::new(64, 64, Duration::from_secs(10))),
                 managed_paths: HashIndex::new(),
             };
@@ -2287,7 +2383,6 @@ mod tests {
 
     mod path_set {
         use super::{helpers::*, *};
-        use crate::path::multipath_manager::types::Score;
 
         // --------------------------------------------------------------------
         // Tests (direct PathSet, driving maintain() with synthetic time)
@@ -2308,9 +2403,9 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(10, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
                 assert_eq!(fetcher.lock().unwrap().received_requests, 1);
 
                 // Check cached paths
@@ -2340,7 +2435,7 @@ mod tests {
                 assert_eq!(path_set.internal.next_idle_check, expected_next_idle_check);
 
                 // second maintain should not trigger fetch
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
                 assert_eq!(fetcher.lock().unwrap().received_requests, 1);
             }
 
@@ -2353,9 +2448,9 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(10, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
                 let handle = PathSetHandle {
                     shared: path_set.shared.clone(),
                 };
@@ -2375,7 +2470,7 @@ mod tests {
                     DEFAULT_EXP_UNITS,
                 ));
 
-                path_set.maintain(next_refetch).await;
+                path_set.maintain(next_refetch, &mgr).await;
 
                 // Should have fetched again
                 assert_eq!(fetcher.lock().unwrap().received_requests, 2);
@@ -2410,9 +2505,9 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(2, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
                 assert_eq!(fetcher.lock().unwrap().received_requests, 1);
 
                 // Should have only 2 cached paths
@@ -2437,7 +2532,7 @@ mod tests {
                     .shared
                     .was_used_in_idle_period
                     .store(true, std::sync::atomic::Ordering::Relaxed);
-                path_set.maintain(next_refetch).await;
+                path_set.maintain(next_refetch, &mgr).await;
 
                 // Should have fetched again
                 assert_eq!(fetcher.lock().unwrap().received_requests, 2);
@@ -2467,9 +2562,9 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(2, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
                 let active_path = path_set.shared.active_path.load();
                 assert!(active_path.is_some());
                 let first_active_fp = active_path.as_ref().unwrap().1;
@@ -2489,7 +2584,7 @@ mod tests {
                     .shared
                     .was_used_in_idle_period
                     .store(true, std::sync::atomic::Ordering::Relaxed);
-                path_set.maintain(next_refetch).await;
+                path_set.maintain(next_refetch, &mgr).await;
 
                 // Should have fetched again
                 assert_eq!(fetcher.lock().unwrap().received_requests, 2);
@@ -2510,6 +2605,7 @@ mod tests {
         mod active_path_replacement {
 
             use super::*;
+            use crate::path::types::Score;
             // ACTIVE PATH REPLACEMENT
 
             // If active path is near expiry, and another valid path is available, it should be
@@ -2522,9 +2618,9 @@ mod tests {
                 let short_exp = 2;
                 let path = dummy_path(1, 0, short_exp, 0);
                 let fetcher = MockFetcher::new(Ok(vec![path.clone()]));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
                 let active_path = path_set.shared.active_path.load();
                 assert!(active_path.is_some());
 
@@ -2535,21 +2631,21 @@ mod tests {
                     expiry - cfg.min_expiry_threshold - Duration::from_secs(1);
 
                 let (decision_not_near, _) =
-                    path_set.decide_active_path_update(not_near_expiry_time);
+                    path_set.decide_active_path_update(not_near_expiry_time, &mgr);
                 assert_eq!(
                     decision_not_near,
                     ActivePathDecision::NoChange,
                     "Active path should be kept when not near expiry"
                 );
 
-                let (decision, _) = path_set.decide_active_path_update(near_expiry_time);
+                let (decision, _) = path_set.decide_active_path_update(near_expiry_time, &mgr);
                 assert_eq!(
                     decision,
                     ActivePathDecision::Replace("active path near expiry"),
                     "Active path should be replaced when near expiry"
                 );
 
-                let (decision, _) = path_set.decide_active_path_update(expiry);
+                let (decision, _) = path_set.decide_active_path_update(expiry, &mgr);
                 assert_eq!(
                     decision,
                     ActivePathDecision::ForceReplace("active path expired"),
@@ -2566,8 +2662,8 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
-                path_set.maintain(BASE_TIME).await;
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let active_path = path_set.shared.active_path.load();
                 let active_fp = active_path.as_ref().unwrap().1;
@@ -2585,10 +2681,10 @@ mod tests {
                     .update(Score::new_clamped(-1.0), BASE_TIME);
 
                 // Re-rank
-                path_set.rerank(BASE_TIME);
+                path_set.rerank(BASE_TIME, &mgr);
 
                 // Check decision
-                let (decision, best) = path_set.decide_active_path_update(BASE_TIME);
+                let (decision, best) = path_set.decide_active_path_update(BASE_TIME, &mgr);
                 assert_eq!(
                     decision,
                     ActivePathDecision::Replace("swap threshold reached"),
@@ -2613,15 +2709,20 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
-                path_set.maintain(BASE_TIME).await;
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let active_path = path_set.shared.active_path.load();
 
                 let fake_better_path = path_set.internal.cached_paths.get(1).unwrap();
 
                 // No change case
-                path_set.apply_active_path_decision(ActivePathDecision::NoChange, None);
+                path_set.apply_active_path_decision(
+                    ActivePathDecision::NoChange,
+                    None,
+                    BASE_TIME,
+                    &mgr,
+                );
                 let active_path_after = path_set.shared.active_path.load();
                 assert_eq!(
                     active_path.as_ref().unwrap().1,
@@ -2632,6 +2733,8 @@ mod tests {
                 path_set.apply_active_path_decision(
                     ActivePathDecision::Replace("no better path"),
                     None,
+                    BASE_TIME,
+                    &mgr,
                 );
                 let active_path_after = path_set.shared.active_path.load();
                 assert_eq!(
@@ -2644,6 +2747,8 @@ mod tests {
                 path_set.apply_active_path_decision(
                     ActivePathDecision::ForceReplace("must replace"),
                     None,
+                    BASE_TIME,
+                    &mgr,
                 );
                 let active_path_after = path_set.shared.active_path.load();
                 assert!(
@@ -2656,6 +2761,8 @@ mod tests {
                 path_set.apply_active_path_decision(
                     ActivePathDecision::Replace("better path available"),
                     Some(fake_better_path),
+                    BASE_TIME,
+                    &mgr,
                 );
                 let active_path_after = path_set.shared.active_path.load();
                 assert_eq!(
@@ -2669,6 +2776,8 @@ mod tests {
                 path_set.apply_active_path_decision(
                     ActivePathDecision::ForceReplace("must replace with better path"),
                     Some(fake_better_path),
+                    BASE_TIME,
+                    &mgr,
                 );
                 let active_path_after = path_set.shared.active_path.load();
                 assert_eq!(
@@ -2692,9 +2801,9 @@ mod tests {
                 let cfg = base_config();
                 let short_exp = 3; // 10 EXP_TIME_UNITs
                 let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, short_exp));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let earliest_expiry = path_set.earliest_expiry().expect("Should have paths");
                 let next_refetch = path_set.internal.next_refetch;
@@ -2716,9 +2825,9 @@ mod tests {
                 // INIT
                 let cfg = base_config();
                 let fetcher = MockFetcher::new(Err("Fetch failed".to_string()));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 // Should have failed
                 assert_eq!(fetcher.lock().unwrap().received_requests, 1);
@@ -2757,7 +2866,7 @@ mod tests {
                     .was_used_in_idle_period
                     .store(true, std::sync::atomic::Ordering::Relaxed);
 
-                path_set.maintain(first_next_refetch).await;
+                path_set.maintain(first_next_refetch, &mgr).await;
                 assert_eq!(path_set.internal.failed_attempts, 2);
 
                 let second_next_refetch = first_next_refetch + backoff.duration(2);
@@ -2781,9 +2890,9 @@ mod tests {
 
                 let fetcher =
                     MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let next_refetch = path_set.internal.next_refetch;
                 let next_idle_check = path_set.internal.next_idle_check;
@@ -2809,14 +2918,14 @@ mod tests {
             let mut cfg = base_config();
             cfg.max_idle_period = Duration::from_secs(10);
             let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-            let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
-            path_set.maintain(BASE_TIME).await;
+            let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+            path_set.maintain(BASE_TIME, &mgr).await;
 
             // Don't use the path (don't call try_active_path or active_path)
             let idle_check_time = path_set.internal.next_idle_check;
 
             // Maintain at idle check time
-            let result = path_set.maintain(idle_check_time).await;
+            let result = path_set.maintain(idle_check_time, &mgr).await;
 
             // Should return Some("idle")
             assert_eq!(
@@ -2834,8 +2943,8 @@ mod tests {
             let mut cfg = base_config();
             cfg.max_idle_period = Duration::from_secs(10);
             let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-            let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
-            path_set.maintain(BASE_TIME).await;
+            let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+            path_set.maintain(BASE_TIME, &mgr).await;
 
             let handle = PathSetHandle {
                 shared: path_set.shared.clone(),
@@ -2846,7 +2955,7 @@ mod tests {
             let idle_check_time = path_set.internal.next_idle_check;
 
             // Maintain at idle check time
-            let result = path_set.maintain(idle_check_time).await;
+            let result = path_set.maintain(idle_check_time, &mgr).await;
 
             // Should return None (not removed)
             assert_eq!(
@@ -2872,7 +2981,7 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
                 let handle = PathSetHandle {
                     shared: path_set.shared.clone(),
@@ -2887,7 +2996,7 @@ mod tests {
                     "Should be pending before initialization"
                 );
 
-                path_set.maintain(BASE_TIME).await; // Initialize
+                path_set.maintain(BASE_TIME, &mgr).await; // Initialize
 
                 // Single poll after initialization must complete
                 let poll_result = poll!(&mut future);
@@ -2905,9 +3014,9 @@ mod tests {
                 // INIT
                 let cfg = base_config();
                 let fetcher = MockFetcher::new(Ok(vec![])); // No paths initially
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let handle = PathSetHandle {
                     shared: path_set.shared.clone(),
@@ -2940,7 +3049,7 @@ mod tests {
                 let path_set_shared = path_set.shared.clone();
 
                 tokio::spawn(async move {
-                    path_set.maintain(next_refetch).await;
+                    path_set.maintain(next_refetch, &mgr).await;
                 });
 
                 // Yield till update started
@@ -2998,9 +3107,9 @@ mod tests {
                 // INIT with fetch error
                 let cfg = base_config();
                 let fetcher = MockFetcher::new(Err("Fetch failed".to_string()));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let handle = PathSetHandle {
                     shared: path_set.shared.clone(),
@@ -3039,9 +3148,9 @@ mod tests {
                 let cfg = base_config();
                 let fetcher =
                     MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let handle = PathSetHandle {
                     shared: path_set.shared.clone(),
@@ -3059,7 +3168,7 @@ mod tests {
                     .set_response(Err("Fetch failed".to_string()));
 
                 let next_refetch = path_set.internal.next_refetch;
-                path_set.maintain(next_refetch).await;
+                path_set.maintain(next_refetch, &mgr).await;
 
                 // Should have error
                 assert!(handle.current_error().is_some());
@@ -3086,9 +3195,9 @@ mod tests {
                 let cfg = base_config();
                 let fetcher = MockFetcher::new(Ok(vec![])); // No paths = simulates filtering
 
-                let (_mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
+                let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-                path_set.maintain(BASE_TIME).await;
+                path_set.maintain(BASE_TIME, &mgr).await;
 
                 let handle = PathSetHandle {
                     shared: path_set.shared.clone(),
@@ -3111,11 +3220,12 @@ mod tests {
 
         mod merge_algo {
             use super::*;
+            use crate::path::{scoring::PathScoring, types::Score};
 
-            fn make_path_vec(fpr_base: u16, count: u16) -> Vec<PathSetEntry> {
+            fn make_path_vec(fpr_base: u16, count: u16) -> Vec<PathManagerPath> {
                 (0..count)
                     .map(|i| {
-                        PathSetEntry {
+                        PathManagerPath {
                             fingerprint: PathFingerprint::local(IsdAsn((fpr_base + i) as u64)),
                             path: dummy_path(i, 0, 100, (fpr_base + i) as u32),
                             reliability: ReliabilityScore::new_with_time(BASE_TIME),
@@ -3129,27 +3239,58 @@ mod tests {
                 let mut existing_paths = make_path_vec(0, 10);
                 let mut new_paths = make_path_vec(100, 10);
 
+                let mut keep = Vec::new();
+                // add half of both existing and new paths to keep
+                keep.extend(
+                    existing_paths
+                        .iter()
+                        .take(5)
+                        .map(|p| p.fingerprint)
+                        .collect::<Vec<_>>(),
+                );
+                keep.extend(
+                    new_paths
+                        .iter()
+                        .take(5)
+                        .map(|p| p.fingerprint)
+                        .collect::<Vec<_>>(),
+                );
+
                 let mut strat = PathStrategy::default();
-                // Add a ranking that alternates between paths to force equal ranking
-                strat.add_ranking(Box::new(|_: &PathManagerPath, _: &PathManagerPath| {
-                    static mut CALLED_TIMES: usize = 0;
-                    unsafe {
-                        CALLED_TIMES += 1;
-                        match CALLED_TIMES % 2 {
-                            0 => std::cmp::Ordering::Greater,
-                            _ => {
-                                // Equal should be handled as less to keep existing paths
-                                match CALLED_TIMES % 4 {
-                                    0 => std::cmp::Ordering::Less,
-                                    _ => std::cmp::Ordering::Equal,
-                                }
-                            }
+
+                struct TestScorer {
+                    keep: Vec<PathFingerprint>,
+                }
+                impl PathScoring for TestScorer {
+                    fn metric_name(&self) -> &'static str {
+                        "test"
+                    }
+
+                    fn score(
+                        &self,
+                        path: &PathManagerPath,
+                        _now: SystemTime,
+                    ) -> crate::path::types::Score {
+                        if self.keep.contains(&path.fingerprint) {
+                            Score::new_clamped(1.0)
+                        } else {
+                            Score::new_clamped(0.0)
                         }
                     }
-                }));
+                }
 
-                let (kept_new, kept_existing) =
-                    merge_new_paths_algo(&mut existing_paths, &mut new_paths, None, 10, &strat);
+                // Add a scoring alternates between 0 and 1 to force equal ranking between existing
+                // paths
+                strat.add_scoring(TestScorer { keep }, 1.0);
+
+                let (kept_new, kept_existing) = merge_new_paths_algo(
+                    &mut existing_paths,
+                    &mut new_paths,
+                    None,
+                    10,
+                    &strat,
+                    SystemTime::now(),
+                );
 
                 assert_eq!(
                     existing_paths.len(),
@@ -3169,10 +3310,34 @@ mod tests {
                 let active_fp = existing_paths[9].fingerprint;
 
                 let mut strat = PathStrategy::default();
+
+                struct TestScorer {
+                    existing_fps: Vec<PathFingerprint>,
+                }
+                impl PathScoring for TestScorer {
+                    fn metric_name(&self) -> &'static str {
+                        "test"
+                    }
+
+                    fn score(
+                        &self,
+                        path: &PathManagerPath,
+                        _now: SystemTime,
+                    ) -> crate::path::types::Score {
+                        if self.existing_fps.contains(&path.fingerprint) {
+                            Score::new_clamped(0.0)
+                        } else {
+                            Score::new_clamped(1.0)
+                        }
+                    }
+                }
                 // Add a ranking that ranks all new paths better than existing paths
-                strat.add_ranking(Box::new(|_: &PathManagerPath, _: &PathManagerPath| {
-                    std::cmp::Ordering::Greater
-                }));
+                strat.add_scoring(
+                    TestScorer {
+                        existing_fps: existing_paths.iter().map(|e| e.fingerprint).collect(),
+                    },
+                    1.0,
+                );
 
                 let (kept_existing, kept_new) = merge_new_paths_algo(
                     &mut existing_paths,
@@ -3180,6 +3345,7 @@ mod tests {
                     Some(active_fp),
                     10,
                     &strat,
+                    SystemTime::now(),
                 );
 
                 let total_paths = existing_paths.len() + new_paths.len();
@@ -3204,7 +3370,7 @@ mod tests {
         use scion_proto::address::{Asn, Isd};
 
         use super::{helpers::*, *};
-        use crate::path::multipath_manager::types::Score;
+        use crate::path::types::Score;
 
         // When an issue is ingested, affected paths should have their reliability scores updated
         // appropriately The issue should be in the issue cache
@@ -3215,7 +3381,7 @@ mod tests {
             let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
             let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-            path_set.maintain(BASE_TIME).await;
+            path_set.maintain(BASE_TIME, &mgr).await;
 
             // Get the first path to create an issue for
             let first_path = &path_set.internal.cached_paths[0];
@@ -3248,7 +3414,7 @@ mod tests {
             }
             // Handle the issue in path_set
             let recv_result = path_set.internal.issue_rx.recv().await;
-            path_set.handle_issue_rx(BASE_TIME, recv_result);
+            path_set.handle_issue_rx(BASE_TIME, recv_result, &mgr);
 
             // Check that the path's score was updated
             let updated_path = path_set
@@ -3258,7 +3424,7 @@ mod tests {
                 .find(|e| e.fingerprint == first_fp)
                 .expect("Path should still exist");
 
-            let updated_score = updated_path.combined_score(BASE_TIME);
+            let updated_score = updated_path.reliability.score(BASE_TIME).value();
 
             assert!(
                 updated_score == penalty.value(),
@@ -3269,7 +3435,7 @@ mod tests {
 
             // Should decay over time
             let later_time = BASE_TIME + Duration::from_secs(30);
-            let decayed_score = updated_path.combined_score(later_time);
+            let decayed_score = updated_path.reliability.score(later_time).value();
             assert!(
                 decayed_score > updated_score,
                 "Path score should recover over time. Updated: {}, Decayed: {}",
@@ -3365,7 +3531,7 @@ mod tests {
             let fetcher = MockFetcher::new(Ok(vec![]));
             let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-            path_set.maintain(BASE_TIME).await;
+            path_set.maintain(BASE_TIME, &mgr).await;
 
             // Create an issue
             let issue_marker = IssueMarker {
@@ -3402,7 +3568,7 @@ mod tests {
             ));
 
             let next_refetch = path_set.internal.next_refetch;
-            path_set.maintain(next_refetch).await;
+            path_set.maintain(next_refetch, &mgr).await;
 
             // The newly fetched path should have the penalty applied
             let affected_path = path_set
@@ -3411,7 +3577,10 @@ mod tests {
                 .first()
                 .expect("Path should exist");
 
-            let score = affected_path.combined_score(BASE_TIME + Duration::from_secs(1));
+            let score = affected_path
+                .reliability
+                .score(BASE_TIME + Duration::from_secs(1))
+                .value();
             assert!(
                 score < 0.0,
                 "Newly fetched path should have cached issue applied. Score: {}",
@@ -3427,7 +3596,7 @@ mod tests {
             let fetcher = MockFetcher::new(generate_responses(5, 0, BASE_TIME, DEFAULT_EXP_UNITS));
             let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-            path_set.maintain(BASE_TIME).await;
+            path_set.maintain(BASE_TIME, &mgr).await;
 
             let active_fp = path_set.shared.active_path.load().as_ref().unwrap().1;
 
@@ -3455,7 +3624,7 @@ mod tests {
 
             // Handle issue
             let recv_result = path_set.internal.issue_rx.recv().await;
-            path_set.handle_issue_rx(BASE_TIME, recv_result);
+            path_set.handle_issue_rx(BASE_TIME, recv_result, &mgr);
 
             // Active path should have changed
             let new_active_fp = path_set.shared.active_path.load().as_ref().unwrap().1;
@@ -3472,7 +3641,7 @@ mod tests {
             let fetcher = MockFetcher::new(generate_responses(1, 0, BASE_TIME, DEFAULT_EXP_UNITS));
             let (mgr, mut path_set) = manual_pathset(BASE_TIME, fetcher.clone(), cfg, None);
 
-            path_set.maintain(BASE_TIME).await;
+            path_set.maintain(BASE_TIME, &mgr).await;
 
             // mark as used to prevent idle removal
             path_set
@@ -3515,7 +3684,9 @@ mod tests {
                 DEFAULT_EXP_UNITS,
             ));
 
-            path_set.maintain(path_set.internal.next_refetch).await;
+            path_set
+                .maintain(path_set.internal.next_refetch, &mgr)
+                .await;
             // mark as used to prevent idle removal
             path_set
                 .shared
@@ -3543,7 +3714,9 @@ mod tests {
                 .unwrap()
                 .reliability = reliability;
 
-            path_set.maintain(path_set.internal.next_refetch).await;
+            path_set
+                .maintain(path_set.internal.next_refetch, &mgr)
+                .await;
 
             assert_eq!(
                 active_fp,

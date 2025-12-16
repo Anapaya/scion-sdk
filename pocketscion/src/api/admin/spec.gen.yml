@@ -54,6 +54,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/IoConfigDto'
+  /link_state:
+    post:
+      tags:
+      - management
+      summary: Set the link state of a link in the topology.
+      description: Returns 200 OK on success or 404 Not Found if the link does not exist.
+      operationId: set_link_state
+      responses:
+        '200':
+          description: Link state set successfully
+        '404':
+          description: Link not found
   /snaps:
     get:
       tags:

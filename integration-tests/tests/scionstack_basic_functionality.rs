@@ -30,7 +30,7 @@ use scion_proto::{
     scmp::{DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpEchoRequest, ScmpMessage},
 };
 use scion_stack::{
-    path::manager::PathManager,
+    path::manager::traits::PathManager,
     scionstack::{
         DEFAULT_RESERVED_TIME, NetworkError, ScionSocketBindError, ScionSocketSendError,
         ScionStackBuilder, ScmpHandler, builder::SnapUnderlayConfig,
@@ -40,8 +40,11 @@ use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
 use tokio::{
     net::UdpSocket,
-    sync::mpsc::{self, Sender},
-    time::sleep,
+    sync::{
+        Barrier,
+        mpsc::{self, Sender},
+    },
+    time::{sleep, timeout},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -1060,4 +1063,114 @@ async fn should_snaptun_reconnects_bind_socket_snap() {
     // Wait 3 seconds for a successful receive.
     within_duration!(Duration::from_secs(3), receive_join_handle).unwrap();
     sender_join_handle.abort();
+}
+
+#[tokio::test]
+#[ignore = "Requires (#26946): currently failing as pathmanager does not receive SCMP errors to mark paths as down"]
+async fn should_failover_on_link_error() {
+    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
+
+    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .unwrap();
+
+    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .unwrap();
+
+    // Bind sender and receiver sockets
+    let sender_socket = sender_stack.bind(None).await.unwrap();
+    let sender_addr = sender_socket.local_addr();
+
+    let receiver_socket = receiver_stack.bind(None).await.unwrap();
+    let receiver_addr = receiver_socket.local_addr();
+
+    // Send packet from sender to receiver
+    let test_data = Bytes::from("Hello, World!");
+    let mut recv_buffer = [0u8; 1024];
+
+    let failover_send_barrier = Arc::new(Barrier::new(2));
+
+    let sender_task = tokio::spawn({
+        let failover_send_barrier = failover_send_barrier.clone();
+        let test_data = test_data.clone();
+        async move {
+            // Send before failover
+            sender_socket
+                .send_to(test_data.as_ref(), receiver_addr)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("error sending from {sender_addr:?} to {receiver_addr:?}")
+                });
+
+            // Await at the barrier to synchronize with the receiver
+            failover_send_barrier.wait().await;
+
+            // A single send should trigger the failover
+            sender_socket
+                .send_to(test_data.as_ref(), receiver_addr)
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("error sending from {sender_addr:?} to {receiver_addr:?}")
+                });
+
+            // Continue sending packets to ensure connectivity
+            loop {
+                sleep(Duration::from_millis(100)).await;
+                sender_socket
+                    .send_to(test_data.as_ref(), receiver_addr)
+                    .await
+                    .unwrap_or_else(|_| {
+                        panic!("error sending from {sender_addr:?} to {receiver_addr:?}")
+                    });
+            }
+        }
+    });
+
+    // Send and receive should work
+    let mut path_buffer = vec![0u8; 1500];
+    let (_, source, path) = receiver_socket
+        .recv_from_with_path(&mut recv_buffer, &mut path_buffer)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        source, sender_addr,
+        "receiver should receive packets from the sender"
+    );
+
+    let egress = path
+        .first_hop_egress_interface()
+        .expect("path should have first hop egress interface");
+
+    // Make direct link between ASes unavailable
+    let client = test_env.pocketscion.api_client();
+    client
+        .set_link_state(egress.isd_asn, egress.id, false)
+        .await
+        .unwrap();
+
+    // Notify sender task to start sending packets to trigger failover
+    failover_send_barrier.wait().await;
+
+    // Should now failover to the other link and we should be able to receive again
+    let mut path_buffer = vec![0u8; 1500];
+    let mut recv_buffer = [0u8; 1024];
+    let (_size, _addr, new_path) = timeout(
+        Duration::from_millis(500),
+        receiver_socket.recv_from_with_path(&mut recv_buffer, &mut path_buffer),
+    )
+    .await
+    .expect("should not time out waiting for packet after failover")
+    .expect("should receive packet after failover");
+
+    // Should not use the same path as before
+    assert_ne!(path, new_path, "should use a different path after failover");
+
+    // Stop the sender task
+    sender_task.abort();
 }

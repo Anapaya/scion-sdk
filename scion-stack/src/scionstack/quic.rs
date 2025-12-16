@@ -36,7 +36,7 @@ use scion_proto::{
 
 use super::{AsyncUdpUnderlaySocket, udp_polling::UdpPoller};
 use crate::{
-    path::manager::{PathPrefetcher, SyncPathManager},
+    path::manager::traits::{PathPrefetcher, SyncPathManager},
     quic::ScionQuinnConn,
 };
 

@@ -381,6 +381,20 @@ impl SharedPocketScionState {
         state_write_guard.topology_segments = Some(segment_store);
     }
 
+    /// Sets the state of a link in the topology.
+    /// If no topology is set, or the link does not exist, None is returned.
+    pub fn set_link_state(&self, isd_asn: IsdAsn, link_id: u16, up: bool) -> Option<bool> {
+        let mut state_write_guard = self.system_state.write().unwrap();
+        if let Some(topology) = &mut state_write_guard.topology {
+            topology.mut_scion_link(&isd_asn, link_id).map(|link| {
+                link.set_is_up(up);
+                up
+            })
+        } else {
+            None
+        }
+    }
+
     /// Returns true if a topology is set.
     pub fn has_topology(&self) -> bool {
         self.system_state.read().unwrap().topology.is_some()

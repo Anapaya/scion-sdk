@@ -21,7 +21,7 @@ use std::{
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{self, Path, State},
     response::IntoResponse,
 };
 use http::StatusCode;
@@ -80,6 +80,7 @@ pub(crate) fn build_management_api(
                 .routes(routes!(get_system_state))
                 .routes(routes!(get_auth_server))
                 .routes(routes!(get_endhost_apis))
+                .routes(routes!(set_link_state))
                 .with_state((system_state.clone(), io_config.clone())),
         )
         .routes(routes!(delete_snap_connection))
@@ -357,6 +358,46 @@ async fn get_endhost_apis(
     Json(EndhostApisResponse {
         endhost_apis: resp_endhost_apis,
     })
+}
+
+/// Response for the endhost APIs.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetLinkStateRequest {
+    /// The link state to set.
+    pub up: bool,
+    /// The interface ID of the link.
+    pub interface_id: u16,
+    /// The ISD-AS of the AS
+    pub isd_as: IsdAsn,
+}
+
+/// Set the link state of a link in the topology.
+///
+/// Returns 200 OK on success or 404 Not Found if the link does not exist.
+#[utoipa::path(
+    post,
+    path = "/link_state",
+    tag = MANAGEMENT_TAG,
+    responses(
+        (status = 200, description = "Link state set successfully"),
+        (status = 404, description = "Link not found"),
+    )
+)]
+async fn set_link_state(
+    State((system_state, _io)): State<(SharedPocketScionState, SharedPocketScionIoConfig)>,
+    Json(req): extract::Json<SetLinkStateRequest>,
+) -> impl IntoResponse {
+    // Example function to demonstrate usage of system state and I/O config.
+    match system_state.set_link_state(req.isd_as, req.interface_id, req.up) {
+        Some(_) => {
+            tracing::info!(%req.isd_as, interface_id=req.interface_id, up=req.up, "Link state set successfully");
+            StatusCode::OK
+        }
+        None => {
+            tracing::error!(%req.isd_as, interface_id=req.interface_id, "Failed to set link state, either no topology or link not found");
+            StatusCode::NOT_FOUND
+        }
+    }
 }
 
 #[cfg(test)]

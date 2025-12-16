@@ -15,7 +15,6 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
-derive_more = { workspace = true, features = ["deref"] }
 endhost-api-client = { workspace = true }
 endhost-api-models = { workspace = true }
 foldhash = { workspace = true }

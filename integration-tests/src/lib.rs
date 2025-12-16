@@ -66,6 +66,7 @@ pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTes
 
     let ia132: IsdAsn = "1-ff00:0:132".parse().unwrap();
     let ia212: IsdAsn = "2-ff00:0:212".parse().unwrap();
+    let ia222: IsdAsn = "2-ff00:0:222".parse().unwrap();
 
     // Define the topology
     let mut topo = ScionTopology::new();
@@ -73,7 +74,13 @@ pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTes
         .unwrap()
         .add_as(ScionAs::new_core(ia132))
         .unwrap()
+        .add_as(ScionAs::new_core(ia222))
+        .unwrap()
         .add_link("1-ff00:0:132#1 core 2-ff00:0:212#3".parse().unwrap())
+        .unwrap()
+        .add_link("1-ff00:0:132#2 core 2-ff00:0:222#1".parse().unwrap())
+        .unwrap()
+        .add_link("2-ff00:0:212#4 core 2-ff00:0:222#2".parse().unwrap())
         .unwrap();
 
     pstate.set_topology(topo);

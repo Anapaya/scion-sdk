@@ -14,12 +14,18 @@
 
 //! Path Selection defines how paths are filtered and ranked.
 
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, sync::Arc, time::SystemTime};
 
-use crate::path::{policy::PathPolicy, ranking::PathRanking, types::PathManagerPath};
+use scion_proto::path::Path;
+
+use crate::path::{
+    policy::PathPolicy,
+    scoring::{PathScorer, PathScoring},
+    types::PathManagerPath,
+};
 
 pub mod policy;
-pub mod ranking;
+pub mod scoring;
 
 /// PathStrategy combines multiple path operations into a single strategy.
 #[derive(Default)]
@@ -27,7 +33,7 @@ pub struct PathStrategy {
     /// The path policies to apply.
     pub policies: Vec<Arc<dyn PathPolicy>>,
     /// The path ranking functions to apply.
-    pub ranking: Vec<Arc<dyn PathRanking>>,
+    pub scoring: PathScorer,
 }
 impl PathStrategy {
     /// Appends a path policy to the list of policies.
@@ -35,16 +41,18 @@ impl PathStrategy {
         self.policies.push(Arc::new(policy));
     }
 
-    /// Appends a path ranking function to the list of ranking functions.
-    pub fn add_ranking(&mut self, ranking: impl PathRanking) {
-        self.ranking.push(Arc::new(ranking));
-    }
-
-    /// Returns true if the given path is accepted by all policies.
+    /// Adds a path scorer with the given impact weight.
     ///
-    /// If no policies are added, all paths are accepted.
-    pub fn predicate(&self, path: &PathManagerPath) -> bool {
-        self.policies.iter().all(|policy| policy.predicate(path))
+    /// Scores from paths are used to select the best path among multiple candidates.
+    ///
+    /// `scorer` - The path scorer to add.
+    /// `impact` - The weight of the scorer in the final score aggregation.
+    ///            e.g. Impact of 0.2 means the scorer can change the final score by up to ±0.2.
+    ///
+    /// Note:
+    /// The impact weight does not need to sum to 1.0 across all scorers.
+    pub fn add_scoring(&mut self, scoring: impl PathScoring, impact: f32) {
+        self.scoring = self.scoring.clone().with_scorer(scoring, impact);
     }
 
     /// Ranks the order of two paths based on preference.
@@ -55,27 +63,34 @@ impl PathStrategy {
     /// - `Ordering::Less` if `this` is preferred over `other`
     /// - `Ordering::Greater` if `other` is preferred over `this`
     /// - `Ordering::Equal` if both paths are equally preferred
-    pub fn rank_order(&self, this: &PathManagerPath, other: &PathManagerPath) -> Ordering {
-        for ranker in &self.ranking {
-            match ranker.rank_order(this, other) {
-                Ordering::Equal => continue,
-                ord => return ord,
-            }
-        }
-        Ordering::Equal
-    }
+    pub fn rank_order(
+        &self,
+        this: &PathManagerPath,
+        other: &PathManagerPath,
+        now: SystemTime,
+    ) -> Ordering {
+        let this_score = self.scoring.score(this, now);
+        let other_score = self.scoring.score(other, now);
 
-    /// Filters the given paths based on all policies, removing paths that are not accepted.
-    pub fn filter_inplace<'path: 'iter, 'iter>(&self, paths: &mut Vec<PathManagerPath>) {
-        paths.retain(|p| self.predicate(p));
+        this_score.total_cmp(&other_score).reverse() // Reverse: Greater score -> Less (more preferred)
     }
 
     /// Sorts the given paths in place, placing the most preferred paths first.
     ///
-    /// Uses the ranking functions in the order they were added.
-    ///
     /// If no ranking functions are added, the paths are not modified.
-    pub fn rank_inplace<'path: 'iter, 'iter>(&self, path: &mut [PathManagerPath]) {
-        path.sort_by(|a, b| self.rank_order(a, b));
+    pub fn rank_inplace(&self, path: &mut [PathManagerPath], now: SystemTime) {
+        path.sort_by(|a, b| self.rank_order(a, b, now));
+    }
+
+    /// Returns true if the given path is accepted by all policies.
+    ///
+    /// If no policies are added, all paths are accepted.
+    pub fn predicate(&self, path: &Path) -> bool {
+        self.policies.iter().all(|policy| policy.predicate(path))
+    }
+
+    /// Filters the given paths based on all policies, removing paths that are not accepted.
+    pub fn filter_inplace<'path: 'iter, 'iter>(&self, paths: &mut Vec<Path>) {
+        paths.retain(|p| self.predicate(p));
     }
 }

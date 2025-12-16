@@ -16,18 +16,17 @@
 //!
 //! For example, filtering out paths that go through certain ASes or paths.
 
-use crate::path::types::PathManagerPath;
+use scion_proto::path::Path;
 
 /// Path policies allow for the selection of paths based on certain criteria.
 pub trait PathPolicy: 'static + Send + Sync {
     /// Returns true if the path should be considered for selection.
-    fn predicate(&self, path: &PathManagerPath) -> bool;
+    fn predicate(&self, path: &Path) -> bool;
 }
 
 // Allow using scion_proto path policies directly
 impl<T: scion_proto::path::policy::PathPolicy> PathPolicy for T {
-    fn predicate(&self, path: &PathManagerPath) -> bool {
-        <Self as scion_proto::path::policy::PathPolicy>::path_allowed(self, &path.path)
-            .unwrap_or(false) // If the policy cannot be evaluated, the path is not allowed
+    fn predicate(&self, path: &Path) -> bool {
+        <Self as scion_proto::path::policy::PathPolicy>::path_allowed(self, path).unwrap_or(false) // If the policy cannot be evaluated, the path is not allowed
     }
 }

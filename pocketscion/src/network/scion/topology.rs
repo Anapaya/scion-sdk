@@ -142,7 +142,7 @@ impl ScionTopology {
             // Rule: One Scion interface can only have one link.
             {
                 let lower_as_has_conflict = self
-                    .get_scion_link(&new_link.id.lower.isd_as, new_link.id.lower.if_id)
+                    .scion_link(&new_link.id.lower.isd_as, new_link.id.lower.if_id)
                     .is_some();
 
                 if lower_as_has_conflict {
@@ -154,7 +154,7 @@ impl ScionTopology {
                 };
 
                 let higher_as_has_conflict = self
-                    .get_scion_link(&new_link.id.higher.isd_as, new_link.id.higher.if_id)
+                    .scion_link(&new_link.id.higher.isd_as, new_link.id.higher.if_id)
                     .is_some();
 
                 if higher_as_has_conflict {
@@ -210,8 +210,27 @@ impl ScionTopology {
     }
 
     /// Returns the ScionLink for the given AS and interface ID. If none exists, returns None.
-    pub fn get_scion_link(&self, isd_as: &IsdAsn, interface_id: u16) -> Option<&ScionLink> {
+    pub fn scion_link(&self, isd_as: &IsdAsn, interface_id: u16) -> Option<&ScionLink> {
         self.iter_scion_links_by_as(isd_as).find(|link| {
+            link.id.lower.if_id == interface_id && link.id.lower.isd_as == *isd_as
+                || link.id.higher.if_id == interface_id && link.id.higher.isd_as == *isd_as
+        })
+    }
+
+    /// Returns a mutable iterator over all scion links of the given AS.
+    pub fn mut_iter_scion_links_by_as(
+        &mut self,
+        isd_as: &IsdAsn,
+    ) -> impl Iterator<Item = &mut ScionLink> {
+        self.link_map
+            .values_mut()
+            .filter(|link| link.id.lower.isd_as == *isd_as || link.id.higher.isd_as == *isd_as)
+    }
+
+    /// Returns a mutable reference to the ScionLink for the given AS and interface ID. If none
+    /// exists, returns None.
+    pub fn mut_scion_link(&mut self, isd_as: &IsdAsn, interface_id: u16) -> Option<&mut ScionLink> {
+        self.mut_iter_scion_links_by_as(isd_as).find(|link| {
             link.id.lower.if_id == interface_id && link.id.lower.isd_as == *isd_as
                 || link.id.higher.if_id == interface_id && link.id.higher.isd_as == *isd_as
         })

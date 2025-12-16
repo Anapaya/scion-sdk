@@ -2826,7 +2826,6 @@ dependencies = [
  "arc-swap",
  "bytes",
  "chrono",
- "derive_more",
  "endhost-api-client",
  "endhost-api-models",
  "foldhash",
