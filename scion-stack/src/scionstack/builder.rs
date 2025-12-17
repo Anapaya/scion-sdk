@@ -23,6 +23,7 @@ use scion_proto::address::{EndhostAddr, IsdAsn};
 // Re-export for consumer
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
+use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
 use snap_control::client::{ControlPlaneApi, CrpcSnapControlClient};
 use url::Url;
 
@@ -36,11 +37,18 @@ use crate::{
             LocalIpResolver, TargetAddrLocalIpResolver, UdpUnderlayStack,
             underlay_resolver::UdpUnderlayResolver,
         },
+        v2::{SnapSocketConfig, V2UnderlayStack, discovery::PeriodicUnderlayDiscovery},
     },
 };
 
 const DEFAULT_RESERVED_TIME: Duration = Duration::from_secs(3);
 const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_secs(600);
+const DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF: BackoffConfig = BackoffConfig {
+    minimum_delay_secs: 0.5,
+    maximum_delay_secs: 10.0,
+    factor: 1.2,
+    jitter_secs: 0.1,
+};
 
 /// Default size for the socket's receive channel (in packets).
 /// 64KiB max payload size * 1000 ~= 64MiB if full.
@@ -73,8 +81,12 @@ pub struct ScionStackBuilder {
     endhost_api_token_source: Option<Arc<dyn TokenSource>>,
     auth_token_source: Option<Arc<dyn TokenSource>>,
     underlay: Underlay,
+    /// XXX(uniquefine): this is currently only used for the v2 underlay stack.
+    /// But it will replace the field above as soon as the v2 underlay stack is stable.
+    preferred_underlay: PreferredUnderlay,
     snap: SnapUnderlayConfig,
     udp: UdpUnderlayConfig,
+    use_v2: bool,
     receive_channel_size: usize,
 }
 
@@ -92,8 +104,10 @@ impl ScionStackBuilder {
                 preferred_underlay: PreferredUnderlay::Udp,
                 isd_as: IsdAsn::WILDCARD,
             },
+            preferred_underlay: PreferredUnderlay::Udp,
             snap: SnapUnderlayConfig::default(),
             udp: UdpUnderlayConfig::default(),
+            use_v2: false,
             receive_channel_size: DEFAULT_RECEIVE_CHANNEL_SIZE,
         }
     }
@@ -104,6 +118,7 @@ impl ScionStackBuilder {
             preferred_underlay: PreferredUnderlay::Snap,
             isd_as: IsdAsn::WILDCARD,
         };
+        self.preferred_underlay = PreferredUnderlay::Snap;
         self
     }
 
@@ -113,6 +128,7 @@ impl ScionStackBuilder {
             preferred_underlay: PreferredUnderlay::Udp,
             isd_as: IsdAsn::WILDCARD,
         };
+        self.preferred_underlay = PreferredUnderlay::Udp;
         self
     }
 
@@ -127,6 +143,12 @@ impl ScionStackBuilder {
                 isd_as,
             };
         }
+        self
+    }
+
+    /// Use the v2 underlay stack.
+    pub fn with_use_v2(mut self) -> Self {
+        self.use_v2 = true;
         self
     }
 
@@ -195,8 +217,10 @@ impl ScionStackBuilder {
             endhost_api_token_source,
             auth_token_source,
             underlay,
+            preferred_underlay,
             snap,
             udp,
+            use_v2,
             receive_channel_size,
         } = self;
 
@@ -208,6 +232,48 @@ impl ScionStackBuilder {
             }
             Arc::new(client)
         };
+
+        if use_v2 {
+            let underlay_discovery = PeriodicUnderlayDiscovery::new(
+                endhost_api_client.clone(),
+                udp.udp_next_hop_resolver_fetch_interval,
+                // TODO(uniquefine): make this configurable.
+                ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
+            )
+            .await
+            .map_err(BuildScionStackError::UnderlayDiscoveryError)?;
+
+            // Use the endhost API URL to resolve the local IP addresses for the UDP underlay
+            // sockets.
+            // Here we assume that the interface used to reach the endhost API is
+            // the same as the interface used to reach the data planes.
+            let local_ip_resolver: Arc<dyn LocalIpResolver> = match udp.local_ips {
+                Some(ips) => Arc::new(ips),
+                None => {
+                    Arc::new(
+                        TargetAddrLocalIpResolver::new(endhost_api_url.clone())
+                            .map_err(BuildUdpScionStackError::LocalIpResolutionError)?,
+                    )
+                }
+            };
+
+            let v2_underlay_stack = V2UnderlayStack::new(
+                preferred_underlay,
+                Arc::new(underlay_discovery),
+                local_ip_resolver,
+                SnapSocketConfig {
+                    snap_token_source: snap.snap_token_source.or(auth_token_source),
+                    renewal_wait_threshold: snap.session_auto_renewal.renewal_wait_threshold,
+                    reconnect_backoff: ExponentialBackoff::new_from_config(
+                        snap.tunnel_reconnect_backoff,
+                    ),
+                },
+            );
+            return Ok(ScionStack::new(
+                endhost_api_client,
+                Arc::new(v2_underlay_stack),
+            ));
+        }
 
         // Discover available underlays
         let underlays = match underlay {
@@ -375,8 +441,11 @@ pub enum BuildUdpScionStackError {
     LocalIpResolutionError(anyhow::Error),
 }
 
-enum PreferredUnderlay {
+/// Preferred underlay type (if available).
+pub enum PreferredUnderlay {
+    /// SNAP underlay.
     Snap,
+    /// UDP underlay.
     Udp,
 }
 
@@ -397,6 +466,7 @@ pub struct SnapUnderlayConfig {
     default_scmp_handler: Option<ScmpHandlerFactory>,
     snap_dp_index: usize,
     session_auto_renewal: SessionRenewal,
+    tunnel_reconnect_backoff: BackoffConfig,
     ports_rng: Option<ChaCha8Rng>,
     ports_reserved_time: Duration,
 }
@@ -410,6 +480,7 @@ impl Default for SnapUnderlayConfig {
             snap_dp_index: 0,
             default_scmp_handler: None,
             session_auto_renewal: SessionRenewal::default(),
+            tunnel_reconnect_backoff: DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF,
             ports_rng: None,
         }
     }
@@ -498,6 +569,30 @@ impl SnapUnderlayConfigBuilder {
     /// * `dp_index` - The index of the SNAP data plane to use.
     pub fn with_snap_dp_index(mut self, dp_index: usize) -> Self {
         self.0.snap_dp_index = dp_index;
+        self
+    }
+
+    /// Set the parameters for the exponential backoff configuration for reconnecting a SNAP tunnel.
+    ///
+    /// # Arguments
+    ///
+    /// * `minimum_delay_secs` - The minimum delay in seconds.
+    /// * `maximum_delay_secs` - The maximum delay in seconds.
+    /// * `factor` - The factor to multiply the delay by.
+    /// * `jitter_secs` - The jitter in seconds.
+    pub fn with_tunnel_reconnect_backoff(
+        mut self,
+        minimum_delay_secs: Duration,
+        maximum_delay_secs: Duration,
+        factor: f32,
+        jitter_secs: Duration,
+    ) -> Self {
+        self.0.tunnel_reconnect_backoff = BackoffConfig {
+            minimum_delay_secs: minimum_delay_secs.as_secs_f32(),
+            maximum_delay_secs: maximum_delay_secs.as_secs_f32(),
+            factor,
+            jitter_secs: jitter_secs.as_secs_f32(),
+        };
         self
     }
 

@@ -60,9 +60,22 @@ pub struct PocketscionTestEnv {
 
 /// Sets up PocketSCION with two SNAPs in different ASes for testing.
 pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTestEnv {
+    minimal_pocketscion_setup_inner(underlay, false).await
+}
+
+/// Sets up PocketSCION with two SNAPs in different ASes for testing. The SNAPs use residential
+/// addresses.
+pub async fn minimal_pocketscion_setup_v2(underlay: UnderlayType) -> PocketscionTestEnv {
+    minimal_pocketscion_setup_inner(underlay, true).await
+}
+
+async fn minimal_pocketscion_setup_inner(underlay: UnderlayType, v2: bool) -> PocketscionTestEnv {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let mut pstate = SharedPocketScionState::new(SystemTime::now());
+    if v2 {
+        pstate.set_forward_all_traffic_to_snaps(true);
+    }
 
     let ia132: IsdAsn = "1-ff00:0:132".parse().unwrap();
     let ia212: IsdAsn = "2-ff00:0:212".parse().unwrap();

@@ -79,7 +79,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SnapsResponse'
-  /snaps/{snap_id}/connections/{endhost_addr}:
+  /snaps/{snap_id}/connections/{socket_addr}:
     delete:
       tags:
       - management
@@ -616,6 +616,7 @@ components:
       type: object
       description: The pocket SCION system state.
       required:
+      - forward_all_traffic_to_snaps
       - snap_token_public_key
       - snaps
       - routers
@@ -633,6 +634,14 @@ components:
             type: integer
             description: Endhost API instance identifier.
             minimum: 0
+        forward_all_traffic_to_snaps:
+          type: boolean
+          description: |-
+            XXX(uniquefine): This is temporary until we properly model the rendevous hashing.
+            If set, only one data plane per snap and only one snap per ISD-AS is allowed.
+            If a snap is configured, then it is registered as wildcard sim_receiver
+            thus all traffic is forwarded to the snaps.
+            If not set, the old behavior is used.
         routers:
           type: object
           description: The list of SCION routers.

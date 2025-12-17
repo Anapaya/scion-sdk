@@ -25,7 +25,7 @@ use axum::{
     response::IntoResponse,
 };
 use http::StatusCode;
-use scion_proto::address::{EndhostAddr, IsdAsn};
+use scion_proto::address::IsdAsn;
 use scion_sdk_observability::info_trace_layer;
 use serde::{Deserialize, Serialize};
 use tower::ServiceBuilder;
@@ -184,23 +184,23 @@ async fn get_snaps(
     Json(SnapsResponse { snaps })
 }
 
-struct EndhostAddrString(EndhostAddr);
+struct SocketAddrString(SocketAddr);
 
-impl<'de> Deserialize<'de> for EndhostAddrString {
+impl<'de> Deserialize<'de> for SocketAddrString {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        let addr = s.parse::<EndhostAddr>().map_err(serde::de::Error::custom)?;
-        Ok(EndhostAddrString(addr))
+        let addr = s.parse::<SocketAddr>().map_err(serde::de::Error::custom)?;
+        Ok(SocketAddrString(addr))
     }
 }
 
 /// Delete (close) a snaptun connection from the server side.
 #[utoipa::path(
     delete,
-    path = "/snaps/{snap_id}/connections/{endhost_addr}",
+    path = "/snaps/{snap_id}/connections/{socket_addr}",
     tag = MANAGEMENT_TAG,
     responses(
         (
@@ -214,25 +214,23 @@ impl<'de> Deserialize<'de> for EndhostAddrString {
     )
 )]
 async fn delete_snap_connection(
-    Path((snap_id, endhost_addr)): Path<(SnapId, EndhostAddrString)>,
+    Path((snap_id, socket_addr)): Path<(SnapId, SocketAddrString)>,
     State(tunnel_gateway_states): State<TunnelGatewayStates>,
 ) -> impl IntoResponse {
     if let Some(tunnel_gw_states) = tunnel_gateway_states.get(&snap_id) {
         for (_, tunnel_gw_state) in tunnel_gw_states.iter() {
             let guard = tunnel_gw_state.write().expect("no fail");
-            // XXX: we expect this API to be used only in the legacy address
-            // assignment case, for now.
-            match guard.get(&SocketAddr::new(endhost_addr.0.local_address(), 0)) {
+            match guard.get(&socket_addr.0) {
                 Some(sender) => {
                     sender.close(
                         snap_tun::server::SnaptunConnErrors::InternalError,
                         b"Connection closed through management API",
                     );
-                    tracing::info!(snap_id=%snap_id, endhost_addr=%endhost_addr.0, "Closed connection");
+                    tracing::info!(snap_id=%snap_id, socket_addr=%socket_addr.0, "Closed connection");
                     return StatusCode::NO_CONTENT;
                 }
                 None => {
-                    tracing::info!(snap_id=%snap_id, endhost_addr=%endhost_addr.0, "Connection not found");
+                    tracing::info!(snap_id=%snap_id, socket_addr=%socket_addr.0, "Connection not found");
                     continue;
                 }
             }

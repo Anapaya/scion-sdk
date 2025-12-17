@@ -149,6 +149,22 @@ impl SharedPocketScionState {
 }
 // Snaps
 impl SharedPocketScionState {
+    /// XXX(uniquefine): This is temporary until we properly model the rendevous hashing.
+    /// If set, only one data plane per snap and only one snap per ISD-AS is allowed.
+    /// If a snap is configured, then it is registered as wildcard sim_receiver
+    /// and all traffic is forwarded to the snap.
+    /// If not set, the old behavior is used.
+    /// Returns true if all traffic should be forwarded to the SNAPs.
+    pub(crate) fn forward_all_traffic_to_snaps(&self) -> bool {
+        let sstate = self.system_state.read().unwrap();
+        sstate.forward_all_traffic_to_snaps
+    }
+    /// Set if all traffic should be forwarded to the SNAPs.
+    pub fn set_forward_all_traffic_to_snaps(&mut self, forward_all_traffic_to_snaps: bool) {
+        let mut system_state = self.system_state.write().unwrap();
+        system_state.forward_all_traffic_to_snaps = forward_all_traffic_to_snaps;
+    }
+
     pub(crate) fn snap_token_public_key(&self) -> Pem {
         let sstate = self.system_state.read().unwrap();
         sstate.snap_token_public_pem.clone()
@@ -286,6 +302,23 @@ impl SharedPocketScionState {
             .map(|registry| (registry.isd_asn(), registry.prefixes().to_vec()))
             .collect::<Vec<_>>()
             .into()
+    }
+
+    pub(crate) fn snap_data_plane_ases(
+        &self,
+        snap_data_plane_id: SnapDataPlaneId,
+    ) -> anyhow::Result<Vec<IsdAsn>> {
+        let state_guard = self.system_state.read().unwrap();
+        let state = state_guard
+            .snaps
+            .get(&snap_data_plane_id.snap_id)
+            .and_then(|snap| snap.data_planes.get(&snap_data_plane_id.data_plane_id))
+            .context("SNAP data plane not found")?;
+        Ok(state
+            .address_registries
+            .values()
+            .map(|registry| registry.isd_asn())
+            .collect::<Vec<_>>())
     }
 }
 // Endhost API
@@ -436,6 +469,12 @@ impl SharedPocketScionState {
 #[derive(Debug, Clone)]
 pub struct SystemState {
     start_time: SystemTime,
+    /// XXX(uniquefine): This is temporary until we properly model the rendevous hashing.
+    /// If set, only one data plane per snap and only one snap per ISD-AS is allowed.
+    /// If a snap is configured, then it is registered as wildcard sim_receiver
+    /// and all traffic is forwarded to the snap.
+    /// If not set, the old behavior is used.
+    forward_all_traffic_to_snaps: bool,
     snap_token_public_pem: Pem,
     snaps: BTreeMap<SnapId, SnapState>,
     auth_server: Option<AuthServerState>,
@@ -451,6 +490,7 @@ impl SystemState {
     pub fn default_from_start_time(start_time: SystemTime) -> Self {
         Self {
             start_time,
+            forward_all_traffic_to_snaps: false,
             snap_token_public_pem: insecure_const_ed25519_key_pair_pem().1,
             snaps: Default::default(),
             routers: Default::default(),
@@ -482,6 +522,7 @@ impl PartialEq for SystemState {
 impl From<&SystemState> for SystemStateDto {
     fn from(system_state: &SystemState) -> Self {
         Self {
+            forward_all_traffic_to_snaps: system_state.forward_all_traffic_to_snaps,
             auth_server_state: system_state
                 .auth_server
                 .as_ref()
@@ -559,6 +600,7 @@ impl TryFrom<SystemStateDto> for SystemState {
         Ok(SystemState {
             start_time: SystemTime::now(),
             auth_server,
+            forward_all_traffic_to_snaps: dto.forward_all_traffic_to_snaps,
             snap_token_public_pem,
             snaps,
             routers: router_sockets,

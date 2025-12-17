@@ -31,6 +31,7 @@ scion-sdk-reqwest-connect-rpc = { workspace = true }
 scion-sdk-utils = { workspace = true }
 snap-control = { workspace = true }
 snap-tun = { workspace = true }
+socket2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -42,6 +43,9 @@ test-log = { workspace = true }
 
 [lints]
 workspace = true
+
+[target."cfg(windows)".dependencies]
+windows-sys = "0.61.2"
 
 # If you believe cargo-machete has detected an unused dependency incorrectly,
 # you can add the dependency to the list of dependencies to ignore in the

@@ -609,6 +609,12 @@ pub enum ScionSocketBindError {
     /// The provided port is already in use.
     #[error("port {0} is already in use")]
     PortAlreadyInUse(u16),
+    /// Failed to connect to SNAP data plane.
+    #[error("SNAP data plane connection failed: {0}")]
+    DataplaneError(Cow<'static, str>),
+    /// No underlay available to bind the requested address.
+    #[error("underlay unavailable: {0}")]
+    UnderlayUnavailable(Cow<'static, str>),
     /// An error that is not covered by the variants above.
     #[error("other error: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),

@@ -61,7 +61,8 @@ impl DefaultTokenRenewer {
 /// Configuration for automatic session renewal.
 #[derive(Clone)]
 pub struct SessionRenewal {
-    renewal_wait_threshold: std::time::Duration,
+    /// Threshold for waiting for the next renewal of the session token.
+    pub renewal_wait_threshold: std::time::Duration,
 }
 
 impl Default for SessionRenewal {
@@ -101,7 +102,7 @@ struct ConnFactory {
 }
 
 impl ConnFactory {
-    async fn new_connection(
+    pub async fn new_connection(
         &self,
         desired_addresses: Vec<EndhostAddr>,
     ) -> Result<SnapTunConnection, SnapTunnelError> {

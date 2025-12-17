@@ -23,7 +23,9 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
-use integration_tests::{UnderlayType, minimal_pocketscion_setup};
+use integration_tests::{
+    PocketscionTestEnv, UnderlayType, minimal_pocketscion_setup, minimal_pocketscion_setup_v2,
+};
 use scion_proto::{
     address::{ScionAddr, SocketAddr},
     packet::{ByEndpoint, ScionPacketRaw, ScionPacketScmp},
@@ -91,20 +93,38 @@ impl TestScmpHandler {
     }
 }
 
-async fn test_bind_two_sockets_send_receive_impl(underlay: UnderlayType) {
-    let test_env = minimal_pocketscion_setup(underlay).await;
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_bind_two_endpoints_socket_already_in_use() {
+    let first_endpoint = quinn::Endpoint::client(("0.0.0.0:0").parse().unwrap()).unwrap();
+    let local_addr = first_endpoint.local_addr().unwrap();
+    info!("Local address: {local_addr:?}");
+    let second_endpoint = quinn::Endpoint::client(local_addr);
+    assert!(
+        second_endpoint.is_err(),
+        "expected error but got {second_endpoint:?}"
+    );
+    info!("Local address again: {:?}", first_endpoint.local_addr());
+}
 
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+async fn test_bind_two_sockets_send_receive_impl(test_env: PocketscionTestEnv, v2: bool) {
+    let sender_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+    let receiver_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api212.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
 
     // Bind sender and receiver sockets
     let sender_socket = sender_stack.bind(None).await.unwrap();
@@ -144,23 +164,46 @@ async fn test_bind_two_sockets_send_receive_impl(underlay: UnderlayType) {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_two_sockets_send_receive_snap() {
-    test_bind_two_sockets_send_receive_impl(UnderlayType::Snap).await;
+    test_bind_two_sockets_send_receive_impl(
+        minimal_pocketscion_setup(UnderlayType::Snap).await,
+        false,
+    )
+    .await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_bind_two_sockets_send_receive_snap_v2() {
+    test_bind_two_sockets_send_receive_impl(
+        minimal_pocketscion_setup_v2(UnderlayType::Snap).await,
+        true,
+    )
+    .await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_two_sockets_send_receive_udp() {
-    test_bind_two_sockets_send_receive_impl(UnderlayType::Udp).await;
+    test_bind_two_sockets_send_receive_impl(
+        minimal_pocketscion_setup(UnderlayType::Udp).await,
+        false,
+    )
+    .await;
 }
 
-async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
-    let test_env = minimal_pocketscion_setup(underlay).await;
+async fn test_bind_with_specific_address_impl(underlay: UnderlayType, v2: bool) {
+    let test_env = if v2 {
+        minimal_pocketscion_setup_v2(underlay).await
+    } else {
+        minimal_pocketscion_setup(underlay).await
+    };
 
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+    let mut builder =
+        ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+    if v2 {
+        builder = builder.with_use_v2();
+    }
+    let stack = builder.build().await.unwrap();
 
     let scion_addr = ScionAddr::new(
         *stack.local_ases().first().unwrap(),
@@ -189,30 +232,35 @@ async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
 #[ignore = "With the SCION stack v2 we can no longer return stacks local address before binding."]
 async fn test_bind_with_specific_address_snap() {
     // On the snap underlay we can bind to any port without conflict.
-    test_bind_with_specific_address_impl(UnderlayType::Snap).await;
+    test_bind_with_specific_address_impl(UnderlayType::Snap, false).await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+#[ignore = "With the SCION stack v2 we can no longer return stacks local address before binding."]
+async fn test_bind_with_specific_address_snap_v2() {
+    test_bind_with_specific_address_impl(UnderlayType::Snap, true).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 #[ignore = "With the SCION stack v2 we can no longer return stacks local address before binding."]
 async fn test_bind_with_specific_address_udp() {
-    test_bind_with_specific_address_impl(UnderlayType::Udp).await;
+    test_bind_with_specific_address_impl(UnderlayType::Udp, false).await;
 }
 
-async fn test_bind_port_already_in_use_impl(underlay: UnderlayType) {
-    let test_env = minimal_pocketscion_setup(underlay).await;
-
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
-
-    info!("Stack local ASes: {:?}", stack.local_ases());
+async fn test_bind_port_already_in_use_impl(test_env: PocketscionTestEnv, v2: bool) {
+    let mut builder =
+        ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+    if v2 {
+        builder = builder.with_use_v2();
+    }
+    let stack = builder.build().await.unwrap();
 
     // First bind should succeed
     let socket = stack.bind(None).await.unwrap();
     let addr = socket.local_addr();
+    info!("First socket address: {addr:?}");
 
     // Second bind to same port should fail
     let result = stack.bind(Some(addr)).await;
@@ -221,18 +269,33 @@ async fn test_bind_port_already_in_use_impl(underlay: UnderlayType) {
         "expected PortAlreadyInUse({}) when binding to same port twice, got {result:?}",
         addr.port()
     );
+    // Make sure the socket is only dropped now.
+    info!("Socket is still around: {:?}", socket.local_addr());
+    drop(socket);
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_port_already_in_use_snap() {
-    test_bind_port_already_in_use_impl(UnderlayType::Snap).await;
+    test_bind_port_already_in_use_impl(minimal_pocketscion_setup(UnderlayType::Snap).await, false)
+        .await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_bind_port_already_in_use_snap_v2() {
+    test_bind_port_already_in_use_impl(
+        minimal_pocketscion_setup_v2(UnderlayType::Snap).await,
+        true,
+    )
+    .await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_port_already_in_use_udp() {
-    test_bind_port_already_in_use_impl(UnderlayType::Udp).await;
+    test_bind_port_already_in_use_impl(minimal_pocketscion_setup(UnderlayType::Udp).await, false)
+        .await;
 }
 
 /// With the snap underlay ports are reserved for a fixed time.
@@ -281,14 +344,13 @@ async fn test_port_reservation_timing_snap() {
     assert_eq!(socket.local_addr(), addr);
 }
 
-async fn test_quic_endpoint_creation_impl(underlay: UnderlayType) {
-    let test_env = minimal_pocketscion_setup(underlay).await;
-
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+async fn test_quic_endpoint_creation_impl(test_env: PocketscionTestEnv, v2: bool) {
+    let mut builder =
+        ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+    if v2 {
+        builder = builder.with_use_v2();
+    }
+    let stack = builder.build().await.unwrap();
 
     let endpoint = stack
         .quic_endpoint(None, quinn::EndpointConfig::default(), None, None)
@@ -300,15 +362,26 @@ async fn test_quic_endpoint_creation_impl(underlay: UnderlayType) {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_quic_endpoint_creation_snap() {
-    test_quic_endpoint_creation_impl(UnderlayType::Snap).await;
+    test_quic_endpoint_creation_impl(minimal_pocketscion_setup(UnderlayType::Snap).await, false)
+        .await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_quic_endpoint_creation_snap_v2() {
+    test_quic_endpoint_creation_impl(minimal_pocketscion_setup_v2(UnderlayType::Snap).await, true)
+        .await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_quic_endpoint_creation_udp() {
-    test_quic_endpoint_creation_impl(UnderlayType::Udp).await;
+    test_quic_endpoint_creation_impl(minimal_pocketscion_setup(UnderlayType::Udp).await, false)
+        .await;
 }
 
+/// Test that if a UDP socket and Raw socket bind to the same socket address,
+/// udp packets are delivered to the UDP socket and other packets are delivered to the Raw socket.
 async fn test_udp_packet_dispatch_impl(underlay: UnderlayType) {
     let test_env = minimal_pocketscion_setup(underlay).await;
     let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
@@ -393,12 +466,26 @@ async fn test_udp_packet_dispatch_udp() {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_scmp_packet_dispatch_with_port_snap() {
+    test_scmp_packet_dispatch_with_port_snap_impl(false).await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+#[ignore = "XXX(uniquefine): This test needs to be fixed when SCMP handling is implemented for v2."]
+async fn test_scmp_packet_dispatch_with_port_snap_v2() {
+    test_scmp_packet_dispatch_with_port_snap_impl(true).await;
+}
+
+async fn test_scmp_packet_dispatch_with_port_snap_impl(v2: bool) {
     let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+    let sender_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
 
     let (tx, mut rx) = mpsc::channel(1);
 
@@ -562,6 +649,7 @@ async fn test_scmp_packet_dispatch_with_port_udp() {
     );
 }
 
+/// XXX(uniquefine): With the SCION stack v2 we can no longer dispatch SCMP packets without a port.
 #[ignore]
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
@@ -805,15 +893,15 @@ fn test_packet_index(bytes: &[u8]) -> Option<u32> {
         .and_then(|s| s.parse::<u32>().ok())
 }
 
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn should_snaptun_sender_reconnects_snap() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+async fn should_snaptun_sender_reconnects_snap_impl(test_env: PocketscionTestEnv, v2: bool) {
+    let sender_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
 
     let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
         .with_auth_token(dummy_snap_token())
@@ -829,12 +917,21 @@ async fn should_snaptun_sender_reconnects_snap() {
     // 2 a) We expect all errors to be ConnectionClosed.
     // 2 b) We expect the sender to eventually recover and successfully send packets.
 
+    let delete_address = if v2 {
+        // delete connection using the full socket address.
+        sender.local_addr().local_address().unwrap()
+    } else {
+        // delete connection using the ip only.
+        sender
+            .local_addr()
+            .local_address()
+            .map(|a| net::SocketAddr::new(a.ip(), 0))
+            .unwrap()
+    };
+
     let client = test_env.pocketscion.api_client();
     client
-        .delete_snap_connection(
-            test_env.snap132,
-            sender.local_addr().scion_address().try_into().unwrap(),
-        )
+        .delete_snap_connection(test_env.snap132, delete_address)
         .await
         .unwrap();
 
@@ -902,19 +999,42 @@ async fn should_snaptun_sender_reconnects_snap() {
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
-async fn should_snaptun_receiver_reconnects_snap() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+async fn should_snaptun_sender_reconnects_snap() {
+    should_snaptun_sender_reconnects_snap_impl(
+        minimal_pocketscion_setup(UnderlayType::Snap).await,
+        false,
+    )
+    .await;
+}
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn should_snaptun_sender_reconnects_snap_v2() {
+    should_snaptun_sender_reconnects_snap_impl(
+        minimal_pocketscion_setup_v2(UnderlayType::Snap).await,
+        true,
+    )
+    .await;
+}
+
+async fn should_snaptun_receiver_reconnects_snap_impl(test_env: PocketscionTestEnv, v2: bool) {
+    let sender_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
+
+    let receiver_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api212.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
 
     let sender = Arc::new(sender_stack.bind(None).await.unwrap());
     let receiver = Arc::new(receiver_stack.bind(None).await.unwrap());
@@ -941,16 +1061,21 @@ async fn should_snaptun_receiver_reconnects_snap() {
         );
     });
 
+    let delete_address = if v2 {
+        // delete connection using the full socket address.
+        receiver_addr.local_address().unwrap()
+    } else {
+        // delete connection using the ip only.
+        receiver_addr
+            .local_address()
+            .map(|a| net::SocketAddr::new(a.ip(), 0))
+            .unwrap()
+    };
+
     // Close the receiver connection.
     let client = test_env.pocketscion.api_client();
     client
-        .delete_snap_connection(
-            test_env.snap212,
-            receiver_addr
-                .scion_address()
-                .try_into()
-                .expect("local address is an endhost address"),
-        )
+        .delete_snap_connection(test_env.snap212, delete_address)
         .await
         .unwrap();
 
@@ -973,19 +1098,42 @@ async fn should_snaptun_receiver_reconnects_snap() {
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
-async fn should_snaptun_reconnects_bind_socket_snap() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+async fn should_snaptun_receiver_reconnects_snap() {
+    should_snaptun_receiver_reconnects_snap_impl(
+        minimal_pocketscion_setup(UnderlayType::Snap).await,
+        false,
+    )
+    .await;
+}
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn should_snaptun_receiver_reconnects_snap_v2() {
+    should_snaptun_receiver_reconnects_snap_impl(
+        minimal_pocketscion_setup_v2(UnderlayType::Snap).await,
+        true,
+    )
+    .await;
+}
+
+async fn should_snaptun_reconnects_bind_socket_snap_impl(test_env: PocketscionTestEnv, v2: bool) {
+    let sender_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api132.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
+
+    let receiver_stack = {
+        let mut builder =
+            ScionStackBuilder::new(test_env.eh_api212.url).with_auth_token(dummy_snap_token());
+        if v2 {
+            builder = builder.with_use_v2();
+        }
+        builder.build().await.unwrap()
+    };
     let receiver = Arc::new(receiver_stack.bind(None).await.unwrap());
 
     let initial_sender = sender_stack.bind(None).await.unwrap();
@@ -994,6 +1142,20 @@ async fn should_snaptun_reconnects_bind_socket_snap() {
         .scion_address()
         .try_into()
         .expect("local address is an endhost address");
+
+    // Address to delete the connection on the server.
+    let delete_address = if v2 {
+        // delete connection using the full socket address.
+        initial_sender.local_addr().local_address().unwrap()
+    } else {
+        // delete connection using the ip only.
+        initial_sender
+            .local_addr()
+            .local_address()
+            .map(|a| net::SocketAddr::new(a.ip(), 0))
+            .unwrap()
+    };
+
     drop(initial_sender);
 
     // 1. Create a SCION stack
@@ -1003,7 +1165,7 @@ async fn should_snaptun_reconnects_bind_socket_snap() {
 
     let client = test_env.pocketscion.api_client();
     client
-        .delete_snap_connection(test_env.snap132, sender_addr)
+        .delete_snap_connection(test_env.snap132, delete_address)
         .await
         .unwrap();
 
@@ -1063,6 +1225,26 @@ async fn should_snaptun_reconnects_bind_socket_snap() {
     // Wait 3 seconds for a successful receive.
     within_duration!(Duration::from_secs(3), receive_join_handle).unwrap();
     sender_join_handle.abort();
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn should_snaptun_reconnects_bind_socket_snap() {
+    should_snaptun_reconnects_bind_socket_snap_impl(
+        minimal_pocketscion_setup(UnderlayType::Snap).await,
+        false,
+    )
+    .await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn should_snaptun_reconnects_bind_socket_snap_v2() {
+    should_snaptun_reconnects_bind_socket_snap_impl(
+        minimal_pocketscion_setup_v2(UnderlayType::Snap).await,
+        true,
+    )
+    .await;
 }
 
 #[tokio::test]

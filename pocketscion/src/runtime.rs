@@ -14,6 +14,7 @@
 //! PocketSCION runtime.
 
 use std::{
+    collections::BTreeSet,
     io,
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
@@ -200,6 +201,29 @@ impl PocketScionRuntimeBuilder {
 
         // General setup
 
+        if pstate.forward_all_traffic_to_snaps() {
+            let mut seen_ases = BTreeSet::new();
+            for (_, snap_state) in pstate.snaps() {
+                // Only allow one snap per ISD-AS.
+                for isd_as in snap_state.isd_ases() {
+                    if seen_ases.contains(&isd_as) {
+                        return Err(PocketScionRuntimeError::StartupError("If forward_all_traffic_to_snaps is set, only one snap per ISD-AS is allowed".to_string()));
+                    }
+                    seen_ases.insert(isd_as);
+                }
+                // Only allow one data plane per snap.
+                if snap_state.data_planes.len() != 1 {
+                    return Err(PocketScionRuntimeError::StartupError("If forward_all_traffic_to_snaps is set, exactly one data plane per snap is allowed".to_string()));
+                }
+            }
+            // Do not allow any AS to have both routers and SNAPs configured.
+            for (_, router) in pstate.routers() {
+                if seen_ases.contains(&router.isd_as) {
+                    return Err(PocketScionRuntimeError::StartupError("If forward_all_traffic_to_snaps is set, only one router per ISD-AS is allowed".to_string()));
+                }
+            }
+        }
+
         for snap_id in pstate.snaps_ids() {
             let (_, session_decoding_key) = insecure_const_session_key_pair(snap_id.as_usize());
             // XXX(session-token-rework): single decoding key after SNAP dp session token removal
@@ -251,20 +275,36 @@ impl PocketScionRuntimeBuilder {
                     async move { dispatcher.start_dispatching().await }
                 });
 
-                let registrations = pstate
-                    .snap_data_plane_prefixes(snap_dp_id)
-                    .expect("Data plane registrations should exist");
-
-                // Register the tunnel gateway dispatcher for each prefix
-                for (ias, ipnets) in registrations {
-                    for ipnet in ipnets {
+                if pstate.forward_all_traffic_to_snaps() {
+                    for isd_as in pstate
+                        .snap_data_plane_ases(snap_dp_id)
+                        .expect("State for SNAP data plane should exist")
+                    {
                         pstate
-                            .add_sim_receiver(
-                                ias,
-                                ipnet,
+                            .add_wildcard_sim_receiver(
+                                isd_as,
                                 Arc::new(TunnelGatewayReceiver::new(tunnel_gw_dispatcher.clone())),
                             )
-                            .expect("Failed to add dispatcher");
+                            .expect("Failed to add wildcard receiver");
+                    }
+                } else {
+                    let registrations = pstate
+                        .snap_data_plane_prefixes(snap_dp_id)
+                        .expect("Data plane registrations should exist");
+
+                    // Register the tunnel gateway dispatcher for each prefix
+                    for (ias, ipnets) in registrations {
+                        for ipnet in ipnets {
+                            pstate
+                                .add_sim_receiver(
+                                    ias,
+                                    ipnet,
+                                    Arc::new(TunnelGatewayReceiver::new(
+                                        tunnel_gw_dispatcher.clone(),
+                                    )),
+                                )
+                                .expect("Failed to add dispatcher");
+                        }
                     }
                 }
 

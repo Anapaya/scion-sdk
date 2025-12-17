@@ -2841,12 +2841,14 @@ dependencies = [
  "scion-sdk-utils",
  "snap-control",
  "snap-tun",
+ "socket2",
  "test-log",
  "thiserror 2.0.17",
  "tokio",
  "tokio-util",
  "tracing",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

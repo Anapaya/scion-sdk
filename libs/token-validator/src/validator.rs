@@ -101,6 +101,8 @@ where
         validator.set_required_spec_claims(&C::required_claims());
         if let Some(audience) = audience {
             validator.set_audience(audience);
+        } else {
+            validator.validate_aud = false;
         }
 
         Self {

@@ -13,11 +13,11 @@
 // limitations under the License.
 //! Client for the PocketScion management API.
 
-use std::time::Duration;
+use std::{net, time::Duration};
 
 use bytes::Bytes;
 use reqwest::ClientBuilder;
-use scion_proto::address::{EndhostAddr, IsdAsn};
+use scion_proto::address::IsdAsn;
 use thiserror::Error;
 use url::Url;
 
@@ -112,11 +112,11 @@ impl ApiClient {
     pub async fn delete_snap_connection(
         &self,
         snap_id: SnapId,
-        endhost_addr: EndhostAddr,
+        socket_addr: net::SocketAddr,
     ) -> Result<(), ClientError> {
         let url = self
             .api
-            .join(&format!("snaps/{snap_id}/connections/{endhost_addr}"))?;
+            .join(&format!("snaps/{snap_id}/connections/{socket_addr}"))?;
         let response = self.client.delete(url).send().await?;
         match response.status() {
             reqwest::StatusCode::NO_CONTENT => Ok(()),
