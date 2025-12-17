@@ -22,7 +22,7 @@ use std::{
 use anyhow::{Context, Ok};
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::ControlPlaneIoConfig;
-use snap_dataplane::{state::DataPlaneId, tunnel_gateway::state::TunnelGatewayIoConfig};
+use snap_dataplane::{state::Hostname, tunnel_gateway::state::TunnelGatewayIoConfig};
 
 use crate::{
     authorization_server::api::IoAuthServerConfig,
@@ -262,8 +262,11 @@ impl SharedPocketScionIoConfig {
             .map(|snap| {
                 snap.data_planes
                     .iter()
-                    .map(|(dp_id, state)| {
-                        (SnapDataPlaneId::new(snap_id, *dp_id), state.listen_addr)
+                    .map(|(hostname, state)| {
+                        (
+                            SnapDataPlaneId::new(snap_id, hostname.clone()),
+                            state.listen_addr,
+                        )
                     })
                     .collect()
             })
@@ -315,7 +318,8 @@ pub struct SnapIoConfig {
     /// The control plane I/O configuration.
     pub control_plane: ControlPlaneIoConfig,
     /// The data plane I/O configurations.
-    pub data_planes: BTreeMap<DataPlaneId, TunnelGatewayIoConfig>,
+    // XXX(bunert): This should be a single TunnelGatewayIoConfig.
+    pub data_planes: BTreeMap<Hostname, TunnelGatewayIoConfig>,
 }
 
 impl From<&SnapIoConfig> for IoSnapConfigDto {
@@ -325,7 +329,7 @@ impl From<&SnapIoConfig> for IoSnapConfigDto {
             data_planes: value
                 .data_planes
                 .iter()
-                .map(|(id, config)| (*id, config.into()))
+                .map(|(hostname, config)| (hostname.clone(), config.into()))
                 .collect(),
         }
     }
@@ -338,12 +342,12 @@ impl TryFrom<IoSnapConfigDto> for SnapIoConfig {
         let data_planes = value
             .data_planes
             .into_iter()
-            .map(|(dp_id, dp_ip_config)| {
+            .map(|(hostname, dp_ip_config)| {
                 Ok((
-                    dp_id,
+                    hostname.clone(),
                     dp_ip_config
                         .try_into()
-                        .with_context(|| format!("Invalid data plane config ({dp_id})"))?,
+                        .with_context(|| format!("Invalid data plane config ({hostname})"))?,
                 ))
             })
             .collect::<Result<_, Self::Error>>()?;
@@ -370,7 +374,7 @@ mod tests {
 
         let cp_api = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, 9002));
         let snap_id = SnapId::from_usize(1);
-        let dp_id = SnapDataPlaneId::new(snap_id, DataPlaneId::from_usize(1));
+        let dp_id = SnapDataPlaneId::new(snap_id, "test-host".try_into().expect("valid hostname"));
 
         io_config.set_snap_control_addr(snap_id, cp_api);
         io_config.set_snap_data_plane_addr(dp_id, tunnel_addr);

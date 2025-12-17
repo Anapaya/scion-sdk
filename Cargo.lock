@@ -3143,6 +3143,7 @@ dependencies = [
  "pem",
  "prometheus",
  "rand",
+ "regex",
  "scion-proto",
  "scion-sdk-address-manager",
  "scion-sdk-common-types",

@@ -253,7 +253,7 @@ mod tests {
             state.add_snap_data_plane(snap_id, isd_as, prefixes, ChaCha8Rng::from_os_rng());
 
         // Get address allocator for the snap
-        let allocator = StateSnapAddressAllocator::new(state, snap_dp_id);
+        let allocator = StateSnapAddressAllocator::new(state, snap_dp_id.clone());
 
         let snap_token = SnapTokenClaims {
             pssid: Pssid(Uuid::new_v4()),

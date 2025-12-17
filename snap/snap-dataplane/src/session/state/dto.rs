@@ -26,7 +26,7 @@ use utoipa::ToSchema;
 
 use crate::{
     session::state::{Session, SessionId, SessionManagerState, SessionTokenIssuerState},
-    state::DataPlaneId,
+    state::Hostname,
 };
 
 /// The session manager state.
@@ -49,7 +49,7 @@ impl From<&SessionManagerState> for SessionManagerStateDto {
                     SessionDto {
                         session_id: SessionIdDto {
                             pssid: session_id.pssid.0.to_string(),
-                            data_plane_id: session_id.data_plane_id,
+                            hostname: session_id.hostname.clone(),
                         },
                         expiry: session.expiry.duration_since(UNIX_EPOCH).unwrap().as_secs(),
                     }
@@ -68,7 +68,7 @@ impl TryFrom<SessionManagerStateDto> for SessionManagerState {
             .into_iter()
             .map(|session| {
                 Pssid::from_str(&session.session_id.pssid).map(|pssid| {
-                    let session_id = SessionId::new(pssid, session.session_id.data_plane_id);
+                    let session_id = SessionId::new(pssid, session.session_id.hostname);
                     let expiry = UNIX_EPOCH + Duration::from_secs(session.expiry);
                     (session_id, Session::new(expiry))
                 })
@@ -96,8 +96,8 @@ pub struct SessionDto {
 pub struct SessionIdDto {
     /// The pseudo SCION subscriber identity (PSSID).
     pub pssid: String,
-    /// The ID of the data plane.
-    pub data_plane_id: DataPlaneId,
+    /// The hostname of the data plane.
+    pub hostname: Hostname,
 }
 
 /// Session token issuer state.

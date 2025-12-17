@@ -28,8 +28,8 @@ use crate::Pssid;
 pub struct SessionTokenClaims {
     /// The pseudo SCION subscriber identity (PSSID) from the SNAP token.
     pub pssid: Pssid,
-    /// The data plane ID.
-    pub data_plane_id: usize,
+    /// The hostname of the data plane.
+    pub hostname: String,
     /// The expiration time of the JWT, represented as a Unix timestamp.
     pub exp: u64,
 }

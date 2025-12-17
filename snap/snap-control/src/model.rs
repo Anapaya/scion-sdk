@@ -63,6 +63,7 @@ pub enum CreateSessionError {
     IssueSessionToken(#[from] SessionTokenError),
 }
 
+#[derive(Clone)]
 /// SNAP data plane information.
 pub struct SnapUnderlay {
     /// The listener address of the data plane.
@@ -71,6 +72,7 @@ pub struct SnapUnderlay {
     pub isd_ases: Vec<IsdAsn>,
 }
 
+#[derive(Clone)]
 /// UDP data plane information.
 pub struct UdpUnderlay {
     /// The UDP socket address of the data plane.
@@ -79,10 +81,11 @@ pub struct UdpUnderlay {
     pub isd_ases: Vec<IsdAsInterfaces>,
 }
 
+#[derive(Clone)]
 /// The interface IDs for an ISD-AS.
 pub struct IsdAsInterfaces {
     /// The ISD-AS identifier
     pub isd_as: IsdAsn,
     /// The interface IDs for this ISD-AS
-    pub interfaces: Vec<u32>,
+    pub interfaces: Vec<u16>,
 }

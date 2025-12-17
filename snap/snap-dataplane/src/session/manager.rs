@@ -16,7 +16,7 @@
 use snap_tokens::Pssid;
 use thiserror::Error;
 
-use crate::{session::state::SessionGrant, state::DataPlaneId};
+use crate::{session::state::SessionGrant, state::Hostname};
 
 /// TokenIssuer is the interface to issue session tokens.
 pub trait TokenIssuer {
@@ -24,7 +24,7 @@ pub trait TokenIssuer {
     fn issue(
         &self,
         pssid: Pssid,
-        data_plane_id: DataPlaneId,
+        hostname: Hostname,
         session_grant: SessionGrant,
     ) -> Result<String, SessionTokenError>;
 }

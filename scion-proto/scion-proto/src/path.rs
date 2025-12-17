@@ -260,10 +260,10 @@ where
                     DataPlanePath::Standard(path) => {
                         let info = path.info_fields().next()?;
                         let hf = path.hop_fields().next()?;
-                        Some(PathInterface {
-                            isd_asn: self.source(),
-                            id: hf.egress_interface(info)?.into(),
-                        })
+                        Some(PathInterface::new(
+                            self.source(),
+                            hf.egress_interface(info)?.into(),
+                        ))
                     }
                     _ => None,
                 }
@@ -286,10 +286,10 @@ where
                     DataPlanePath::Standard(path) => {
                         let info = path.info_fields().next_back()?;
                         let hf = path.hop_fields().next_back()?;
-                        Some(PathInterface {
-                            isd_asn: self.destination(),
-                            id: hf.ingress_interface(info)?.into(),
-                        })
+                        Some(PathInterface::new(
+                            self.destination(),
+                            hf.ingress_interface(info)?.into(),
+                        ))
                     }
                     _ => None,
                 }

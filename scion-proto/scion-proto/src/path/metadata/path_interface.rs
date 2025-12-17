@@ -31,6 +31,13 @@ pub struct PathInterface {
     pub id: u16,
 }
 
+impl PathInterface {
+    /// Creates a new [`PathInterface`] with the given [`IsdAsn`] and interface ID.
+    pub fn new(isd_asn: IsdAsn, id: u16) -> Self {
+        PathInterface { isd_asn, id }
+    }
+}
+
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum PathInterfaceParseError {
     #[error("invalid ISD-ASN")]

@@ -41,7 +41,7 @@ use snap_dataplane::{
         manager::TokenIssuer,
         state::{SessionManagerState, SessionTokenIssuerState, insecure_const_ed25519_signing_key},
     },
-    state::{DataPlaneId, DataPlaneState, Id},
+    state::{DataPlaneState, Hostname, Id},
     tunnel_gateway::state::SharedTunnelGatewayState,
 };
 use snap_tokens::snap_token::SnapTokenClaims;
@@ -265,14 +265,16 @@ impl SharedPocketScionState {
             .get_mut(&snap_id)
             .expect("SNAP not found");
 
-        let dp_id = DataPlaneId::from_usize(snap.data_planes.len());
-        let snap_dp_id = SnapDataPlaneId::new(snap_id, dp_id);
+        let hostname: Hostname = format!("host-{}", snap.data_planes.len())
+            .try_into()
+            .expect("valid hostname");
+        let snap_dp_id = SnapDataPlaneId::new(snap_id, hostname.clone());
 
         let mgr = AddressManager::new(isd_as, prefixes, rng).unwrap();
         let mut dp_state = DataPlaneState::default();
         dp_state.address_registries.insert(mgr.id(), mgr);
 
-        snap.data_planes.insert(dp_id, dp_state);
+        snap.data_planes.insert(hostname, dp_state);
 
         snap_dp_id
     }
@@ -282,7 +284,7 @@ impl SharedPocketScionState {
         let snap = sstate.snaps.get(&snap_id).expect("SNAP not found");
         snap.data_planes
             .keys()
-            .map(|dp_id| SnapDataPlaneId::new(snap_id, *dp_id))
+            .map(|hostname| SnapDataPlaneId::new(snap_id, hostname.clone()))
             .collect()
     }
 
@@ -294,7 +296,10 @@ impl SharedPocketScionState {
         let state = state_guard
             .snaps
             .get(&snap_data_plane_id.snap_id)
-            .and_then(|snap| snap.data_planes.get(&snap_data_plane_id.data_plane_id))?;
+            .and_then(|snap| {
+                snap.data_planes
+                    .get(&snap_data_plane_id.data_plane_hostname)
+            })?;
 
         state
             .address_registries
@@ -312,7 +317,10 @@ impl SharedPocketScionState {
         let state = state_guard
             .snaps
             .get(&snap_data_plane_id.snap_id)
-            .and_then(|snap| snap.data_planes.get(&snap_data_plane_id.data_plane_id))
+            .and_then(|snap| {
+                snap.data_planes
+                    .get(&snap_data_plane_id.data_plane_hostname)
+            })
             .context("SNAP data plane not found")?;
         Ok(state
             .address_registries
@@ -623,7 +631,8 @@ impl AsRef<SystemState> for RwLockReadGuard<'_, SystemState> {
 pub struct SnapState {
     pub(crate) session_manager: SessionManagerState,
     pub(crate) session_issuer: SessionTokenIssuerState,
-    pub(crate) data_planes: BTreeMap<DataPlaneId, DataPlaneState>,
+    // XXX(bunert): SNAP should contain a single data plane state.
+    pub(crate) data_planes: BTreeMap<Hostname, DataPlaneState>,
 }
 
 impl SnapState {
@@ -645,7 +654,7 @@ impl From<&SnapState> for SnapStateDto {
             data_planes: value
                 .data_planes
                 .iter()
-                .map(|(id, state)| (*id, state.into()))
+                .map(|(hostname, state)| (hostname.clone(), state.into()))
                 .collect(),
         }
     }
@@ -658,12 +667,12 @@ impl TryFrom<SnapStateDto> for SnapState {
         let data_planes = value
             .data_planes
             .into_iter()
-            .map(|(dp_id, state)| {
+            .map(|(hostname, state)| {
                 Ok((
-                    dp_id,
+                    hostname.clone(),
                     state
                         .try_into()
-                        .with_context(|| format!("invalid data plane state ({dp_id})"))?,
+                        .with_context(|| format!("invalid data plane state ({hostname})"))?,
                 ))
             })
             .collect::<Result<_, Self::Error>>()?;
@@ -842,7 +851,7 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
 
         snap.data_planes
             .iter()
-            .filter_map(|(dp_id, dp_state)| {
+            .filter_map(|(hostname, dp_state)| {
                 let isd_ases: Vec<IsdAsn> = dp_state
                     .address_registries
                     .values()
@@ -850,7 +859,7 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
                     .collect();
 
                 self.io_config
-                    .snap_data_plane_addr(SnapDataPlaneId::new(self.snap_id, *dp_id))
+                    .snap_data_plane_addr(SnapDataPlaneId::new(self.snap_id, hostname.clone()))
                     .map(|address| SnapUnderlay { address, isd_ases })
             })
             .collect()
@@ -931,17 +940,17 @@ impl Id for SnapId {
 }
 
 /// SNAP data plane identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ToSchema)]
 pub struct SnapDataPlaneId {
     snap_id: SnapId,
-    data_plane_id: DataPlaneId,
+    data_plane_hostname: Hostname,
 }
 
 impl SnapDataPlaneId {
-    pub(crate) fn new(snap_id: SnapId, dp_id: DataPlaneId) -> Self {
+    pub(crate) fn new(snap_id: SnapId, hostname: Hostname) -> Self {
         Self {
             snap_id,
-            data_plane_id: dp_id,
+            data_plane_hostname: hostname,
         }
     }
 
@@ -949,8 +958,8 @@ impl SnapDataPlaneId {
         self.snap_id
     }
 
-    pub(crate) fn data_plane(&self) -> DataPlaneId {
-        self.data_plane_id
+    pub(crate) fn data_plane(&self) -> Hostname {
+        self.data_plane_hostname.clone()
     }
 }
 
@@ -959,7 +968,7 @@ impl Serialize for SnapDataPlaneId {
     where
         S: Serializer,
     {
-        let s = format!("{}-{}", self.snap_id.0, self.data_plane_id);
+        let s = format!("{}-{}", self.snap_id.0, self.data_plane_hostname);
         serializer.serialize_str(&s)
     }
 }
@@ -979,19 +988,19 @@ impl<'de> Deserialize<'de> for SnapDataPlaneId {
         let snap = parts[0]
             .parse::<usize>()
             .map_err(|_| Error::custom("invalid SnapId part"))?;
-        let dp_id = parts[1]
-            .parse::<usize>()
-            .map_err(|_| Error::custom("invalid DataPlaneId part"))?;
+        let hostname = parts[1]
+            .try_into()
+            .map_err(|e| Error::custom(format!("invalid hostname: {}", e)))?;
         Ok(SnapDataPlaneId {
             snap_id: SnapId(snap),
-            data_plane_id: DataPlaneId::from_usize(dp_id),
+            data_plane_hostname: hostname,
         })
     }
 }
 
 impl fmt::Display for SnapDataPlaneId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}-{}", self.snap_id, self.data_plane_id)
+        write!(f, "{}-{}", self.snap_id, self.data_plane_hostname)
     }
 }
 

@@ -234,8 +234,10 @@ impl PocketScionRuntimeBuilder {
 
             // Start TunnelGateway for each SNAP data plane
             for snap_dp_id in pstate.snap_data_planes(snap_id) {
-                let address_allocator =
-                    Arc::new(StateSnapAddressAllocator::new(pstate.clone(), snap_dp_id));
+                let address_allocator = Arc::new(StateSnapAddressAllocator::new(
+                    pstate.clone(),
+                    snap_dp_id.clone(),
+                ));
 
                 let metrics_registry = MetricsRegistry::new();
 
@@ -246,7 +248,7 @@ impl PocketScionRuntimeBuilder {
                 );
 
                 // tunnel gateway server quinn endpoint
-                let server_endpoint = match io_config.snap_data_plane_addr(snap_dp_id) {
+                let server_endpoint = match io_config.snap_data_plane_addr(snap_dp_id.clone()) {
                     Some(addr) => quinn::Endpoint::server(server_config, addr)?,
                     None => {
                         tracing::debug!(data_plane_id=%snap_dp_id, "No listen address specified for SNAP data plane");
@@ -254,8 +256,10 @@ impl PocketScionRuntimeBuilder {
                             server_config,
                             SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
                         )?;
-                        io_config
-                            .set_snap_data_plane_addr(snap_dp_id, server_endpoint.local_addr()?);
+                        io_config.set_snap_data_plane_addr(
+                            snap_dp_id.clone(),
+                            server_endpoint.local_addr()?,
+                        );
                         server_endpoint
                     }
                 };
@@ -264,7 +268,7 @@ impl PocketScionRuntimeBuilder {
                 tunnel_gateway_states
                     .entry(snap_id)
                     .or_default()
-                    .insert(snap_dp_id, shared_tunnel_gw_state.clone());
+                    .insert(snap_dp_id.clone(), shared_tunnel_gw_state.clone());
                 let tunnel_gw_dispatcher = TunnelGatewayDispatcher::new(
                     shared_tunnel_gw_state.clone(),
                     TunnelGatewayDispatcherMetrics::new(&metrics_registry),

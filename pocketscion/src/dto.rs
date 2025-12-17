@@ -30,7 +30,7 @@ use snap_control::server::state::dto::IoControlPlaneConfigDto;
 use snap_dataplane::{
     dto::DataPlaneStateDto,
     session::state::dto::{SessionManagerStateDto, SessionTokenIssuerStateDto},
-    state::DataPlaneId,
+    state::Hostname,
     tunnel_gateway::state::dto::IoDataPlaneConfigDto,
 };
 use utoipa::ToSchema;
@@ -131,7 +131,7 @@ pub struct SnapStateDto {
     /// Session token issuer state.
     pub session_issuer: SessionTokenIssuerStateDto,
     /// The list of SNAP data planes.
-    pub data_planes: BTreeMap<DataPlaneId, DataPlaneStateDto>,
+    pub data_planes: BTreeMap<Hostname, DataPlaneStateDto>,
 }
 
 /// The I/O configuration of a SNAP.
@@ -140,7 +140,7 @@ pub struct IoSnapConfigDto {
     /// The control plane address of the SNAP.
     pub control_plane: IoControlPlaneConfigDto,
     /// The list of data plane I/O configurations.
-    pub data_planes: BTreeMap<DataPlaneId, IoDataPlaneConfigDto>,
+    pub data_planes: BTreeMap<Hostname, IoDataPlaneConfigDto>,
 }
 
 /// The state of a SCION router emulated by PocketScion.

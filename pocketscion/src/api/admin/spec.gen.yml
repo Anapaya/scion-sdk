@@ -243,10 +243,6 @@ components:
         token_exchanger:
           $ref: '#/components/schemas/TokenExchangerStateDto'
           description: The token exchange state.
-    DataPlaneId:
-      type: integer
-      description: Data plane identifier.
-      minimum: 0
     DataPlaneStateDto:
       type: object
       description: The SNAP data plane state.
@@ -318,6 +314,9 @@ components:
         public_key:
           type: string
           description: The public key (PEM format) used to verify ID tokens.
+    Hostname:
+      type: string
+      description: SNAP node hostname.
     IoAuthServerConfigDto:
       type: object
       description: The I/O configuration of the Auth server.
@@ -393,9 +392,8 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/IoDataPlaneConfigDto'
           propertyNames:
-            type: integer
-            description: Data plane identifier.
-            minimum: 0
+            type: string
+            description: SNAP node hostname.
     IpNetDto:
       type: string
       description: IP network.
@@ -524,11 +522,11 @@ components:
       description: Session ID.
       required:
       - pssid
-      - data_plane_id
+      - hostname
       properties:
-        data_plane_id:
-          $ref: '#/components/schemas/DataPlaneId'
-          description: The ID of the data plane.
+        hostname:
+          $ref: '#/components/schemas/Hostname'
+          description: The hostname of the data plane.
         pssid:
           type: string
           description: The pseudo SCION subscriber identity (PSSID).
@@ -579,9 +577,8 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/DataPlaneStateDto'
           propertyNames:
-            type: integer
-            description: Data plane identifier.
-            minimum: 0
+            type: string
+            description: SNAP node hostname.
         session_issuer:
           $ref: '#/components/schemas/SessionTokenIssuerStateDto'
           description: Session token issuer state.

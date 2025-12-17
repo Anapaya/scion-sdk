@@ -178,7 +178,7 @@ impl<T: UnderlayDiscovery> endhost_api_models::UnderlayDiscovery for UnderlayDis
                 udp_underlay.push(ScionRouter {
                     isd_as: router_as.isd_as,
                     internal_interface: dp.endpoint,
-                    interfaces: router_as.interfaces.iter().map(|&i| i as u16).collect(),
+                    interfaces: router_as.interfaces.clone(),
                 });
             }
         }

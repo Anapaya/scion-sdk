@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use snap_tokens::{Pssid, session_token::SessionTokenClaims};
 
 use super::manager::{SessionTokenError, TokenIssuer};
-use crate::state::{DataPlaneId, Id};
+use crate::state::Hostname;
 
 pub mod dto;
 
@@ -40,16 +40,13 @@ const DEFAULT_SESSION_DURATION: Duration = Duration::from_secs(3600); // 1 hour
 #[derive(Debug, Ord, Eq, PartialEq, PartialOrd, Serialize, Deserialize, Clone)]
 pub struct SessionId {
     pssid: Pssid,
-    data_plane_id: DataPlaneId,
+    hostname: Hostname,
 }
 
 impl SessionId {
     /// Creates a new SNAP data plane session ID.
-    pub fn new(pssid: Pssid, data_plane_id: DataPlaneId) -> Self {
-        Self {
-            pssid,
-            data_plane_id,
-        }
+    pub fn new(pssid: Pssid, hostname: Hostname) -> Self {
+        Self { pssid, hostname }
     }
 }
 
@@ -83,9 +80,9 @@ impl SessionManagerState {
     pub fn open(
         &mut self,
         pssid: Pssid,
-        data_plane_id: DataPlaneId,
+        hostname: Hostname,
     ) -> Result<SessionGrant, SessionOpenError> {
-        let session_id = SessionId::new(pssid.clone(), data_plane_id);
+        let session_id = SessionId::new(pssid.clone(), hostname);
         let session_expiry = SystemTime::now() + self.session_duration;
 
         // XXX(bunert): For now it does not matter if we create a new session or update an existing
@@ -147,12 +144,12 @@ impl TokenIssuer for SessionTokenIssuerState {
     fn issue(
         &self,
         pssid: Pssid,
-        data_plane_id: DataPlaneId,
+        hostname: Hostname,
         session_grant: SessionGrant,
     ) -> Result<String, SessionTokenError> {
         let claims = SessionTokenClaims {
             pssid,
-            data_plane_id: data_plane_id.as_usize(),
+            hostname: hostname.to_string(),
             exp: session_grant
                 .expiry
                 .duration_since(UNIX_EPOCH)
@@ -240,7 +237,7 @@ mod tests {
                 .unwrap()
                 .as_secs(),
         };
-        let dp_id = DataPlaneId::from_usize(0);
+        let hostname: Hostname = "test-host".try_into().expect("valid hostname");
 
         let signing_key = insecure_const_ed25519_signing_key(0);
         let signing_key = Ed25519SigningKeyPem::from(signing_key);
@@ -249,10 +246,12 @@ mod tests {
 
         let mut session_manager = SessionManagerState::default();
 
-        let session_grant = session_manager.open(claims.pssid.clone(), dp_id).unwrap();
+        let session_grant = session_manager
+            .open(claims.pssid.clone(), hostname.clone())
+            .unwrap();
 
         let session_token = issuer
-            .issue(claims.pssid.clone(), dp_id, session_grant)
+            .issue(claims.pssid.clone(), hostname.clone(), session_grant)
             .unwrap();
 
         Validator::<SessionTokenClaims>::new(decoding_key, None)
@@ -261,7 +260,7 @@ mod tests {
 
         // Open another session with the same PSSID should succeed for now.
         let _ = session_manager
-            .open(claims.pssid.clone(), dp_id)
+            .open(claims.pssid.clone(), hostname.clone())
             .expect("open second session");
     }
 }

@@ -18,6 +18,7 @@ pem = { workspace = true, features = ["serde"] }
 prometheus = { workspace = true }
 quinn = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 thiserror = { workspace = true }
