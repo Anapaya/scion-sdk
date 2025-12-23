@@ -52,10 +52,10 @@ pub struct PocketscionTestEnv {
     pub eh_api132: EndhostApiResponseEntry,
     /// Endhost API entry for AS 2-ff00:0:212.
     pub eh_api212: EndhostApiResponseEntry,
-    /// Snap ID for AS 1-ff00:0:132.
-    pub snap132: SnapId,
-    /// Snap ID for AS 2-ff00:0:212.
-    pub snap212: SnapId,
+    /// Snap ID for AS 1-ff00:0:132. None if UDP underlay is used.
+    pub snap132: Option<SnapId>,
+    /// Snap ID for AS 2-ff00:0:212. None if UDP underlay is used.
+    pub snap212: Option<SnapId>,
 }
 
 /// Sets up PocketSCION with two SNAPs in different ASes for testing.
@@ -66,14 +66,24 @@ pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTes
 /// Sets up PocketSCION with two SNAPs in different ASes for testing. The SNAPs use residential
 /// addresses.
 pub async fn minimal_pocketscion_setup_v2(underlay: UnderlayType) -> PocketscionTestEnv {
-    minimal_pocketscion_setup_inner(underlay, true).await
+    minimal_pocketscion_setup_inner(
+        underlay,
+        match underlay {
+            UnderlayType::Snap => true,
+            UnderlayType::Udp => false,
+        },
+    )
+    .await
 }
 
-async fn minimal_pocketscion_setup_inner(underlay: UnderlayType, v2: bool) -> PocketscionTestEnv {
+async fn minimal_pocketscion_setup_inner(
+    underlay: UnderlayType,
+    forward_all_traffic_to_snaps: bool,
+) -> PocketscionTestEnv {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let mut pstate = SharedPocketScionState::new(SystemTime::now());
-    if v2 {
+    if forward_all_traffic_to_snaps {
         pstate.set_forward_all_traffic_to_snaps(true);
     }
 
@@ -103,18 +113,20 @@ async fn minimal_pocketscion_setup_inner(underlay: UnderlayType, v2: bool) -> Po
     let eh212 = pstate.add_endhost_api(vec![ia212]);
 
     // Create two SNAPs with data planes
-    let snap132 = pstate.add_snap();
-    let snap212 = pstate.add_snap();
+    let mut snap132 = None;
+    let mut snap212 = None;
     match underlay {
         UnderlayType::Snap => {
+            snap132 = Some(pstate.add_snap());
+            snap212 = Some(pstate.add_snap());
             pstate.add_snap_data_plane(
-                snap132,
+                snap132.unwrap(),
                 ia132,
                 vec!["10.132.0.0/16".parse().unwrap()],
                 ChaCha8Rng::seed_from_u64(1),
             );
             pstate.add_snap_data_plane(
-                snap212,
+                snap212.unwrap(),
                 ia212,
                 vec!["10.212.0.0/16".parse().unwrap()],
                 ChaCha8Rng::seed_from_u64(42),

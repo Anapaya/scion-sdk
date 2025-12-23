@@ -27,6 +27,8 @@ use snap_tokens::snap_token::dummy_snap_token_with_validity;
 use test_log::test;
 use tokio::time::timeout;
 
+/// TODO(uniquefine): Adapt to use v2. Session tokens are no longer used, but the snap token still
+/// needs to be renewed and send to the data plane.
 #[test(tokio::test)]
 async fn auto_session_renewals() {
     // For sessions we have a hardcoded automatic renew to happen at (expiration_time as f32 * 0.75)
@@ -101,6 +103,8 @@ async fn auto_session_renewals() {
     tracing::info!("Got expected error: {err:?}");
 }
 
+/// TODO(uniquefine): Adapt to use v2. Session tokens are no longer used, but the snap token still
+/// needs to be renewed and send to the data plane.
 // Test the auto snaptun session renewal with a renewable connect RPC client. This tests not only
 // the SNAP data plane session token renewal but also the SNAP token renewal.
 #[test(tokio::test)]
