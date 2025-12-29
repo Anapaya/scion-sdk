@@ -24,7 +24,6 @@ scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
 serde = { workspace = true }
-snap-tokens = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

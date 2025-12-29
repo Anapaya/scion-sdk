@@ -16,6 +16,5 @@
 pub mod path;
 pub mod quic;
 pub mod scionstack;
-pub mod snap_tunnel;
 pub mod types;
 pub mod underlays;

@@ -14,22 +14,19 @@
 //! SNAP tunnel test suite.
 
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use assert_matches::assert_matches;
 use bytes::Bytes;
-use ipnet::IpNet;
 use quinn::{Endpoint, TransportConfig, crypto::rustls::QuicClientConfig, rustls};
 use rustls::ClientConfig;
-use scion_proto::address::{Asn, EndhostAddr, Isd, IsdAsn};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use scion_sdk_token_validator::validator::{Token, TokenValidator, TokenValidatorError};
 use serde::{Deserialize, Serialize};
 use snap_tun::{
-    AddressAllocation, AddressAllocationError, AddressAllocationId, AddressAllocator,
     client::{
         AutoSessionRenewal, ClientBuilder, Control, DEFAULT_RENEWAL_WAIT_THRESHOLD, Receiver,
         Sender,
@@ -38,15 +35,6 @@ use snap_tun::{
     server::ControlError,
 };
 use tokio::task::JoinSet;
-
-const DESIRED_IPV4_ADDR: EndhostAddr = EndhostAddr::new(
-    IsdAsn::new(Isd(1), Asn::new(0xff00_0000_0110)),
-    IpAddr::V4(Ipv4Addr::new(192, 168, 0, 1)),
-);
-const DESIRED_IPV6_ADDR: EndhostAddr = EndhostAddr::new(
-    IsdAsn::new(Isd(1), Asn::new(0xff00_0000_0110)),
-    IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
-);
 
 /// Test address assignments by checking that sent packets are echoed back.
 #[test_log::test(tokio::test)]
@@ -60,13 +48,7 @@ pub async fn assign_address_and_retrieve_echoed_packet() {
     let mut js = JoinSet::<()>::new();
     js.spawn(run_server(quic_srv, srv));
 
-    let desired_addresses = vec![DESIRED_IPV6_ADDR];
-    let (tx, rx, _ctrl) = prepare_snaptun_client(
-        quic_client,
-        srv_addr,
-        DesiredAssignment::LegacyDesiredAddresses(desired_addresses.clone()),
-    )
-    .await;
+    let (tx, rx, _ctrl) = prepare_snaptun_client(quic_client, srv_addr).await;
 
     let n_packets = 64u16;
     js.spawn(async move {
@@ -95,8 +77,7 @@ pub async fn assign_sock_addr_and_retrieve_echoed_packet() {
     let mut js = JoinSet::<()>::new();
     js.spawn(run_server(quic_srv, srv));
 
-    let (tx, rx, _ctrl) =
-        prepare_snaptun_client(quic_client, srv_addr, DesiredAssignment::SocketAddr).await;
+    let (tx, rx, _ctrl) = prepare_snaptun_client(quic_client, srv_addr).await;
 
     let n_packets = 64u16;
     js.spawn(async move {
@@ -132,13 +113,7 @@ pub async fn session_enforcement() {
         assert_matches!(res, Err(ControlError::SessionExpired));
     });
 
-    let desired_addresses = vec![DESIRED_IPV4_ADDR];
-    let (_tx, _rx, _ctrl) = prepare_snaptun_client(
-        quic_client,
-        srv_addr,
-        DesiredAssignment::LegacyDesiredAddresses(desired_addresses),
-    )
-    .await;
+    let (_tx, _rx, _ctrl) = prepare_snaptun_client(quic_client, srv_addr).await;
 
     // Wait for the session to expire
     join_handle.await.expect("no fail");
@@ -156,13 +131,7 @@ pub async fn session_renewal() {
     let mut js = JoinSet::<()>::new();
     js.spawn(run_server(quic_srv, srv));
 
-    let desired_addresses = vec![DESIRED_IPV4_ADDR];
-    let (_tx, _rx, mut ctrl) = prepare_snaptun_client(
-        quic_client,
-        srv_addr,
-        DesiredAssignment::LegacyDesiredAddresses(desired_addresses.clone()),
-    )
-    .await;
+    let (_tx, _rx, mut ctrl) = prepare_snaptun_client(quic_client, srv_addr).await;
     let validity_before = ctrl.session_expiry();
 
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -190,7 +159,6 @@ pub async fn auto_session_renewal() {
     let mut js = JoinSet::<()>::new();
     js.spawn(run_server(quic_srv, srv));
 
-    let desired_addresses = vec![DESIRED_IPV6_ADDR];
     let c = quic_client
         .connect(srv_addr, "localhost")
         .expect("no fail")
@@ -198,7 +166,6 @@ pub async fn auto_session_renewal() {
         .expect("no_fail");
 
     let (_tx, _rx, ctrl) = ClientBuilder::new(MAGIC_TOKEN)
-        .with_desired_addresses(desired_addresses.clone())
         .with_auto_session_renewal(AutoSessionRenewal::new(
             DEFAULT_RENEWAL_WAIT_THRESHOLD,
             Arc::new(move || Box::pin(async move { Ok(MAGIC_TOKEN.to_string()) })),
@@ -206,7 +173,10 @@ pub async fn auto_session_renewal() {
         .connect(c)
         .await
         .expect("no fail");
-    assert_eq!(ctrl.assigned_addresses(), desired_addresses);
+    assert_eq!(
+        ctrl.assigned_sock_addr(),
+        Some(quic_client.local_addr().unwrap())
+    );
 
     // Given the token is only valid for 3 seconds, sleeping for 2 seconds ensures a session
     // renewal.
@@ -214,19 +184,12 @@ pub async fn auto_session_renewal() {
 }
 
 fn prepare_snaptun_server(validator: MagicAuthorizer) -> snap_tun::server::Server<DummyToken> {
-    let allocator = Arc::new(EchoingAllocator);
-
-    snap_tun::server::Server::new(
-        allocator,
-        Arc::new(validator),
-        Metrics::new(&MetricsRegistry::new()),
-    )
+    snap_tun::server::Server::new(Arc::new(validator), Metrics::new(&MetricsRegistry::new()))
 }
 
 async fn prepare_snaptun_client(
     quic_client: Endpoint,
     srv_addr: SocketAddr,
-    desired_addresses: DesiredAssignment,
 ) -> (Sender, Receiver, Control) {
     let c = quic_client
         .connect(srv_addr, "localhost")
@@ -235,25 +198,11 @@ async fn prepare_snaptun_client(
         .expect("no_fail");
 
     let client_builder = ClientBuilder::new(MAGIC_TOKEN);
-    let (client_builder, desired_addresses, sock_addr) = match desired_addresses {
-        DesiredAssignment::LegacyDesiredAddresses(endhost_addrs) => {
-            (
-                client_builder.with_desired_addresses(endhost_addrs.clone()),
-                endhost_addrs,
-                None,
-            )
-        }
-        DesiredAssignment::SocketAddr => {
-            (
-                client_builder.with_sock_addr_assignment(),
-                vec![],
-                Some(quic_client.local_addr().unwrap()),
-            )
-        }
-    };
     let (tx, rx, ctrl) = client_builder.connect(c).await.expect("no fail");
-    assert_eq!(ctrl.assigned_addresses(), desired_addresses);
-    assert_eq!(ctrl.assigned_sock_addr(), sock_addr);
+    assert_eq!(
+        ctrl.assigned_sock_addr(),
+        Some(quic_client.local_addr().unwrap())
+    );
 
     (tx, rx, ctrl)
 }
@@ -325,34 +274,6 @@ fn gen_packet(idx: u16, total: u16) -> Bytes {
     Bytes::from(format!("Packet {}/{}", idx + 1, total))
 }
 
-/// A simple address allocator that assigns constant IP addresses.
-struct EchoingAllocator;
-
-impl AddressAllocator<DummyToken> for EchoingAllocator {
-    fn put_on_hold(&self, _id: AddressAllocationId) -> bool {
-        true
-    }
-
-    fn deallocate(&self, _id: AddressAllocationId) -> bool {
-        true
-    }
-
-    fn allocate(
-        &self,
-        isd_as: IsdAsn,
-        prefix: IpNet,
-        claims: DummyToken,
-    ) -> Result<AddressAllocation, AddressAllocationError> {
-        Ok(AddressAllocation {
-            id: AddressAllocationId {
-                registry_id: 0,
-                alloc_id: claims.id(),
-            },
-            address: EndhostAddr::new(isd_as, prefix.addr()),
-        })
-    }
-}
-
 /// A simple dummy token.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DummyToken {
@@ -408,9 +329,4 @@ impl TokenValidator<DummyToken> for MagicAuthorizer {
             _ => Err(TokenValidatorError::TokenExpired(std::time::UNIX_EPOCH)),
         }
     }
-}
-
-enum DesiredAssignment {
-    LegacyDesiredAddresses(Vec<EndhostAddr>),
-    SocketAddr,
 }

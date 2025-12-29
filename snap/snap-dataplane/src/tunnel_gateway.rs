@@ -19,7 +19,6 @@ use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use scion_sdk_token_validator::validator::{Token, TokenValidator};
 use scion_sdk_utils::task_handler::CancelTaskSet;
 use serde::Deserialize;
-use snap_tun::AddressAllocator;
 
 use crate::{
     dispatcher::Dispatcher,
@@ -47,7 +46,6 @@ pub mod state;
 pub fn start_tunnel_gateway<T, D>(
     tasks: &mut CancelTaskSet,
     shared_tunnel_gw_state: SharedTunnelGatewayState<T>,
-    address_allocator: Arc<dyn AddressAllocator<T>>,
     token_validator: Arc<dyn TokenValidator<T>>,
     tunnel_gateway_endpoint: quinn::Endpoint,
     lan_gateway_dispatcher: Arc<D>,
@@ -57,7 +55,6 @@ pub fn start_tunnel_gateway<T, D>(
     D: Dispatcher + 'static,
 {
     let snaptun_server = snap_tun::server::Server::new(
-        address_allocator,
         token_validator.clone(),
         snap_tun::metrics::Metrics::new(&metrics_registry.clone()),
     );

@@ -15,7 +15,7 @@
 
 use std::{
     borrow::Cow,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     ops::Deref,
     pin::Pin,
     sync::{Arc, RwLock},
@@ -25,12 +25,11 @@ use std::{
 use bytes::Bytes;
 use prost::Message;
 use quinn::{ConnectionError, RecvStream, SendStream};
-use scion_proto::address::EndhostAddr;
 use tokio::{sync::watch, task::JoinHandle};
 
 use crate::requests::{
-    AddrError, AddressAssignRequest, AddressAssignResponse, AddressRange, SessionRenewalResponse,
-    SocketAddrAssignmentRequest, SocketAddrAssignmentResponse, system_time_from_unix_epoch_secs,
+    AddrError, SessionRenewalResponse, SocketAddrAssignmentRequest, SocketAddrAssignmentResponse,
+    system_time_from_unix_epoch_secs,
 };
 
 /// Maximum size of a control message, both request and response.
@@ -72,39 +71,22 @@ impl AutoSessionRenewal {
 
 /// SNAP tunnel client builder.
 pub struct ClientBuilder {
-    desired_addresses: Vec<EndhostAddr>,
     initial_session_token: String,
     auto_session_renewal: Option<AutoSessionRenewal>,
-    sock_addr_assignment: bool,
 }
 
 impl ClientBuilder {
     /// Client builder with an initial session token to be used to authenticate requests.
     pub fn new<S: AsRef<str>>(initial_session_token: S) -> Self {
         ClientBuilder {
-            desired_addresses: Vec::new(),
             initial_session_token: initial_session_token.as_ref().into(),
             auto_session_renewal: None,
-            sock_addr_assignment: false,
         }
-    }
-
-    /// Set the desired addresses to be requested from the SNAP. If empty, the SNAP server will
-    /// assign an address.
-    pub fn with_desired_addresses(mut self, desired_addresses: Vec<EndhostAddr>) -> Self {
-        self.desired_addresses = desired_addresses;
-        self
     }
 
     /// Enable automatic session renewal.
     pub fn with_auto_session_renewal(mut self, session_renewal: AutoSessionRenewal) -> Self {
         self.auto_session_renewal = Some(session_renewal);
-        self
-    }
-
-    /// Enable socket address assignment
-    pub fn with_sock_addr_assignment(mut self) -> Self {
-        self.sock_addr_assignment = true;
         self
     }
 
@@ -123,11 +105,7 @@ impl ClientBuilder {
 
         ctrl.state.write().expect("no fail").session_token = self.initial_session_token;
         ctrl.renew_session().await?;
-        if self.sock_addr_assignment {
-            ctrl.request_socket_addr().await?;
-        } else {
-            ctrl.request_address(self.desired_addresses.clone()).await?;
-        }
+        ctrl.request_socket_addr().await?;
 
         if let Some(auto_session_renewal) = self.auto_session_renewal.clone() {
             ctrl.start_auto_session_renewal(auto_session_renewal, expiry_receiver);
@@ -145,15 +123,6 @@ pub struct Control {
 }
 
 impl Control {
-    /// Returns the currently assigned addresses.
-    pub fn assigned_addresses(&self) -> Vec<EndhostAddr> {
-        self.state
-            .read()
-            .expect("no fail")
-            .assigned_addresses
-            .clone()
-    }
-
     /// Returns the socket address assigned by the server. This typically
     /// corresponds to the client's _remote_ socket address; i.e. the possibly
     /// NAT'ed address of the client visible to the server.
@@ -201,67 +170,6 @@ impl Control {
 
         let mut sstate = self.state.0.write().expect("no fail");
         sstate.assigned_sock_addr = Some(sock_addr);
-
-        Ok(())
-    }
-
-    /// Sends an address assign request to the snaptun server.
-    ///
-    /// # Arguments
-    /// * `desired_addresses` - Client can request specific [EndhostAddr] from the server.
-    async fn request_address(
-        &mut self,
-        desired_addresses: Vec<EndhostAddr>,
-    ) -> Result<(), ControlError> {
-        tracing::debug!(?desired_addresses, "Requesting address assignment");
-
-        let (mut snd, mut rcv) = self.conn.open_bi().await?;
-
-        // Send address assignment request
-        let request = AddressAssignRequest {
-            requested_addresses: desired_addresses
-                .into_iter()
-                .map(|addr| {
-                    let (version, prefix_length, octets) = match addr.local_address() {
-                        IpAddr::V4(a) => (4, 32, a.octets().to_vec()),
-                        IpAddr::V6(a) => (6, 128, a.octets().to_vec()),
-                    };
-                    AddressRange {
-                        isd_as: addr.isd_asn().into(),
-                        ip_version: version as u32,
-                        prefix_length: prefix_length as u32,
-                        address: octets,
-                    }
-                })
-                .collect::<Vec<_>>(),
-        };
-        let body = request.encode_to_vec();
-        let token = self.state.read().expect("no fail").session_token.clone();
-        send_control_request(&mut snd, crate::PATH_ADDR_ASSIGNMENT, body.as_ref(), &token).await?;
-
-        // Parse address assignment response
-        let mut resp_buf = [0u8; MAX_CTRL_MESSAGE_SIZE];
-        let response = recv_response::<AddressAssignResponse>(&mut resp_buf[..], &mut rcv).await?;
-
-        if response.assigned_addresses.is_empty() {
-            return Err(ControlError::AddressAssignmentFailed(
-                AddrAssignError::NoAddressAssigned,
-            ));
-        }
-
-        let assigned_addresses = response
-            .assigned_addresses
-            .iter()
-            .map(|address_range| {
-                TryInto::<EndhostAddr>::try_into(address_range).map_err(|e| {
-                    ControlError::AddressAssignmentFailed(AddrAssignError::InvalidAddr(e))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        tracing::debug!(?assigned_addresses, "Got address assignment");
-
-        self.state.write().expect("no fail").assigned_addresses = assigned_addresses;
 
         Ok(())
     }
@@ -433,7 +341,6 @@ impl Drop for Control {
 struct ConnState {
     session_token: String,
     session_expiry: SystemTime,
-    assigned_addresses: Vec<EndhostAddr>,
     // The socket address that is assigned by the remote and should be used as
     // the endhost socket address for this tunnel.
     assigned_sock_addr: Option<SocketAddr>,
@@ -445,7 +352,6 @@ impl ConnState {
         Self {
             session_token: String::new(),
             session_expiry: SystemTime::UNIX_EPOCH,
-            assigned_addresses: Vec::new(),
             assigned_sock_addr: None,
             expiry_notifier,
         }

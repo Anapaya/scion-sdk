@@ -66,7 +66,6 @@ use crate::{
     },
 };
 
-pub mod address_allocator;
 pub mod endhost_segment_lister;
 pub mod simulation_dispatcher;
 
@@ -753,12 +752,6 @@ impl TokenExchange for AuthorizationServerHandle {
 enum AllocationError {
     #[error("registration error: {0}")]
     RegistrationError(#[from] AddressRegistrationError),
-    #[error("prefix allocation not supported: {0}")]
-    PrefixAllocationNotSupported(IpNet),
-    #[error("no address manager for ISD-AS: {0}")]
-    NoAddressManagerForIsdAs(IsdAsn),
-    #[error("no address manager for id: {0}")]
-    NoAddressManagerForId(u64),
 }
 
 impl From<AllocationError> for snap_tun::AddressAllocationError {
@@ -783,10 +776,6 @@ impl From<AllocationError> for snap_tun::AddressAllocationError {
                     _ => snap_tun::AddressAllocationError::AddressAllocationRejected,
                 }
             }
-            AllocationError::NoAddressManagerForIsdAs(isd_as) => {
-                snap_tun::AddressAllocationError::NoAddressManagerForIsdAs(isd_as)
-            }
-            _ => snap_tun::AddressAllocationError::AddressAllocationRejected,
         }
     }
 }

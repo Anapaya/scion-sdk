@@ -3192,7 +3192,6 @@ dependencies = [
  "scion-sdk-token-validator",
  "scion-sdk-utils",
  "serde",
- "snap-tokens",
  "test-log",
  "thiserror 2.0.17",
  "tokio",

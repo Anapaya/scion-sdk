@@ -35,7 +35,7 @@ use scion_proto::{
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
-use snap_tun::client::{AutoSessionRenewal, ClientBuilder};
+use snap_tun::client::{AutoSessionRenewal, ClientBuilder, DEFAULT_RENEWAL_WAIT_THRESHOLD};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{sync::futures::OwnedNotified, task::JoinHandle};
 use url::Url;
@@ -424,15 +424,14 @@ async fn new_snaptun(
         .get_token()
         .await
         .map_err(|e| anyhow::anyhow!("failed to get token: {e:?}"))?;
-    let client_builder = ClientBuilder::new(token)
-        .with_auto_session_renewal(AutoSessionRenewal::new(
+    let client_builder =
+        ClientBuilder::new(token).with_auto_session_renewal(AutoSessionRenewal::new(
             renewal_wait_threshold,
             Arc::new(move || {
                 let token_source = token_source.clone();
                 Box::pin(async move { token_source.get_token().await })
             }),
-        ))
-        .with_sock_addr_assignment();
+        ));
 
     let (sender, receiver, ctrl) = client_builder.connect(conn).await?;
     Ok(SnapTunConnection {
@@ -717,4 +716,28 @@ fn quinn_client_endpoint(addr: net::SocketAddr) -> io::Result<quinn::Endpoint> {
         runtime.wrap_udp_socket(socket.into())?,
         runtime,
     )
+}
+
+/// Configuration for automatic session renewal.
+#[derive(Clone)]
+pub struct SessionRenewal {
+    /// Threshold for waiting for the next renewal of the session token.
+    pub renewal_wait_threshold: std::time::Duration,
+}
+
+impl Default for SessionRenewal {
+    fn default() -> Self {
+        SessionRenewal {
+            renewal_wait_threshold: DEFAULT_RENEWAL_WAIT_THRESHOLD,
+        }
+    }
+}
+
+impl SessionRenewal {
+    /// Creates a new session renewal configuration.
+    pub fn new(renewal_wait_threshold: std::time::Duration) -> Self {
+        SessionRenewal {
+            renewal_wait_threshold,
+        }
+    }
 }

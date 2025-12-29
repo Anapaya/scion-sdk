@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use pocketscion::{
     authorization_server::{self, api::TokenRequest, fake_idp},
     runtime::PocketScionRuntimeBuilder,
@@ -28,68 +28,17 @@ use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rustls::ClientConfig;
-use scion_proto::{
-    address::{IsdAsn, ScionAddr, SocketAddr},
-    packet::{self, ByEndpoint, ScionPacketUdp},
-    path::{DataPlanePath, encoded::EncodedStandardPath},
-    wire_encoding::{WireDecode, WireEncodeVec},
-};
+use scion_proto::address::{IsdAsn, SocketAddr};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use scion_stack::{
     quic::QuinnConn as _,
     scionstack::{ScionStackBuilder, UdpScionSocket, builder::SnapUnderlayConfig},
-    snap_tunnel::{SessionRenewal, SnapTunnel},
 };
-use snap_control::client::{ControlPlaneApi, CrpcSnapControlClient};
 use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use url::Url;
-
-/// Builds a SCION packet with the given payload and source address.
-fn build_scion_packet(source_addr: ScionAddr, dest_addr: ScionAddr, payload: &Bytes) -> Vec<u8> {
-    let src_sock_addr = scion_proto::address::SocketAddr::new(source_addr, 1025);
-    let dst_sock_addr = scion_proto::address::SocketAddr::new(dest_addr, 1025);
-    let endpoints = ByEndpoint {
-        source: src_sock_addr,
-        destination: dst_sock_addr,
-    };
-
-    // Construct a simple one hop path:
-    // https://docs.scion.org/en/latest/protocols/scion-header.html#path-type-onehoppath
-    let mut path_raw = BytesMut::with_capacity(36);
-    path_raw.put_u32(0x0000_2000);
-    path_raw.put_slice(&[0_u8; 32]);
-    let data_plane_path =
-        DataPlanePath::Standard(EncodedStandardPath::decode(&mut path_raw.freeze()).unwrap());
-
-    let packet = ScionPacketUdp::new(endpoints, data_plane_path, payload.clone()).unwrap();
-
-    packet.encode_to_bytes_vec().concat()
-}
-
-/// Sends a SCION packet with the given payload on the SNAP tunnel and verifies
-/// that the same payload is received.
-async fn send_and_receive_echo(tun: &SnapTunnel, payload: Bytes) {
-    let packet = build_scion_packet(
-        tun.assigned_addresses()[0].into(),
-        tun.assigned_addresses()[0].into(),
-        &payload,
-    );
-    tun.sender().send_datagram(packet.clone().into()).unwrap();
-
-    let rdata = tun.receiver().read_datagram().await.unwrap();
-
-    // Check length before decoding as the bytes get consumed.
-    assert!(packet.len() == rdata.len());
-    let received_packet = packet::ScionPacketUdp::decode(&mut rdata.clone()).unwrap();
-    assert!(received_packet.datagram.payload == payload);
-    assert!(
-        received_packet.headers.address.destination().unwrap()
-            == tun.assigned_addresses()[0].into()
-    );
-}
 
 // Test involving two clients in AS 110 sending packets to a server in AS 111.
 // The server echoes the packets back. The clients connect via two different
@@ -499,6 +448,7 @@ async fn recv_and_check(
     assert_eq!(expected_sender_addr, sender_addr);
 }
 
+// Test creating the SCION stack with the SNAP token obtained from the auth server.
 #[test(tokio::test)]
 async fn with_auth_server() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
@@ -538,7 +488,7 @@ async fn with_auth_server() {
         .expect("get auth server");
 
     let auth_server_api: Url = format!("http://{}/", auth_server.addr).parse().unwrap();
-    debug!("auth server api: {}", auth_server_api);
+    tracing::debug!("auth server api: {}", auth_server_api);
     let auth_client =
         authorization_server::client::ApiClient::new(&auth_server_api).expect("no fail");
     let token_exchange_req = TokenRequest::new(access_token);
@@ -553,27 +503,9 @@ async fn with_auth_server() {
         .expect("get snap")
         .control_plane_api
         .clone();
-    let mut client =
-        CrpcSnapControlClient::new(&snap_cp_addr).expect("creating SNAP cp API client");
-    client.use_token_source(Arc::new(snap_token_resp.access_token));
-
-    let session_grants = client
-        .create_data_plane_sessions()
+    let _client_stack = ScionStackBuilder::new(snap_cp_addr)
+        .with_auth_token(snap_token_resp.access_token)
+        .build()
         .await
-        .expect("creating SNAP data plane sessions");
-
-    assert!(session_grants.len() == 1);
-    let session_grant = session_grants
-        .first()
-        .expect("getting first SNAP data plane session grant");
-    let tun = SnapTunnel::new(
-        session_grant,
-        Arc::new(client),
-        vec![],
-        SessionRenewal::default(),
-    )
-    .await
-    .unwrap();
-
-    send_and_receive_echo(&tun, Bytes::from_static(b"my SCION packet")).await;
+        .unwrap();
 }

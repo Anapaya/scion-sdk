@@ -16,7 +16,6 @@
 use std::{borrow::Cow, net, sync::Arc, time::Duration};
 
 use endhost_api_client::client::CrpcEndhostApiClient;
-use scion_proto::address::EndhostAddr;
 // Re-export for consumer
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
@@ -24,11 +23,11 @@ use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
 use url::Url;
 
 use crate::{
-    scionstack::{ScionStack, ScmpHandler},
-    snap_tunnel::{SessionRenewal, SnapTunnelError, SnapTunnelSender},
+    scionstack::ScionStack,
     underlays::{
         SnapSocketConfig, UnderlayStack,
         discovery::PeriodicUnderlayDiscovery,
+        snap::SessionRenewal,
         udp::{LocalIpResolver, TargetAddrLocalIpResolver},
     },
 };
@@ -40,10 +39,6 @@ const DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF: BackoffConfig = BackoffConfig {
     factor: 1.2,
     jitter_secs: 0.1,
 };
-
-/// Type alias for the complex SCMP handler factory type to reduce type complexity
-type ScmpHandlerFactory =
-    Box<dyn FnOnce(SnapTunnelSender) -> Arc<dyn ScmpHandler> + Sync + Send + 'static>;
 
 /// Builder for creating a [ScionStack].
 ///
@@ -248,9 +243,6 @@ pub enum BuildSnapScionStackError {
     /// Error making the data plane discovery request to the SNAP control plane.
     #[error("data plane discovery request error: {0:#}")]
     DataPlaneDiscoveryError(CrpcClientError),
-    /// Error connecting to the SNAP data plane.
-    #[error("error connecting to data plane: {0:#}")]
-    DataPlaneConnectionError(#[from] SnapTunnelError),
 }
 
 /// Build UDP SCION stack errors.
@@ -272,8 +264,6 @@ pub enum PreferredUnderlay {
 /// SNAP underlay configuration.
 pub struct SnapUnderlayConfig {
     snap_token_source: Option<Arc<dyn TokenSource>>,
-    requested_addresses: Vec<EndhostAddr>,
-    default_scmp_handler: Option<ScmpHandlerFactory>,
     snap_dp_index: usize,
     session_auto_renewal: SessionRenewal,
     tunnel_reconnect_backoff: BackoffConfig,
@@ -283,9 +273,7 @@ impl Default for SnapUnderlayConfig {
     fn default() -> Self {
         Self {
             snap_token_source: None,
-            requested_addresses: vec![],
             snap_dp_index: 0,
-            default_scmp_handler: None,
             session_auto_renewal: SessionRenewal::default(),
             tunnel_reconnect_backoff: DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF,
         }
@@ -312,29 +300,6 @@ impl SnapUnderlayConfigBuilder {
     /// Set a token source to use for authentication with the SNAP control plane.
     pub fn with_auth_token_source(mut self, source: impl TokenSource) -> Self {
         self.0.snap_token_source = Some(Arc::new(source));
-        self
-    }
-
-    /// Set the addresses to request from the SNAP server.
-    /// Note, that the server may choose not to assign all requested addresses
-    /// and may assign additional addresses.
-    /// Use assigned_addresses() to get the final list of addresses.
-    ///
-    /// # Arguments
-    ///
-    /// * `requested_addresses` - The addresses to request from the SNAP server.
-    pub fn with_requested_addresses(mut self, requested_addresses: Vec<EndhostAddr>) -> Self {
-        self.0.requested_addresses = requested_addresses;
-        self
-    }
-
-    /// Set the default SCMP handler.
-    ///
-    /// # Arguments
-    ///
-    /// * `default_scmp_handler` - The default SCMP handler.
-    pub fn with_default_scmp_handler(mut self, default_scmp_handler: ScmpHandlerFactory) -> Self {
-        self.0.default_scmp_handler = Some(Box::new(default_scmp_handler));
         self
     }
 

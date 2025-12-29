@@ -188,7 +188,6 @@
 
 pub mod builder;
 pub mod quic;
-pub mod scmp_handler;
 mod socket;
 pub(crate) mod udp_polling;
 
@@ -215,7 +214,6 @@ pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, Udp
 
 // Re-export the main types from the modules
 pub use self::builder::ScionStackBuilder;
-pub use self::scmp_handler::{DefaultScmpHandler, ScmpHandler};
 use crate::path::{
     PathStrategy,
     fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl},

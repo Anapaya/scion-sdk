@@ -61,22 +61,17 @@ use std::{
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
-use ipnet::IpNet;
 use prost::Message;
 use quinn::{RecvStream, SendStream, VarInt};
-use scion_proto::address::{EndhostAddr, IsdAsn};
+use scion_proto::address::EndhostAddr;
 use scion_sdk_token_validator::validator::{Token, TokenValidator, TokenValidatorError};
 use serde::Deserialize;
 use tokio::sync::watch;
 
 use crate::{
-    AUTH_HEADER, AddressAllocation, AddressAllocator, IPV4_WILDCARD, IPV6_WILDCARD,
-    PATH_ADDR_ASSIGNMENT, PATH_SESSION_RENEWAL, PATH_SOCK_ADDR_ASSIGNMENT,
+    AUTH_HEADER, PATH_SESSION_RENEWAL, PATH_SOCK_ADDR_ASSIGNMENT,
     metrics::{Metrics, ReceiverMetrics, SenderMetrics},
-    requests::{
-        AddrError, AddressAssignRequest, AddressAssignResponse, SessionRenewalResponse,
-        SocketAddrAssignmentResponse, unix_epoch_from_system_time,
-    },
+    requests::{SessionRenewalResponse, SocketAddrAssignmentResponse, unix_epoch_from_system_time},
 };
 
 /// SNAP tunnel connection errors.
@@ -119,7 +114,6 @@ const MAX_CTRL_MESSAGE_SIZE: usize = 4096;
 pub struct Server<T> {
     metrics: Metrics,
     validator: Arc<dyn TokenValidator<T>>,
-    allocator: Arc<dyn AddressAllocator<T>>,
 }
 
 /// Accept errors.
@@ -145,16 +139,8 @@ pub enum AcceptError {
 impl<T: SnapTunToken> Server<T> {
     /// Create a new server that can accept QUIC connections and turn them into
     /// snap tunnels.
-    pub fn new(
-        allocator: Arc<dyn AddressAllocator<T>>,
-        validator: Arc<dyn TokenValidator<T>>,
-        metrics: Metrics,
-    ) -> Self {
-        Self {
-            allocator,
-            validator,
-            metrics,
-        }
+    pub fn new(validator: Arc<dyn TokenValidator<T>>, metrics: Metrics) -> Self {
+        Self { validator, metrics }
     }
 
     /// Accept a connection and establish a tunnel.
@@ -193,7 +179,6 @@ impl<T: SnapTunToken> Server<T> {
         let state_machine = Arc::new(TunnelStateMachine::new(
             conn.remote_address(),
             self.validator.clone(),
-            self.allocator.clone(),
         ));
 
         //
@@ -222,14 +207,11 @@ impl<T: SnapTunToken> Server<T> {
             return Err(AcceptError::SendControlResponseError(e));
         }
 
-        // Second request MUST be an address assignment request.
+        // Second request MUST be a socket address assignment request.
         let (address_assign_request, mut snd, _rcv) = receive_expected_control_request(
             &conn,
-            |r| {
-                matches!(r, ControlRequest::AddressAssignment { .. })
-                    || matches!(r, ControlRequest::SocketAddrAssignment { .. })
-            },
-            b"expected address assignment request",
+            |r| matches!(r, ControlRequest::SocketAddrAssignment { .. }),
+            b"expected socket addr assignment request",
         )
         .await?;
 
@@ -624,7 +606,6 @@ pub enum AddressAssignmentError {
 pub struct TunnelStateMachine<T: SnapTunToken> {
     remote_sock_addr: SocketAddr,
     validator: Arc<dyn TokenValidator<T>>,
-    allocator: Arc<dyn AddressAllocator<T>>,
     inner_state: RwLock<TunnelState>,
     state_version: AtomicUsize,
     // channel to notify the session termination about session expiry updates
@@ -640,17 +621,12 @@ impl<T: SnapTunToken> Drop for TunnelStateMachine<T> {
 }
 
 impl<T: SnapTunToken> TunnelStateMachine<T> {
-    pub(crate) fn new(
-        remote_sock_addr: SocketAddr,
-        validator: Arc<dyn TokenValidator<T>>,
-        allocator: Arc<dyn AddressAllocator<T>>,
-    ) -> Self {
+    pub(crate) fn new(remote_sock_addr: SocketAddr, validator: Arc<dyn TokenValidator<T>>) -> Self {
         let (sender, receiver) = watch::channel(());
 
         Self {
             remote_sock_addr,
             validator,
-            allocator,
             inner_state: Default::default(),
             state_version: AtomicUsize::new(0),
             sender,
@@ -671,14 +647,6 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
             return (http::StatusCode::BAD_REQUEST, "tunnel is closed".into());
         }
         match control_request {
-            ControlRequest::AddressAssignment(token, address_assign_request) => {
-                self.locked_process_addr_assignment_request(
-                    &mut inner_state,
-                    now,
-                    token,
-                    address_assign_request,
-                )
-            }
             ControlRequest::SocketAddrAssignment(token) => {
                 self.locked_process_socket_addr_assignment_request(&mut inner_state, now, token)
             }
@@ -719,19 +687,6 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         now: SystemTime,
         token: String,
     ) -> (http::StatusCode, Vec<u8>) {
-        // We disallow assigning a socket address if a legacy address
-        // was already assigned.
-        match inner_state {
-            // XXX: assuming well-behaved clients, we should never encounter
-            // such a state. Also, LegacyAddrAssigned will be removed.
-            TunnelState::LegacyAddrAssigned { .. } | TunnelState::Closed => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "invalid state transition".into(),
-                );
-            }
-            _ => {}
-        }
         // XXX: assuming well-behaved clients, we should never encounter
         // a situation where a client did not authenticate before requesting a
         // socket addr.
@@ -766,144 +721,6 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         }
     }
 
-    /// Processes an address assignment request, updates the internal protocol
-    /// state and returns the response that should be sent back to the client.
-    fn locked_process_addr_assignment_request(
-        &self,
-        inner_state: &mut TunnelState,
-        now: SystemTime,
-        token: String,
-        addr_assignments: AddressAssignRequest,
-    ) -> (http::StatusCode, Vec<u8>) {
-        // We disallow assigning a socket address if a legacy address
-        // was already assigned.
-        match inner_state {
-            // XXX: assuming well-behaved clients, we should never encounter
-            // such a state. Also, LegacyAddrAssigned will be removed.
-            TunnelState::SockAddrAssigned { .. } | TunnelState::Closed => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "invalid state transition".into(),
-                );
-            }
-            _ => {}
-        }
-        match self.validator.validate(now, &token) {
-            Ok(claims) => {
-                if addr_assignments.requested_addresses.len() > 1 {
-                    // We only implement single address assignments at the moment
-                    tracing::warn!(
-                        "Address assignment failed, multiple address assignments not supported"
-                    );
-                    return (
-                        StatusCode::NOT_IMPLEMENTED,
-                        "multiple address assignments are not supported".into(),
-                    );
-                }
-
-                let mut requests: Vec<(IsdAsn, IpNet)> = match addr_assignments
-                    .requested_addresses
-                    .iter()
-                    .map(|range| range.try_into())
-                    .collect::<Result<Vec<_>, AddrError>>()
-                {
-                    Ok(reqs) => reqs,
-                    Err(_) => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            "a requested address assignment contained an invalid address range"
-                                .into(),
-                        );
-                    }
-                };
-
-                // We only implement single address assignments at the moment
-                if requests
-                    .iter()
-                    .any(|(_, net)| net.prefix_len() != net.max_prefix_len())
-                {
-                    tracing::warn!(
-                        "Address assignment failed, prefix assignments are not supported"
-                    );
-                    return (
-                        StatusCode::NOT_IMPLEMENTED,
-                        "prefix assignments are not supported".into(),
-                    );
-                }
-
-                // If no addresses are requested, try allocating either a IPv4 or IPv6 address.
-                if requests.is_empty() {
-                    requests.push((IsdAsn::WILDCARD, IPV4_WILDCARD));
-                    requests.push((IsdAsn::WILDCARD, IPV6_WILDCARD));
-                }
-
-                // check that our current state is valid
-                let session_expiry = match inner_state.session_validity() {
-                    Ok(v) => v,
-                    Err(err) => {
-                        tracing::error!(
-                            ?err,
-                            "Failed to get session validity when processing address assignment request"
-                        );
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "session state invalid".into(),
-                        );
-                    }
-                };
-
-                // We return the first successfully allocated address.
-                let mut assigned_address: Option<AddressAllocation> = None;
-                for (requested_isd_as, requested_net) in requests.iter() {
-                    match self
-                        .allocator
-                        .allocate(*requested_isd_as, *requested_net, claims.clone())
-                    {
-                        Ok(allocation) => {
-                            assigned_address = Some(allocation);
-                            break;
-                        }
-                        Err(err) => {
-                            tracing::debug!(
-                                ?err,
-                                "Address allocation failed for ISD-AS {requested_isd_as} and net {requested_net}"
-                            );
-                        }
-                    }
-                }
-
-                // Only return an error if no addresses were assigned.
-                let Some(assigned_address) = assigned_address else {
-                    tracing::warn!(
-                        "Address assignment failed - no available addresses for: {requests:?}",
-                    );
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        "either requested address is unavailable, or no addresses are available"
-                            .into(),
-                    );
-                };
-
-                self.locked_update_state(
-                    inner_state,
-                    TunnelState::LegacyAddrAssigned {
-                        session_expiry,
-                        address: assigned_address.clone(),
-                    },
-                );
-
-                let resp = AddressAssignResponse {
-                    assigned_addresses: vec![(&assigned_address.address).into()],
-                };
-
-                let mut resp_body = vec![];
-                resp.encode(&mut resp_body).expect("no fail");
-                (StatusCode::OK, resp_body)
-            }
-            Err(e) => map_token_validation_err_to_response(e),
-        }
-    }
-
     fn locked_update_tunnel_session(
         &self,
         inner_state: &mut TunnelState,
@@ -915,12 +732,6 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
             }
             TunnelState::SessionEstablished { .. } => {
                 *inner_state = TunnelState::SessionEstablished { session_expiry };
-            }
-            TunnelState::LegacyAddrAssigned { address, .. } => {
-                *inner_state = TunnelState::LegacyAddrAssigned {
-                    session_expiry,
-                    address: address.clone(),
-                };
             }
             TunnelState::SockAddrAssigned { .. } => {
                 *inner_state = TunnelState::SockAddrAssigned { session_expiry }
@@ -946,7 +757,6 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         let guard = self.inner_state.read().expect("no fail");
 
         match &*guard {
-            TunnelState::LegacyAddrAssigned { address, .. } => Ok(vec![address.address]),
             TunnelState::SockAddrAssigned { .. } => Ok(vec![]),
             _ => Err(AddressAssignmentError::NoAddressAssigned),
         }
@@ -1010,17 +820,6 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
 
     fn shutdown(&self) {
         let mut inner_state = self.inner_state.write().expect("no fail");
-
-        // Put address grant on hold
-        if let TunnelState::LegacyAddrAssigned {
-            session_expiry: _,
-            address,
-        } = &*inner_state
-            && !self.allocator.put_on_hold(address.id.clone())
-        {
-            tracing::error!(addr=?address.address, "Could not set address to hold during shutdown - address was released while tunnel was still assigned");
-        }
-
         self.locked_update_state(&mut inner_state, TunnelState::Closed);
     }
 }
@@ -1055,10 +854,6 @@ enum TunnelState {
     SessionEstablished {
         session_expiry: SystemTime,
     },
-    LegacyAddrAssigned {
-        session_expiry: SystemTime,
-        address: AddressAllocation,
-    },
     SockAddrAssigned {
         session_expiry: SystemTime,
     },
@@ -1069,7 +864,6 @@ impl TunnelState {
     fn session_validity(&self) -> Result<SystemTime, TunnelStateError> {
         match self {
             TunnelState::SessionEstablished { session_expiry } => Ok(*session_expiry),
-            TunnelState::LegacyAddrAssigned { session_expiry, .. } => Ok(*session_expiry),
             TunnelState::SockAddrAssigned { session_expiry, .. } => Ok(*session_expiry),
             _ => Err(TunnelStateError::InvalidState(self.clone())),
         }
@@ -1087,17 +881,6 @@ impl std::fmt::Display for TunnelState {
                     DateTime::<Utc>::from(*session_expiry)
                 )
             }
-            TunnelState::LegacyAddrAssigned {
-                session_expiry,
-                address,
-            } => {
-                write!(
-                    f,
-                    "LegacyAddrAssigned (valid until: {}, addresses: [{}])",
-                    DateTime::<Utc>::from(*session_expiry),
-                    address.address
-                )
-            }
             TunnelState::Closed => write!(f, "Closed"),
             TunnelState::SockAddrAssigned { session_expiry } => {
                 write!(
@@ -1113,7 +896,6 @@ impl std::fmt::Display for TunnelState {
 #[derive(Debug)]
 enum ControlRequest {
     SocketAddrAssignment(String),
-    AddressAssignment(String, AddressAssignRequest),
     SessionRenewal(String),
 }
 
@@ -1179,7 +961,7 @@ async fn recv_request(
         let mut req = httparse::Request::new(&mut headers);
 
         // Try to parse the request
-        let Ok(httparse::Status::Complete(body_offset)) = req.parse(&buf[..cursor]) else {
+        let Ok(httparse::Status::Complete(_body_offset)) = req.parse(&buf[..cursor]) else {
             // Check if we can keep reading
             if cursor >= buf.len() {
                 return Err(InvalidRequest("request too big".into()));
@@ -1196,7 +978,6 @@ async fn recv_request(
         // actually act on it. (1)
         match req.path {
             Some(PATH_SOCK_ADDR_ASSIGNMENT) => {}
-            Some(PATH_ADDR_ASSIGNMENT) => {}
             Some(PATH_SESSION_RENEWAL) => {}
             Some(_) | None => return Err(InvalidRequest("invalid path".into())),
         }
@@ -1216,23 +997,6 @@ async fn recv_request(
         // assert: req.path.is_some() and is valid, see (1)
         let path = req.path.unwrap();
         match path {
-            PATH_ADDR_ASSIGNMENT => {
-                // Read rest of the stream, we expect a body
-                while let Some(n) = rcv.read(&mut buf[cursor..]).await? {
-                    cursor += n;
-                    if cursor >= buf.len() {
-                        return Err(InvalidRequest("request too big".into()));
-                    }
-                }
-
-                // parse address assignment request
-                let Ok(addr_req) = AddressAssignRequest::decode(&buf[body_offset..cursor]) else {
-                    return Err(InvalidRequest(
-                        "error when parsing address assignment request".into(),
-                    ));
-                };
-                return Ok(ControlRequest::AddressAssignment(bearer_token, addr_req));
-            }
             PATH_SOCK_ADDR_ASSIGNMENT => {
                 return Ok(ControlRequest::SocketAddrAssignment(bearer_token));
             }
@@ -1286,133 +1050,4 @@ async fn send_http_response(
     // Gracefully terminate the stream.
     stream.finish()?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, UNIX_EPOCH};
-
-    use snap_tokens::{Pssid, snap_token::SnapTokenClaims};
-
-    use super::*;
-
-    mod address_allocation {
-
-        fn setup() -> (TunnelStateMachine<SnapTokenClaims>, Arc<MockAllocator>) {
-            let alloc = Arc::new(MockAllocator {
-                is_allocated: AtomicBool::new(false),
-                is_on_hold: AtomicBool::new(false),
-            });
-
-            let tun = TunnelStateMachine::new(
-                "127.0.0.1:1234".parse().unwrap(),
-                Arc::new(MockValidator),
-                alloc.clone(),
-            );
-            // Prepare the state machine by doing a session renewal first
-            let (status, body) = tun.process_control_request(
-                SystemTime::now(),
-                ControlRequest::SessionRenewal("valid_token".into()),
-            );
-            assert_eq!(
-                status,
-                http::StatusCode::OK,
-                "failed to renew session - body: {body:?}"
-            );
-
-            (tun, alloc)
-        }
-
-        use snap_tokens::snap_token::SnapTokenClaims;
-
-        use super::*;
-
-        #[test]
-        fn control_request_put_on_hold_after_shutdown() {
-            let (tun, alloc) = setup();
-
-            let (status, body) = tun.process_control_request(
-                SystemTime::now(),
-                ControlRequest::AddressAssignment(
-                    "valid_token".into(),
-                    AddressAssignRequest {
-                        requested_addresses: vec![],
-                    },
-                ),
-            );
-            assert_eq!(status, http::StatusCode::OK, "failed - body: {body:?}");
-            assert!(alloc.is_allocated.load(Ordering::Acquire));
-            tun.shutdown();
-            assert!(alloc.is_on_hold.load(Ordering::Acquire));
-        }
-
-        #[test]
-        fn control_request_put_on_hold_after_drop() {
-            let (tun, alloc) = setup();
-
-            let (status, body) = tun.process_control_request(
-                SystemTime::now(),
-                ControlRequest::AddressAssignment(
-                    "valid_token".into(),
-                    AddressAssignRequest {
-                        requested_addresses: vec![],
-                    },
-                ),
-            );
-            assert_eq!(status, http::StatusCode::OK, "failed - body: {body:?}");
-            assert!(alloc.is_allocated.load(Ordering::Acquire));
-            drop(tun);
-            assert!(alloc.is_on_hold.load(Ordering::Acquire));
-        }
-    }
-
-    struct MockValidator;
-    impl TokenValidator<SnapTokenClaims> for MockValidator {
-        fn validate(
-            &self,
-            now: SystemTime,
-            _: &str,
-        ) -> Result<SnapTokenClaims, TokenValidatorError> {
-            Ok(SnapTokenClaims {
-                pssid: Pssid::new(),
-                exp: (now.duration_since(UNIX_EPOCH).unwrap() + Duration::from_secs(3600))
-                    .as_secs(),
-            })
-        }
-    }
-
-    struct MockAllocator {
-        is_allocated: AtomicBool,
-        is_on_hold: AtomicBool,
-    }
-    impl AddressAllocator<SnapTokenClaims> for MockAllocator {
-        fn allocate(
-            &self,
-            isd_as: IsdAsn,
-            prefix: IpNet,
-            claims: SnapTokenClaims,
-        ) -> Result<AddressAllocation, crate::AddressAllocationError> {
-            if self.is_allocated.load(Ordering::Acquire) {
-                return Err(crate::AddressAllocationError::NoAddressesAvailable);
-            }
-            self.is_allocated.store(true, Ordering::Release);
-
-            Ok(AddressAllocation {
-                id: crate::AddressAllocationId {
-                    registry_id: 0,
-                    alloc_id: claims.id(),
-                },
-                address: EndhostAddr::new(isd_as, prefix.addr()),
-            })
-        }
-
-        fn put_on_hold(&self, _id: crate::AddressAllocationId) -> bool {
-            self.is_on_hold.store(true, Ordering::Release);
-            true
-        }
-
-        fn deallocate(&self, _id: crate::AddressAllocationId) -> bool {
-            false
-        }
-    }
 }

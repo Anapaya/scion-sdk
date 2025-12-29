@@ -179,22 +179,6 @@ impl From<SocketAddr> for SocketAddrAssignmentResponse {
     }
 }
 
-/// Represents an address assignment request.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AddressAssignRequest {
-    /// The requested endhost address ranges.
-    #[prost(message, repeated, tag = "1")]
-    pub requested_addresses: Vec<AddressRange>,
-}
-
-/// Response to a address assign request.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct AddressAssignResponse {
-    /// The assigned address ranges.
-    #[prost(message, repeated, tag = "1")]
-    pub assigned_addresses: Vec<AddressRange>,
-}
-
 impl TryInto<EndhostAddr> for &AddressRange {
     type Error = AddrError;
 

@@ -14,9 +14,7 @@
 //! Integration tests for basic functionality of PocketSCION.
 
 use std::{
-    future::Future,
     net::{self, IpAddr},
-    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -32,7 +30,7 @@ use scion_proto::{
 use scion_stack::{
     path::manager::traits::PathManager,
     scionstack::{
-        NetworkError, ScionSocketBindError, ScionSocketSendError, ScionStackBuilder, ScmpHandler,
+        NetworkError, ScionSocketBindError, ScionSocketSendError, ScionStackBuilder,
         builder::SnapUnderlayConfig,
     },
 };
@@ -40,10 +38,7 @@ use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
 use tokio::{
     net::UdpSocket,
-    sync::{
-        Barrier,
-        mpsc::{self, Sender},
-    },
+    sync::{Barrier, mpsc},
     time::{sleep, timeout},
 };
 use tokio_util::sync::CancellationToken;
@@ -69,26 +64,6 @@ macro_rules! err_within_duration {
             $duration
         );
     };
-}
-
-// Helper struct for SCMP tests
-struct TestScmpHandler {
-    pub sender: Sender<ScionPacketScmp>,
-}
-
-impl ScmpHandler for TestScmpHandler {
-    fn handle_packet(
-        &self,
-        packet: ScionPacketScmp,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async move { self.sender.send(packet).await.unwrap() })
-    }
-}
-
-impl TestScmpHandler {
-    fn new(sender: Sender<ScionPacketScmp>) -> Self {
-        Self { sender }
-    }
 }
 
 #[test(tokio::test)]
@@ -358,6 +333,26 @@ async fn test_quic_endpoint_creation_impl(test_env: PocketscionTestEnv) {
     assert!(endpoint.is_ok());
 }
 
+// Helper struct for SCMP tests
+// struct TestScmpHandler {
+//     pub sender: Sender<ScionPacketScmp>,
+// }
+
+// impl ScmpHandler for TestScmpHandler {
+//     fn handle_packet(
+//         &self,
+//         packet: ScionPacketScmp,
+//     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+//         Box::pin(async move { self.sender.send(packet).await.unwrap() })
+//     }
+// }
+
+// impl TestScmpHandler {
+//     fn new(sender: Sender<ScionPacketScmp>) -> Self {
+//         Self { sender }
+//     }
+// }
+
 async fn test_scmp_packet_dispatch_with_port_snap_impl() {
     let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
     let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
@@ -366,17 +361,13 @@ async fn test_scmp_packet_dispatch_with_port_snap_impl() {
         .await
         .expect("build SCION stack");
 
-    let (tx, mut rx) = mpsc::channel(1);
+    // XXX(bunert): Channel used by the previously used test SCMP handler. Fix SCMP handling for the
+    // new SCION stack and adjust this test accordingly.
+    let (_tx, mut rx) = mpsc::channel(1);
 
     let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
         .with_auth_token(dummy_snap_token())
-        .with_snap_underlay_config(
-            SnapUnderlayConfig::builder()
-                .with_default_scmp_handler(Box::new(move |_| {
-                    Arc::new(TestScmpHandler::new(tx.clone()))
-                }))
-                .build(),
-        )
+        .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
         .build()
         .await
         .unwrap();
@@ -432,7 +423,8 @@ async fn test_scmp_packet_dispatch_with_port_snap_impl() {
         },
         async {
             // Default SCMP handler should receive the echo request
-            let packet = within_duration!(MS_100, rx.recv()).expect("error receiving echo request");
+            let packet: ScionPacketScmp =
+                within_duration!(MS_100, rx.recv()).expect("error receiving echo request");
 
             match packet.message {
                 ScmpMessage::EchoRequest(reply) => {

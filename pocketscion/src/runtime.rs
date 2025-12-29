@@ -54,7 +54,6 @@ use crate::{
     },
     state::{
         SharedPocketScionState, SystemState, TunnelGatewayStates,
-        address_allocator::StateSnapAddressAllocator,
         endhost_segment_lister::StateEndhostSegmentLister,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
     },
@@ -240,11 +239,6 @@ impl PocketScionRuntimeBuilder {
 
             // Start TunnelGateway for each SNAP data plane
             for snap_dp_id in pstate.snap_data_planes(snap_id) {
-                let address_allocator = Arc::new(StateSnapAddressAllocator::new(
-                    pstate.clone(),
-                    snap_dp_id.clone(),
-                ));
-
                 let metrics_registry = MetricsRegistry::new();
 
                 let (_cert_der, server_config) = scion_sdk_utils::test::generate_cert(
@@ -302,7 +296,6 @@ impl PocketScionRuntimeBuilder {
                 start_tunnel_gateway(
                     &mut task_set,
                     shared_tunnel_gw_state,
-                    address_allocator,
                     validator.clone(),
                     server_endpoint,
                     Arc::new(NetSimDispatcher::new(pstate.clone())),
