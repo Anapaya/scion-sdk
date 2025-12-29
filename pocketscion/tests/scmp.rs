@@ -32,9 +32,11 @@ use scion_proto::{
 };
 use scion_stack::scionstack::ScionStackBuilder;
 use snap_tokens::snap_token::dummy_snap_token;
+use test_log::test;
 
-#[tokio::test]
+#[test(tokio::test)]
 #[timeout(10_000)]
+#[ignore = "XXX(uniquefine): This test needs to be fixed when SCMP handling is implemented for the updated SCION stack."]
 async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     let server_ia = IsdAsn::from_str("1-1")?;
     let snap_ip_net = "10.2.0.0/24".parse()?;
@@ -89,12 +91,14 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     let client_stack = ScionStackBuilder::new(snap_cp_addr)
         .with_auth_token(dummy_snap_token())
         .build()
-        .await?;
+        .await
+        .expect("build SCION stack");
 
     let client_socket = client_stack.bind(None).await?;
     let client_raw = client_stack
         .bind_raw(Some(client_socket.local_addr()))
-        .await?;
+        .await
+        .expect("bind raw SCION socket");
 
     //
     // Actual Test

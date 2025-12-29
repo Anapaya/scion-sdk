@@ -44,12 +44,6 @@ use crate::{
 /// The pocket SCION system state.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct SystemStateDto {
-    /// XXX(uniquefine): This is temporary until we properly model the rendevous hashing.
-    /// If set, only one data plane per snap and only one snap per ISD-AS is allowed.
-    /// If a snap is configured, then it is registered as wildcard sim_receiver
-    /// thus all traffic is forwarded to the snaps.
-    /// If not set, the old behavior is used.
-    pub forward_all_traffic_to_snaps: bool,
     /// The public key (PEM format) to verify SNAP tokens.
     pub snap_token_public_key: String,
     /// Test authentication server.

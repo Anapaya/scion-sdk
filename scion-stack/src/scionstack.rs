@@ -224,9 +224,6 @@ use crate::path::{
     scoring::PathScoring,
 };
 
-/// Default duration to reserve a port when binding a socket.
-pub const DEFAULT_RESERVED_TIME: Duration = Duration::from_secs(3);
-
 /// The SCION stack can be used to create path-aware SCION sockets or even Quic over SCION
 /// connections.
 ///

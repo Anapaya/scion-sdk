@@ -201,26 +201,32 @@ impl PocketScionRuntimeBuilder {
 
         // General setup
 
-        if pstate.forward_all_traffic_to_snaps() {
-            let mut seen_ases = BTreeSet::new();
-            for (_, snap_state) in pstate.snaps() {
-                // Only allow one snap per ISD-AS.
-                for isd_as in snap_state.isd_ases() {
-                    if seen_ases.contains(&isd_as) {
-                        return Err(PocketScionRuntimeError::StartupError("If forward_all_traffic_to_snaps is set, only one snap per ISD-AS is allowed".to_string()));
-                    }
-                    seen_ases.insert(isd_as);
+        // XXX(uniquefine): This is temporary until we properly model the rendevous hashing. Only
+        // one data plane per snap and only one snap per ISD-AS is allowed.
+        let mut seen_ases = BTreeSet::new();
+        for (_, snap_state) in pstate.snaps() {
+            // Only allow one snap per ISD-AS.
+            for isd_as in snap_state.isd_ases() {
+                if seen_ases.contains(&isd_as) {
+                    return Err(PocketScionRuntimeError::StartupError(
+                        "Only one snap per ISD-AS is allowed".to_string(),
+                    ));
                 }
-                // Only allow one data plane per snap.
-                if snap_state.data_planes.len() != 1 {
-                    return Err(PocketScionRuntimeError::StartupError("If forward_all_traffic_to_snaps is set, exactly one data plane per snap is allowed".to_string()));
-                }
+                seen_ases.insert(isd_as);
             }
-            // Do not allow any AS to have both routers and SNAPs configured.
-            for (_, router) in pstate.routers() {
-                if seen_ases.contains(&router.isd_as) {
-                    return Err(PocketScionRuntimeError::StartupError("If forward_all_traffic_to_snaps is set, only one router per ISD-AS is allowed".to_string()));
-                }
+            // Only allow one data plane per snap.
+            if snap_state.data_planes.len() > 1 {
+                return Err(PocketScionRuntimeError::StartupError(
+                    "Only one data plane per snap is allowed".to_string(),
+                ));
+            }
+        }
+        // Do not allow any AS to have both routers and SNAPs configured.
+        for (_, router) in pstate.routers() {
+            if seen_ases.contains(&router.isd_as) {
+                return Err(PocketScionRuntimeError::StartupError(
+                    "Only one router per ISD-AS is allowed".to_string(),
+                ));
             }
         }
 
@@ -279,37 +285,18 @@ impl PocketScionRuntimeBuilder {
                     async move { dispatcher.start_dispatching().await }
                 });
 
-                if pstate.forward_all_traffic_to_snaps() {
-                    for isd_as in pstate
-                        .snap_data_plane_ases(snap_dp_id)
-                        .expect("State for SNAP data plane should exist")
-                    {
-                        pstate
-                            .add_wildcard_sim_receiver(
-                                isd_as,
-                                Arc::new(TunnelGatewayReceiver::new(tunnel_gw_dispatcher.clone())),
-                            )
-                            .expect("Failed to add wildcard receiver");
-                    }
-                } else {
-                    let registrations = pstate
-                        .snap_data_plane_prefixes(snap_dp_id)
-                        .expect("Data plane registrations should exist");
-
-                    // Register the tunnel gateway dispatcher for each prefix
-                    for (ias, ipnets) in registrations {
-                        for ipnet in ipnets {
-                            pstate
-                                .add_sim_receiver(
-                                    ias,
-                                    ipnet,
-                                    Arc::new(TunnelGatewayReceiver::new(
-                                        tunnel_gw_dispatcher.clone(),
-                                    )),
-                                )
-                                .expect("Failed to add dispatcher");
-                        }
-                    }
+                // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
+                // sim_receiver and all traffic is forwarded to the SNAP.
+                for isd_as in pstate
+                    .snap_data_plane_ases(snap_dp_id)
+                    .expect("State for SNAP data plane should exist")
+                {
+                    pstate
+                        .add_wildcard_sim_receiver(
+                            isd_as,
+                            Arc::new(TunnelGatewayReceiver::new(tunnel_gw_dispatcher.clone())),
+                        )
+                        .expect("Failed to add wildcard receiver");
                 }
 
                 start_tunnel_gateway(

@@ -16,14 +16,11 @@ arc-swap = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 endhost-api-client = { workspace = true }
-endhost-api-models = { workspace = true }
 foldhash = { workspace = true }
 futures = { workspace = true }
 pin-project-lite = { workspace = true }
 prost = { workspace = true }
 quinn = { workspace = true }
-rand = { workspace = true }
-rand_chacha = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }
 scc = { workspace = true }
 scion-proto = { workspace = true }

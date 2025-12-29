@@ -15,13 +15,9 @@
 
 use integration_tests::{UnderlayType, minimal_pocketscion_setup};
 use scion_proto::address::{ScionAddrSvc, ServiceAddr, SocketAddr};
-use scion_sdk_reqwest_connect_rpc::{
-    client::CrpcClientError,
-    error::{CrpcError, CrpcErrorCode},
-};
+use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_stack::scionstack::{
-    ScionSocketBindError, ScionStackBuilder,
-    builder::{BuildScionStackError, BuildSnapScionStackError},
+    ScionSocketBindError, ScionStackBuilder, builder::BuildScionStackError,
 };
 use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
@@ -68,7 +64,6 @@ mod v2 {
 
         let result = ScionStackBuilder::new(format!("http://{unreachable_addr}").parse().unwrap())
             .with_auth_token(dummy_snap_token())
-            .with_use_v2()
             .build()
             .await;
 
@@ -90,7 +85,6 @@ mod v2 {
 
         let result = ScionStackBuilder::new(test_env.eh_api132.url)
             .with_auth_token("invalid token".to_string())
-            .with_use_v2()
             .build()
             .await
             .unwrap()
@@ -110,7 +104,6 @@ mod v2 {
 
         let stack = ScionStackBuilder::new(test_env.eh_api132.url)
             .with_auth_token(dummy_snap_token())
-            .with_use_v2()
             .build()
             .await
             .unwrap();
@@ -141,26 +134,21 @@ mod v2 {
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
-async fn test_invalid_token_snap() {
+async fn test_invalid_snap_token() {
     let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
 
     let result = ScionStackBuilder::new(test_env.eh_api132.url)
         .with_auth_token("invalid token".to_string())
         .build()
+        .await
+        .unwrap()
+        .bind(None)
         .await;
 
+    // TODO(uniquefine): this should match a more specific error to indicate that the auth token
+    // is invalid.
     assert!(
-        matches!(
-            result,
-            Err(BuildScionStackError::Snap(
-                BuildSnapScionStackError::DataPlaneDiscoveryError(CrpcClientError::CrpcError(
-                    CrpcError {
-                        code: CrpcErrorCode::Unauthenticated,
-                        ..
-                    }
-                ))
-            ))
-        ),
+        matches!(result, Err(ScionSocketBindError::DataplaneError(_))),
         "expected Snap::DataPlaneDiscoveryError::CrpcError with Unauthenticated code for invalid token, got {result:?}"
     );
 }

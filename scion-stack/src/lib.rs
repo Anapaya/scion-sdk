@@ -13,7 +13,6 @@
 // limitations under the License.
 //! SCION stack library.
 
-mod allocation;
 pub mod path;
 pub mod quic;
 pub mod scionstack;

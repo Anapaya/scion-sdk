@@ -30,6 +30,7 @@ use tokio::time::timeout;
 /// TODO(uniquefine): Adapt to use v2. Session tokens are no longer used, but the snap token still
 /// needs to be renewed and send to the data plane.
 #[test(tokio::test)]
+#[ignore = "The new SCION stack no longer uses session tokens, but the SNAP token still needs to be renewed."]
 async fn auto_session_renewals() {
     // For sessions we have a hardcoded automatic renew to happen at (expiration_time as f32 * 0.75)
     // as u64

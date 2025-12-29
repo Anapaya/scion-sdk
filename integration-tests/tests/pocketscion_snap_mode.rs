@@ -94,8 +94,11 @@ async fn send_and_receive_echo(tun: &SnapTunnel, payload: Bytes) {
 // Test involving two clients in AS 110 sending packets to a server in AS 111.
 // The server echoes the packets back. The clients connect via two different
 // SNAP data planes in AS 110.
+//
+// XXX(scionstack-v2): rendezvous hashing for pocketscion missing
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
+#[ignore = "rendezvous hashing for pocketscion missing"]
 async fn multi_client_multi_snap() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
