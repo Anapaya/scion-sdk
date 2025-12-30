@@ -29,13 +29,9 @@ use scion_sdk_utils::{
     io::{get_tmp_path, read_file, write_file},
     task_handler::{CancelTaskSet, InProcess},
 };
-use snap_dataplane::{
-    session::state::insecure_const_session_key_pair,
-    state::Id,
-    tunnel_gateway::{
-        dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
-        start_tunnel_gateway, state::SharedTunnelGatewayState,
-    },
+use snap_dataplane::tunnel_gateway::{
+    dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
+    start_tunnel_gateway, state::SharedTunnelGatewayState,
 };
 use thiserror::Error;
 use tokio::{net::TcpListener, time::sleep};
@@ -167,7 +163,7 @@ impl PocketScionRuntimeBuilder {
             };
 
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
-            let session_manager = pstate.snap_session_manager(snap_id, io_config.clone());
+            let snap_resolver = pstate.snap_resolver(snap_id, io_config.clone());
             let decoding_key = snap_token_decoding_key.clone();
 
             let local_ases = snap_state.isd_ases();
@@ -179,8 +175,8 @@ impl PocketScionRuntimeBuilder {
                     token,
                     listener,
                     dp_discovery,
-                    session_manager,
                     segment_lister,
+                    snap_resolver,
                     decoding_key,
                     snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
                 )
@@ -230,12 +226,7 @@ impl PocketScionRuntimeBuilder {
         }
 
         for snap_id in pstate.snaps_ids() {
-            let (_, session_decoding_key) = insecure_const_session_key_pair(snap_id.as_usize());
-            // XXX(session-token-rework): single decoding key after SNAP dp session token removal
-            let validator = Arc::new(Validator::new_with_keys(
-                vec![snap_token_decoding_key.clone(), session_decoding_key],
-                None,
-            ));
+            let validator = Arc::new(Validator::new(snap_token_decoding_key.clone(), None));
 
             // Start TunnelGateway for each SNAP data plane
             for snap_dp_id in pstate.snap_data_planes(snap_id) {

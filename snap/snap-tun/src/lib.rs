@@ -26,8 +26,8 @@ use scion_proto::address::{EndhostAddr, IsdAsn};
 
 /// The socket address assign connect RPC endpoint.
 pub(crate) const PATH_SOCK_ADDR_ASSIGNMENT: &str = "/connectrpc.v1.snaptun/assign_socketaddr";
-/// The session renewal connect RPC endpoint.
-pub(crate) const PATH_SESSION_RENEWAL: &str = "/connectrpc.v1.snaptun/renew_session";
+/// The update token connect RPC endpoint.
+pub(crate) const PATH_UPDATE_TOKEN: &str = "/connectrpc.v1.snaptun/update_token";
 pub(crate) const AUTH_HEADER: &str = "Authorization";
 
 /// Placeholder IPv4-Address that should be used by callers to

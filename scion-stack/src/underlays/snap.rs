@@ -35,7 +35,7 @@ use scion_proto::{
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
-use snap_tun::client::{AutoSessionRenewal, ClientBuilder, DEFAULT_RENEWAL_WAIT_THRESHOLD};
+use snap_tun::client::{AutoTokenRenewal, ClientBuilder, DEFAULT_RENEWAL_WAIT_THRESHOLD};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{sync::futures::OwnedNotified, task::JoinHandle};
 use url::Url;
@@ -106,23 +106,11 @@ impl SnapUnderlaySocket {
         })?;
         snap_cp_client.use_token_source(snap_token_source.clone());
 
-        let session_grants = snap_cp_client
-            .create_data_plane_sessions()
-            .await
-            .map_err(|e| {
-                crate::scionstack::ScionSocketBindError::DataplaneError(
-                    format!("failed to discover SNAP data planes: {e:#}").into(),
-                )
-            })?;
-
-        let data_plane_addr = session_grants
-            .first()
-            .ok_or_else(|| {
-                crate::scionstack::ScionSocketBindError::DataplaneError(
-                    "no SNAP data plane found".into(),
-                )
-            })?
-            .address;
+        let data_plane_addr = snap_cp_client.get_data_plane_address().await.map_err(|e| {
+            crate::scionstack::ScionSocketBindError::DataplaneError(
+                format!("failed to discover SNAP data plane: {e:#}").into(),
+            )
+        })?;
 
         // Bind to the provided bind address or fall back to 0.0.0.0:0.
         let endpoint_bind_addr: net::SocketAddr =
@@ -360,11 +348,7 @@ impl SnapUnderlaySocketTask {
                             .use_token_source(self.snap_token_source.clone());
                     }
 
-                    let session_grants = self.snap_cp_client.1.create_data_plane_sessions().await?;
-                    let data_plane_addr = session_grants
-                        .first()
-                        .context("no data plane found")?
-                        .address;
+                    let data_plane_addr = self.snap_cp_client.1.get_data_plane_address().await?;
 
                     let new_connection = new_snaptun(
                         &self.inner.endpoint,
@@ -424,14 +408,13 @@ async fn new_snaptun(
         .get_token()
         .await
         .map_err(|e| anyhow::anyhow!("failed to get token: {e:?}"))?;
-    let client_builder =
-        ClientBuilder::new(token).with_auto_session_renewal(AutoSessionRenewal::new(
-            renewal_wait_threshold,
-            Arc::new(move || {
-                let token_source = token_source.clone();
-                Box::pin(async move { token_source.get_token().await })
-            }),
-        ));
+    let client_builder = ClientBuilder::new(token).with_auto_token_renewal(AutoTokenRenewal::new(
+        renewal_wait_threshold,
+        Arc::new(move || {
+            let token_source = token_source.clone();
+            Box::pin(async move { token_source.get_token().await })
+        }),
+    ));
 
     let (sender, receiver, ctrl) = client_builder.connect(conn).await?;
     Ok(SnapTunConnection {
@@ -718,25 +701,25 @@ fn quinn_client_endpoint(addr: net::SocketAddr) -> io::Result<quinn::Endpoint> {
     )
 }
 
-/// Configuration for automatic session renewal.
+/// Configuration for automatic SNAP token renewal.
 #[derive(Clone)]
-pub struct SessionRenewal {
-    /// Threshold for waiting for the next renewal of the session token.
+pub struct TokenRenewal {
+    /// Threshold for waiting for the next renewal of the SNAP token.
     pub renewal_wait_threshold: std::time::Duration,
 }
 
-impl Default for SessionRenewal {
+impl Default for TokenRenewal {
     fn default() -> Self {
-        SessionRenewal {
+        TokenRenewal {
             renewal_wait_threshold: DEFAULT_RENEWAL_WAIT_THRESHOLD,
         }
     }
 }
 
-impl SessionRenewal {
+impl TokenRenewal {
     /// Creates a new session renewal configuration.
     pub fn new(renewal_wait_threshold: std::time::Duration) -> Self {
-        SessionRenewal {
+        TokenRenewal {
             renewal_wait_threshold,
         }
     }

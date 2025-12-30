@@ -24,7 +24,7 @@ endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0
 
 scion-sdk-address-manager = { path = "libs/address-manager", version = "0.2" }
 scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.2" }
-scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
+# scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
 scion-sdk-observability = { path = "libs/observability", version = "0.2" }
 scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.2" }
 scion-sdk-token-validator = { path = "libs/token-validator", version = "0.2" }

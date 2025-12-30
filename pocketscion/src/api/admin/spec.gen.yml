@@ -314,9 +314,6 @@ components:
         public_key:
           type: string
           description: The public key (PEM format) used to verify ID tokens.
-    Hostname:
-      type: string
-      description: SNAP node hostname.
     IoAuthServerConfigDto:
       type: object
       description: The I/O configuration of the Auth server.
@@ -502,58 +499,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/pocketscion::network::scion::topology::dto::ScionLinkDto'
-    SessionDto:
-      type: object
-      description: Data plane session.
-      required:
-      - session_id
-      - expiry
-      properties:
-        expiry:
-          type: integer
-          format: int64
-          description: The expiry time of the session represented as a Unix timestamp.
-          minimum: 0
-        session_id:
-          $ref: '#/components/schemas/SessionIdDto'
-          description: The ID of the session.
-    SessionIdDto:
-      type: object
-      description: Session ID.
-      required:
-      - pssid
-      - hostname
-      properties:
-        hostname:
-          $ref: '#/components/schemas/Hostname'
-          description: The hostname of the data plane.
-        pssid:
-          type: string
-          description: The pseudo SCION subscriber identity (PSSID).
-    SessionManagerStateDto:
-      type: object
-      description: The session manager state.
-      required:
-      - session_duration
-      - sessions
-      properties:
-        session_duration:
-          type: string
-          description: The maximum duration of a session.
-        sessions:
-          type: array
-          items:
-            $ref: '#/components/schemas/SessionDto'
-          description: List of existing sessions.
-    SessionTokenIssuerStateDto:
-      type: object
-      description: Session token issuer state.
-      required:
-      - key
-      properties:
-        key:
-          type: string
-          description: The encoding key (PEM format) used to issue session tokens.
     Snap:
       type: object
       description: SNAP in pocketSCION.
@@ -567,8 +512,6 @@ components:
       type: object
       description: The state of a SNAP.
       required:
-      - session_manager
-      - session_issuer
       - data_planes
       properties:
         data_planes:
@@ -579,12 +522,6 @@ components:
           propertyNames:
             type: string
             description: SNAP node hostname.
-        session_issuer:
-          $ref: '#/components/schemas/SessionTokenIssuerStateDto'
-          description: Session token issuer state.
-        session_manager:
-          $ref: '#/components/schemas/SessionManagerStateDto'
-          description: Session manager state.
     SnapsResponse:
       type: object
       description: SNAP response.

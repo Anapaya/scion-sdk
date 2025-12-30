@@ -16,7 +16,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     num::NonZero,
     str::FromStr,
     sync::{Arc, RwLock, RwLockReadGuard},
@@ -32,15 +32,8 @@ use scion_proto::address::IsdAsn;
 use scion_sdk_address_manager::manager::{AddressManager, AddressRegistrationError};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use snap_control::{
-    crpc_api::api_service::model::SessionGrant,
-    model::{CreateSessionError, SessionGranter, SnapUnderlay, UdpUnderlay, UnderlayDiscovery},
-};
+use snap_control::model::{SnapResolver, SnapUnderlay, UdpUnderlay, UnderlayDiscovery};
 use snap_dataplane::{
-    session::{
-        manager::TokenIssuer,
-        state::{SessionManagerState, SessionTokenIssuerState, insecure_const_ed25519_signing_key},
-    },
     state::{DataPlaneState, Hostname, Id},
     tunnel_gateway::state::SharedTunnelGatewayState,
 };
@@ -161,24 +154,11 @@ impl SharedPocketScionState {
 
     /// Adds a new SNAP to the system state and returns its id.
     pub fn add_snap(&mut self) -> SnapId {
-        self.add_snap_with_session_manager(SessionManagerState::default())
-    }
-
-    /// Adds a new SNAP with a specific session manager state to the system state and returns its
-    /// id.
-    pub fn add_snap_with_session_manager(
-        &mut self,
-        session_manager: SessionManagerState,
-    ) -> SnapId {
         let mut system_state = self.system_state.write().unwrap();
         let snap_id = SnapId::from_usize(system_state.snaps.len());
-        let session_encoding_key = insecure_const_ed25519_signing_key(snap_id.as_usize());
-
         system_state.snaps.insert(
             snap_id,
             SnapState {
-                session_manager,
-                session_issuer: SessionTokenIssuerState::new(session_encoding_key.into()),
                 data_planes: Default::default(),
             },
         );
@@ -221,12 +201,12 @@ impl SharedPocketScionState {
     }
 
     /// Get the [SessionManagerHandle] of a specific snap
-    pub(crate) fn snap_session_manager(
+    pub(crate) fn snap_resolver(
         &self,
         snap_id: SnapId,
         io_config: SharedPocketScionIoConfig,
-    ) -> SessionManagerHandle {
-        SessionManagerHandle {
+    ) -> SnapResolverHandle {
+        SnapResolverHandle {
             snap_id,
             system_state: self.system_state.clone(),
             io_config,
@@ -582,8 +562,6 @@ impl AsRef<SystemState> for RwLockReadGuard<'_, SystemState> {
 /// Pocket SCION SNAP state.
 #[derive(Debug, PartialEq, Clone)]
 pub struct SnapState {
-    pub(crate) session_manager: SessionManagerState,
-    pub(crate) session_issuer: SessionTokenIssuerState,
     // XXX(bunert): SNAP should contain a single data plane state.
     pub(crate) data_planes: BTreeMap<Hostname, DataPlaneState>,
 }
@@ -602,8 +580,6 @@ impl SnapState {
 impl From<&SnapState> for SnapStateDto {
     fn from(value: &SnapState) -> Self {
         Self {
-            session_manager: (&value.session_manager).into(),
-            session_issuer: (&value.session_issuer).into(),
             data_planes: value
                 .data_planes
                 .iter()
@@ -630,14 +606,7 @@ impl TryFrom<SnapStateDto> for SnapState {
             })
             .collect::<Result<_, Self::Error>>()?;
 
-        let session_manager = value.session_manager.try_into()?;
-        let session_issuer = value.session_issuer.try_into()?;
-
-        Ok(Self {
-            session_issuer,
-            data_planes,
-            session_manager,
-        })
+        Ok(Self { data_planes })
     }
 }
 
@@ -813,7 +782,7 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
     }
 }
 
-pub(crate) struct SessionManagerHandle {
+pub(crate) struct SnapResolverHandle {
     #[allow(unused)]
     snap_id: SnapId,
     #[allow(unused)]
@@ -822,38 +791,15 @@ pub(crate) struct SessionManagerHandle {
     io_config: SharedPocketScionIoConfig,
 }
 
-impl SessionGranter for SessionManagerHandle {
-    // Issue a grant for _every_ available data plane for which a socket address
-    // is configured in the io layer of pocket scion.
-    fn create_sessions(
+impl SnapResolver for SnapResolverHandle {
+    fn resolve(
         &self,
-        // In the case of PocketSCION, the endhost ip addr is ignored.
-        _endhost_ip_addr: IpAddr,
-        snap_token: SnapTokenClaims,
-    ) -> Result<Vec<SessionGrant>, CreateSessionError> {
-        let mut sstate = self.system_state.write().unwrap();
-        self.io_config
-            .list_snap_data_planes(self.snap_id)
-            .into_iter()
-            .filter_map(|(dp_id, addr)| addr.map(move |a| (dp_id, a)))
-            .map(|(dp_id, address)| {
-                let snap = sstate.snaps.get_mut(&self.snap_id).expect("SNAP not found");
-
-                // open a data plane session
-                let session_grant = snap
-                    .session_manager
-                    .open(snap_token.pssid.clone(), dp_id.data_plane())?;
-
-                // issue a session token
-                let token = snap.session_issuer.issue(
-                    snap_token.pssid.clone(),
-                    dp_id.data_plane(),
-                    session_grant,
-                )?;
-
-                Ok(SessionGrant { address, token })
-            })
-            .collect()
+        _endhost_ip: std::net::IpAddr,
+    ) -> Result<SocketAddr, snap_control::model::ResolveSnapError> {
+        // XXX(bunert): rendezvous hashing in pocketscion?
+        let data_planes = self.io_config.list_snap_data_planes(self.snap_id);
+        let (_dp_id, addr) = data_planes.first().expect("must exist");
+        Ok(addr.expect("address must be set"))
     }
 }
 

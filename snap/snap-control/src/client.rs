@@ -21,14 +21,8 @@ use scion_sdk_reqwest_connect_rpc::{client::CrpcClientError, token_source::Token
 use url::Url;
 
 use crate::{
-    crpc_api::api_service::{
-        GET_SNAP_DATA_PLANE_SESSION_GRANT, RENEW_SNAP_DATA_PLANE_SESSION_GRANT, SERVICE_PATH,
-        convert::SessionGrantError, model::SessionGrant,
-    },
-    protobuf::anapaya::snap::v1::api_service::{
-        GetSnapDataPlaneSessionGrantRequest, GetSnapDataPlaneSessionGrantResponse,
-        RenewSnapDataPlaneSessionGrantRequest, RenewSnapDataPlaneSessionGrantResponse,
-    },
+    crpc_api::api_service::{GET_SNAP_DATA_PLANE_ADDRESS, SERVICE_PATH},
+    protobuf::anapaya::snap::v1::api_service::{GetSnapDataPlaneRequest, GetSnapDataPlaneResponse},
 };
 
 /// Re-export the endhost API client and the reqwest connect RPC cllient.
@@ -40,13 +34,8 @@ pub mod re_export {
 /// SNAP control plane API trait.
 #[async_trait]
 pub trait ControlPlaneApi: Send + Sync {
-    /// Creates SNAP data plane sessions for all data planes.
-    async fn create_data_plane_sessions(&self) -> Result<Vec<SessionGrant>, CrpcClientError>;
-    /// Renews a SNAP data plane session for the given address.
-    async fn renew_data_plane_session(
-        &self,
-        addr: SocketAddr,
-    ) -> Result<SessionGrant, CrpcClientError>;
+    /// Get the SNAP data plane address.
+    async fn get_data_plane_address(&self) -> Result<SocketAddr, CrpcClientError>;
 }
 
 /// Connect RPC client for the SNAP control plane API.
@@ -85,45 +74,21 @@ impl CrpcSnapControlClient {
 
 #[async_trait]
 impl ControlPlaneApi for CrpcSnapControlClient {
-    async fn create_data_plane_sessions(&self) -> Result<Vec<SessionGrant>, CrpcClientError> {
+    async fn get_data_plane_address(&self) -> Result<SocketAddr, CrpcClientError> {
         self.client
-            .unary_request::<GetSnapDataPlaneSessionGrantRequest, GetSnapDataPlaneSessionGrantResponse>(
-                &format!("{SERVICE_PATH}{GET_SNAP_DATA_PLANE_SESSION_GRANT}"),
-                GetSnapDataPlaneSessionGrantRequest::default(),
+            .unary_request::<GetSnapDataPlaneRequest, GetSnapDataPlaneResponse>(
+                &format!("{SERVICE_PATH}{GET_SNAP_DATA_PLANE_ADDRESS}"),
+                GetSnapDataPlaneRequest::default(),
             )
             .await?
-            .try_into()
-            .map_err(
-                |e: SessionGrantError| {
-                    CrpcClientError::DecodeError {
-                        context: "decoding session grants".into(),
-                        source: e.into(),
-                        body: None,
-                    }
-                },
-            )
-    }
-    async fn renew_data_plane_session(
-        &self,
-        address: SocketAddr,
-    ) -> Result<SessionGrant, CrpcClientError> {
-        self.client
-            .unary_request::<RenewSnapDataPlaneSessionGrantRequest, RenewSnapDataPlaneSessionGrantResponse>(
-                &format!("{SERVICE_PATH}{RENEW_SNAP_DATA_PLANE_SESSION_GRANT}"),
-                RenewSnapDataPlaneSessionGrantRequest{
-                    address: address.to_string(),
-                },
-            )
-            .await?
-            .try_into()
-            .map_err(
-                |e: SessionGrantError| {
-                    CrpcClientError::DecodeError {
-                        context: "decoding renewed session grant".into(),
-                        source: e.into(),
-                        body: None,
-                    }
-                },
-            )
+            .address
+            .parse()
+            .map_err(|e: std::net::AddrParseError| {
+                CrpcClientError::DecodeError {
+                    context: "parsing data plane address".into(),
+                    source: e.into(),
+                    body: None,
+                }
+            })
     }
 }

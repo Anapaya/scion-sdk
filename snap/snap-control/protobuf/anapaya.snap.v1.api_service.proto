@@ -2,48 +2,13 @@ syntax = "proto3";
 
 package anapaya.snap.v1.api_service;
 
-// ############################################
-// Reuseable types
+// Request to get the SNAP data plane details for the client to connect to.
+message GetSnapDataPlaneRequest {}
 
-// A grant to allow access to a SNAP data plane.
-message SnapDataPlaneSessionGrant {
+// SNAP data plane response message.
+message GetSnapDataPlaneResponse {
   // The UDP endpoint (host:port) of the SNAP data plane.
   // The host can either be an IP address or a hostname.
   string address = 1;
-
-  // The Snap data plane session token is a JWT with the following claims:
-  // - `exp`: the expiration time of the token in seconds since unix epoch.
-  // - `address`: the address (host:port) of the SNAP data plane this token is valid for.
-  string token = 2;
-}
-
-// ############################################
-// CreateSnapDataPlaneSession
-
-// Requests creation of a SNAP data plane session grant.
-//
-// Selects one or more SNAP data planes for the client and returns grants for them.
-message GetSnapDataPlaneSessionGrantRequest {
-  // Space for hints for the data plane selection in future iterations.
-}
-
-// SNAP data plane session grant response.
-message GetSnapDataPlaneSessionGrantResponse {
-  // Tokens for the created SNAP data plane sessions.
-  repeated SnapDataPlaneSessionGrant grants = 1;
-}
-
-// ############################################
-// RenewDataPlaneSession
-
-// Requests renewal of an active data plane grant.
-message RenewSnapDataPlaneSessionGrantRequest {
-  // The address of the data plane for which the active session should be renewed
-  string address = 1;
-}
-
-// SNAP data plane session grant renewal response.
-message RenewSnapDataPlaneSessionGrantResponse {
-  // The renewed session grant.
-  SnapDataPlaneSessionGrant grant = 1;
+  // XXX(bunert): Extend with static identity for the snaptun-ng.
 }

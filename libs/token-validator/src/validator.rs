@@ -16,7 +16,9 @@
 use std::{marker::PhantomData, time::SystemTime};
 
 use ed25519_dalek::pkcs8::{EncodePrivateKey, EncodePublicKey};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, errors::Error as JwtError};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, TokenData, Validation, decode, errors::Error as JwtError,
+};
 use pem::Pem;
 use serde::Deserialize;
 use thiserror::Error;
@@ -64,8 +66,7 @@ pub struct Validator<C>
 where
     C: for<'de> Deserialize<'de> + Token,
 {
-    // XXX(session-token-rework): temporary list of keys
-    public_keys: Vec<DecodingKey>,
+    public_key: DecodingKey,
     validator: Validation,
 
     // Here, we need to pull a type-foo trick to make `Validator: Sync`, even
@@ -84,19 +85,6 @@ where
     /// * `audience`: Optional audience to validate the token against. If `None`, the audience is
     ///   not validated.
     pub fn new(public_key: DecodingKey, audience: Option<&[&str]>) -> Self {
-        Self::new_with_keys(vec![public_key], audience)
-    }
-
-    /// Creates a new token validator with multiple public keys.
-    ///
-    /// The validator will try each key in order until one succeeds.
-    ///
-    /// # Arguments
-    /// * `public_keys`: The list of public keys to try when verifying the token signature.
-    /// * `audience`: Optional audience to validate the token against. If `None`, the audience is
-    ///   not validated.
-    // XXX(session-token-rework): cleanup (remove)
-    pub fn new_with_keys(public_keys: Vec<DecodingKey>, audience: Option<&[&str]>) -> Self {
         let mut validator = Validation::new(Algorithm::EdDSA);
         validator.set_required_spec_claims(&C::required_claims());
         if let Some(audience) = audience {
@@ -106,7 +94,7 @@ where
         }
 
         Self {
-            public_keys,
+            public_key,
             validator,
             _marker: PhantomData,
         }
@@ -118,25 +106,14 @@ where
     C: for<'de> Deserialize<'de> + Token,
 {
     fn validate(&self, now: SystemTime, token: &str) -> Result<C, TokenValidatorError> {
-        // XXX(session-token-rework): temporary hack, not the proper error if no public keys are
-        // configured but let's not bother about that for the temporary solution.
-        let mut last_err = TokenValidatorError::JwtSignatureInvalid();
+        let token_data: TokenData<C> = decode::<C>(token, &self.public_key, &self.validator)?;
 
-        // Try each public key until one succeeds
-        for public_key in &self.public_keys {
-            match decode::<C>(token, public_key, &self.validator) {
-                Ok(token_data) => {
-                    let token_exp = token_data.claims.exp_time();
-                    if now > token_exp {
-                        return Err(TokenValidatorError::TokenExpired(token_exp));
-                    }
-                    return Ok(token_data.claims);
-                }
-                Err(e) => last_err = e.into(),
-            }
+        let token_exp = token_data.claims.exp_time();
+        if now > token_exp {
+            return Err(TokenValidatorError::TokenExpired(token_exp));
         }
 
-        Err(last_err)
+        Ok(token_data.claims)
     }
 }
 

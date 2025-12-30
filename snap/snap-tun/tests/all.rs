@@ -28,8 +28,7 @@ use scion_sdk_token_validator::validator::{Token, TokenValidator, TokenValidator
 use serde::{Deserialize, Serialize};
 use snap_tun::{
     client::{
-        AutoSessionRenewal, ClientBuilder, Control, DEFAULT_RENEWAL_WAIT_THRESHOLD, Receiver,
-        Sender,
+        AutoTokenRenewal, ClientBuilder, Control, DEFAULT_RENEWAL_WAIT_THRESHOLD, Receiver, Sender,
     },
     metrics::Metrics,
     server::ControlError,
@@ -94,34 +93,34 @@ pub async fn assign_sock_addr_and_retrieve_echoed_packet() {
     }
 }
 
-/// Test session enforcement by using a short token validity.
+/// Test token enforcement by using a short token validity.
 #[test_log::test(tokio::test)]
-pub async fn session_enforcement() {
+pub async fn token_enforcement() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let (quic_client, quic_srv) = quic_endpoint_pair();
     let srv_addr = quic_srv.local_addr().expect("no fail");
     let srv = prepare_snaptun_server(MagicAuthorizer::new(1));
 
-    // accept connections but only wait for the control stream to close due to session expiry
+    // accept connections but only wait for the control stream to close due to token expiry
     let join_handle = tokio::spawn(async move {
         let incoming = quic_srv.accept().await.expect("no fail");
         let conn = incoming.await.expect("no fail");
         let (_tx, _rx, ctrl) = srv.accept_with_timeout(conn).await.expect("no fail");
 
         let res = ctrl.await;
-        assert_matches!(res, Err(ControlError::SessionExpired));
+        assert_matches!(res, Err(ControlError::TokenExpired));
     });
 
     let (_tx, _rx, _ctrl) = prepare_snaptun_client(quic_client, srv_addr).await;
 
-    // Wait for the session to expire
+    // Wait for the token to expire
     join_handle.await.expect("no fail");
 }
 
-/// Test manual session renewal.
+/// Test manual token renewal.
 #[test_log::test(tokio::test)]
-pub async fn session_renewal() {
+pub async fn manual_token_renewal() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let (quic_client, quic_srv) = quic_endpoint_pair();
@@ -132,24 +131,24 @@ pub async fn session_renewal() {
     js.spawn(run_server(quic_srv, srv));
 
     let (_tx, _rx, mut ctrl) = prepare_snaptun_client(quic_client, srv_addr).await;
-    let validity_before = ctrl.session_expiry();
+    let validity_before = ctrl.token_expiry();
 
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let res = ctrl.renew_session().await;
-    assert!(res.is_ok(), "Session renewal should succeed: {res:?}");
+    let res = ctrl.update_token().await;
+    assert!(res.is_ok(), "token update should succeed: {res:?}");
 
-    let validity_after = ctrl.session_expiry();
+    let validity_after = ctrl.token_expiry();
     assert!(
         validity_after > validity_before,
-        "Session expiry must be extended {:?} > {:?}",
+        "token expiry must be extended {:?} > {:?}",
         chrono::DateTime::<chrono::Utc>::from(validity_after),
         chrono::DateTime::<chrono::Utc>::from(validity_before)
     );
 }
 
-/// Test automatic session renewal.
+/// Test automatic token renewal.
 #[test_log::test(tokio::test)]
-pub async fn auto_session_renewal() {
+pub async fn auto_token_renewal() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let (quic_client, quic_srv) = quic_endpoint_pair();
@@ -166,7 +165,7 @@ pub async fn auto_session_renewal() {
         .expect("no_fail");
 
     let (_tx, _rx, ctrl) = ClientBuilder::new(MAGIC_TOKEN)
-        .with_auto_session_renewal(AutoSessionRenewal::new(
+        .with_auto_token_renewal(AutoTokenRenewal::new(
             DEFAULT_RENEWAL_WAIT_THRESHOLD,
             Arc::new(move || Box::pin(async move { Ok(MAGIC_TOKEN.to_string()) })),
         ))
@@ -178,8 +177,7 @@ pub async fn auto_session_renewal() {
         Some(quic_client.local_addr().unwrap())
     );
 
-    // Given the token is only valid for 3 seconds, sleeping for 2 seconds ensures a session
-    // renewal.
+    // Given the token is only valid for 3 seconds, sleeping for 2 seconds ensures a token update.
     tokio::time::sleep(Duration::from_secs(2)).await;
 }
 
@@ -297,7 +295,8 @@ const MAGIC_TOKEN: &str = "ANAPAYA";
 
 /// A simple token validator that accepts the token "ANAPAYA".
 struct MagicAuthorizer {
-    // Seconds for which the token is valid. This is relevant for testing the session management.
+    // Seconds for which the token is valid. This is relevant for testing token validity
+    // enforcement.
     token_validity: u64,
 }
 

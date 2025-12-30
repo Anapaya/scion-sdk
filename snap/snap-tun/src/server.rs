@@ -22,7 +22,7 @@
 //! and [Control]. The first is used to receive packets from the peer, the second to send packets to
 //! the peer. The third is used to _drive_ the control state of the connection.
 //!
-//! [Server::accept_with_timeout] expects the client to first send a session renew request followed
+//! [Server::accept_with_timeout] expects the client to first send a update token request followed
 //! by an address assignment request. If the client doesn't do so within [ACCEPT_TIMEOUT], a
 //! [AcceptError::Timeout] error is returned and the connection closed. The rationale behind this is
 //! that bogus client connections should be closed as quickly as possible.
@@ -69,9 +69,9 @@ use serde::Deserialize;
 use tokio::sync::watch;
 
 use crate::{
-    AUTH_HEADER, PATH_SESSION_RENEWAL, PATH_SOCK_ADDR_ASSIGNMENT,
+    AUTH_HEADER, PATH_SOCK_ADDR_ASSIGNMENT, PATH_UPDATE_TOKEN,
     metrics::{Metrics, ReceiverMetrics, SenderMetrics},
-    requests::{SessionRenewalResponse, SocketAddrAssignmentResponse, unix_epoch_from_system_time},
+    requests::{SocketAddrAssignmentResponse, TokenUpdateResponse, unix_epoch_from_system_time},
 };
 
 /// SNAP tunnel connection errors.
@@ -83,8 +83,8 @@ pub enum SnaptunConnErrors {
     Timeout = 2,
     /// Unauthenticated error.
     Unauthenticated = 3,
-    /// Session expired error.
-    SessionExpired = 4,
+    /// Token expired error.
+    TokenExpired = 4,
     /// Internal error.
     InternalError = 5,
 }
@@ -99,7 +99,7 @@ impl From<SnaptunConnErrors> for quinn::VarInt {
 pub trait SnapTunToken: for<'de> Deserialize<'de> + Token + Clone {}
 impl<T> SnapTunToken for T where T: for<'de> Deserialize<'de> + Token + Clone {}
 
-/// A client MUST first send a session renew request, followed by an address assignment request
+/// A client MUST first send a token update request, followed by an address assignment request
 /// within the `ACCEPT_TIMEOUT`.
 pub const ACCEPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -147,7 +147,7 @@ impl<T: SnapTunToken> Server<T> {
     ///
     /// ## Tunnel initialization
     ///
-    /// The client is expected to first send a session renew request, followed by an address
+    /// The client is expected to first send a token update request, followed by an address
     /// assignment request. The connection is closed with a [SnaptunConnErrors::Timeout] if the
     /// client does not send the requests within [ACCEPT_TIMEOUT].
     pub async fn accept_with_timeout(
@@ -170,7 +170,7 @@ impl<T: SnapTunToken> Server<T> {
     ///
     /// ## Tunnel initialization
     ///
-    /// The client is expected to first send a session renew request, followed by an address
+    /// The client is expected to first send a token update request, followed by an address
     /// assignment request.
     async fn accept(
         &self,
@@ -182,18 +182,18 @@ impl<T: SnapTunToken> Server<T> {
         ));
 
         //
-        // First request MUST be a session renew request.
-        let (session_renew_req, mut snd, _rcv) = receive_expected_control_request(
+        // First request MUST be a token update request.
+        let (token_update_req, mut snd, _rcv) = receive_expected_control_request(
             &conn,
-            |r| matches!(r, ControlRequest::SessionRenewal(_)),
-            b"expected session renewal request",
+            |r| matches!(r, ControlRequest::TokenUpdate(_)),
+            b"expected token update request",
         )
         .await?;
 
         let now = SystemTime::now();
-        tracing::debug!(?now, request=?session_renew_req, "Got session renewal request");
+        tracing::debug!(?now, request=?token_update_req, "Got token update request");
 
-        let (code, body) = state_machine.process_control_request(now, session_renew_req);
+        let (code, body) = state_machine.process_control_request(now, token_update_req);
         let send_res = send_http_response(&mut snd, code, &body).await;
         if !code.is_success() {
             conn.close(SnaptunConnErrors::InvalidRequest.into(), &body);
@@ -511,9 +511,9 @@ pub enum ControlError {
     /// QUIC stopped error.
     #[error("wait for completion error: {0}")]
     StoppedError(#[from] quinn::StoppedError),
-    /// Session expired.
-    #[error("session expired")]
-    SessionExpired,
+    /// Token expired.
+    #[error("token expired")]
+    TokenExpired,
     /// Connection closed prematurely.
     #[error("connection closed prematurely")]
     ClosedPrematurely,
@@ -533,11 +533,11 @@ impl Control {
         let fut = async move {
             loop {
                 tokio::select! {
-                    _ = tunnel_state.await_session_expiry() => {
-                        // session expired, close the connection
+                    _ = tunnel_state.await_token_expiry() => {
+                        // token expired, close the connection
                         tunnel_state.shutdown();
-                        conn.close(SnaptunConnErrors::SessionExpired.into(), b"session expired");
-                        return Err(ControlError::SessionExpired)
+                        conn.close(SnaptunConnErrors::TokenExpired.into(), b"token expired");
+                        return Err(ControlError::TokenExpired)
                     }
                     res = conn.accept_bi() => {
                         let (mut snd, mut rcv) = match res {
@@ -608,7 +608,7 @@ pub struct TunnelStateMachine<T: SnapTunToken> {
     validator: Arc<dyn TokenValidator<T>>,
     inner_state: RwLock<TunnelState>,
     state_version: AtomicUsize,
-    // channel to notify the session termination about session expiry updates
+    // channel to notify the token termination about token expiry updates
     sender: watch::Sender<()>,
     receiver: watch::Receiver<()>,
 }
@@ -650,13 +650,13 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
             ControlRequest::SocketAddrAssignment(token) => {
                 self.locked_process_socket_addr_assignment_request(&mut inner_state, now, token)
             }
-            ControlRequest::SessionRenewal(token) => {
-                self.locked_process_session_renewal(&mut inner_state, now, token)
+            ControlRequest::TokenUpdate(token) => {
+                self.locked_process_token_update(&mut inner_state, now, token)
             }
         }
     }
 
-    fn locked_process_session_renewal(
+    fn locked_process_token_update(
         &self,
         inner_state: &mut TunnelState,
         now: SystemTime,
@@ -667,9 +667,9 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
                 let token_expiry = claims.exp_time();
 
                 // update internal state
-                self.locked_update_tunnel_session(inner_state, token_expiry);
+                self.locked_update_tunnel_expiry(inner_state, token_expiry);
 
-                let resp = SessionRenewalResponse {
+                let resp = TokenUpdateResponse {
                     valid_until: unix_epoch_from_system_time(token_expiry),
                 };
 
@@ -690,12 +690,12 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         // XXX: assuming well-behaved clients, we should never encounter
         // a situation where a client did not authenticate before requesting a
         // socket addr.
-        let session_expiry = match inner_state.session_validity() {
+        let token_expiry = match inner_state.token_validity() {
             Ok(v) => v,
             Err(err) => {
                 tracing::error!(
                     ?err,
-                    "Failed to get session validity when processing address assignment request"
+                    "Failed to get token validity when processing address assignment request"
                 );
                 // this should, in principle, never happen assuming well-behaved
                 // clients.
@@ -709,7 +709,7 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
             Ok(_claims) => {
                 self.locked_update_state(
                     inner_state,
-                    TunnelState::SockAddrAssigned { session_expiry },
+                    TunnelState::SockAddrAssigned { token_expiry },
                 );
                 let resp = SocketAddrAssignmentResponse::from(self.remote_sock_addr);
 
@@ -721,22 +721,20 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         }
     }
 
-    fn locked_update_tunnel_session(
-        &self,
-        inner_state: &mut TunnelState,
-        session_expiry: SystemTime,
-    ) {
+    fn locked_update_tunnel_expiry(&self, inner_state: &mut TunnelState, token_expiry: SystemTime) {
         match inner_state {
             TunnelState::Unassigned => {
-                *inner_state = TunnelState::SessionEstablished { session_expiry };
+                *inner_state = TunnelState::SessionEstablished { token_expiry };
             }
             TunnelState::SessionEstablished { .. } => {
-                *inner_state = TunnelState::SessionEstablished { session_expiry };
+                *inner_state = TunnelState::SessionEstablished { token_expiry };
             }
             TunnelState::SockAddrAssigned { .. } => {
-                *inner_state = TunnelState::SockAddrAssigned { session_expiry }
+                *inner_state = TunnelState::SockAddrAssigned { token_expiry }
             }
-            TunnelState::Closed => tracing::error!("Updating tunnel session but in closed state"),
+            TunnelState::Closed => {
+                tracing::error!("Updating tunnel token expiry but in closed state")
+            }
         };
     }
 
@@ -747,9 +745,9 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         self.state_version.fetch_add(1, Ordering::AcqRel);
 
         if self.sender.send(()).is_err() {
-            // This happens only if the channel is closed, which means that the session has
+            // This happens only if the channel is closed, which means that the token has
             // expired and the receiver is no longer interested in updates.
-            tracing::debug!("Failed to notify session expiry update");
+            tracing::debug!("Failed to notify token expiry update");
         }
     }
 
@@ -770,24 +768,24 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
         None
     }
 
-    async fn await_session_expiry(&self) {
+    async fn await_token_expiry(&self) {
         let mut expiry_notifier = self.receiver.clone();
         loop {
             let valid_duration = {
                 let res = {
                     let guard = self.inner_state.read().expect("no fail");
-                    guard.session_validity()
+                    guard.token_validity()
                 };
                 match res {
-                    Ok(session_validity) => {
-                        match session_validity.duration_since(SystemTime::now()) {
+                    Ok(token_validity) => {
+                        match token_validity.duration_since(SystemTime::now()) {
                             Ok(dur) => dur,
-                            Err(_) => return, // session already expired
+                            Err(_) => return, // token already expired
                         }
                     }
                     Err(err) => {
                         // Tunnel in an invalid state, should only happen if the tunnel is closed
-                        // (e.g. session already expired).
+                        // (e.g. token already expired).
                         tracing::warn!(%err, "Tunnel in an invalid state");
                         return;
                     }
@@ -796,11 +794,11 @@ impl<T: SnapTunToken> TunnelStateMachine<T> {
 
             tokio::select! {
                 _ = expiry_notifier.changed() => {
-                    // session expiry updated
+                    // token expiry updated
                     continue;
                 }
                 _ = tokio::time::sleep(valid_duration) => {
-                    // Sleep until the session expires
+                    // Sleep until the token expires
                     return;
                 }
             }
@@ -852,19 +850,19 @@ enum TunnelState {
     #[default]
     Unassigned,
     SessionEstablished {
-        session_expiry: SystemTime,
+        token_expiry: SystemTime,
     },
     SockAddrAssigned {
-        session_expiry: SystemTime,
+        token_expiry: SystemTime,
     },
     Closed,
 }
 
 impl TunnelState {
-    fn session_validity(&self) -> Result<SystemTime, TunnelStateError> {
+    fn token_validity(&self) -> Result<SystemTime, TunnelStateError> {
         match self {
-            TunnelState::SessionEstablished { session_expiry } => Ok(*session_expiry),
-            TunnelState::SockAddrAssigned { session_expiry, .. } => Ok(*session_expiry),
+            TunnelState::SessionEstablished { token_expiry } => Ok(*token_expiry),
+            TunnelState::SockAddrAssigned { token_expiry, .. } => Ok(*token_expiry),
             _ => Err(TunnelStateError::InvalidState(self.clone())),
         }
     }
@@ -874,19 +872,19 @@ impl std::fmt::Display for TunnelState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TunnelState::Unassigned => write!(f, "Unassigned"),
-            TunnelState::SessionEstablished { session_expiry } => {
+            TunnelState::SessionEstablished { token_expiry } => {
                 write!(
                     f,
                     "SessionEstablished ({})",
-                    DateTime::<Utc>::from(*session_expiry)
+                    DateTime::<Utc>::from(*token_expiry)
                 )
             }
             TunnelState::Closed => write!(f, "Closed"),
-            TunnelState::SockAddrAssigned { session_expiry } => {
+            TunnelState::SockAddrAssigned { token_expiry } => {
                 write!(
                     f,
                     "Remote socket address assigned (valid until: {}).",
-                    DateTime::<Utc>::from(*session_expiry),
+                    DateTime::<Utc>::from(*token_expiry),
                 )
             }
         }
@@ -896,7 +894,7 @@ impl std::fmt::Display for TunnelState {
 #[derive(Debug)]
 enum ControlRequest {
     SocketAddrAssignment(String),
-    SessionRenewal(String),
+    TokenUpdate(String),
 }
 
 fn handle_invalid_request(conn: &quinn::Connection, err: &ParseControlRequestError) {
@@ -978,7 +976,7 @@ async fn recv_request(
         // actually act on it. (1)
         match req.path {
             Some(PATH_SOCK_ADDR_ASSIGNMENT) => {}
-            Some(PATH_SESSION_RENEWAL) => {}
+            Some(PATH_UPDATE_TOKEN) => {}
             Some(_) | None => return Err(InvalidRequest("invalid path".into())),
         }
 
@@ -1000,7 +998,7 @@ async fn recv_request(
             PATH_SOCK_ADDR_ASSIGNMENT => {
                 return Ok(ControlRequest::SocketAddrAssignment(bearer_token));
             }
-            PATH_SESSION_RENEWAL => return Ok(ControlRequest::SessionRenewal(bearer_token)),
+            PATH_UPDATE_TOKEN => return Ok(ControlRequest::TokenUpdate(bearer_token)),
             path => unreachable!("invalid path: {path}"),
         }
     }

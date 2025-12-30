@@ -17,11 +17,7 @@
 //! This crate contains integration tests that require multiple components
 //! to work together, avoiding circular dependencies.
 
-use std::{
-    collections::BTreeMap,
-    num::NonZeroU16,
-    time::{Duration, SystemTime},
-};
+use std::{collections::BTreeMap, num::NonZeroU16, time::SystemTime};
 
 use pocketscion::{
     api::admin::api::EndhostApiResponseEntry,
@@ -32,7 +28,6 @@ use pocketscion::{
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha8Rng;
 use scion_proto::address::IsdAsn;
-use snap_dataplane::session::state::SessionManagerState;
 use url::Url;
 
 /// Underlay type.
@@ -146,15 +141,13 @@ pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTes
 
 /// Setup pocketscion with a single SNAP for testing. The SNAP uses a session manager with a short
 /// session duration to test session renewal.
-pub async fn single_snap_pocketscion_setup(
-    session_validity: Duration,
-) -> (PocketScionRuntime, Url) {
+pub async fn single_snap_pocketscion_setup() -> (PocketScionRuntime, Url) {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let mut pstate = SharedPocketScionState::new(SystemTime::now());
 
     let isd_as: IsdAsn = "1-ff00:0:132".parse().unwrap();
-    let snap = pstate.add_snap_with_session_manager(SessionManagerState::new(session_validity));
+    let snap = pstate.add_snap();
 
     let _dp_id1 = pstate.add_snap_data_plane(
         snap,

@@ -13,7 +13,6 @@
 // limitations under the License.
 //! SNAP token library.
 
-pub mod session_token;
 pub mod snap_token;
 
 use std::{fmt::Display, str::FromStr};

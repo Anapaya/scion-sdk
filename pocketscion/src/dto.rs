@@ -28,10 +28,7 @@ use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::dto::IoControlPlaneConfigDto;
 use snap_dataplane::{
-    dto::DataPlaneStateDto,
-    session::state::dto::{SessionManagerStateDto, SessionTokenIssuerStateDto},
-    state::Hostname,
-    tunnel_gateway::state::dto::IoDataPlaneConfigDto,
+    dto::DataPlaneStateDto, state::Hostname, tunnel_gateway::state::dto::IoDataPlaneConfigDto,
 };
 use utoipa::ToSchema;
 
@@ -120,10 +117,6 @@ pub struct IoAuthServerConfigDto {
 /// The state of a SNAP.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct SnapStateDto {
-    /// Session manager state.
-    pub session_manager: SessionManagerStateDto,
-    /// Session token issuer state.
-    pub session_issuer: SessionTokenIssuerStateDto,
     /// The list of SNAP data planes.
     pub data_planes: BTreeMap<Hostname, DataPlaneStateDto>,
 }

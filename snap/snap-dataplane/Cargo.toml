@@ -12,12 +12,8 @@ categories = ["network-programming"]
 [dependencies]
 anyhow = { workspace = true }
 bytes = { workspace = true }
-ed25519-dalek = { workspace = true }
-jsonwebtoken = { workspace = true }
-pem = { workspace = true, features = ["serde"] }
 prometheus = { workspace = true }
 quinn = { workspace = true }
-rand = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
@@ -26,16 +22,13 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
-uuid = { workspace = true, features = ["serde", "v4"] }
 
 # Local dependencies
 scion-sdk-address-manager = { workspace = true }
 scion-proto = { workspace = true }
-scion-sdk-common-types = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
-snap-tokens = { workspace = true }
 snap-tun = { workspace = true }
 
 [lints]

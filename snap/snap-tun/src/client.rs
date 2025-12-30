@@ -28,14 +28,14 @@ use quinn::{ConnectionError, RecvStream, SendStream};
 use tokio::{sync::watch, task::JoinHandle};
 
 use crate::requests::{
-    AddrError, SessionRenewalResponse, SocketAddrAssignmentRequest, SocketAddrAssignmentResponse,
+    AddrError, SocketAddrAssignmentRequest, SocketAddrAssignmentResponse, TokenUpdateResponse,
     system_time_from_unix_epoch_secs,
 };
 
 /// Maximum size of a control message, both request and response.
 pub const MAX_CTRL_MESSAGE_SIZE: usize = 4096;
 
-/// Lead time for session renewal. Renewal is triggered when the current time is later than the
+/// Lead time for SNAP token renewal. Renewal is triggered when the current time is later than the
 /// token expiry minus the lead time.
 pub const DEFAULT_RENEWAL_WAIT_THRESHOLD: Duration = Duration::from_secs(300); // 5min
 
@@ -47,22 +47,23 @@ pub type TokenRenewFn = Arc<
     dyn Fn() -> Pin<Box<dyn Future<Output = Result<String, TokenRenewError>> + Send>> + Send + Sync,
 >;
 
-/// Automatic session renewal configuration.
+/// Automatic SNAP token renewal configuration.
 #[derive(Clone)]
-pub struct AutoSessionRenewal {
-    /// Function to fetch a new session token.
+pub struct AutoTokenRenewal {
+    /// Function to fetch a new SNAP token.
     pub token_renewer: TokenRenewFn,
     renew_wait_threshold: Duration,
 }
 
-impl AutoSessionRenewal {
-    /// Create a new automatic session renewal configuration.
+impl AutoTokenRenewal {
+    /// Create a new automatic SNAP token renewal configuration.
     ///
     /// # Arguments
-    /// * `renew_wait_threshold` - Duration before session expiry to wait before attempting renewal.
-    /// * `token_renewer` - Function to renew the session token.
+    /// * `renew_wait_threshold` - Duration before SNAP token expiry to wait before attempting
+    ///   renewal.
+    /// * `token_renewer` - Function to renew the SNAP token.
     pub fn new(renew_wait_threshold: Duration, token_renewer: TokenRenewFn) -> Self {
-        AutoSessionRenewal {
+        AutoTokenRenewal {
             token_renewer,
             renew_wait_threshold,
         }
@@ -71,22 +72,22 @@ impl AutoSessionRenewal {
 
 /// SNAP tunnel client builder.
 pub struct ClientBuilder {
-    initial_session_token: String,
-    auto_session_renewal: Option<AutoSessionRenewal>,
+    initial_snap_token: String,
+    auto_token_renewal: Option<AutoTokenRenewal>,
 }
 
 impl ClientBuilder {
-    /// Client builder with an initial session token to be used to authenticate requests.
-    pub fn new<S: AsRef<str>>(initial_session_token: S) -> Self {
+    /// Client builder with an initial SNAP token to be used to authenticate requests.
+    pub fn new<S: AsRef<str>>(initial_snap_token: S) -> Self {
         ClientBuilder {
-            initial_session_token: initial_session_token.as_ref().into(),
-            auto_session_renewal: None,
+            initial_snap_token: initial_snap_token.as_ref().into(),
+            auto_token_renewal: None,
         }
     }
 
-    /// Enable automatic session renewal.
-    pub fn with_auto_session_renewal(mut self, session_renewal: AutoSessionRenewal) -> Self {
-        self.auto_session_renewal = Some(session_renewal);
+    /// Enable automatic SNAP token renewal.
+    pub fn with_auto_token_renewal(mut self, token_renewal: AutoTokenRenewal) -> Self {
+        self.auto_token_renewal = Some(token_renewal);
         self
     }
 
@@ -100,15 +101,15 @@ impl ClientBuilder {
         let mut ctrl = Control {
             conn: conn.clone(),
             state: conn_state.clone(),
-            session_renewal_task: None,
+            token_renewal_task: None,
         };
 
-        ctrl.state.write().expect("no fail").session_token = self.initial_session_token;
-        ctrl.renew_session().await?;
+        ctrl.state.write().expect("no fail").snap_token = self.initial_snap_token;
+        ctrl.update_token().await?;
         ctrl.request_socket_addr().await?;
 
-        if let Some(auto_session_renewal) = self.auto_session_renewal.clone() {
-            ctrl.start_auto_session_renewal(auto_session_renewal, expiry_receiver);
+        if let Some(auto_token_renewal) = self.auto_token_renewal.clone() {
+            ctrl.start_auto_token_renewal(auto_token_renewal, expiry_receiver);
         }
 
         Ok((Sender::new(conn.clone()), Receiver { conn }, ctrl))
@@ -119,7 +120,7 @@ impl ClientBuilder {
 pub struct Control {
     conn: quinn::Connection,
     state: SharedConnState,
-    session_renewal_task: Option<JoinHandle<Result<(), RenewTaskError>>>,
+    token_renewal_task: Option<JoinHandle<Result<(), RenewTaskError>>>,
 }
 
 impl Control {
@@ -132,14 +133,14 @@ impl Control {
         self.state.read().expect("no fail").assigned_sock_addr
     }
 
-    /// Returns the session expiry time.
-    pub fn session_expiry(&self) -> SystemTime {
-        self.state.read().expect("no fail").session_expiry
+    /// Returns the token expiry time.
+    pub fn token_expiry(&self) -> SystemTime {
+        self.state.read().expect("no fail").token_expiry
     }
 
-    /// Returns the current session token.
-    pub fn session_token(&self) -> String {
-        self.state.read().expect("no fail").session_token.clone()
+    /// Returns the current SNAP token.
+    pub fn snap_token(&self) -> String {
+        self.state.read().expect("no fail").snap_token.clone()
     }
 
     /// Sends a socket address assign request to the snaptun server.
@@ -150,7 +151,7 @@ impl Control {
         let request = SocketAddrAssignmentRequest {};
 
         let body = request.encode_to_vec();
-        let token = self.state.read().expect("no fail").session_token.clone();
+        let token = self.state.read().expect("no fail").snap_token.clone();
         send_control_request(
             &mut snd,
             crate::PATH_SOCK_ADDR_ASSIGNMENT,
@@ -174,23 +175,23 @@ impl Control {
         Ok(())
     }
 
-    /// Sends a session renewal request to the snaptun server.
-    pub async fn renew_session(&mut self) -> Result<(), ControlError> {
-        let token = self.state.read().expect("no fail").session_token.clone();
-        self.set_session_expiry(renew_session(&self.conn.clone(), &token).await?);
+    /// Sends a new SNAP token to keep the snaptun connection with the server established.
+    pub async fn update_token(&mut self) -> Result<(), ControlError> {
+        let token = self.state.read().expect("no fail").snap_token.clone();
+        self.set_token_expiry(update_token(&self.conn.clone(), &token).await?);
         Ok(())
     }
 
-    fn start_auto_session_renewal(
+    fn start_auto_token_renewal(
         &mut self,
-        config: AutoSessionRenewal,
+        config: AutoTokenRenewal,
         mut expiry_notifier: watch::Receiver<()>,
     ) {
         let conn = self.conn.clone();
         let conn_state = self.state.clone();
 
-        self.session_renewal_task = Some(tokio::spawn(async move {
-            // Maximum number of retries for session renewal.
+        self.token_renewal_task = Some(tokio::spawn(async move {
+            // Maximum number of retries for token renewal.
             const MAX_RETRIES: u32 = 5;
             // Base retry delay used for exponential backoff.
             const BASE_RETRY_DELAY_SECS: u64 = 3;
@@ -200,15 +201,15 @@ impl Control {
             let mut retries: u32 = 0;
             loop {
                 let secs_until_expiry = {
-                    let expiry = conn_state.read().expect("no fail").session_expiry;
-                    // Calculate how long until the session expires
+                    let expiry = conn_state.read().expect("no fail").token_expiry;
+                    // Calculate how long until the token expires
                     match expiry.duration_since(SystemTime::now()) {
                         Ok(duration) => duration.as_secs(),
                         Err(_) => {
-                            // As long as the auto session renewal works correctly, this should
+                            // As long as the auto token renewal works correctly, this should
                             // never happen.
-                            tracing::error!("Session expiry already passed, stopping auto-renewal");
-                            return Err(RenewTaskError::SessionExpired);
+                            tracing::error!("Token expiry already passed, stopping auto-renewal");
+                            return Err(RenewTaskError::TokenExpired);
                         }
                     }
                 };
@@ -219,12 +220,12 @@ impl Control {
                 } else {
                     (secs_until_expiry as f32 * SLEEP_FRACTION) as u64
                 };
-                tracing::debug!("Next session renewal in {sleep_secs} seconds");
+                tracing::debug!("Next token renewal in {sleep_secs} seconds");
 
                 tokio::select! {
                     _ = expiry_notifier.changed() => continue,
                     _ = tokio::time::sleep(Duration::from_secs(sleep_secs)) => {
-                        tracing::debug!("Renewing token and snaptun session");
+                        tracing::debug!("Renewing snaptun token");
 
                         // renew token
                         let token = match (config.token_renewer)().await {
@@ -240,11 +241,11 @@ impl Control {
                             },
                         };
 
-                        // renew session
-                        let new_expiry = match renew_session(&conn, &token).await {
+                        // update token
+                        let new_expiry = match update_token(&conn, &token).await {
                             Ok(exp) => exp,
                             Err(err) => {
-                                tracing::warn!(%err, "Failed to renew session, retrying");
+                                tracing::warn!(%err, "Failed to update token, retrying");
                                 retries += 1;
                                 if retries >= MAX_RETRIES {
                                     return Err(RenewTaskError::MaxRetriesReached);
@@ -254,8 +255,8 @@ impl Control {
                             }
                         };
 
-                        tracing::info!(new_expiry=%chrono::DateTime::<chrono::Utc>::from(new_expiry).to_rfc3339(), "Auto session renewal successful");
-                        conn_state.write().expect("no fail").session_expiry = new_expiry;
+                        tracing::info!(new_expiry=%chrono::DateTime::<chrono::Utc>::from(new_expiry).to_rfc3339(), "Auto token renewal successful");
+                        conn_state.write().expect("no fail").token_expiry = new_expiry;
                         retries = 0;
                     }
                 }
@@ -263,8 +264,8 @@ impl Control {
         }));
     }
 
-    fn set_session_expiry(&mut self, expiry: SystemTime) {
-        self.state.write().expect("no fail").session_expiry = expiry;
+    fn set_token_expiry(&mut self, expiry: SystemTime) {
+        self.state.write().expect("no fail").token_expiry = expiry;
         if self
             .state
             .read()
@@ -273,9 +274,9 @@ impl Control {
             .send(())
             .is_err()
         {
-            // This happens only if the channel is closed, which means that the session has
+            // This happens only if the channel is closed, which means that the token has
             // expired and the receiver is no longer interested in updates.
-            tracing::debug!("Failed to notify session expiry update");
+            tracing::debug!("Failed to notify token expiry update");
         }
     }
 
@@ -301,36 +302,36 @@ impl Control {
 /// Token renew task error.
 #[derive(Debug, thiserror::Error)]
 pub enum RenewTaskError {
-    /// Session expired.
-    #[error("session expired")]
-    SessionExpired,
+    /// Token expired.
+    #[error("token expired")]
+    TokenExpired,
     /// Maximum number of retries reached.
     #[error("maximum number of retries reached")]
     MaxRetriesReached,
 }
 
-/// Renew SNAP tunnel session.
+/// Update SNAP token.
 ///
-/// This opens a new bi-directional stream to the server, sends a session renewal request, and waits
-/// for the response. On success, it returns the new session expiry time.
-pub async fn renew_session(
+/// This opens a new bi-directional stream to the server, sends a update SNAP token request, and
+/// waits for the response. On success, it returns the new token expiry time.
+pub async fn update_token(
     conn: &quinn::Connection,
     token: &str,
 ) -> Result<SystemTime, ControlError> {
     let (mut snd, mut rcv) = conn.open_bi().await?;
 
     let body = vec![];
-    send_control_request(&mut snd, crate::PATH_SESSION_RENEWAL, &body, token).await?;
+    send_control_request(&mut snd, crate::PATH_UPDATE_TOKEN, &body, token).await?;
     let mut resp_buf = [0u8; MAX_CTRL_MESSAGE_SIZE];
-    let response: SessionRenewalResponse = recv_response(&mut resp_buf[..], &mut rcv).await?;
+    let response: TokenUpdateResponse = recv_response(&mut resp_buf[..], &mut rcv).await?;
 
     Ok(system_time_from_unix_epoch_secs(response.valid_until))
 }
 
 impl Drop for Control {
     fn drop(&mut self) {
-        if let Some(task) = self.session_renewal_task.take() {
-            // Cancel the session renewal task
+        if let Some(task) = self.token_renewal_task.take() {
+            // Cancel the token renewal task
             task.abort();
         }
     }
@@ -339,8 +340,8 @@ impl Drop for Control {
 /// Connection state.
 #[derive(Debug, Clone)]
 struct ConnState {
-    session_token: String,
-    session_expiry: SystemTime,
+    snap_token: String,
+    token_expiry: SystemTime,
     // The socket address that is assigned by the remote and should be used as
     // the endhost socket address for this tunnel.
     assigned_sock_addr: Option<SocketAddr>,
@@ -350,8 +351,8 @@ struct ConnState {
 impl ConnState {
     fn new(expiry_notifier: watch::Sender<()>) -> Self {
         Self {
-            session_token: String::new(),
-            session_expiry: SystemTime::UNIX_EPOCH,
+            snap_token: String::new(),
+            token_expiry: SystemTime::UNIX_EPOCH,
             assigned_sock_addr: None,
             expiry_notifier,
         }

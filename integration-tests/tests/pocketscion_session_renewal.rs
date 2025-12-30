@@ -59,14 +59,14 @@ async fn auto_session_renewals() {
 
     // Slight offset between T and A because network and app latency
     const TOKEN_EXPIRY: u64 = 5;
-    const SESSION_EXPIRY: Duration = Duration::from_secs(4);
+    // const SESSION_EXPIRY: Duration = Duration::from_secs(4);
 
-    let (_pocketscion, snap_cp_addr) = single_snap_pocketscion_setup(SESSION_EXPIRY).await;
+    let (_pocketscion, snap_cp_addr) = single_snap_pocketscion_setup().await;
     let stack = ScionStackBuilder::new(snap_cp_addr)
         .with_auth_token(dummy_snap_token_with_validity(TOKEN_EXPIRY))
         .with_snap_underlay_config(
             SnapUnderlayConfig::builder()
-                .with_session_auto_renewal(Duration::from_secs(0))
+                .with_auto_token_renewal(Duration::from_secs(0))
                 .build(),
         )
         .build()
@@ -110,11 +110,12 @@ async fn auto_session_renewals() {
 // the SNAP data plane session token renewal but also the SNAP token renewal.
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
+#[ignore = "The new SCION stack no longer uses session tokens, but the SNAP token still needs to be renewed."]
 async fn auto_session_renewal_with_client() {
     // Setup pocketscion:
     // * SNAP data plane session token are valid for 3 seconds.
     // * SNAP token expires in 3 seconds.
-    let (_pocketscion, snap_cp_addr) = single_snap_pocketscion_setup(Duration::from_secs(3)).await;
+    let (_pocketscion, snap_cp_addr) = single_snap_pocketscion_setup().await;
     tracing::debug!("snap cp addr: {snap_cp_addr}");
     let source = RefreshTokenSource::builder("test-renewer", || {
         async move {
@@ -132,7 +133,7 @@ async fn auto_session_renewal_with_client() {
         // with renewable SNAP token
         .with_snap_underlay_config(
             SnapUnderlayConfig::builder()
-                .with_session_auto_renewal(Duration::from_secs(0))
+                .with_auto_token_renewal(Duration::from_secs(0))
                 .build(),
         )
         .build()

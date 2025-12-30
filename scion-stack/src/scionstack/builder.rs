@@ -27,7 +27,7 @@ use crate::{
     underlays::{
         SnapSocketConfig, UnderlayStack,
         discovery::PeriodicUnderlayDiscovery,
-        snap::SessionRenewal,
+        snap::TokenRenewal,
         udp::{LocalIpResolver, TargetAddrLocalIpResolver},
     },
 };
@@ -190,7 +190,7 @@ impl ScionStackBuilder {
             local_ip_resolver,
             SnapSocketConfig {
                 snap_token_source: snap.snap_token_source.or(auth_token_source),
-                renewal_wait_threshold: snap.session_auto_renewal.renewal_wait_threshold,
+                renewal_wait_threshold: snap.auto_token_renewal.renewal_wait_threshold,
                 reconnect_backoff: ExponentialBackoff::new_from_config(
                     snap.tunnel_reconnect_backoff,
                 ),
@@ -265,7 +265,7 @@ pub enum PreferredUnderlay {
 pub struct SnapUnderlayConfig {
     snap_token_source: Option<Arc<dyn TokenSource>>,
     snap_dp_index: usize,
-    session_auto_renewal: SessionRenewal,
+    auto_token_renewal: TokenRenewal,
     tunnel_reconnect_backoff: BackoffConfig,
 }
 
@@ -274,7 +274,7 @@ impl Default for SnapUnderlayConfig {
         Self {
             snap_token_source: None,
             snap_dp_index: 0,
-            session_auto_renewal: SessionRenewal::default(),
+            auto_token_renewal: TokenRenewal::default(),
             tunnel_reconnect_backoff: DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF,
         }
     }
@@ -303,13 +303,13 @@ impl SnapUnderlayConfigBuilder {
         self
     }
 
-    /// Set the automatic session renewal.
+    /// Set the automatic SNAP token renewal.
     ///
     /// # Arguments
     ///
-    /// * `interval` - The interval before session expiry to wait before attempting renewal.
-    pub fn with_session_auto_renewal(mut self, interval: Duration) -> Self {
-        self.0.session_auto_renewal = SessionRenewal::new(interval);
+    /// * `interval` - The interval before SNAP token expiry to wait before attempting renewal.
+    pub fn with_auto_token_renewal(mut self, interval: Duration) -> Self {
+        self.0.auto_token_renewal = TokenRenewal::new(interval);
         self
     }
 

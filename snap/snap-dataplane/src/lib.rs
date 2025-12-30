@@ -15,6 +15,5 @@
 
 pub mod dispatcher;
 pub mod dto;
-pub mod session;
 pub mod state;
 pub mod tunnel_gateway;

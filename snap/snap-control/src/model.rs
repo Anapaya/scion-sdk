@@ -13,16 +13,12 @@
 // limitations under the License.
 //! SNAP control plane models.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use scion_proto::address::IsdAsn;
-use snap_dataplane::session::{manager::SessionTokenError, state::SessionOpenError};
-use snap_tokens::snap_token::SnapTokenClaims;
 use thiserror::Error;
-
-use crate::crpc_api::api_service::model::SessionGrant;
 
 /// List the available data planes.
 #[cfg_attr(test, automock)]
@@ -31,36 +27,6 @@ pub trait UnderlayDiscovery: Send + Sync {
     fn list_snap_underlays(&self) -> Vec<SnapUnderlay>;
     /// List all UDP data planes.
     fn list_udp_underlays(&self) -> Vec<UdpUnderlay>;
-}
-
-/// Data plane session granter.
-#[cfg_attr(test, automock)]
-pub trait SessionGranter: Send + Sync {
-    /// Authorizes the usage of a (set of) data planes based on the requesting
-    /// endhost's IP address and returns a session grant for each such data
-    /// plane.
-    fn create_sessions(
-        &self,
-        endhost_ip_addr: IpAddr,
-        snap_token: SnapTokenClaims,
-    ) -> Result<Vec<SessionGrant>, CreateSessionError>;
-}
-
-/// Session creation error.
-#[derive(Debug, Error)]
-pub enum CreateSessionError {
-    /// No data plane available
-    #[error("open session error: {reason}")]
-    NoDataPlaneAvailable {
-        /// The reason no data plane could be found.
-        reason: String,
-    },
-    /// Failed to open session.
-    #[error("open session error: {0}")]
-    OpenSession(#[from] SessionOpenError),
-    /// Failed to issue session token.
-    #[error("failed to issue session token: {0}")]
-    IssueSessionToken(#[from] SessionTokenError),
 }
 
 #[derive(Clone)]
@@ -88,4 +54,18 @@ pub struct IsdAsInterfaces {
     pub isd_as: IsdAsn,
     /// The interface IDs for this ISD-AS
     pub interfaces: Vec<u16>,
+}
+
+/// SNAP resolution error.
+#[derive(Debug, Error)]
+pub enum ResolveSnapError {
+    /// No data plane available
+    #[error("no data plane could be found")]
+    NoDataPlaneAvailable,
+}
+
+/// SNAP data plane resolver.
+pub trait SnapResolver: Send + Sync {
+    /// Get the corresponding SNAP data plane address for a given endhost IP address.
+    fn resolve(&self, endhost_ip: std::net::IpAddr) -> Result<SocketAddr, ResolveSnapError>;
 }

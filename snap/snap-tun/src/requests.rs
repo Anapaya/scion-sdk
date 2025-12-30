@@ -31,10 +31,10 @@ pub(crate) fn unix_epoch_from_system_time(time: SystemTime) -> u64 {
         .as_secs()
 }
 
-/// Response to a session renewal request.
+/// Response to a token update request.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SessionRenewalResponse {
-    /// The unix epoch timestamp at which this session expires.
+pub struct TokenUpdateResponse {
+    /// The unix epoch timestamp at which the token expires.
     #[prost(uint64, tag = "1")]
     pub valid_until: u64,
 }
