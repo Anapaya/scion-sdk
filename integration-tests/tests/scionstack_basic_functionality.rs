@@ -82,9 +82,14 @@ async fn test_bind_two_sockets_send_receive_udp() {
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
-#[ignore = "With the SCION stack, we can no longer return stacks local address before binding."]
 async fn test_bind_with_specific_address_snap() {
     test_bind_with_specific_address_impl(UnderlayType::Snap).await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_bind_with_specific_address_udp() {
+    test_bind_with_specific_address_impl(UnderlayType::Udp).await;
 }
 
 #[test(tokio::test)]
@@ -237,19 +242,16 @@ async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
 
     let scion_addr = ScionAddr::new(
         *stack.local_ases().first().unwrap(),
-        "10.132.0.1".parse::<IpAddr>().unwrap().into(),
+        "127.0.0.1".parse::<IpAddr>().unwrap().into(),
     );
-    let port = match underlay {
-        UnderlayType::Snap => 8080,
-        UnderlayType::Udp => {
-            let bind_host = "10.132.0.1".parse().unwrap();
-            let sock = UdpSocket::bind(net::SocketAddr::new(bind_host, 0))
-                .await
-                .unwrap();
-            let port = sock.local_addr().unwrap().port();
-            drop(sock);
-            port
-        }
+    let port = {
+        let bind_host = "127.0.0.1".parse().unwrap();
+        let sock = UdpSocket::bind(net::SocketAddr::new(bind_host, 0))
+            .await
+            .unwrap();
+        let port = sock.local_addr().unwrap().port();
+        drop(sock);
+        port
     };
     let specific_addr = SocketAddr::new(scion_addr, port);
     let socket = stack.bind(Some(specific_addr)).await.unwrap();
@@ -281,44 +283,6 @@ async fn test_bind_port_already_in_use_impl(test_env: PocketscionTestEnv) {
     drop(socket);
 }
 
-/// With the snap underlay ports are reserved for a fixed time.
-/// With the udp underlay the reservation period is up to the operating system.
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn test_port_reservation_timing_snap() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
-
-    let stack = Arc::new(
-        ScionStackBuilder::new(test_env.eh_api132.url)
-            .with_auth_token(dummy_snap_token())
-            .build()
-            .await
-            .unwrap(),
-    );
-    info!("Stack local ASes: {:?}", stack.as_ref().local_ases());
-
-    let initial_time = std::time::Instant::now();
-
-    // Bind and immediately drop
-    let addr = {
-        let socket = stack
-            .as_ref()
-            .bind_with_time(None, initial_time)
-            .await
-            .unwrap();
-        socket.local_addr()
-    };
-
-    // Immediate rebind should fail (port reserved)
-    let bind_time = initial_time + Duration::from_secs(1);
-    let result = stack.as_ref().bind_with_time(Some(addr), bind_time).await;
-    assert!(
-        matches!(result, Err(ScionSocketBindError::PortAlreadyInUse(port)) if port == addr.port()),
-        "expected PortAlreadyInUse({}) when binding to reserved port, got {result:?}",
-        addr.port()
-    );
-}
-
 async fn test_quic_endpoint_creation_impl(test_env: PocketscionTestEnv) {
     let stack = ScionStackBuilder::new(test_env.eh_api132.url)
         .with_auth_token(dummy_snap_token())
@@ -332,26 +296,6 @@ async fn test_quic_endpoint_creation_impl(test_env: PocketscionTestEnv) {
 
     assert!(endpoint.is_ok());
 }
-
-// Helper struct for SCMP tests
-// struct TestScmpHandler {
-//     pub sender: Sender<ScionPacketScmp>,
-// }
-
-// impl ScmpHandler for TestScmpHandler {
-//     fn handle_packet(
-//         &self,
-//         packet: ScionPacketScmp,
-//     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-//         Box::pin(async move { self.sender.send(packet).await.unwrap() })
-//     }
-// }
-
-// impl TestScmpHandler {
-//     fn new(sender: Sender<ScionPacketScmp>) -> Self {
-//         Self { sender }
-//     }
-// }
 
 async fn test_scmp_packet_dispatch_with_port_snap_impl() {
     let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;

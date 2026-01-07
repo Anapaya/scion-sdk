@@ -400,6 +400,32 @@ impl TryFrom<ScmpMessageRaw> for ScmpMessage {
     }
 }
 
+/// Error returned when attempting to convert a SCMP message to an SCMP error message but the
+/// message is not an SCMP error message.
+#[derive(Debug, thiserror::Error)]
+#[error("not an SCMP error message")]
+pub struct NotAnScmpErrorMessage;
+
+impl TryFrom<ScmpMessage> for ScmpErrorMessage {
+    type Error = NotAnScmpErrorMessage;
+
+    fn try_from(value: ScmpMessage) -> Result<Self, Self::Error> {
+        match value {
+            ScmpMessage::DestinationUnreachable(x) => {
+                Ok(ScmpErrorMessage::DestinationUnreachable(x))
+            }
+            ScmpMessage::PacketTooBig(x) => Ok(ScmpErrorMessage::PacketTooBig(x)),
+            ScmpMessage::ParameterProblem(x) => Ok(ScmpErrorMessage::ParameterProblem(x)),
+            ScmpMessage::ExternalInterfaceDown(x) => Ok(ScmpErrorMessage::ExternalInterfaceDown(x)),
+            ScmpMessage::InternalConnectivityDown(x) => {
+                Ok(ScmpErrorMessage::InternalConnectivityDown(x))
+            }
+            ScmpMessage::UnknownError(x) => Ok(ScmpErrorMessage::Unknown(x)),
+            _ => Err(NotAnScmpErrorMessage),
+        }
+    }
+}
+
 impl TryFrom<ScmpMessageRaw> for ScmpErrorMessage {
     type Error = ScmpDecodeError;
 

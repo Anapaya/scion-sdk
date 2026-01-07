@@ -259,6 +259,13 @@ impl UnderlaySocket for SnapUnderlaySocket {
                         continue;
                     }
                 };
+
+                let dst = packet.headers.address.destination();
+                if dst.is_none() || dst.unwrap() != self.inner.assigned_addr.scion_address() {
+                    tracing::debug!(destination = ?dst, assigned_addr = %self.inner.assigned_addr.scion_address(), "Packet destination does not match assigned address, skipping");
+                    continue;
+                }
+
                 match packet.headers.common.next_header {
                     UdpMessage::PROTOCOL_NUMBER => {
                         return Ok(packet);

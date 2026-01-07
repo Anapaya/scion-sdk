@@ -26,8 +26,8 @@ pub use error::{DecodeError, EncodeError, InadequateBufferSize, ScmpEncodeError}
 
 mod headers;
 pub use headers::{
-    AddressHeader, AddressInfo, ByEndpoint, CommonHeader, FlowId, PathReversalError,
-    RawHostAddress, ScionHeaders, Version,
+    AddressHeader, AddressInfo, ByEndpoint, CommonHeader, FlowId, RawHostAddress, ScionHeaders,
+    Version,
 };
 
 mod raw;

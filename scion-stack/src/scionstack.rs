@@ -197,7 +197,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::Context as _;
@@ -337,28 +337,6 @@ impl ScionStack {
     ) -> Result<UdpScionSocket, ScionSocketConnectError> {
         let socket = self.bind_with_config(bind_addr, socket_config).await?;
         socket.connect(remote_addr).await
-    }
-
-    /// Bind a socket with controlled time for port allocation.
-    ///
-    /// This allows tests to control port reservation timing without sleeping.
-    pub async fn bind_with_time(
-        &self,
-        bind_addr: Option<SocketAddr>,
-        now: std::time::Instant,
-    ) -> Result<UdpScionSocket, ScionSocketBindError> {
-        let socket = self
-            .underlay
-            .bind_socket_with_time(SocketKind::Udp, bind_addr, now)
-            .await?;
-
-        let pather = self.create_path_manager();
-
-        Ok(UdpScionSocket::new(
-            PathUnawareUdpScionSocket::new(socket),
-            Arc::new(pather),
-            DEFAULT_CONNECT_TIMEOUT,
-        ))
     }
 
     /// Create a socket that can send and receive SCMP messages.
@@ -645,13 +623,6 @@ pub(crate) trait UnderlayStack: Send + Sync {
         bind_addr: Option<SocketAddr>,
     ) -> BoxFuture<'_, Result<Self::Socket, ScionSocketBindError>>;
 
-    fn bind_socket_with_time(
-        &self,
-        kind: SocketKind,
-        bind_addr: Option<SocketAddr>,
-        now: Instant,
-    ) -> BoxFuture<'_, Result<Self::Socket, ScionSocketBindError>>;
-
     fn bind_async_udp_socket(
         &self,
         bind_addr: Option<SocketAddr>,
@@ -667,13 +638,6 @@ pub(crate) trait DynUnderlayStack: Send + Sync {
         &self,
         kind: SocketKind,
         bind_addr: Option<SocketAddr>,
-    ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>>;
-
-    fn bind_socket_with_time(
-        &self,
-        kind: SocketKind,
-        bind_addr: Option<SocketAddr>,
-        now: Instant,
     ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>>;
 
     fn bind_async_udp_socket(
@@ -692,18 +656,6 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
     ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>> {
         Box::pin(async move {
             let socket = self.bind_socket(kind, bind_addr).await?;
-            Ok(Box::new(socket) as Box<dyn UnderlaySocket>)
-        })
-    }
-
-    fn bind_socket_with_time(
-        &self,
-        kind: SocketKind,
-        bind_addr: Option<SocketAddr>,
-        now: Instant,
-    ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>> {
-        Box::pin(async move {
-            let socket = self.bind_socket_with_time(kind, bind_addr, now).await?;
             Ok(Box::new(socket) as Box<dyn UnderlaySocket>)
         })
     }

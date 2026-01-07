@@ -244,19 +244,6 @@ impl DynUnderlayStack for UnderlayStack {
         })
     }
 
-    // XXX(uniquefine): drop this func once we migrated to v2.
-    fn bind_socket_with_time(
-        &self,
-        kind: crate::scionstack::SocketKind,
-        bind_addr: Option<scion_proto::address::SocketAddr>,
-        _now: std::time::Instant,
-    ) -> futures::future::BoxFuture<
-        '_,
-        Result<Box<dyn crate::scionstack::UnderlaySocket>, crate::scionstack::ScionSocketBindError>,
-    > {
-        self.bind_socket(kind, bind_addr)
-    }
-
     fn bind_async_udp_socket(
         &self,
         bind_addr: Option<scion_proto::address::SocketAddr>,

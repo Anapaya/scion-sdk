@@ -18,12 +18,11 @@
 mod common_header;
 use std::num::NonZeroU8;
 
-use bytes::BufMut;
+use bytes::{BufMut, Bytes};
 pub use common_header::{AddressInfo, CommonHeader, FlowId, Version};
 
 mod address_header;
 pub use address_header::{AddressHeader, RawHostAddress};
-use thiserror::Error;
 
 use super::{EncodeError, InadequateBufferSize};
 use crate::{
@@ -121,20 +120,6 @@ impl WireEncode for ScionHeaders {
     }
 }
 
-/// Error when reversing a path.
-#[derive(Debug, Error)]
-pub enum PathReversalError {
-    /// The headers source address is not a valid SCION address.
-    #[error("invalid source address")]
-    InvalidSourceAddress,
-    /// The headers destination address is not a valid SCION address.
-    #[error("invalid destination address")]
-    InvalidDestinationAddress,
-    /// The path is not supported.
-    #[error(transparent)]
-    UnsupportedPathType(#[from] UnsupportedPathType),
-}
-
 /// Path reversal utilities.
 impl ScionHeaders {
     /// Returns the reverse of the path in the headers.
@@ -142,25 +127,22 @@ impl ScionHeaders {
     pub fn reversed_path(
         &self,
         underlay_next_hop: Option<std::net::SocketAddr>,
-    ) -> Result<Path, PathReversalError> {
+    ) -> Result<Path, UnsupportedPathType> {
         let reverse_dp_path = self.path.to_reversed()?;
         let reversed_isd_asn = ByEndpoint {
-            source: self
-                .address
-                .destination()
-                .ok_or(PathReversalError::InvalidDestinationAddress)?
-                .isd_asn(),
-            destination: self
-                .address
-                .source()
-                .ok_or(PathReversalError::InvalidSourceAddress)?
-                .isd_asn(),
+            source: self.address.ia.destination,
+            destination: self.address.ia.source,
         };
         Ok(Path::new(
             reverse_dp_path,
             reversed_isd_asn,
             underlay_next_hop,
         ))
+    }
+
+    /// Returns the path in the headers.
+    pub fn path(&self) -> Path<Bytes> {
+        Path::new(self.path.clone(), self.address.ia, None)
     }
 }
 

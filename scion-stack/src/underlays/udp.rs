@@ -254,6 +254,14 @@ impl UnderlaySocket for UdpUnderlaySocket {
                         continue;
                     }
                 };
+
+                // Drop packets that are not addressed to this socket.
+                let dst = packet.headers.address.destination();
+                if dst.is_none() || dst.unwrap() != self.bind_addr.scion_address() {
+                    tracing::debug!(destination = ?dst, assigned_addr = %self.bind_addr.scion_address(), "Packet destination does not match assigned address, skipping");
+                    continue;
+                }
+
                 match packet.headers.common.next_header {
                     UdpMessage::PROTOCOL_NUMBER => {
                         return Ok(packet);
@@ -391,58 +399,69 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
         &self,
         cx: &mut std::task::Context,
     ) -> Poll<std::io::Result<(SocketAddr, bytes::Bytes, scion_proto::path::Path)>> {
-        // Verify that the socket is ready before allocating a receive buffer.
-        ready!(self.inner.poll_recv_ready(cx))?;
+        loop {
+            let mut raw_buf = [0u8; UDP_DATAGRAM_BUFFER_SIZE];
+            let mut buf = ReadBuf::new(&mut raw_buf);
+            let _ = ready!(self.inner.poll_recv_from(cx, &mut buf))?;
 
-        let mut raw_buf = [0u8; UDP_DATAGRAM_BUFFER_SIZE];
-        let mut buf = ReadBuf::new(&mut raw_buf);
-        let _ = ready!(self.inner.poll_recv_from(cx, &mut buf))?;
+            let packet = match ScionPacketRaw::decode(&mut BytesMut::from(buf.initialized())) {
+                Ok(packet) => packet,
+                Err(e) => {
+                    tracing::trace!(error = %e, "Received non SCION packet, dropping");
+                    continue;
+                }
+            };
+            let src = match packet.headers.address.source() {
+                Some(src) => src,
+                None => {
+                    tracing::trace!("Received packet without source address header, dropping");
+                    continue;
+                }
+            };
+            let dst = match packet.headers.address.destination() {
+                Some(dst) => dst,
+                None => {
+                    tracing::trace!("Received packet without destination address header, dropping");
+                    continue;
+                }
+            };
 
-        let packet = match ScionPacketRaw::decode(&mut BytesMut::from(buf.initialized())) {
-            Ok(packet) => packet,
-            Err(e) => {
-                tracing::trace!(error = %e, "Received non SCION packet, dropping");
-                return Poll::Pending;
+            let path = Path::new(
+                packet.headers.path.clone(),
+                ByEndpoint {
+                    source: src.isd_asn(),
+                    destination: dst.isd_asn(),
+                },
+                None,
+            );
+
+            match packet.headers.common.next_header {
+                UdpMessage::PROTOCOL_NUMBER => {
+                    let packet: ScionPacketUdp = match packet.try_into() {
+                        Ok(packet) => packet,
+                        Err(e) => {
+                            tracing::error!(error = %e, "Received non UDP packet, dropping");
+                            continue;
+                        }
+                    };
+
+                    return Poll::Ready(Ok((
+                        SocketAddr::new(src, packet.src_port()),
+                        packet.datagram.payload,
+                        path,
+                    )));
+                }
+                SCMP_PROTOCOL_NUMBER => {
+                    // XXX(uniquefine): We should handle SCMP packets here.
+                    tracing::debug!("SCMP packet received, skipping");
+                    continue;
+                }
+                _ => {
+                    tracing::debug!(next_header = %packet.headers.common.next_header, "Unknown packet type, dropping");
+                    continue;
+                }
             }
-        };
-        let src = match packet.headers.address.source() {
-            Some(src) => src,
-            None => {
-                tracing::trace!("Received packet without source address header, dropping");
-                return Poll::Pending;
-            }
-        };
-        let dst = match packet.headers.address.destination() {
-            Some(dst) => dst,
-            None => {
-                tracing::trace!("Received packet without destination address header, dropping");
-                return Poll::Pending;
-            }
-        };
-
-        let path = Path::new(
-            packet.headers.path.clone(),
-            ByEndpoint {
-                source: src.isd_asn(),
-                destination: dst.isd_asn(),
-            },
-            None,
-        );
-
-        // XXX(uniquefine): Handle SCMP packets here!.
-        let packet: ScionPacketUdp = match packet.try_into() {
-            Ok(packet) => packet,
-            Err(e) => {
-                tracing::error!(error = %e, "Received non UDP packet, dropping");
-                return Poll::Pending;
-            }
-        };
-
-        std::task::Poll::Ready(Ok((
-            SocketAddr::new(src, packet.src_port()),
-            packet.datagram.payload,
-            path,
-        )))
+        }
     }
 
     fn local_addr(&self) -> SocketAddr {
