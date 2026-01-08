@@ -1131,8 +1131,8 @@ mod tests {
         pub const DEFAULT_EXP_UNITS: u8 = 100;
         pub const BASE_TIME: SystemTime = SystemTime::UNIX_EPOCH;
 
-        pub fn dummy_path(hop_count: u16, timestamp: u32, exp_units: u8, asn_seed: u32) -> Path {
-            let mut builder = TestPathBuilder::new(SRC_ADDR, DST_ADDR)
+        pub fn dummy_path(hop_count: u16, timestamp: u32, exp_units: u8, seed: u32) -> Path {
+            let mut builder: TestPathBuilder = TestPathBuilder::new(SRC_ADDR, DST_ADDR)
                 .using_info_timestamp(timestamp)
                 .with_hop_expiry(exp_units)
                 .up();
@@ -1141,11 +1141,12 @@ mod tests {
 
             for cnt in 0..hop_count {
                 let mut hash = DefaultHasher::new();
-                asn_seed.hash(&mut hash);
+                seed.hash(&mut hash);
                 cnt.hash(&mut hash);
                 let hash = hash.finish() as u32;
 
-                builder = builder.with_asn(hash).add_hop(cnt + 1, cnt + 2);
+                let hop = hash.saturating_sub(2) as u16; // ensure no underflow or overflow
+                builder = builder.with_asn(hash).add_hop(hop + 1, hop + 2);
             }
 
             builder = builder.add_hop(1, 0);

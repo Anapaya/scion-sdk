@@ -24,7 +24,7 @@ use std::{
 use arc_swap::ArcSwapOption;
 use scion_proto::{
     address::IsdAsn,
-    path::{Path, PathFingerprint},
+    path::{DataPlanePathFingerprint, Path},
 };
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use tokio::{
@@ -68,7 +68,7 @@ pub struct PathSet<F: PathFetcher> {
 /// Shared state of the managed path set.
 pub struct PathSetSharedState {
     /// Currently active path
-    pub active_path: ArcSwapOption<(Path, PathFingerprint)>,
+    pub active_path: ArcSwapOption<(Path, DataPlanePathFingerprint)>,
     /// Fast path usage tracker
     pub was_used_in_idle_period: AtomicBool,
     /// Separate state for synchronization
@@ -522,9 +522,9 @@ impl<F: PathFetcher> PathSet<F> {
         now: SystemTime,
         manager: &MultiPathManager<F>,
     ) {
-        let mut fetched_paths: HashMap<PathFingerprint, Path, RandomState> =
+        let mut fetched_paths: HashMap<DataPlanePathFingerprint, Path, RandomState> =
             HashMap::from_iter(fetched_paths.into_iter().map(|path| {
-                let fingerprint = path.fingerprint().unwrap();
+                let fingerprint = path.data_plane_fingerprint();
                 (fingerprint, path)
             }));
 
@@ -907,7 +907,7 @@ impl PathSetHandle {
     /// Tries to get the currently active path without awaiting ongoing updates.
     pub fn try_active_path(
         &self,
-    ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, PathFingerprint)>>> {
+    ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, DataPlanePathFingerprint)>>> {
         self.shared
             .was_used_in_idle_period
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -918,7 +918,7 @@ impl PathSetHandle {
     /// Gets the currently active path, awaiting ongoing updates if necessary.
     pub async fn active_path(
         &self,
-    ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, PathFingerprint)>>> {
+    ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, DataPlanePathFingerprint)>>> {
         self.shared
             .was_used_in_idle_period
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -998,7 +998,7 @@ impl Drop for PathSetTask {
 fn merge_new_paths_algo(
     existing_paths: &mut Vec<PathManagerPath>,
     new_paths: &mut Vec<PathManagerPath>,
-    active_fp: Option<PathFingerprint>,
+    active_fp: Option<DataPlanePathFingerprint>,
     target_path_count: usize,
     path_strategy: &PathStrategy,
     now: SystemTime,
@@ -1931,9 +1931,10 @@ mod tests {
             fn make_path_vec(fpr_base: u16, count: u16) -> Vec<PathManagerPath> {
                 (0..count)
                     .map(|i| {
+                        let path = dummy_path(i + 2, 0, 100, (fpr_base + i) as u32);
                         PathManagerPath {
-                            fingerprint: PathFingerprint::local(IsdAsn((fpr_base + i) as u64)),
-                            path: dummy_path(i, 0, 100, (fpr_base + i) as u32),
+                            fingerprint: DataPlanePathFingerprint::new(&path),
+                            path,
                             reliability: ReliabilityScore::new_with_time(BASE_TIME),
                         }
                     })
@@ -1965,7 +1966,7 @@ mod tests {
                 let mut strat = PathStrategy::default();
 
                 struct TestScorer {
-                    keep: Vec<PathFingerprint>,
+                    keep: Vec<DataPlanePathFingerprint>,
                 }
                 impl PathScoring for TestScorer {
                     fn metric_name(&self) -> &'static str {
@@ -2010,7 +2011,7 @@ mod tests {
             #[test]
             fn should_ensure_active_path_is_kept() {
                 let mut existing_paths = make_path_vec(0, 10);
-                let mut new_paths = make_path_vec(100, 10);
+                let mut new_paths = make_path_vec(1, 10);
 
                 // Use path which would be removed without active path consideration
                 let active_fp = existing_paths[9].fingerprint;
@@ -2018,7 +2019,7 @@ mod tests {
                 let mut strat = PathStrategy::default();
 
                 struct TestScorer {
-                    existing_fps: Vec<PathFingerprint>,
+                    existing_fps: Vec<DataPlanePathFingerprint>,
                 }
                 impl PathScoring for TestScorer {
                     fn metric_name(&self) -> &'static str {

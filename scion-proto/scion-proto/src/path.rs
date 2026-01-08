@@ -69,6 +69,9 @@ pub mod policy;
 mod fingerprint;
 pub use fingerprint::{FingerprintError, PathFingerprint};
 
+mod dataplane_fingerprint;
+pub use dataplane_fingerprint::DataPlanePathFingerprint;
+
 mod metadata;
 pub use metadata::{GeoCoordinates, LinkType, Metadata, PathInterface};
 
@@ -207,6 +210,16 @@ where
     /// See [`PathFingerprint`] for more details.
     pub fn fingerprint(&self) -> Result<PathFingerprint, FingerprintError> {
         PathFingerprint::try_from(self)
+    }
+
+    /// Returns a fingerprint based on the dataplane path.
+    ///
+    /// Different from [`PathFingerprint`], this can be computed, even if
+    /// no metadata is present.
+    ///
+    /// See [`DataPlanePathFingerprint`] for more details.
+    pub fn data_plane_fingerprint(&self) -> DataPlanePathFingerprint {
+        DataPlanePathFingerprint::new(self)
     }
 
     /// Returns the expiry time of the path if the path hop fields, otherwise None.

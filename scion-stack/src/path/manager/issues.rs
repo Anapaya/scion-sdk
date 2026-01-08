@@ -23,7 +23,7 @@ use std::{
 use scion_proto::{
     address::{HostAddr, IsdAsn},
     packet::ScionPacketRaw,
-    path::{Path, PathFingerprint},
+    path::{DataPlanePathFingerprint, Path},
     scmp::{DestinationUnreachableCode, ScmpErrorMessage},
     wire_encoding::WireDecode,
 };
@@ -62,7 +62,7 @@ impl IssueMarker {
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 pub enum IssueMarkerTarget {
     FullPath {
-        fingerprint: PathFingerprint,
+        fingerprint: DataPlanePathFingerprint,
     },
     Interface {
         isd_asn: IsdAsn,
@@ -93,7 +93,7 @@ impl IssueMarkerTarget {
     /// If the path does not contain metadata, hop based targets cannot be matched.
     ///
     /// If it's possible to optimize path matching, use `matches_path_checked` instead.
-    pub fn matches_path(&self, path: &Path, fingerprint: &PathFingerprint) -> bool {
+    pub fn matches_path(&self, path: &Path, fingerprint: &DataPlanePathFingerprint) -> bool {
         self.matches_path_checked(path, fingerprint, |_, _| true)
     }
 
@@ -106,7 +106,7 @@ impl IssueMarkerTarget {
     pub fn matches_path_checked<F>(
         &self,
         path: &Path,
-        fingerprint: &PathFingerprint,
+        fingerprint: &DataPlanePathFingerprint,
         might_include_check: F,
     ) -> bool
     where

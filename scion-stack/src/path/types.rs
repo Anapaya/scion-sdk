@@ -16,7 +16,7 @@
 
 use std::time::SystemTime;
 
-use scion_proto::path::{Path, PathFingerprint};
+use scion_proto::path::{DataPlanePathFingerprint, Path};
 
 use crate::path::manager::reliability::ReliabilityScore;
 
@@ -26,7 +26,7 @@ pub struct PathManagerPath {
     /// The underlying SCION path.
     pub path: Path,
     /// The fingerprint of the path.
-    pub fingerprint: PathFingerprint,
+    pub fingerprint: DataPlanePathFingerprint,
     /// The reliability score of the path.
     pub reliability: ReliabilityScore,
 }
@@ -34,10 +34,7 @@ pub struct PathManagerPath {
 impl PathManagerPath {
     /// Wrap a scion path with metadata
     pub fn new(path: Path) -> Self {
-        let fingerprint = path.fingerprint().unwrap_or_else(|_| {
-            // Local paths always succeed
-            PathFingerprint::local(path.isd_asn.source)
-        });
+        let fingerprint = path.data_plane_fingerprint();
 
         Self {
             path,
