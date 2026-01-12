@@ -23,8 +23,6 @@ use pocketscion::{
     runtime::PocketScionRuntimeBuilder,
     state::SharedPocketScionState,
 };
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use scion_proto::{
     address::{IsdAsn, SocketAddr as ScionSocketAddr},
     packet::classify_scion_packet,
@@ -39,7 +37,6 @@ use test_log::test;
 #[ignore = "XXX(uniquefine): This test needs to be fixed when SCMP handling is implemented for the updated SCION stack."]
 async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     let server_ia = IsdAsn::from_str("1-1")?;
-    let snap_ip_net = "10.2.0.0/24".parse()?;
 
     let mut state = SharedPocketScionState::new(SystemTime::now());
 
@@ -54,17 +51,7 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
 
     //
     // Setup snap
-    let snap_id = {
-        let server_snap_id = state.add_snap();
-        state.add_snap_data_plane(
-            server_snap_id,
-            server_ia,
-            vec![snap_ip_net],
-            ChaCha8Rng::seed_from_u64(1),
-        );
-
-        server_snap_id
-    };
+    let snap_id = state.add_snap(server_ia)?;
 
     //
     // Start PocketScion

@@ -23,10 +23,8 @@ use pocketscion::{
     api::admin::api::EndhostApiResponseEntry,
     network::scion::topology::{ScionAs, ScionTopology},
     runtime::{PocketScionRuntime, PocketScionRuntimeBuilder},
-    state::{SharedPocketScionState, SnapId},
+    state::{SharedPocketScionState, snap::SnapId},
 };
-use rand::SeedableRng as _;
-use rand_chacha::ChaCha8Rng;
 use scion_proto::address::IsdAsn;
 use url::Url;
 
@@ -89,20 +87,8 @@ pub async fn minimal_pocketscion_setup(underlay: UnderlayType) -> PocketscionTes
     let mut snap212 = None;
     match underlay {
         UnderlayType::Snap => {
-            snap132 = Some(pstate.add_snap());
-            snap212 = Some(pstate.add_snap());
-            pstate.add_snap_data_plane(
-                snap132.unwrap(),
-                ia132,
-                vec!["10.132.0.0/16".parse().unwrap()],
-                ChaCha8Rng::seed_from_u64(1),
-            );
-            pstate.add_snap_data_plane(
-                snap212.unwrap(),
-                ia212,
-                vec!["10.212.0.0/16".parse().unwrap()],
-                ChaCha8Rng::seed_from_u64(42),
-            );
+            snap132 = Some(pstate.add_snap(ia132).unwrap());
+            snap212 = Some(pstate.add_snap(ia212).unwrap());
         }
         UnderlayType::Udp => {
             pstate.add_router(
@@ -147,14 +133,7 @@ pub async fn single_snap_pocketscion_setup() -> (PocketScionRuntime, Url) {
     let mut pstate = SharedPocketScionState::new(SystemTime::now());
 
     let isd_as: IsdAsn = "1-ff00:0:132".parse().unwrap();
-    let snap = pstate.add_snap();
-
-    let _dp_id1 = pstate.add_snap_data_plane(
-        snap,
-        isd_as,
-        vec!["10.132.0.0/16".parse().unwrap()],
-        ChaCha8Rng::seed_from_u64(1),
-    );
+    let snap = pstate.add_snap(isd_as).unwrap();
 
     let pocketscion = PocketScionRuntimeBuilder::new()
         .with_system_state(pstate.into_state())

@@ -25,8 +25,6 @@ use pocketscion::{
     runtime::PocketScionRuntimeBuilder,
     state::SharedPocketScionState,
 };
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use scion_proto::address::IsdAsn;
 use url::Url;
 
@@ -56,13 +54,7 @@ async fn should_have_working_eh_api() -> anyhow::Result<()> {
     state.set_topology(topo);
 
     // Setup snap
-    let ia1_snap = state.add_snap();
-    state.add_snap_data_plane(
-        ia1_snap,
-        ia1,
-        vec!["10.0.0.1/30".parse()?],
-        ChaCha8Rng::seed_from_u64(1),
-    );
+    state.add_snap(ia1)?;
 
     // Setup Eh API
     let eh_api_id = state.add_endhost_api(vec![ia1]);

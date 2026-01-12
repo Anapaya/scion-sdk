@@ -38,7 +38,7 @@ use crate::{
     dto::{IoConfigDto, SystemStateDto},
     endhost_api::EndhostApiId,
     io_config::SharedPocketScionIoConfig,
-    state::{SharedPocketScionState, SnapId, TunnelGatewayStates},
+    state::{SharedPocketScionState, TunnelGatewayStates, snap::SnapId},
 };
 
 const MANAGEMENT_TAG: &str = "management";
@@ -217,25 +217,23 @@ async fn delete_snap_connection(
     Path((snap_id, socket_addr)): Path<(SnapId, SocketAddrString)>,
     State(tunnel_gateway_states): State<TunnelGatewayStates>,
 ) -> impl IntoResponse {
-    if let Some(tunnel_gw_states) = tunnel_gateway_states.get(&snap_id) {
-        for (_, tunnel_gw_state) in tunnel_gw_states.iter() {
-            let guard = tunnel_gw_state.write().expect("no fail");
-            match guard.get(&socket_addr.0) {
-                Some(sender) => {
-                    sender.close(
-                        snap_tun::server::SnaptunConnErrors::InternalError,
-                        b"Connection closed through management API",
-                    );
-                    tracing::info!(snap_id=%snap_id, socket_addr=%socket_addr.0, "Closed connection");
-                    return StatusCode::NO_CONTENT;
-                }
-                None => {
-                    tracing::info!(snap_id=%snap_id, socket_addr=%socket_addr.0, "Connection not found");
-                    continue;
-                }
+    if let Some(tunnel_gw) = tunnel_gateway_states.get(&snap_id) {
+        let guard = tunnel_gw.write().unwrap();
+        match guard.get(&socket_addr.0) {
+            Some(sender) => {
+                sender.close(
+                    snap_tun::server::SnaptunConnErrors::InternalError,
+                    b"Connection closed through management API",
+                );
+                tracing::info!(snap_id=%snap_id, socket_addr=%socket_addr.0, "Closed connection");
+                return StatusCode::NO_CONTENT;
+            }
+            None => {
+                tracing::info!(snap_id=%snap_id, socket_addr=%socket_addr.0, "Connection not found");
             }
         }
     }
+
     http::StatusCode::NOT_FOUND
 }
 

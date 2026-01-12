@@ -27,15 +27,13 @@ use std::{collections::BTreeMap, time::Duration};
 use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::dto::IoControlPlaneConfigDto;
-use snap_dataplane::{
-    dto::DataPlaneStateDto, state::Hostname, tunnel_gateway::state::dto::IoDataPlaneConfigDto,
-};
+use snap_dataplane::tunnel_gateway::state::dto::IoDataPlaneConfigDto;
 use utoipa::ToSchema;
 
 use crate::{
     endhost_api::{EndhostApiId, EndhostApiState},
     network::scion::topology::dto::ScionTopologyDto,
-    state::{RouterId, SnapId},
+    state::{RouterId, snap::SnapId},
 };
 
 /// The pocket SCION system state.
@@ -117,8 +115,8 @@ pub struct IoAuthServerConfigDto {
 /// The state of a SNAP.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct SnapStateDto {
-    /// The list of SNAP data planes.
-    pub data_planes: BTreeMap<Hostname, DataPlaneStateDto>,
+    /// The ISD-AS of the SNAP.
+    pub isd_as: IsdAsn,
 }
 
 /// The I/O configuration of a SNAP.
@@ -127,7 +125,7 @@ pub struct IoSnapConfigDto {
     /// The control plane address of the SNAP.
     pub control_plane: IoControlPlaneConfigDto,
     /// The list of data plane I/O configurations.
-    pub data_planes: BTreeMap<Hostname, IoDataPlaneConfigDto>,
+    pub data_plane: IoDataPlaneConfigDto,
 }
 
 /// The state of a SCION router emulated by PocketScion.

@@ -24,7 +24,6 @@ tracing = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
 
 # Local dependencies
-scion-sdk-address-manager = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }

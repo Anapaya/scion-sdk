@@ -14,6 +14,5 @@
 //! SNAP data plane library.
 
 pub mod dispatcher;
-pub mod dto;
 pub mod state;
 pub mod tunnel_gateway;

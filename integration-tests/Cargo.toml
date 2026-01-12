@@ -14,8 +14,6 @@ ipnet = { workspace = true }
 ntest = { workspace = true }
 pocketscion = { workspace = true }
 quinn = { workspace = true }
-rand = { workspace = true }
-rand_chacha = { workspace = true }
 rustls = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }

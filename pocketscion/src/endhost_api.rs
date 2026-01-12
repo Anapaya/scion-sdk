@@ -239,15 +239,13 @@ mod tests {
     use std::{collections::BTreeMap, num::NonZero, str::FromStr, time::SystemTime};
 
     use anyhow::Ok;
-    use rand::SeedableRng;
-    use rand_chacha::ChaCha8Rng;
 
     use super::*;
 
     struct TestSetup {
         ias: (IsdAsn, IsdAsn, IsdAsn),
         snap_cp_addrs: (SocketAddr, SocketAddr, SocketAddr),
-        snap_dp_addrs: (SocketAddr, (SocketAddr, SocketAddr), SocketAddr),
+        snap_dp_addrs: (SocketAddr, SocketAddr, SocketAddr),
         router_addrs: (SocketAddr, SocketAddr, SocketAddr),
 
         disc_snaps: (Snap, Snap, Snap),
@@ -285,7 +283,7 @@ mod tests {
         let ips = TestSetup {
             ias: (ia1, ia2, ia3),
             snap_cp_addrs: (snap11, snap12, snap13),
-            snap_dp_addrs: (addr(21), (addr(221), addr(222)), addr(23)),
+            snap_dp_addrs: (addr(21), addr(221), addr(23)),
             router_addrs: (addr(31), addr(32), addr(33)),
 
             disc_snaps: (
@@ -295,7 +293,7 @@ mod tests {
                 },
                 Snap {
                     address: addr_to_http_url(snap12),
-                    isd_ases: vec![ia1, ia2],
+                    isd_ases: vec![ia2],
                 },
                 Snap {
                     address: addr_to_http_url(snap13),
@@ -317,25 +315,17 @@ mod tests {
             ),
         };
 
-        let rng = ChaCha8Rng::from_seed([0; 32]);
-        let prefixes = vec!["10.0.0.1/32".parse()?];
-
-        let snap0_id = state.add_snap();
+        let snap0_id = state.add_snap(ia1)?;
         io.set_snap_control_addr(snap0_id, ips.snap_cp_addrs.0);
-        let dp = state.add_snap_data_plane(snap0_id, ia1, prefixes.clone(), rng.clone());
-        io.set_snap_data_plane_addr(dp, ips.snap_dp_addrs.0);
+        io.set_snap_data_plane_addr(snap0_id, ips.snap_dp_addrs.0);
 
-        let snap1_id = state.add_snap();
+        let snap1_id = state.add_snap(ia2)?;
         io.set_snap_control_addr(snap1_id, ips.snap_cp_addrs.1);
-        let dp = state.add_snap_data_plane(snap1_id, ia1, prefixes.clone(), rng.clone());
-        io.set_snap_data_plane_addr(dp, ips.snap_dp_addrs.1.0);
-        let dp = state.add_snap_data_plane(snap1_id, ia2, prefixes.clone(), rng.clone());
-        io.set_snap_data_plane_addr(dp, ips.snap_dp_addrs.1.1);
+        io.set_snap_data_plane_addr(snap1_id, ips.snap_dp_addrs.1);
 
-        let snap2_id = state.add_snap();
+        let snap2_id = state.add_snap(ia3)?;
         io.set_snap_control_addr(snap2_id, ips.snap_cp_addrs.2);
-        let dp = state.add_snap_data_plane(snap2_id, ia3, prefixes.clone(), rng.clone());
-        io.set_snap_data_plane_addr(dp, ips.snap_dp_addrs.2);
+        io.set_snap_data_plane_addr(snap2_id, ips.snap_dp_addrs.2);
 
         let nz = NonZero::new(1).expect("Last time I checked 1 was not 0");
 
@@ -390,7 +380,7 @@ mod tests {
             let res = service.list_underlays(t.ias.0);
             let expected = Underlays {
                 udp_underlay: vec![t.disc_udp_underlays.0],
-                snap_underlay: vec![t.disc_snaps.0, t.disc_snaps.1],
+                snap_underlay: vec![t.disc_snaps.0],
             };
 
             assert_eq!(sort(res), sort(expected));
@@ -447,7 +437,7 @@ mod tests {
             let res = service.list_underlays(t.ias.0);
             let expected = Underlays {
                 udp_underlay: vec![t.disc_udp_underlays.0],
-                snap_underlay: vec![t.disc_snaps.0, t.disc_snaps.1],
+                snap_underlay: vec![t.disc_snaps.0],
             };
 
             assert_eq!(sort(res), sort(expected));

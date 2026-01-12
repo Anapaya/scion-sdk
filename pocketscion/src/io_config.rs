@@ -22,13 +22,13 @@ use std::{
 use anyhow::{Context, Ok};
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::ControlPlaneIoConfig;
-use snap_dataplane::{state::Hostname, tunnel_gateway::state::TunnelGatewayIoConfig};
+use snap_dataplane::tunnel_gateway::state::TunnelGatewayIoConfig;
 
 use crate::{
     authorization_server::api::IoAuthServerConfig,
     dto::{IoConfigDto, IoSnapConfigDto},
     endhost_api::EndhostApiId,
-    state::{RouterId, SnapDataPlaneId, SnapId},
+    state::{RouterId, snap::SnapId},
 };
 
 /// PocketSCION I/O configuration.
@@ -186,7 +186,7 @@ impl SharedPocketScionIoConfig {
                 control_plane: ControlPlaneIoConfig {
                     api_addr: Some(control_plane_api_addr),
                 },
-                data_planes: Default::default(),
+                data_plane: Default::default(),
             },
         );
     }
@@ -196,22 +196,11 @@ impl SharedPocketScionIoConfig {
     /// # Panics
     ///
     /// If address was already set
-    pub fn set_snap_data_plane_addr(&self, snap_dp_id: SnapDataPlaneId, listen_addr: SocketAddr) {
+    pub fn set_snap_data_plane_addr(&self, snap_id: SnapId, listen_addr: SocketAddr) {
         let mut sstate = self.state.write().unwrap();
-        let snap_io_config = sstate
-            .snaps
-            .get_mut(&snap_dp_id.snap())
-            .expect("SNAP doesn't exist");
-        assert!(
-            !snap_io_config
-                .data_planes
-                .contains_key(&snap_dp_id.data_plane()),
-            "Data plane already exists",
-        );
-        snap_io_config.data_planes.insert(
-            snap_dp_id.data_plane(),
-            TunnelGatewayIoConfig::new(listen_addr),
-        );
+        let snap_io_config = sstate.snaps.get_mut(&snap_id).expect("SNAP doesn't exist");
+
+        snap_io_config.data_plane = TunnelGatewayIoConfig::new(listen_addr);
     }
 
     /// List all available SNAPs with the control plane API address.
@@ -240,37 +229,10 @@ impl SharedPocketScionIoConfig {
     ///
     /// Returns `None` if the SNAP or the SNAP data plane doesn't exist, or if
     /// the listen address hasn't been set yet.
-    pub fn snap_data_plane_addr(&self, snap_dp_id: SnapDataPlaneId) -> Option<SocketAddr> {
+    pub fn snap_data_plane_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
         let rstate = self.state.read().expect("no fail");
-        rstate.snaps.get(&snap_dp_id.snap()).and_then(|snap_state| {
-            snap_state
-                .data_planes
-                .get(&snap_dp_id.data_plane())
-                .and_then(|tunnel_gw| tunnel_gw.listen_addr)
-        })
-    }
-
-    /// List all available SNAP data planes with their control plane API address.
-    pub fn list_snap_data_planes(
-        &self,
-        snap_id: SnapId,
-    ) -> Vec<(SnapDataPlaneId, Option<SocketAddr>)> {
-        let rstate = self.state.read().expect("no fail");
-        rstate
-            .snaps
-            .get(&snap_id)
-            .map(|snap| {
-                snap.data_planes
-                    .iter()
-                    .map(|(hostname, state)| {
-                        (
-                            SnapDataPlaneId::new(snap_id, hostname.clone()),
-                            state.listen_addr,
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let snap = rstate.snaps.get(&snap_id)?;
+        snap.data_plane.listen_addr
     }
 
     /// Get the socket address of a given router socket.
@@ -318,19 +280,14 @@ pub struct SnapIoConfig {
     /// The control plane I/O configuration.
     pub control_plane: ControlPlaneIoConfig,
     /// The data plane I/O configurations.
-    // XXX(bunert): This should be a single TunnelGatewayIoConfig.
-    pub data_planes: BTreeMap<Hostname, TunnelGatewayIoConfig>,
+    pub data_plane: TunnelGatewayIoConfig,
 }
 
 impl From<&SnapIoConfig> for IoSnapConfigDto {
     fn from(value: &SnapIoConfig) -> Self {
         IoSnapConfigDto {
             control_plane: (&value.control_plane).into(),
-            data_planes: value
-                .data_planes
-                .iter()
-                .map(|(hostname, config)| (hostname.clone(), config.into()))
-                .collect(),
+            data_plane: (&value.data_plane).into(),
         }
     }
 }
@@ -339,22 +296,14 @@ impl TryFrom<IoSnapConfigDto> for SnapIoConfig {
     type Error = anyhow::Error;
 
     fn try_from(value: IoSnapConfigDto) -> Result<Self, Self::Error> {
-        let data_planes = value
-            .data_planes
-            .into_iter()
-            .map(|(hostname, dp_ip_config)| {
-                Ok((
-                    hostname.clone(),
-                    dp_ip_config
-                        .try_into()
-                        .with_context(|| format!("Invalid data plane config ({hostname})"))?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
+        let data_plane = value
+            .data_plane
+            .try_into()
+            .with_context(|| "Invalid data plane config".to_string())?;
 
         Ok(Self {
             control_plane: value.control_plane.try_into()?,
-            data_planes,
+            data_plane,
         })
     }
 }
@@ -374,10 +323,9 @@ mod tests {
 
         let cp_api = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, 9002));
         let snap_id = SnapId::from_usize(1);
-        let dp_id = SnapDataPlaneId::new(snap_id, "test-host".try_into().expect("valid hostname"));
 
         io_config.set_snap_control_addr(snap_id, cp_api);
-        io_config.set_snap_data_plane_addr(dp_id, tunnel_addr);
+        io_config.set_snap_data_plane_addr(snap_id, tunnel_addr);
         let before = io_config.state.read().unwrap().clone();
 
         let dto_io_config = io_config.to_dto();

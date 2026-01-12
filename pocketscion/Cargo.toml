@@ -43,7 +43,6 @@ ntest = { workspace = true }
 pem = { workspace = true, features = ["serde"] }
 quinn = { workspace = true }
 rand = { workspace = true }
-rand_chacha = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 jsonwebtoken = { workspace = true }
 serde = { workspace = true }

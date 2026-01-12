@@ -112,6 +112,8 @@ impl SnapUnderlaySocket {
             )
         })?;
 
+        tracing::debug!(%data_plane_addr, "Connecting to dataplane");
+
         // Bind to the provided bind address or fall back to 0.0.0.0:0.
         let endpoint_bind_addr: net::SocketAddr =
             bind_addr.unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
@@ -411,6 +413,9 @@ async fn new_snaptun(
     let conn = endpoint
         .connect(data_plane_addr, &data_plane_server_name)?
         .await?;
+
+    tracing::trace!(%data_plane_addr, "Connected");
+
     let token = token_source
         .get_token()
         .await

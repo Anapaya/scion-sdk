@@ -25,7 +25,7 @@ use super::api::{AuthServerResponse, SnapsResponse, StatusResponse};
 use crate::{
     api::admin::api::{EndhostApisResponse, SetLinkStateRequest},
     dto::IoConfigDto,
-    state::SnapId,
+    state::snap::SnapId,
 };
 
 /// A client for interacting with the PocketScion API.

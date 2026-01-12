@@ -25,8 +25,6 @@ use pocketscion::{
     state::SharedPocketScionState,
 };
 use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use rustls::ClientConfig;
 use scion_proto::address::{IsdAsn, SocketAddr};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
@@ -47,8 +45,7 @@ use url::Url;
 // XXX(scionstack-v2): rendezvous hashing for pocketscion missing
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
-#[ignore = "rendezvous hashing for pocketscion missing"]
-async fn multi_client_multi_snap() {
+async fn multi_client() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
     let mut pstate = SharedPocketScionState::new(SystemTime::now());
@@ -56,26 +53,8 @@ async fn multi_client_multi_snap() {
     let ia110: IsdAsn = "1-ff00:0:132".parse().unwrap();
     let ia111: IsdAsn = "2-ff00:0:212".parse().unwrap();
 
-    let snap_id1 = pstate.add_snap();
-    let snap_id2 = pstate.add_snap();
-    let _dp_id1_1 = pstate.add_snap_data_plane(
-        snap_id1,
-        ia110,
-        vec!["10.110.0.0/24".parse().unwrap()],
-        ChaCha8Rng::seed_from_u64(1),
-    );
-    let _dp_id1_2 = pstate.add_snap_data_plane(
-        snap_id1,
-        ia110,
-        vec!["10.110.1.0/24".parse().unwrap()],
-        ChaCha8Rng::seed_from_u64(2),
-    );
-    let _dp_id2_1 = pstate.add_snap_data_plane(
-        snap_id2,
-        ia111,
-        vec!["10.111.0.0/16".parse().unwrap()],
-        ChaCha8Rng::seed_from_u64(42),
-    );
+    let snap_id1 = pstate.add_snap(ia110).unwrap();
+    let snap_id2 = pstate.add_snap(ia111).unwrap();
 
     let pocketscion = PocketScionRuntimeBuilder::new()
         .with_system_state(pstate.into_state())
@@ -182,20 +161,8 @@ async fn quic_on_quic() {
     let ia110: IsdAsn = "1-ff00:0:132".parse().unwrap();
     let ia111: IsdAsn = "2-ff00:0:212".parse().unwrap();
 
-    let client_snap_id = pstate.add_snap();
-    let server_snap_id = pstate.add_snap();
-    let _dp_id1_1 = pstate.add_snap_data_plane(
-        client_snap_id,
-        ia110,
-        vec!["10.10.0.0/16".parse().unwrap()],
-        ChaCha8Rng::seed_from_u64(1),
-    );
-    let _dp_id2_1 = pstate.add_snap_data_plane(
-        server_snap_id,
-        ia111,
-        vec!["10.11.0.0/16".parse().unwrap()],
-        ChaCha8Rng::seed_from_u64(42),
-    );
+    let client_snap_id = pstate.add_snap(ia110).unwrap();
+    let server_snap_id = pstate.add_snap(ia111).unwrap();
 
     let pocketscion = PocketScionRuntimeBuilder::new()
         .with_system_state(pstate.into_state())
@@ -408,7 +375,7 @@ async fn quic_on_quic() {
             / 1024.0
             / 1024.0,
         server_packets_missing,
-        server_packets_missing as f64 / server_packets_received as f64 * 100.0
+        (1f64 - server_packets_received as f64 / server_packets_missing as f64) * 100.0
     );
     info!(
         "echo server sent {} packets in {} seconds -> {} mbps (one way)",
@@ -426,7 +393,7 @@ async fn quic_on_quic() {
             / 1024.0
             / 1024.0,
         packets_missing,
-        packets_missing as f64 / packets_received as f64 * 100.0
+        (1f64 - server_packets_received as f64 / server_packets_missing as f64) * 100.0
     );
 
     assert!(packets_received > 0);
@@ -460,13 +427,7 @@ async fn with_auth_server() {
     pstate.set_auth_server(snap_token_private_pem);
 
     let isd_as = "1-ff00:0:110".parse().unwrap();
-    let snap_id = pstate.add_snap();
-    let _ = pstate.add_snap_data_plane(
-        snap_id,
-        isd_as,
-        vec!["10.0.0.0/16".parse().unwrap()],
-        ChaCha8Rng::seed_from_u64(42),
-    );
+    let snap_id = pstate.add_snap(isd_as).unwrap();
 
     let pocketscion = PocketScionRuntimeBuilder::new()
         .with_system_state(pstate.into_state())

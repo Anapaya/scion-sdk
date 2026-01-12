@@ -118,113 +118,6 @@ paths:
                 $ref: '#/components/schemas/SystemStateDto'
 components:
   schemas:
-    AddrRangeDto:
-      type: object
-      description: An address range.
-      required:
-      - start
-      - end
-      properties:
-        end:
-          type: integer
-          description: The end of the address range.
-          minimum: 0
-        start:
-          type: integer
-          description: The start of the address range.
-          minimum: 0
-    AddrSetDto:
-      type: object
-      description: An address set.
-      required:
-      - prefix
-      - free
-      properties:
-        free:
-          type: array
-          items:
-            $ref: '#/components/schemas/AddrRangeDto'
-          description: The list of free addresses ranges.
-        prefix:
-          type: string
-          description: The prefix of the address set.
-    AddressAllocatorDto:
-      type: object
-      description: The address allocator.
-      required:
-      - v4
-      - v6
-      - rng
-      properties:
-        rng:
-          $ref: '#/components/schemas/RngDto'
-          description: The random number generator state.
-        v4:
-          type: array
-          items:
-            $ref: '#/components/schemas/AddrSetDto'
-          description: The list of IPv4 address sets.
-        v6:
-          type: array
-          items:
-            $ref: '#/components/schemas/AddrSetDto'
-          description: The list of IPv6 address sets.
-    AddressGrantDto:
-      type: object
-      description: An address grant.
-      required:
-      - endhost_addr
-      - id
-      properties:
-        endhost_addr:
-          type: string
-          description: The endhost address.
-        id:
-          type: string
-          description: The ID of the token that was used to retrieve this address grant.
-        on_hold_until:
-          type: string
-          description: The duration for which the grant is kept on hold.
-    AddressManagerDto:
-      type: object
-      description: The data plane address registry.
-      required:
-      - id
-      - isd_as
-      - hold_duration
-      - address_grants
-      - free_ips
-      - max_attempts
-      - prefixes
-      properties:
-        address_grants:
-          type: array
-          items:
-            $ref: '#/components/schemas/AddressGrantDto'
-          description: The list of address grants.
-        free_ips:
-          $ref: '#/components/schemas/AddressAllocatorDto'
-          description: Bookkeeping of free IP addresses.
-        hold_duration:
-          type: string
-          description: The duration for which an address is held.
-        id:
-          type: integer
-          format: int64
-          description: The id of the address registry.
-          minimum: 0
-        isd_as:
-          $ref: '#/components/schemas/IsdAsn'
-          description: The ISD-AS of the data plane.
-        max_attempts:
-          type: integer
-          description: The maximum number of attempts to allocate an address.
-          minimum: 0
-        prefixes:
-          type: array
-          items:
-            $ref: '#/components/schemas/IpNetDto'
-          description: Prefixes this AddressManager is responsible for.
     AuthServerResponse:
       type: object
       description: Authorization server response.
@@ -243,17 +136,6 @@ components:
         token_exchanger:
           $ref: '#/components/schemas/TokenExchangerStateDto'
           description: The token exchange state.
-    DataPlaneStateDto:
-      type: object
-      description: The SNAP data plane state.
-      required:
-      - address_registries
-      properties:
-        address_registries:
-          type: array
-          items:
-            $ref: '#/components/schemas/AddressManagerDto'
-          description: The address registries (per ISD AS) of the data plane.
     EndhostApiId:
       type: integer
       description: Endhost API instance identifier.
@@ -378,22 +260,14 @@ components:
       description: The I/O configuration of a SNAP.
       required:
       - control_plane
-      - data_planes
+      - data_plane
       properties:
         control_plane:
           $ref: '#/components/schemas/IoControlPlaneConfigDto'
           description: The control plane address of the SNAP.
-        data_planes:
-          type: object
+        data_plane:
+          $ref: '#/components/schemas/IoDataPlaneConfigDto'
           description: The list of data plane I/O configurations.
-          additionalProperties:
-            $ref: '#/components/schemas/IoDataPlaneConfigDto'
-          propertyNames:
-            type: string
-            description: SNAP node hostname.
-    IpNetDto:
-      type: string
-      description: IP network.
     IsdAsn:
       type: string
       description: |-
@@ -418,23 +292,6 @@ components:
       enum:
       - Ready
       - NotReady
-    RngDto:
-      type: object
-      description: The random number generator state.
-      required:
-      - seed
-      - word
-      - stream
-      properties:
-        seed:
-          type: string
-        stream:
-          type: integer
-          format: int64
-          minimum: 0
-        word:
-          type: integer
-          minimum: 0
     RouterStateDto:
       type: object
       description: The state of a SCION router emulated by PocketScion.
@@ -512,16 +369,11 @@ components:
       type: object
       description: The state of a SNAP.
       required:
-      - data_planes
+      - isd_as
       properties:
-        data_planes:
-          type: object
-          description: The list of SNAP data planes.
-          additionalProperties:
-            $ref: '#/components/schemas/DataPlaneStateDto'
-          propertyNames:
-            type: string
-            description: SNAP node hostname.
+        isd_as:
+          $ref: '#/components/schemas/IsdAsn'
+          description: The ISD-AS of the SNAP.
     SnapsResponse:
       type: object
       description: SNAP response.

@@ -13,16 +13,12 @@
 // limitations under the License.
 //! SNAP data plane state.
 
-use std::{collections::BTreeMap, fmt::Display, sync::LazyLock};
+use std::{fmt::Display, sync::LazyLock};
 
-use anyhow::Context as _;
 use regex::Regex;
-use scion_sdk_address_manager::manager::AddressManager;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use utoipa::ToSchema;
-
-use crate::dto::DataPlaneStateDto;
 
 /// Generic identifier trait.
 pub trait Id {
@@ -30,46 +26,6 @@ pub trait Id {
     fn from_usize(val: usize) -> Self;
     /// Returns the identifier as a `usize`.
     fn as_usize(&self) -> usize;
-}
-
-/// The SNAP data plane state.
-#[derive(Debug, Default, PartialEq, Clone)]
-pub struct DataPlaneState {
-    /// The address registries (per registry id).
-    pub address_registries: BTreeMap<u64, AddressManager>,
-}
-
-impl From<&DataPlaneState> for DataPlaneStateDto {
-    fn from(value: &DataPlaneState) -> Self {
-        DataPlaneStateDto {
-            address_registries: value
-                .address_registries
-                .values()
-                .map(|registry| registry.into())
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<DataPlaneStateDto> for DataPlaneState {
-    type Error = anyhow::Error;
-
-    fn try_from(state: DataPlaneStateDto) -> Result<Self, Self::Error> {
-        let registries = state
-            .address_registries
-            .into_iter()
-            .map(|mgr_dto| {
-                let mgr: AddressManager = mgr_dto
-                    .try_into()
-                    .context("Failed to convert manager to AddressManager")?;
-                Ok((mgr.id(), mgr))
-            })
-            .collect::<Result<BTreeMap<_, _>, Self::Error>>()?;
-
-        Ok(Self {
-            address_registries: registries,
-        })
-    }
 }
 
 /// SNAP node hostname.

@@ -14,8 +14,7 @@
 //! PocketSCION state.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
+    collections::BTreeMap,
     net::SocketAddr,
     num::NonZero,
     str::FromStr,
@@ -27,16 +26,11 @@ use anyhow::Context as _;
 use derive_more::Display;
 use ipnet::IpNet;
 use pem::Pem;
-use rand_chacha::ChaCha8Rng;
 use scion_proto::address::IsdAsn;
-use scion_sdk_address_manager::manager::{AddressManager, AddressRegistrationError};
+use scion_sdk_address_manager::manager::AddressRegistrationError;
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use snap_control::model::{SnapResolver, SnapUnderlay, UdpUnderlay, UnderlayDiscovery};
-use snap_dataplane::{
-    state::{DataPlaneState, Hostname, Id},
-    tunnel_gateway::state::SharedTunnelGatewayState,
-};
+use serde::{Deserialize, Serialize};
+use snap_dataplane::{state::Id, tunnel_gateway::state::SharedTunnelGatewayState};
 use snap_tokens::snap_token::SnapTokenClaims;
 use utoipa::ToSchema;
 
@@ -47,9 +41,8 @@ use crate::{
             TokenExchange, TokenExchangeConfig, TokenExchangeError, TokenExchangeImpl,
         },
     },
-    dto::{AuthServerStateDto, RouterStateDto, SnapStateDto, SystemStateDto},
+    dto::{AuthServerStateDto, RouterStateDto, SystemStateDto},
     endhost_api::{EndhostApiId, EndhostApiState},
-    io_config::SharedPocketScionIoConfig,
     network::{
         local::{receiver_registry::NetworkReceiverRegistry, receivers::Receiver},
         scion::{
@@ -57,10 +50,12 @@ use crate::{
             topology::{FastTopologyLookup, ScionTopology},
         },
     },
+    state::snap::{SnapId, SnapState},
 };
 
 pub mod endhost_segment_lister;
 pub mod simulation_dispatcher;
+pub mod snap;
 
 /// The internal state of PocketScion.
 #[derive(Clone)]
@@ -137,138 +132,6 @@ impl SharedPocketScionState {
 
     pub(crate) fn has_auth_server(&self) -> bool {
         self.system_state.read().unwrap().auth_server.is_some()
-    }
-}
-// Snaps
-impl SharedPocketScionState {
-    pub(crate) fn snap_token_public_key(&self) -> Pem {
-        let sstate = self.system_state.read().unwrap();
-        sstate.snap_token_public_pem.clone()
-    }
-
-    /// Set the public key used to verify SNAP tokens.
-    pub fn set_snap_token_public_pem(&mut self, pem: Pem) {
-        let mut system_state = self.system_state.write().unwrap();
-        system_state.snap_token_public_pem = pem;
-    }
-
-    /// Adds a new SNAP to the system state and returns its id.
-    pub fn add_snap(&mut self) -> SnapId {
-        let mut system_state = self.system_state.write().unwrap();
-        let snap_id = SnapId::from_usize(system_state.snaps.len());
-        system_state.snaps.insert(
-            snap_id,
-            SnapState {
-                data_planes: Default::default(),
-            },
-        );
-        snap_id
-    }
-
-    /// Returns a map of all Snaps
-    pub fn snaps(&self) -> BTreeMap<SnapId, SnapState> {
-        let sstate = self.system_state.read().unwrap();
-        sstate.snaps.clone()
-    }
-
-    /// Returns a vector of all existing SnapIds
-    pub fn snaps_ids(&self) -> Vec<SnapId> {
-        let sstate = self.system_state.read().unwrap();
-        sstate.snaps.keys().cloned().collect()
-    }
-
-    /// Returns all local IsdAses of a snap
-    pub fn snap_isd_ases(&self, id: SnapId) -> Option<BTreeSet<IsdAsn>> {
-        self.system_state
-            .read()
-            .unwrap()
-            .snaps
-            .get(&id)
-            .map(|s| s.isd_ases())
-    }
-
-    /// Get the [SnapDataPlaneDiscoveryHandle] of a specific snap
-    pub(crate) fn snap_data_plane_discovery(
-        &self,
-        snap_id: SnapId,
-        io_config: SharedPocketScionIoConfig,
-    ) -> SnapDataPlaneDiscoveryHandle {
-        SnapDataPlaneDiscoveryHandle {
-            snap_id,
-            system_state: self.system_state.clone(),
-            io_config,
-        }
-    }
-
-    /// Get the [SessionManagerHandle] of a specific snap
-    pub(crate) fn snap_resolver(
-        &self,
-        snap_id: SnapId,
-        io_config: SharedPocketScionIoConfig,
-    ) -> SnapResolverHandle {
-        SnapResolverHandle {
-            snap_id,
-            system_state: self.system_state.clone(),
-            io_config,
-        }
-    }
-
-    /// Adds a new data plane for the given SNAP to the system state and returns its id.
-    pub fn add_snap_data_plane(
-        &mut self,
-        snap_id: SnapId,
-        isd_as: IsdAsn,
-        prefixes: Vec<IpNet>,
-        rng: ChaCha8Rng,
-    ) -> SnapDataPlaneId {
-        let mut system_state = self.system_state.write().unwrap();
-
-        let snap = system_state
-            .snaps
-            .get_mut(&snap_id)
-            .expect("SNAP not found");
-
-        let hostname: Hostname = format!("host-{}", snap.data_planes.len())
-            .try_into()
-            .expect("valid hostname");
-        let snap_dp_id = SnapDataPlaneId::new(snap_id, hostname.clone());
-
-        let mgr = AddressManager::new(isd_as, prefixes, rng).unwrap();
-        let mut dp_state = DataPlaneState::default();
-        dp_state.address_registries.insert(mgr.id(), mgr);
-
-        snap.data_planes.insert(hostname, dp_state);
-
-        snap_dp_id
-    }
-
-    pub(crate) fn snap_data_planes(&self, snap_id: SnapId) -> Vec<SnapDataPlaneId> {
-        let sstate = self.system_state.read().unwrap();
-        let snap = sstate.snaps.get(&snap_id).expect("SNAP not found");
-        snap.data_planes
-            .keys()
-            .map(|hostname| SnapDataPlaneId::new(snap_id, hostname.clone()))
-            .collect()
-    }
-
-    pub(crate) fn snap_data_plane_ases(
-        &self,
-        snap_data_plane_id: SnapDataPlaneId,
-    ) -> anyhow::Result<Vec<IsdAsn>> {
-        let state_guard = self.system_state.read().unwrap();
-        let state = state_guard
-            .snaps
-            .get(&snap_data_plane_id.snap_id)
-            .and_then(|snap| {
-                snap.data_planes
-                    .get(&snap_data_plane_id.data_plane_hostname)
-            })
-            .context("SNAP data plane not found")?;
-        Ok(state
-            .address_registries
-            .values()
-            .map(|registry| registry.isd_asn())
-            .collect::<Vec<_>>())
     }
 }
 // Endhost API
@@ -473,7 +336,7 @@ impl From<&SystemState> for SystemStateDto {
             snaps: system_state
                 .snaps
                 .iter()
-                .map(|(snap_id, snap_state)| (*snap_id, snap_state.into()))
+                .map(|(snap_id, snap_state)| (*snap_id, snap_state.clone().into()))
                 .collect(),
             routers: system_state
                 .routers
@@ -556,57 +419,6 @@ impl TryFrom<SystemStateDto> for SystemState {
 impl AsRef<SystemState> for RwLockReadGuard<'_, SystemState> {
     fn as_ref(&self) -> &SystemState {
         self
-    }
-}
-
-/// Pocket SCION SNAP state.
-#[derive(Debug, PartialEq, Clone)]
-pub struct SnapState {
-    // XXX(bunert): SNAP should contain a single data plane state.
-    pub(crate) data_planes: BTreeMap<Hostname, DataPlaneState>,
-}
-
-impl SnapState {
-    // List all ases this snap is connected to
-    pub(crate) fn isd_ases(&self) -> BTreeSet<IsdAsn> {
-        self.data_planes
-            .iter()
-            .flat_map(|dp| dp.1.address_registries.iter())
-            .map(|ar| ar.1.isd_asn())
-            .collect()
-    }
-}
-
-impl From<&SnapState> for SnapStateDto {
-    fn from(value: &SnapState) -> Self {
-        Self {
-            data_planes: value
-                .data_planes
-                .iter()
-                .map(|(hostname, state)| (hostname.clone(), state.into()))
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<SnapStateDto> for SnapState {
-    type Error = anyhow::Error;
-
-    fn try_from(value: SnapStateDto) -> Result<Self, Self::Error> {
-        let data_planes = value
-            .data_planes
-            .into_iter()
-            .map(|(hostname, state)| {
-                Ok((
-                    hostname.clone(),
-                    state
-                        .try_into()
-                        .with_context(|| format!("invalid data plane state ({hostname})"))?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
-
-        Ok(Self { data_planes })
     }
 }
 
@@ -749,150 +561,6 @@ impl From<AllocationError> for snap_tun::AddressAllocationError {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct SnapDataPlaneDiscoveryHandle {
-    snap_id: SnapId,
-    system_state: Arc<RwLock<SystemState>>,
-    io_config: SharedPocketScionIoConfig,
-}
-
-impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
-    fn list_snap_underlays(&self) -> Vec<SnapUnderlay> {
-        let sstate = self.system_state.read().unwrap();
-        let snap = sstate.snaps.get(&self.snap_id).expect("SNAP not found");
-
-        snap.data_planes
-            .iter()
-            .filter_map(|(hostname, dp_state)| {
-                let isd_ases: Vec<IsdAsn> = dp_state
-                    .address_registries
-                    .values()
-                    .map(|ar| ar.isd_asn())
-                    .collect();
-
-                self.io_config
-                    .snap_data_plane_addr(SnapDataPlaneId::new(self.snap_id, hostname.clone()))
-                    .map(|address| SnapUnderlay { address, isd_ases })
-            })
-            .collect()
-    }
-
-    fn list_udp_underlays(&self) -> Vec<UdpUnderlay> {
-        vec![] // XXX(ake): Currently no mixed mode with both UDP and SNAP data planes is supported
-    }
-}
-
-pub(crate) struct SnapResolverHandle {
-    #[allow(unused)]
-    snap_id: SnapId,
-    #[allow(unused)]
-    system_state: Arc<RwLock<SystemState>>,
-    #[allow(unused)]
-    io_config: SharedPocketScionIoConfig,
-}
-
-impl SnapResolver for SnapResolverHandle {
-    fn resolve(
-        &self,
-        _endhost_ip: std::net::IpAddr,
-    ) -> Result<SocketAddr, snap_control::model::ResolveSnapError> {
-        // XXX(bunert): rendezvous hashing in pocketscion?
-        let data_planes = self.io_config.list_snap_data_planes(self.snap_id);
-        let (_dp_id, addr) = data_planes.first().expect("must exist");
-        Ok(addr.expect("address must be set"))
-    }
-}
-
-/// The SNAP identifier.
-#[derive(
-    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ToSchema,
-)]
-#[serde(transparent)]
-pub struct SnapId(usize);
-
-impl TryFrom<String> for SnapId {
-    type Error = <usize as FromStr>::Err;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        Ok(SnapId::from_usize(s.parse()?))
-    }
-}
-
-impl Id for SnapId {
-    fn as_usize(&self) -> usize {
-        self.0
-    }
-
-    fn from_usize(val: usize) -> Self {
-        Self(val)
-    }
-}
-
-/// SNAP data plane identifier.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, ToSchema)]
-pub struct SnapDataPlaneId {
-    snap_id: SnapId,
-    data_plane_hostname: Hostname,
-}
-
-impl SnapDataPlaneId {
-    pub(crate) fn new(snap_id: SnapId, hostname: Hostname) -> Self {
-        Self {
-            snap_id,
-            data_plane_hostname: hostname,
-        }
-    }
-
-    pub(crate) fn snap(&self) -> SnapId {
-        self.snap_id
-    }
-
-    pub(crate) fn data_plane(&self) -> Hostname {
-        self.data_plane_hostname.clone()
-    }
-}
-
-impl Serialize for SnapDataPlaneId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let s = format!("{}-{}", self.snap_id.0, self.data_plane_hostname);
-        serializer.serialize_str(&s)
-    }
-}
-
-impl<'de> Deserialize<'de> for SnapDataPlaneId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        use serde::de::Error;
-
-        let s = String::deserialize(deserializer)?;
-        let parts: Vec<&str> = s.split('-').collect();
-        if parts.len() != 2 {
-            return Err(Error::custom("invalid SnapDataPlaneId format"));
-        }
-        let snap = parts[0]
-            .parse::<usize>()
-            .map_err(|_| Error::custom("invalid SnapId part"))?;
-        let hostname = parts[1]
-            .try_into()
-            .map_err(|e| Error::custom(format!("invalid hostname: {}", e)))?;
-        Ok(SnapDataPlaneId {
-            snap_id: SnapId(snap),
-            data_plane_hostname: hostname,
-        })
-    }
-}
-
-impl fmt::Display for SnapDataPlaneId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}-{}", self.snap_id, self.data_plane_hostname)
-    }
-}
-
 /// The router identifier.
 #[derive(
     Debug,
@@ -929,14 +597,12 @@ impl Id for RouterId {
 }
 
 /// Map of all tunnel gateway states indexed by SNAP ID and SNAP data plane ID.
-pub type TunnelGatewayStates =
-    BTreeMap<SnapId, BTreeMap<SnapDataPlaneId, SharedTunnelGatewayState<SnapTokenClaims>>>;
+pub type TunnelGatewayStates = BTreeMap<SnapId, SharedTunnelGatewayState<SnapTokenClaims>>;
 
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU16;
 
-    use rand::SeedableRng;
     use test_log::test;
 
     use super::*;
@@ -945,13 +611,9 @@ mod tests {
     fn should_convert_to_dto_and_back_without_data_loss() {
         let mut pstate = SharedPocketScionState::new(SystemTime::now());
         let isd_as = "1-ff00:0:110".parse().unwrap();
-        let snap_id = pstate.add_snap();
-        let _dp_id = pstate.add_snap_data_plane(
-            snap_id,
-            isd_as,
-            vec!["10.0.0.0/16".parse().unwrap()],
-            ChaCha8Rng::seed_from_u64(42),
-        );
+
+        pstate.add_snap(isd_as).unwrap();
+
         let _router_id = pstate.add_router(
             isd_as,
             vec![NonZeroU16::new(1).unwrap(), NonZeroU16::new(2).unwrap()],

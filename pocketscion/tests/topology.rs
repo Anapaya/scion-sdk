@@ -23,8 +23,6 @@ use pocketscion::{
     runtime::PocketScionRuntimeBuilder,
     state::SharedPocketScionState,
 };
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use scion_proto::address::IsdAsn;
 use scion_stack::scionstack::ScionStackBuilder;
 use snap_tokens::snap_token::dummy_snap_token;
@@ -34,9 +32,6 @@ use snap_tokens::snap_token::dummy_snap_token;
 async fn should_send_receive_with_topology() -> anyhow::Result<()> {
     let server_ia = IsdAsn::from_str("1-3")?;
     let client_ia = IsdAsn::from_str("2-3")?;
-
-    let server_snap_ip_net = "10.2.0.0/24".parse()?;
-    let client_snap_ip_net = "10.1.0.0/24".parse()?;
 
     const MESSAGE_LEN: usize = 64;
 
@@ -63,21 +58,8 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
     //
     // Setup snaps
     let (server_snap_id, client_snap_id) = {
-        let server_snap_id = state.add_snap();
-        state.add_snap_data_plane(
-            server_snap_id,
-            server_ia,
-            vec![server_snap_ip_net],
-            ChaCha8Rng::seed_from_u64(1),
-        );
-
-        let client_snap_id = state.add_snap();
-        state.add_snap_data_plane(
-            client_snap_id,
-            client_ia,
-            vec![client_snap_ip_net],
-            ChaCha8Rng::seed_from_u64(2),
-        );
+        let server_snap_id = state.add_snap(server_ia)?;
+        let client_snap_id = state.add_snap(client_ia)?;
 
         (server_snap_id, client_snap_id)
     };

@@ -47,7 +47,6 @@ use std::{
 use anyhow::Context;
 use bytes::Bytes;
 use derive_more::Deref;
-use ipnet::IpNet;
 use pocketscion::{
     addr_to_http_url, io_config,
     network::scion::topology::{ScionAs, ScionTopology},
@@ -55,8 +54,6 @@ use pocketscion::{
     state::SharedPocketScionState,
 };
 use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig, rustls::RootCertStore};
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_utils::test::install_rustls_crypto_provider;
 use scion_stack::{
@@ -91,21 +88,15 @@ async fn main() -> Result<(), anyhow::Error> {
             scion_access_points: vec![
                 SnapConfig {
                     name: "server_snap".to_string(),
-                    listening_addr: "127.0.0.1:10001".parse()?,
-                    data_planes: vec![DataPlaneConfig {
-                        listening_addr: "127.0.0.1:10002".parse()?,
-                        isd_as: "2-2".parse()?,
-                        address_range: vec!["10.1.0.0/24".parse()?],
-                    }],
+                    control_api_addr: "127.0.0.1:10001".parse()?,
+                    dataplane_addr: "127.0.0.1:10002".parse()?,
+                    isd_as: "2-2".parse()?,
                 },
                 SnapConfig {
                     name: "client_snap".to_string(),
-                    listening_addr: "127.0.0.1:10003".parse()?,
-                    data_planes: vec![DataPlaneConfig {
-                        listening_addr: "127.0.0.1:10004".parse()?,
-                        isd_as: "2-1".parse()?,
-                        address_range: vec!["10.2.0.0/24".parse()?],
-                    }],
+                    control_api_addr: "127.0.0.1:10003".parse()?,
+                    dataplane_addr: "127.0.0.1:10004".parse()?,
+                    isd_as: "2-1".parse()?,
                 },
             ],
         },
@@ -133,25 +124,14 @@ async fn main() -> Result<(), anyhow::Error> {
         system_state.set_topology(cfg.pocket_scion.topology.clone());
 
         // Create SCION Network Access Points (SNAPs)
-        for snap in &cfg.pocket_scion.scion_access_points {
+        for snap_config in &cfg.pocket_scion.scion_access_points {
             // Add a new SNAP to the system state
-            let snap_id = system_state.add_snap();
+            let snap_id = system_state.add_snap(snap_config.isd_as)?;
 
             // Then add an IO config to declare how this control plane can be reached
-            io_config.set_snap_control_addr(snap_id, snap.listening_addr);
-
-            for data_plane in &snap.data_planes {
-                // Add the SNAP data plane to the system state
-                let dataplane_id = system_state.add_snap_data_plane(
-                    snap_id,
-                    data_plane.isd_as,
-                    data_plane.address_range.clone(),
-                    ChaCha8Rng::seed_from_u64(10),
-                );
-
-                // Add an IO config
-                io_config.set_snap_data_plane_addr(dataplane_id, data_plane.listening_addr);
-            }
+            io_config.set_snap_control_addr(snap_id, snap_config.control_api_addr);
+            // Add an IO config to declare how the data plane can be reached
+            io_config.set_snap_data_plane_addr(snap_id, snap_config.dataplane_addr);
         }
 
         // Finally we create the PocketScionRuntime
@@ -635,7 +615,7 @@ impl ExampleConfig {
             .scion_access_points
             .iter()
             .find(|snap| snap.name == snap_name)
-            .map(|snap| addr_to_http_url(snap.listening_addr))
+            .map(|snap| addr_to_http_url(snap.control_api_addr))
             .with_context(|| format!("snap: '{snap_name}' was not declared in the ExampleConfig"))
     }
 }
@@ -659,20 +639,14 @@ struct SnapConfig {
     /// Example internal name of the SNAP
     name: String,
     /// Listening address for the SNAP's control plane
-    listening_addr: std::net::SocketAddr,
-    /// This SNAP's data planes
-    data_planes: Vec<DataPlaneConfig>,
+    control_api_addr: std::net::SocketAddr,
+    /// The ISD-AS number this SNAP belongs to
+    isd_as: IsdAsn,
+    /// The LAN address this data plane should listen on
+    dataplane_addr: std::net::SocketAddr,
 }
 
 struct ClientConfig {
     /// The name of the SNAP this client should use
     use_snap: String,
-}
-
-struct DataPlaneConfig {
-    isd_as: IsdAsn,
-    /// The LAN address this data plane should listen on
-    listening_addr: std::net::SocketAddr,
-    /// The (virtual) IP addresses this data plane can assign to its clients
-    address_range: Vec<IpNet>,
 }
