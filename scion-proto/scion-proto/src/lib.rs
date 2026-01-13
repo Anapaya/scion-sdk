@@ -32,6 +32,7 @@
 //! - [control messages][scmp] for sending informational and error control messages to endhosts and
 //!   routers in the network; and
 //! - [parsing logic][reliable] for the endhost-to-SCION-dispatcher communication.
+//! - [control plane][control_plane] for implementing the SCION control plane.
 //!
 //! This crate does not perform any I/O. See the [**scion**](../scion/index.html) crate for
 //! (asynchronous) socket implementations that use these types.
@@ -41,6 +42,7 @@
 //! [isd]: https://docs.scion.org/en/latest/overview.html#isolation-domains-isds
 
 pub mod address;
+pub mod control_plane;
 pub mod datagram;
 pub mod packet;
 pub mod path;

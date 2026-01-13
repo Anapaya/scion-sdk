@@ -1,4 +1,4 @@
-// Copyright 2025 Anapaya Systems
+// Copyright 2026 Anapaya Systems
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,26 +11,58 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Snap Segment Listing plan
+//! Segment Listing plan
 //!
-//! Snap requires more complex lookups, this module provides a plan for these
+//! Plan of segment lookups against SCION control services to be performed
+//! when looking up segments from a source to a destination.
 
-use anyhow::bail;
-use scion_proto::address::{Asn, Isd, IsdAsn};
+use crate::address::{Asn, Isd, IsdAsn};
 
-/// Plan of segment lookups to be performed for a request
+/// Plan to look up segments from a source to a destination ISD-AS
+/// by splitting the request into up, core, and down segments requests
+/// against SCION control services.
 #[derive(Debug)]
-pub struct SnapListSegmentPlan {
-    pub(crate) up: Option<(IsdAsn, IsdAsn)>,
-    pub(crate) core: Option<(IsdAsn, IsdAsn)>,
-    pub(crate) down: Option<(IsdAsn, IsdAsn)>,
+pub struct ListSegmentPlan {
+    /// Up segment request
+    pub up: Option<(IsdAsn, IsdAsn)>,
+    /// Core segment request
+    pub core: Option<(IsdAsn, IsdAsn)>,
+    /// Down segment request
+    pub down: Option<(IsdAsn, IsdAsn)>,
 }
 
-impl SnapListSegmentPlan {
+/// Error returned when creating a [`ListSegmentPlan`].
+#[derive(Debug, thiserror::Error)]
+pub enum ListSegmentPlanError {
+    /// Source and destination AS must differ in path segment lookup.
+    #[error("source and destination AS must differ in path segment lookup")]
+    SameSourceAndDestination,
+    /// At least one segment lookup must be specified.
+    #[error("at least one segment lookup must be specified")]
+    NoSegmentLookup,
+    /// Up segment lookup must be in the same ISD.
+    #[error("up segment lookup must be in same ISD: {0} != {1}")]
+    UpSegmentIsdMismatch(Isd, Isd),
+    /// Up segment lookup source must not be wildcard.
+    #[error("up segment lookup source must not be wildcard: {0}")]
+    UpSegmentSourceWildcard(IsdAsn),
+    /// Down segment lookup must be in the same ISD.
+    #[error("down segment lookup must be in same ISD: {0} != {1}")]
+    DownSegmentIsdMismatch(Isd, Isd),
+    /// Down segment lookup destination must not be wildcard.
+    #[error("down segment lookup destination must not be wildcard: {0}")]
+    DownSegmentDestinationWildcard(IsdAsn),
+}
+
+impl ListSegmentPlan {
     /// Plans the lookups to be done on given Parameters
-    pub fn new(src: Src, src_cores: CoreHint, dst: Dst) -> anyhow::Result<SnapListSegmentPlan> {
+    pub fn new(
+        src: Src,
+        src_cores: CoreHint,
+        dst: Dst,
+    ) -> Result<ListSegmentPlan, ListSegmentPlanError> {
         if src.ias() == dst.ias() {
-            bail!("Source and destination AS must differ in path segment lookup.");
+            return Err(ListSegmentPlanError::SameSourceAndDestination);
         }
         let same_isd = src.isd() == dst.isd();
         match same_isd {
@@ -43,7 +75,7 @@ impl SnapListSegmentPlan {
         src: Src,
         src_cores: CoreHint,
         dst: Dst,
-    ) -> anyhow::Result<SnapListSegmentPlan> {
+    ) -> Result<ListSegmentPlan, ListSegmentPlanError> {
         let any_core = IsdAsn::new(src.isd(), Asn::WILDCARD);
 
         match src_cores {
@@ -87,7 +119,7 @@ impl SnapListSegmentPlan {
         }
     }
 
-    fn plan_cross_isd(src: Src, dst: Dst) -> Result<SnapListSegmentPlan, anyhow::Error> {
+    fn plan_cross_isd(src: Src, dst: Dst) -> Result<ListSegmentPlan, ListSegmentPlanError> {
         let src_any_core = IsdAsn::new(src.isd(), Asn::WILDCARD);
         let dst_any_core = IsdAsn::new(dst.isd(), Asn::WILDCARD);
 
@@ -111,41 +143,36 @@ impl SnapListSegmentPlan {
     }
 }
 
-impl SnapListSegmentPlan {
+impl ListSegmentPlan {
     /// Checks if the Lookup could be satisfied
-    fn validate(self) -> anyhow::Result<Self> {
+    fn validate(self) -> Result<Self, ListSegmentPlanError> {
         if self.up.is_none() && self.core.is_none() && self.down.is_none() {
-            bail!("At least one segment lookup must be specified");
+            return Err(ListSegmentPlanError::NoSegmentLookup);
         }
 
         if let Some((src, dst)) = &self.up {
             if src.isd() != dst.isd() {
-                bail!(
-                    "Up segment lookup must be in same ISD: {} != {}",
+                return Err(ListSegmentPlanError::UpSegmentIsdMismatch(
                     src.isd(),
-                    dst.isd()
-                );
+                    dst.isd(),
+                ));
             }
 
             if src.is_wildcard() {
-                bail!("Up segment lookup source must not be wildcard: {}", src);
+                return Err(ListSegmentPlanError::UpSegmentSourceWildcard(*src));
             }
         }
 
         if let Some((src, dst)) = &self.down {
             if src.isd() != dst.isd() {
-                bail!(
-                    "Down segment lookup must be in same ISD: {} != {}",
+                return Err(ListSegmentPlanError::DownSegmentIsdMismatch(
                     src.isd(),
-                    dst.isd()
-                );
+                    dst.isd(),
+                ));
             }
 
             if dst.is_wildcard() {
-                bail!(
-                    "Down segment lookup destination must not be wildcard: {}",
-                    src
-                );
+                return Err(ListSegmentPlanError::DownSegmentDestinationWildcard(*src));
             }
         }
 
@@ -153,8 +180,8 @@ impl SnapListSegmentPlan {
     }
 
     /// No-op segments lookup.
-    pub fn none() -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    pub fn none() -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: None,
             core: None,
             down: None,
@@ -163,8 +190,8 @@ impl SnapListSegmentPlan {
     }
 
     /// Core segments lookup.
-    pub fn core(src: IsdAsn, dst: IsdAsn) -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    pub fn core(src: IsdAsn, dst: IsdAsn) -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: None,
             core: Some((src, dst)),
             down: None,
@@ -175,8 +202,8 @@ impl SnapListSegmentPlan {
     /// Single Up Segments lookup.
     ///
     /// src and dst must be in same ISD
-    pub fn up(src: IsdAsn, dst: IsdAsn) -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    pub fn up(src: IsdAsn, dst: IsdAsn) -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: Some((src, dst)),
             core: None,
             down: None,
@@ -187,8 +214,8 @@ impl SnapListSegmentPlan {
     /// Single Down Segments lookup.
     ///
     /// src and dst must be in same ISD
-    pub fn down(src: IsdAsn, dst: IsdAsn) -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    pub fn down(src: IsdAsn, dst: IsdAsn) -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: None,
             core: None,
             down: Some((src, dst)),
@@ -204,8 +231,8 @@ impl SnapListSegmentPlan {
         src: IsdAsn,
         transit: IsdAsn,
         dst: IsdAsn,
-    ) -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    ) -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: Some((src, transit)),
             core: Some((transit, dst)),
             down: None,
@@ -221,8 +248,8 @@ impl SnapListSegmentPlan {
         src: IsdAsn,
         transit: IsdAsn,
         dst: IsdAsn,
-    ) -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    ) -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: None,
             core: Some((src, transit)),
             down: Some((transit, dst)),
@@ -237,8 +264,8 @@ impl SnapListSegmentPlan {
         src: IsdAsn,
         transit: IsdAsn,
         dst: IsdAsn,
-    ) -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    ) -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: Some((src, transit)),
             core: None,
             down: Some((transit, dst)),
@@ -255,8 +282,8 @@ impl SnapListSegmentPlan {
         src_transit: IsdAsn,
         dst_transit: IsdAsn,
         dst: IsdAsn,
-    ) -> anyhow::Result<SnapListSegmentPlan> {
-        SnapListSegmentPlan {
+    ) -> Result<ListSegmentPlan, ListSegmentPlanError> {
+        ListSegmentPlan {
             up: Some((src, src_transit)),
             core: Some((src_transit, dst_transit)),
             down: Some((dst_transit, dst)),
@@ -276,7 +303,8 @@ pub enum Dst {
 }
 
 impl Dst {
-    pub(crate) fn new(ias: IsdAsn, is_core: bool) -> Self {
+    /// Creates a new destination AS type
+    pub fn new(ias: IsdAsn, is_core: bool) -> Self {
         match ias.is_wildcard() {
             true => Dst::AnyCore(ias),
             false if is_core => Dst::Core(ias),
@@ -284,7 +312,8 @@ impl Dst {
         }
     }
 
-    pub(crate) fn ias(&self) -> IsdAsn {
+    /// Returns the ISD-AS of the destination.
+    pub fn ias(&self) -> IsdAsn {
         match self {
             Dst::Core(ias) => *ias,
             Dst::NonCore(ias) => *ias,
@@ -292,7 +321,8 @@ impl Dst {
         }
     }
 
-    pub(crate) fn isd(&self) -> Isd {
+    /// Returns the ISD of the destination.
+    pub fn isd(&self) -> Isd {
         match self {
             Dst::Core(ias) => ias.isd(),
             Dst::NonCore(ias) => ias.isd(),
@@ -309,23 +339,31 @@ pub enum Src {
     NonCore(IsdAsn),
 }
 
+/// Error returned when creating a [`Src`].
+#[derive(Debug, thiserror::Error)]
+#[error("source AS must not be wildcard")]
+pub struct SrcWildcardError;
+
 impl Src {
-    pub(crate) fn new(ias: IsdAsn, is_core: bool) -> anyhow::Result<Self> {
+    /// Creates a new source AS type
+    pub fn new(ias: IsdAsn, is_core: bool) -> Result<Self, SrcWildcardError> {
         match ias.is_wildcard() {
-            true => bail!("Source AS must not be wildcard"),
+            true => Err(SrcWildcardError),
             false if is_core => Ok(Src::Core(ias)),
             false => Ok(Src::NonCore(ias)),
         }
     }
 
-    pub(crate) fn ias(&self) -> IsdAsn {
+    /// Returns the ISD-AS of the source.
+    pub fn ias(&self) -> IsdAsn {
         match self {
             Src::Core(ias) => *ias,
             Src::NonCore(ias) => *ias,
         }
     }
 
-    pub(crate) fn isd(&self) -> Isd {
+    /// Returns the ISD of the source.
+    pub fn isd(&self) -> Isd {
         match self {
             Src::Core(ias) => ias.isd(),
             Src::NonCore(ias) => ias.isd(),
@@ -333,7 +371,7 @@ impl Src {
     }
 }
 
-/// Hint on count of Core ASes in a ISD
+/// Hint on count of Core ASes in an ISD
 pub enum CoreHint {
     /// Only a single Core can be used to route in this AS
     Single(IsdAsn),

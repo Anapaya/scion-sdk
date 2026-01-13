@@ -15,18 +15,16 @@
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
-use scion_proto::{address::IsdAsn, path::PathSegment};
-
-use crate::network::scion::{
-    segment::{
-        lister::endhost::plan::{CoreHint, Dst, SnapListSegmentPlan, Src},
-        model::LinkSegment,
-        registry::SegmentRegistry,
-    },
-    topology::ScionTopology,
+use scion_proto::{
+    address::IsdAsn,
+    control_plane::list_segment_plan::{CoreHint, Dst, ListSegmentPlan, Src},
+    path::PathSegment,
 };
 
-pub mod plan;
+use crate::network::scion::{
+    segment::{model::LinkSegment, registry::SegmentRegistry},
+    topology::ScionTopology,
+};
 
 impl SegmentRegistry {
     /// Lists segments between src_as and dst_as at an Endhost API
@@ -58,7 +56,7 @@ impl SegmentRegistry {
             _ => CoreHint::Multiple,
         };
 
-        let req = SnapListSegmentPlan::new(src, core_hint, dst)?;
+        let req = ListSegmentPlan::new(src, core_hint, dst)?;
 
         tracing::debug!(
             ?local,
