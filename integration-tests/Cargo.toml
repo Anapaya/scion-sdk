@@ -8,6 +8,7 @@ name = "integration_tests"
 path = "src/lib.rs"
 
 [dependencies]
+anyhow = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 ipnet = { workspace = true }

@@ -24,23 +24,18 @@ use chrono::Utc;
 use integration_tests::{PocketscionTestEnv, UnderlayType, minimal_pocketscion_setup};
 use scion_proto::{
     address::{ScionAddr, SocketAddr},
-    packet::{ByEndpoint, ScionPacketScmp},
-    scmp::{ScmpEchoRequest, ScmpMessage},
+    packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp},
+    path::DataPlanePath,
+    scmp::{ScmpEchoReply, ScmpMessage},
+    wire_encoding::WireEncodeVec,
 };
 use scion_stack::{
     path::manager::traits::PathManager,
-    scionstack::{
-        NetworkError, ScionSocketBindError, ScionSocketSendError, ScionStackBuilder,
-        builder::SnapUnderlayConfig,
-    },
+    scionstack::{NetworkError, ScionSocketBindError, ScionSocketSendError, ScionStackBuilder},
 };
 use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
-use tokio::{
-    net::UdpSocket,
-    sync::{Barrier, mpsc},
-    time::{sleep, timeout},
-};
+use tokio::{net::UdpSocket, time::sleep};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -52,17 +47,6 @@ macro_rules! within_duration {
         tokio::time::timeout($duration, $result)
             .await
             .expect("operation timed out")
-    };
-}
-
-// Macro to assert that an operation does not finish within the given duration.
-macro_rules! err_within_duration {
-    ($duration:expr, $result:expr) => {
-        assert!(
-            tokio::time::timeout($duration, $result).await.is_err(),
-            "operation did not time out within {:?}",
-            $duration
-        );
     };
 }
 
@@ -114,34 +98,6 @@ async fn test_quic_endpoint_creation_snap() {
 #[ntest::timeout(10_000)]
 async fn test_quic_endpoint_creation_udp() {
     test_quic_endpoint_creation_impl(minimal_pocketscion_setup(UnderlayType::Udp).await).await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-#[ignore = "XXX(uniquefine): This test needs to be fixed when SCMP handling is implemented for the updated SCION stack."]
-async fn test_scmp_packet_dispatch_with_port_snap() {
-    test_scmp_packet_dispatch_with_port_snap_impl().await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-#[ignore = "XXX(uniquefine): This test needs to be fixed when SCMP handling is implemented for the updated SCION stack."]
-async fn test_scmp_packet_dispatch_with_port_udp() {
-    test_scmp_packet_dispatch_with_port_udp_impl().await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-#[ignore = "XXX(uniquefine): ignored until SCMP handling is implemented for the updated SCION stack."]
-async fn test_scmp_echo_is_replied_snap() {
-    test_scmp_echo_is_replied_impl(UnderlayType::Snap).await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-#[ignore = "XXX(uniquefine): ignored until SCMP handling is implemented for the updated SCION stack."]
-async fn test_scmp_echo_is_replied_udp() {
-    test_scmp_echo_is_replied_impl(UnderlayType::Udp).await;
 }
 
 #[test(tokio::test)]
@@ -297,100 +253,9 @@ async fn test_quic_endpoint_creation_impl(test_env: PocketscionTestEnv) {
     assert!(endpoint.is_ok());
 }
 
-async fn test_scmp_packet_dispatch_with_port_snap_impl() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build SCION stack");
-
-    // XXX(bunert): Channel used by the previously used test SCMP handler. Fix SCMP handling for the
-    // new SCION stack and adjust this test accordingly.
-    let (_tx, mut rx) = mpsc::channel(1);
-
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
-        .build()
-        .await
-        .unwrap();
-
-    let sender = sender_stack.bind_raw(None).await.unwrap();
-    let path_manager = sender_stack.create_path_manager();
-
-    let udp_receiver = receiver_stack.bind(None).await.unwrap();
-    let raw_receiver = receiver_stack
-        .bind_raw(Some(udp_receiver.local_addr()))
-        .await
-        .unwrap();
-
-    // Create an SCMP echo request towards the receiver sockets.
-    let path = path_manager
-        .path_wait(
-            sender.local_addr().isd_asn(),
-            udp_receiver.local_addr().isd_asn(),
-            Utc::now(),
-        )
-        .await
-        .unwrap();
-    let echo_request = ScionPacketScmp::new(
-        ByEndpoint {
-            source: sender.local_addr().scion_address(),
-            destination: udp_receiver.local_addr().scion_address(),
-        },
-        path.data_plane_path.clone(),
-        ScmpMessage::EchoRequest(ScmpEchoRequest::new(
-            // Use the identifier for the receiver port.
-            udp_receiver.local_addr().port(),
-            1,
-            Bytes::from_static(b"echo test"),
-        )),
-    )
-    .unwrap();
-
-    tokio::join!(
-        async {
-            // Raw receiver should get the SCMP packet
-            let packet =
-                within_duration!(MS_100, raw_receiver.recv()).expect("error receiving scmp packet");
-            let scmp_packet: ScionPacketScmp = packet.try_into().expect("invalid scmp packet");
-
-            match scmp_packet.message {
-                ScmpMessage::EchoRequest(req) => {
-                    assert_eq!(req.identifier, udp_receiver.local_addr().port());
-                    assert_eq!(req.sequence_number, 1);
-                    assert_eq!(req.data, Bytes::from_static(b"echo test"));
-                }
-                _ => panic!("Expected echo request, got: {:?}", scmp_packet.message),
-            }
-        },
-        async {
-            // Default SCMP handler should receive the echo request
-            let packet: ScionPacketScmp =
-                within_duration!(MS_100, rx.recv()).expect("error receiving echo request");
-
-            match packet.message {
-                ScmpMessage::EchoRequest(reply) => {
-                    assert_eq!(reply.identifier, udp_receiver.local_addr().port());
-                    assert_eq!(reply.sequence_number, 1);
-                    assert_eq!(reply.data, Bytes::from_static(b"echo test"));
-                }
-                _ => panic!("Expected echo request, got: {:?}", packet.message),
-            }
-        },
-        async {
-            err_within_duration!(MS_100, udp_receiver.recv_from(&mut [0u8; 1024]));
-        },
-        async {
-            within_duration!(MS_100, sender.send(echo_request.into()))
-                .expect("error sending echo request");
-        },
-    );
-}
-
-async fn test_scmp_packet_dispatch_with_port_udp_impl() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Udp).await;
+/// Test that an SCMP socket receives SCMP messages.
+async fn test_scmp_with_port_is_received_scmp_impl(underlay: UnderlayType) {
+    let test_env = minimal_pocketscion_setup(underlay).await;
     let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
         .with_auth_token(dummy_snap_token())
         .build()
@@ -404,19 +269,18 @@ async fn test_scmp_packet_dispatch_with_port_udp_impl() {
         .expect("build receiver SCION stack");
 
     let sender = sender_stack.bind_raw(None).await.unwrap();
+    let receiver = receiver_stack.bind_scmp(None).await.unwrap();
+    let receiver_addr = receiver.local_addr();
     let path_manager = sender_stack.create_path_manager();
 
-    let udp_receiver = receiver_stack.bind(None).await.unwrap();
-    let raw_receiver = receiver_stack
-        .bind_raw(Some(udp_receiver.local_addr()))
-        .await
-        .unwrap();
+    let echo_data = Bytes::from_static(b"ping test data");
+    let sequence = 1u16;
 
-    // Create an SCMP echo request towards the receiver sockets.
+    // Create an SCMP echo request
     let path = path_manager
         .path_wait(
             sender.local_addr().isd_asn(),
-            udp_receiver.local_addr().isd_asn(),
+            receiver_addr.isd_asn(),
             Utc::now(),
         )
         .await
@@ -424,45 +288,60 @@ async fn test_scmp_packet_dispatch_with_port_udp_impl() {
     let echo_request = ScionPacketScmp::new(
         ByEndpoint {
             source: sender.local_addr().scion_address(),
-            destination: udp_receiver.local_addr().scion_address(),
+            destination: receiver_addr.scion_address(),
         },
-        path.data_plane_path.clone(),
-        ScmpMessage::EchoRequest(ScmpEchoRequest::new(
-            // Use the identifier for the receiver port.
-            udp_receiver.local_addr().port(),
-            1,
-            Bytes::from_static(b"echo test"),
+        path.data_plane_path,
+        ScmpMessage::EchoReply(ScmpEchoReply::new(
+            receiver_addr.port(),
+            sequence,
+            echo_data.clone(),
         )),
     )
     .unwrap();
 
+    tracing::info!(src = %sender.local_addr(), dst = %receiver_addr, "Sending echo reply");
+
     tokio::join!(
         async {
-            // Raw receiver should get the SCMP packet
-            let packet =
-                within_duration!(MS_100, raw_receiver.recv()).expect("error receiving scmp packet");
-            let scmp_packet: ScionPacketScmp = packet.try_into().expect("invalid scmp packet");
-
-            match scmp_packet.message {
-                ScmpMessage::EchoRequest(req) => {
-                    assert_eq!(req.identifier, udp_receiver.local_addr().port());
-                    assert_eq!(req.sequence_number, 1);
-                    assert_eq!(req.data, Bytes::from_static(b"echo test"));
+            // The test SCMP handler should receive the echo request
+            match within_duration!(MS_100, receiver.recv_from()) {
+                Ok((scmp_msg, src_addr)) => {
+                    match scmp_msg {
+                        ScmpMessage::EchoReply(rep) => {
+                            assert_eq!(rep.identifier, receiver_addr.port());
+                            assert_eq!(rep.sequence_number, sequence);
+                            assert_eq!(rep.data, echo_data);
+                        }
+                        _ => panic!("Expected echo reply, got: {:?}", scmp_msg),
+                    }
+                    assert_eq!(src_addr, sender.local_addr().scion_address());
                 }
-                _ => panic!("Expected echo request, got: {:?}", scmp_packet.message),
+                Err(e) => {
+                    panic!("Error receiving echo reply: {e:?}");
+                }
             }
         },
         async {
-            err_within_duration!(MS_100, udp_receiver.recv_from(&mut [0u8; 1024]));
-        },
-        async {
             within_duration!(MS_100, sender.send(echo_request.into()))
-                .expect("error sending echo request");
+                .expect("error sending echo reply");
         },
     );
 }
 
-async fn test_scmp_echo_is_replied_impl(underlay: UnderlayType) {
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_scmp_with_port_is_received_scmp_udp_impl() {
+    test_scmp_with_port_is_received_scmp_impl(UnderlayType::Udp).await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_scmp_with_port_is_received_scmp_snap_impl() {
+    test_scmp_with_port_is_received_scmp_impl(UnderlayType::Snap).await;
+}
+
+/// Test that a Raw socket receives SCMP messages.
+async fn test_scmp_with_port_is_received_raw_impl(underlay: UnderlayType) {
     let test_env = minimal_pocketscion_setup(underlay).await;
     let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
         .with_auth_token(dummy_snap_token())
@@ -482,46 +361,46 @@ async fn test_scmp_echo_is_replied_impl(underlay: UnderlayType) {
     let path_manager = sender_stack.create_path_manager();
 
     let echo_data = Bytes::from_static(b"ping test data");
-    let identifier = sender.local_addr().port();
     let sequence = 1u16;
 
-    // Create an SCMP echo request
+    // Create an SCMP echo reply
     let path = path_manager
         .path_wait(
             sender.local_addr().isd_asn(),
-            receiver_stack.local_ases()[0],
+            receiver_addr.isd_asn(),
             Utc::now(),
         )
         .await
         .unwrap();
-    let echo_request = ScionPacketScmp::new(
+    let echo_reply = ScionPacketScmp::new(
         ByEndpoint {
             source: sender.local_addr().scion_address(),
             destination: receiver_addr.scion_address(),
         },
         path.data_plane_path,
-        ScmpMessage::EchoRequest(ScmpEchoRequest::new(
-            identifier,
+        ScmpMessage::EchoReply(ScmpEchoReply::new(
+            receiver_addr.port(),
             sequence,
             echo_data.clone(),
         )),
     )
     .unwrap();
 
+    tracing::info!(src = %sender.local_addr(), dst = %receiver_addr, "Sending echo reply");
+
     tokio::join!(
         async {
-            // The test SCMP handler should receive the echo request
-            match within_duration!(MS_100, sender.recv()) {
-                Ok(packet) => {
-                    let scmp_packet: ScionPacketScmp =
-                        packet.try_into().expect("invalid scmp packet");
-                    match scmp_packet.message {
+            // The Raw socket should receive the echo request
+            match within_duration!(MS_100, receiver.recv()) {
+                Ok(raw) => {
+                    let scmp_pkt: ScionPacketScmp = raw.try_into().expect("invalid scmp packet");
+                    match scmp_pkt.message {
                         ScmpMessage::EchoReply(rep) => {
-                            assert_eq!(rep.identifier, identifier);
+                            assert_eq!(rep.identifier, receiver_addr.port());
                             assert_eq!(rep.sequence_number, sequence);
                             assert_eq!(rep.data, echo_data);
                         }
-                        _ => panic!("Expected echo reply, got: {:?}", scmp_packet.message),
+                        _ => panic!("Expected echo reply, got: {:?}", scmp_pkt.message),
                     }
                 }
                 Err(e) => {
@@ -530,10 +409,22 @@ async fn test_scmp_echo_is_replied_impl(underlay: UnderlayType) {
             }
         },
         async {
-            within_duration!(MS_100, sender.send(echo_request.into()))
-                .expect("error sending echo request");
+            within_duration!(MS_100, sender.send(echo_reply.into()))
+                .expect("error sending echo reply");
         },
     );
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_scmp_with_port_is_received_raw_udp_impl() {
+    test_scmp_with_port_is_received_raw_impl(UnderlayType::Udp).await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_scmp_with_port_is_received_raw_snap_impl() {
+    test_scmp_with_port_is_received_raw_impl(UnderlayType::Snap).await;
 }
 
 fn test_packet(i: u32) -> Bytes {
@@ -796,112 +687,172 @@ async fn should_snaptun_reconnects_bind_socket_snap_impl(test_env: PocketscionTe
     sender_join_handle.abort();
 }
 
-#[tokio::test]
-#[ignore = "Requires (#26946): currently failing as pathmanager does not receive SCMP errors to mark paths as down"]
-async fn should_failover_on_link_error() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
+/// Creates a raw SCION packet with unknown next_header (67) for local communication.
+fn create_unknown_next_header_packet(
+    source: ScionAddr,
+    destination: ScionAddr,
+    payload: Bytes,
+) -> ScionPacketRaw {
+    ScionPacketRaw::new(
+        ByEndpoint {
+            source,
+            destination,
+        },
+        DataPlanePath::EmptyPath,
+        payload,
+        67, // Unknown next_header value
+        FlowId::default(),
+    )
+    .expect("Failed to create raw SCION packet with unknown next_header")
+}
 
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
+/// Sends a raw SCION packet directly to a SCION socket via tokio::UdpSocket.
+async fn send_raw_packet_directly(
+    packet: ScionPacketRaw,
+    target_socket_addr: SocketAddr,
+) -> Result<(), std::io::Error> {
+    let target_addr = target_socket_addr
+        .local_address()
+        .expect("Target socket must have a local address");
+
+    let sender_socket = UdpSocket::bind("127.0.0.1:0").await?;
+    let packet_bytes = packet.encode_to_bytes_vec().concat();
+    sender_socket.send_to(&packet_bytes, target_addr).await?;
+    Ok(())
+}
+
+/// Test that a UDP socket ignores packets with unknown next_header (67).
+async fn test_udp_socket_ignores_unknown_next_header_impl() {
+    let test_env = minimal_pocketscion_setup(UnderlayType::Udp).await;
+    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
         .with_auth_token(dummy_snap_token())
         .build()
         .await
-        .unwrap();
+        .expect("build SCION stack");
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
-
-    // Bind sender and receiver sockets
-    let sender_socket = sender_stack.bind(None).await.unwrap();
-    let sender_addr = sender_socket.local_addr();
-
-    let receiver_socket = receiver_stack.bind(None).await.unwrap();
+    let receiver_socket = stack.bind(None).await.unwrap();
     let receiver_addr = receiver_socket.local_addr();
 
-    // Send packet from sender to receiver
-    let test_data = Bytes::from("Hello, World!");
-    let mut recv_buffer = [0u8; 1024];
-
-    let failover_send_barrier = Arc::new(Barrier::new(2));
-
-    let sender_task = tokio::spawn({
-        let failover_send_barrier = failover_send_barrier.clone();
-        let test_data = test_data.clone();
-        async move {
-            // Send before failover
-            sender_socket
-                .send_to(test_data.as_ref(), receiver_addr)
-                .await
-                .unwrap_or_else(|_| {
-                    panic!("error sending from {sender_addr:?} to {receiver_addr:?}")
-                });
-
-            // Await at the barrier to synchronize with the receiver
-            failover_send_barrier.wait().await;
-
-            // A single send should trigger the failover
-            sender_socket
-                .send_to(test_data.as_ref(), receiver_addr)
-                .await
-                .unwrap_or_else(|_| {
-                    panic!("error sending from {sender_addr:?} to {receiver_addr:?}")
-                });
-
-            // Continue sending packets to ensure connectivity
-            loop {
-                sleep(Duration::from_millis(100)).await;
-                sender_socket
-                    .send_to(test_data.as_ref(), receiver_addr)
-                    .await
-                    .unwrap_or_else(|_| {
-                        panic!("error sending from {sender_addr:?} to {receiver_addr:?}")
-                    });
-            }
-        }
-    });
-
-    // Send and receive should work
-    let mut path_buffer = vec![0u8; 1500];
-    let (_, source, path) = receiver_socket
-        .recv_from_with_path(&mut recv_buffer, &mut path_buffer)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        source, sender_addr,
-        "receiver should receive packets from the sender"
+    let test_payload = Bytes::from_static(b"unknown next_header test");
+    let packet = create_unknown_next_header_packet(
+        receiver_addr.scion_address(),
+        receiver_addr.scion_address(),
+        test_payload,
     );
 
-    let egress = path
-        .first_hop_egress_interface()
-        .expect("path should have first hop egress interface");
-
-    // Make direct link between ASes unavailable
-    let client = test_env.pocketscion.api_client();
-    client
-        .set_link_state(egress.isd_asn, egress.id, false)
+    // Send the packet directly
+    send_raw_packet_directly(packet, receiver_addr)
         .await
-        .unwrap();
+        .expect("Failed to send packet directly");
 
-    // Notify sender task to start sending packets to trigger failover
-    failover_send_barrier.wait().await;
-
-    // Should now failover to the other link and we should be able to receive again
-    let mut path_buffer = vec![0u8; 1500];
+    // The UDP socket should NOT receive the packet (should timeout)
     let mut recv_buffer = [0u8; 1024];
-    let (_size, _addr, new_path) = timeout(
-        Duration::from_millis(500),
-        receiver_socket.recv_from_with_path(&mut recv_buffer, &mut path_buffer),
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        receiver_socket.recv_from(&mut recv_buffer),
     )
-    .await
-    .expect("should not time out waiting for packet after failover")
-    .expect("should receive packet after failover");
+    .await;
+    assert!(
+        result.is_err(),
+        "UDP socket should ignore packets with unknown next_header, but received a packet"
+    );
+}
 
-    // Should not use the same path as before
-    assert_ne!(path, new_path, "should use a different path after failover");
+/// Test that an SCMP socket ignores packets with unknown next_header (67).
+async fn test_scmp_socket_ignores_unknown_next_header_impl() {
+    let test_env = minimal_pocketscion_setup(UnderlayType::Udp).await;
+    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .expect("build SCION stack");
 
-    // Stop the sender task
-    sender_task.abort();
+    let receiver_socket = stack.bind_scmp(None).await.unwrap();
+    let receiver_addr = receiver_socket.local_addr();
+
+    let test_payload = Bytes::from_static(b"unknown next_header test");
+    let packet = create_unknown_next_header_packet(
+        receiver_addr.scion_address(),
+        receiver_addr.scion_address(),
+        test_payload,
+    );
+
+    // Send the packet directly
+    send_raw_packet_directly(packet, receiver_addr)
+        .await
+        .expect("Failed to send packet directly");
+
+    // The SCMP socket should NOT receive the packet (should timeout)
+    let result =
+        tokio::time::timeout(Duration::from_millis(300), receiver_socket.recv_from()).await;
+    assert!(
+        result.is_err(),
+        "SCMP socket should ignore packets with unknown next_header, but received a packet"
+    );
+}
+
+/// Test that a RAW socket receives packets with unknown next_header (67).
+async fn test_raw_socket_receives_unknown_next_header_impl() {
+    let test_env = minimal_pocketscion_setup(UnderlayType::Udp).await;
+    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .expect("build SCION stack");
+
+    let receiver_socket = stack.bind_raw(None).await.unwrap();
+    let receiver_addr = receiver_socket.local_addr();
+
+    let test_payload = Bytes::from_static(b"unknown next_header test");
+    let packet = create_unknown_next_header_packet(
+        receiver_addr.scion_address(),
+        receiver_addr.scion_address(),
+        test_payload.clone(),
+    );
+
+    tokio::join!(
+        async {
+            // The RAW socket SHOULD receive the packet
+            match within_duration!(MS_100, receiver_socket.recv()) {
+                Ok(raw) => {
+                    assert_eq!(
+                        raw.payload, test_payload,
+                        "RAW socket should receive the packet with unknown next_header"
+                    );
+                    assert_eq!(
+                        raw.headers.common.next_header, 67,
+                        "Received packet should have next_header=67"
+                    );
+                }
+                Err(e) => {
+                    panic!(
+                        "RAW socket should receive packets with unknown next_header, but got error: {e:?}"
+                    );
+                }
+            }
+        },
+        async {
+            // Send the packet directly
+            within_duration!(MS_100, send_raw_packet_directly(packet, receiver_addr))
+                .expect("Failed to send packet directly");
+        },
+    );
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_udp_socket_ignores_unknown_next_header() {
+    test_udp_socket_ignores_unknown_next_header_impl().await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_scmp_socket_ignores_unknown_next_header() {
+    test_scmp_socket_ignores_unknown_next_header_impl().await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_raw_socket_receives_unknown_next_header() {
+    test_raw_socket_receives_unknown_next_header_impl().await;
 }

@@ -19,9 +19,10 @@ use chrono::Utc;
 use futures::future::BoxFuture;
 use scion_proto::{
     address::{ScionAddr, SocketAddr},
+    datagram::UdpMessage,
     packet::{ByEndpoint, ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
     path::Path,
-    scmp::ScmpMessage,
+    scmp::{SCMP_PROTOCOL_NUMBER, ScmpMessage},
 };
 
 use super::{NetworkError, UnderlaySocket};
@@ -30,12 +31,17 @@ use crate::{
         MultiPathManager,
         traits::{PathManager, PathWaitError},
     },
-    scionstack::{ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError},
+    scionstack::{
+        ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError,
+        scmp_handler::ScmpHandler,
+    },
 };
 
 /// A path unaware UDP SCION socket.
 pub struct PathUnawareUdpScionSocket {
     inner: Box<dyn UnderlaySocket + Sync + Send>,
+    /// The SCMP handlers.
+    scmp_handlers: Vec<Box<dyn ScmpHandler>>,
 }
 
 impl std::fmt::Debug for PathUnawareUdpScionSocket {
@@ -47,8 +53,14 @@ impl std::fmt::Debug for PathUnawareUdpScionSocket {
 }
 
 impl PathUnawareUdpScionSocket {
-    pub(crate) fn new(socket: Box<dyn UnderlaySocket + Sync + Send>) -> Self {
-        Self { inner: socket }
+    pub(crate) fn new(
+        socket: Box<dyn UnderlaySocket + Sync + Send>,
+        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
+    ) -> Self {
+        Self {
+            inner: socket,
+            scmp_handlers,
+        }
     }
 
     /// Send a SCION UDP datagram via the given path.
@@ -90,6 +102,26 @@ impl PathUnawareUdpScionSocket {
         Box::pin(async move {
             loop {
                 let packet = self.inner.recv().await?;
+
+                let packet = match packet.headers.common.next_header {
+                    UdpMessage::PROTOCOL_NUMBER => packet,
+                    SCMP_PROTOCOL_NUMBER => {
+                        tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
+                        for handler in &self.scmp_handlers {
+                            if let Some(reply) = handler.handle(packet.clone())
+                                && let Err(e) = self.inner.try_send(reply)
+                            {
+                                tracing::warn!(error = %e, "failed to send SCMP reply");
+                            }
+                        }
+                        continue;
+                    }
+                    _ => {
+                        tracing::debug!(next_header = %packet.headers.common.next_header, "Packet with unknown next layer protocol, skipping");
+                        continue;
+                    }
+                };
+
                 let packet: ScionPacketUdp = match packet.try_into() {
                     Ok(packet) => packet,
                     Err(e) => {
@@ -140,6 +172,26 @@ impl PathUnawareUdpScionSocket {
         Box::pin(async move {
             loop {
                 let packet = self.inner.recv().await?;
+
+                let packet = match packet.headers.common.next_header {
+                    UdpMessage::PROTOCOL_NUMBER => packet,
+                    SCMP_PROTOCOL_NUMBER => {
+                        tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
+                        for handler in &self.scmp_handlers {
+                            if let Some(reply) = handler.handle(packet.clone())
+                                && let Err(e) = self.inner.try_send(reply)
+                            {
+                                tracing::warn!(error = %e, "failed to send SCMP reply");
+                            }
+                        }
+                        continue;
+                    }
+                    _ => {
+                        tracing::debug!(next_header = %packet.headers.common.next_header, "Packet with unknown next layer protocol, skipping");
+                        continue;
+                    }
+                };
+
                 let packet: ScionPacketUdp = match packet.try_into() {
                     Ok(packet) => packet,
                     Err(e) => {

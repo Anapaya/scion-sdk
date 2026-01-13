@@ -24,7 +24,7 @@ use url::Url;
 use crate::{
     scionstack::{
         AsyncUdpUnderlaySocket, DynUnderlayStack, ScionSocketBindError, UnderlaySocket,
-        builder::PreferredUnderlay,
+        builder::PreferredUnderlay, scmp_handler::ScmpHandler,
     },
     underlays::{
         discovery::{UnderlayDiscovery, UnderlayInfo},
@@ -247,6 +247,7 @@ impl DynUnderlayStack for UnderlayStack {
     fn bind_async_udp_socket(
         &self,
         bind_addr: Option<scion_proto::address::SocketAddr>,
+        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> futures::future::BoxFuture<
         '_,
         Result<
@@ -269,7 +270,7 @@ impl DynUnderlayStack for UnderlayStack {
                             self.snap_socket_config.snap_token_source.clone(),
                         )
                         .await?;
-                    let async_udp_socket = SnapAsyncUdpSocket::new(socket);
+                    let async_udp_socket = SnapAsyncUdpSocket::new(socket, scmp_handlers);
                     Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
                 }
                 Some((isd_as, UnderlayInfo::Udp(_))) => {
@@ -278,14 +279,16 @@ impl DynUnderlayStack for UnderlayStack {
                         bind_addr,
                         self.underlay_discovery.clone(),
                         socket,
+                        scmp_handlers,
                     );
                     Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
                 }
                 None => {
-                    // XXX(uniquefine): use a proper error type here.
-                    Err(crate::scionstack::ScionSocketBindError::Other(
-                        anyhow::anyhow!("no underlay available").into_boxed_dyn_error(),
-                    ))
+                    Err(
+                        crate::scionstack::ScionSocketBindError::UnderlayUnavailable(
+                            "no underlay available".into(),
+                        ),
+                    )
                 }
             }
         })

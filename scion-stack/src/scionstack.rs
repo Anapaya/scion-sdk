@@ -188,6 +188,7 @@
 
 pub mod builder;
 pub mod quic;
+pub mod scmp_handler;
 mod socket;
 pub(crate) mod udp_polling;
 
@@ -214,12 +215,16 @@ pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, Udp
 
 // Re-export the main types from the modules
 pub use self::builder::ScionStackBuilder;
-use crate::path::{
-    PathStrategy,
-    fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl},
-    manager::{MultiPathManager, MultiPathManagerConfig},
-    policy::PathPolicy,
-    scoring::PathScoring,
+use crate::{
+    path::{
+        PathStrategy,
+        fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl},
+        manager::{MultiPathManager, MultiPathManagerConfig},
+        policy::PathPolicy,
+        scoring::PathScoring,
+    },
+    scionstack::scmp_handler::{ScmpErrorHandler, ScmpErrorReceiver, ScmpHandler},
+    types::Subscribers,
 };
 
 /// The SCION stack can be used to create path-aware SCION sockets or even Quic over SCION
@@ -230,6 +235,7 @@ use crate::path::{
 pub struct ScionStack {
     client: Arc<dyn EndhostApiClient>,
     underlay: Arc<dyn DynUnderlayStack>,
+    scmp_error_receivers: Subscribers<dyn ScmpErrorReceiver>,
 }
 
 impl fmt::Debug for ScionStack {
@@ -246,7 +252,11 @@ impl ScionStack {
         client: Arc<dyn EndhostApiClient>,
         underlay: Arc<dyn DynUnderlayStack>,
     ) -> Self {
-        Self { client, underlay }
+        Self {
+            client,
+            underlay,
+            scmp_error_receivers: Subscribers::new(),
+        }
     }
 
     /// Create a path-aware SCION socket with automatic path management.
@@ -279,7 +289,14 @@ impl ScionStack {
         bind_addr: Option<SocketAddr>,
         mut socket_config: SocketConfig,
     ) -> Result<UdpScionSocket, ScionSocketBindError> {
-        let socket = self.bind_path_unaware(bind_addr).await?;
+        let socket = PathUnawareUdpScionSocket::new(
+            self.underlay
+                .bind_socket(SocketKind::Udp, bind_addr)
+                .await?,
+            vec![Box::new(ScmpErrorHandler::new(
+                self.scmp_error_receivers.clone(),
+            ))],
+        );
         let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
 
         // Use default scorers if none are configured.
@@ -287,16 +304,21 @@ impl ScionStack {
             socket_config.path_strategy.scoring.use_default_scorers();
         }
 
-        let pather = MultiPathManager::new(
-            MultiPathManagerConfig::default(),
-            fetcher,
-            socket_config.path_strategy,
-        )
-        .expect("should not fail with default configuration");
+        let pather = Arc::new(
+            MultiPathManager::new(
+                MultiPathManagerConfig::default(),
+                fetcher,
+                socket_config.path_strategy,
+            )
+            .expect("should not fail with default configuration"),
+        );
+
+        // Register the path manager as a SCMP error receiver.
+        self.scmp_error_receivers.register(pather.clone());
 
         Ok(UdpScionSocket::new(
             socket,
-            Arc::new(pather),
+            pather,
             socket_config.connect_timeout,
         ))
     }
@@ -399,7 +421,8 @@ impl ScionStack {
             .underlay
             .bind_socket(SocketKind::Udp, bind_addr)
             .await?;
-        Ok(PathUnawareUdpScionSocket::new(socket))
+
+        Ok(PathUnawareUdpScionSocket::new(socket, vec![]))
     }
 
     /// Create a QUIC over SCION endpoint.
@@ -454,10 +477,16 @@ impl ScionStack {
         runtime: Option<Arc<dyn quinn::Runtime>>,
         socket_config: SocketConfig,
     ) -> anyhow::Result<Endpoint> {
-        let socket = self.underlay.bind_async_udp_socket(bind_addr).await?;
+        let scmp_handlers: Vec<Box<dyn ScmpHandler>> = vec![Box::new(ScmpErrorHandler::new(
+            self.scmp_error_receivers.clone(),
+        ))];
+        let socket = self
+            .underlay
+            .bind_async_udp_socket(bind_addr, scmp_handlers)
+            .await?;
         let address_translator = Arc::new(AddressTranslator::default());
 
-        let path_manager = {
+        let pather = {
             let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
 
             // Use default scorers if none are configured.
@@ -472,11 +501,14 @@ impl ScionStack {
             )
         };
 
+        // Register the path manager as a SCMP error receiver.
+        self.scmp_error_receivers.register(pather.clone());
+
         let local_scion_addr = socket.local_addr();
 
         let socket = Arc::new(ScionAsyncUdpSocket::new(
             socket,
-            path_manager.clone(),
+            pather.clone(),
             address_translator.clone(),
         ));
 
@@ -491,7 +523,7 @@ impl ScionStack {
             socket,
             local_scion_addr,
             runtime,
-            path_manager,
+            pather,
             address_translator,
         )?)
     }
@@ -626,6 +658,7 @@ pub(crate) trait UnderlayStack: Send + Sync {
     fn bind_async_udp_socket(
         &self,
         bind_addr: Option<SocketAddr>,
+        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> BoxFuture<'_, Result<Self::AsyncUdpSocket, ScionSocketBindError>>;
 
     /// Get the list of local ISD-ASes available on the endhost.
@@ -643,6 +676,7 @@ pub(crate) trait DynUnderlayStack: Send + Sync {
     fn bind_async_udp_socket(
         &self,
         bind_addr: Option<SocketAddr>,
+        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> BoxFuture<'_, Result<Arc<dyn AsyncUdpUnderlaySocket>, ScionSocketBindError>>;
 
     fn local_ases(&self) -> Vec<IsdAsn>;
@@ -663,9 +697,10 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
     fn bind_async_udp_socket(
         &self,
         bind_addr: Option<SocketAddr>,
+        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> BoxFuture<'_, Result<Arc<dyn AsyncUdpUnderlaySocket>, ScionSocketBindError>> {
         Box::pin(async move {
-            let socket = self.bind_async_udp_socket(bind_addr).await?;
+            let socket = self.bind_async_udp_socket(bind_addr, scmp_handlers).await?;
             Ok(Arc::new(socket) as Arc<dyn AsyncUdpUnderlaySocket>)
         })
     }
@@ -745,6 +780,8 @@ pub enum ScionSocketReceiveError {
 }
 
 /// A trait that defines an abstraction over an asynchronous underlay socket.
+/// The socket sends and receives raw SCION packets. Decoding of the next layer
+/// protocol or SCMP handling is left to the caller.
 pub(crate) trait UnderlaySocket: 'static + Send + Sync {
     /// Send a raw packet. Takes a ScionPacketRaw because it needs to read the path
     /// to resolve the underlay next hop.
@@ -752,6 +789,10 @@ pub(crate) trait UnderlaySocket: 'static + Send + Sync {
         &'a self,
         packet: ScionPacketRaw,
     ) -> BoxFuture<'a, Result<(), ScionSocketSendError>>;
+
+    /// Try to send a raw packet immediately. Takes a ScionPacketRaw because it needs to read the
+    /// path to resolve the underlay next hop.
+    fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError>;
 
     fn recv<'a>(&'a self) -> BoxFuture<'a, Result<ScionPacketRaw, ScionSocketReceiveError>>;
 
@@ -768,6 +809,8 @@ pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
     /// immediately.
     fn try_send(&self, raw_packet: ScionPacketRaw) -> Result<(), std::io::Error>;
     /// Poll for receiving a SCION packet with sender and path.
+    /// This function will only return valid UDP packets.
+    /// SCMP packets will be handled internally.
     fn poll_recv_from_with_path(
         &self,
         cx: &mut Context,

@@ -26,7 +26,6 @@ use bytes::Bytes;
 use quinn::{ClientConfig, EndpointConfig, TransportConfig, crypto::rustls::QuicClientConfig};
 use scion_proto::{
     address::{IsdAsn, ScionAddr, SocketAddr},
-    datagram::UdpMessage,
     packet::{ByEndpoint, ScionPacketRaw, ScionPacketUdp},
     path::Path,
     scmp::SCMP_PROTOCOL_NUMBER,
@@ -43,7 +42,7 @@ use url::Url;
 use crate::{
     scionstack::{
         AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket,
-        udp_polling::UdpPoller,
+        scmp_handler::ScmpHandler, udp_polling::UdpPoller,
     },
     underlays::discovery::{UnderlayDiscovery, UnderlayInfo},
 };
@@ -189,9 +188,40 @@ impl SnapUnderlaySocket {
             _task: Arc::new(SnapUnderlaySocketTaskHandle(task)),
         })
     }
+
+    /// Map a QUINN send datagram error to a SCION socket send error.
+    fn map_send_datagram_error(e: quinn::SendDatagramError) -> ScionSocketSendError {
+        match e {
+            quinn::SendDatagramError::TooLarge => {
+                ScionSocketSendError::InvalidPacket("Packet too large".into())
+            }
+            quinn::SendDatagramError::ConnectionLost(_) => {
+                ScionSocketSendError::NetworkUnreachable(
+                    crate::scionstack::NetworkError::DestinationUnreachable(
+                        "Connection lost, reconnecting".into(),
+                    ),
+                )
+            }
+            quinn::SendDatagramError::Disabled | quinn::SendDatagramError::UnsupportedByPeer => {
+                ScionSocketSendError::IoError(std::io::Error::other(format!(
+                    "unexpected error from SNAP tunnel: {e:?}"
+                )))
+            }
+        }
+    }
 }
 
 impl UnderlaySocket for SnapUnderlaySocket {
+    fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError> {
+        self.inner
+            .connection
+            .load_full()
+            .1
+            .sender
+            .send_datagram(packet.encode_to_bytes_vec().concat().into())
+            .map_err(Self::map_send_datagram_error)
+    }
+
     fn send<'a>(
         &'a self,
         packet: scion_proto::packet::ScionPacketRaw,
@@ -205,26 +235,7 @@ impl UnderlaySocket for SnapUnderlaySocket {
                 .sender
                 .send_datagram_wait(packet)
                 .await
-                .map_err(|e| {
-                    match e {
-                        quinn::SendDatagramError::TooLarge => {
-                            ScionSocketSendError::InvalidPacket("Packet too large".into())
-                        }
-                        quinn::SendDatagramError::ConnectionLost(_) => {
-                            ScionSocketSendError::NetworkUnreachable(
-                                crate::scionstack::NetworkError::DestinationUnreachable(
-                                    "Connection lost, reconnecting".into(),
-                                ),
-                            )
-                        }
-                        quinn::SendDatagramError::Disabled
-                        | quinn::SendDatagramError::UnsupportedByPeer => {
-                            ScionSocketSendError::IoError(std::io::Error::other(format!(
-                                "unexpected error from SNAP tunnel: {e:?}"
-                            )))
-                        }
-                    }
-                })?;
+                .map_err(Self::map_send_datagram_error)?;
             Ok(())
         })
     }
@@ -268,19 +279,7 @@ impl UnderlaySocket for SnapUnderlaySocket {
                     continue;
                 }
 
-                match packet.headers.common.next_header {
-                    UdpMessage::PROTOCOL_NUMBER => {
-                        return Ok(packet);
-                    }
-                    SCMP_PROTOCOL_NUMBER => {
-                        tracing::debug!("SCMP packet received, skipping");
-                        continue;
-                    }
-                    _ => {
-                        tracing::debug!(next_header = %packet.headers.common.next_header, "Unknown packet type, skipping");
-                        continue;
-                    }
-                }
+                return Ok(packet);
             }
         })
     }
@@ -472,13 +471,15 @@ pub(crate) struct SnapAsyncUdpSocket {
             futures::future::BoxFuture<'static, Result<ScionPacketRaw, ScionSocketReceiveError>>,
         >,
     >,
+    scmp_handlers: Vec<Box<dyn ScmpHandler>>,
 }
 
 impl SnapAsyncUdpSocket {
-    pub fn new(socket: SnapUnderlaySocket) -> Self {
+    pub fn new(socket: SnapUnderlaySocket, scmp_handlers: Vec<Box<dyn ScmpHandler>>) -> Self {
         Self {
             socket,
             recv_fut: Mutex::new(None),
+            scmp_handlers,
         }
     }
 }
@@ -542,6 +543,19 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
             // Handle result
             match res {
                 Ok(packet) => {
+                    // Handle SCMP packets.
+                    if packet.headers.common.next_header == SCMP_PROTOCOL_NUMBER {
+                        tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
+                        for handler in &self.scmp_handlers {
+                            if let Some(reply) = handler.handle(packet.clone())
+                                && let Err(e) = self.try_send(reply)
+                            {
+                                tracing::warn!(error = %e, "failed to send SCMP reply");
+                            }
+                        }
+                        continue;
+                    };
+
                     let fallible = || {
                         let src = packet
                             .headers

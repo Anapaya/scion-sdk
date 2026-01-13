@@ -23,8 +23,7 @@ use anyhow::Context;
 use bytes::BytesMut;
 use futures::future::BoxFuture;
 use scion_proto::{
-    address::SocketAddr,
-    datagram::UdpMessage,
+    address::{IsdAsn, SocketAddr},
     packet::{
         ByEndpoint, PacketClassification, ScionPacketRaw, ScionPacketUdp, classify_scion_packet,
     },
@@ -37,7 +36,7 @@ use tokio::{io::ReadBuf, net::UdpSocket};
 use crate::{
     scionstack::{
         AsyncUdpUnderlaySocket, NetworkError, ScionSocketSendError, UnderlaySocket,
-        udp_polling::UdpPollHelper,
+        scmp_handler::ScmpHandler, udp_polling::UdpPollHelper,
     },
     underlays::discovery::UnderlayDiscovery,
 };
@@ -113,11 +112,10 @@ impl UdpUnderlaySocket {
         }
     }
 
-    /// Dispatch a packet to the local AS network.
-    async fn dispatch_local(
+    fn resolve_local_dispatch_addr(
         &self,
-        packet: ScionPacketRaw,
-    ) -> Result<(), crate::scionstack::ScionSocketSendError> {
+        packet: &ScionPacketRaw,
+    ) -> Result<net::SocketAddr, ScionSocketSendError> {
         let dst_addr = packet
             .headers
             .address
@@ -143,28 +141,46 @@ impl UdpUnderlaySocket {
                 ));
             }
         };
+        Ok(net::SocketAddr::new(dst_addr, dst_port))
+    }
+
+    fn try_dispatch_local(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError> {
+        let dst_addr = self.resolve_local_dispatch_addr(&packet)?;
         let packet_bytes = packet.encode_to_bytes_vec().concat();
-        let dst_addr = net::SocketAddr::new(dst_addr, dst_port);
+        self.socket
+            .try_send_to(&packet_bytes, dst_addr)
+            .map_err(|e| Self::map_send_io_error(e, packet.headers.address.ia.source, 0))?;
+        Ok(())
+    }
+
+    /// Dispatch a packet to the local AS network.
+    async fn dispatch_local(
+        &self,
+        packet: ScionPacketRaw,
+    ) -> Result<(), crate::scionstack::ScionSocketSendError> {
+        let dst_addr = self.resolve_local_dispatch_addr(&packet)?;
+        let packet_bytes = packet.encode_to_bytes_vec().concat();
         self.socket
             .send_to(&packet_bytes, dst_addr)
             .await
-            .map_err(|e| {
-                use std::io::ErrorKind::*;
-                match e.kind() {
-                    HostUnreachable | NetworkUnreachable => {
-                        ScionSocketSendError::NetworkUnreachable(
-                            NetworkError::DestinationUnreachable(
-                                format!("Error sending packet locally to {dst_addr}: {e:?}").into(),
-                            ),
-                        )
-                    }
-                    ConnectionAborted | ConnectionReset | BrokenPipe => {
-                        ScionSocketSendError::Closed
-                    }
-                    _ => ScionSocketSendError::IoError(e),
-                }
-            })?;
+            .map_err(|e| Self::map_send_io_error(e, packet.headers.address.ia.source, 0))?;
         Ok(())
+    }
+
+    /// Map a UDP send error to a SCION socket send error.
+    fn map_send_io_error(e: io::Error, src: IsdAsn, interface_id: u16) -> ScionSocketSendError {
+        use std::io::ErrorKind::*;
+        match e.kind() {
+            HostUnreachable | NetworkUnreachable => {
+                ScionSocketSendError::NetworkUnreachable(NetworkError::UnderlayNextHopUnreachable {
+                    isd_as: src,
+                    interface_id,
+                    msg: e.to_string(),
+                })
+            }
+            ConnectionAborted | ConnectionReset | BrokenPipe => ScionSocketSendError::Closed,
+            _ => ScionSocketSendError::IoError(e),
+        }
     }
 }
 
@@ -240,13 +256,57 @@ impl UnderlaySocket for UdpUnderlaySocket {
         })
     }
 
+    /// Try to send a raw packet immediately. Takes a ScionPacketRaw because it needs to read the
+    /// path to resolve the underlay next hop.
+    fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError> {
+        let source_ia = packet.headers.address.ia.source;
+        if packet.headers.address.ia.destination == source_ia {
+            return self.try_dispatch_local(packet);
+        }
+
+        // Extract the source IA and next hop from the packet.
+        let interface_id = if let DataPlanePath::Standard(standard_path) = &packet.headers.path
+            && let Some(interface_id) = standard_path.iter_interfaces().next()
+        {
+            interface_id
+        } else {
+            return Err(ScionSocketSendError::InvalidPacket(
+                "Path does not contain first hop.".into(),
+            ));
+        };
+
+        let next_hop = match self
+            .underlay_discovery
+            .resolve_udp_underlay_next_hop(PathInterface {
+                isd_asn: source_ia,
+                id: interface_id.get(),
+            })
+            .ok_or(ScionSocketSendError::NetworkUnreachable(
+                NetworkError::UnderlayNextHopUnreachable {
+                    isd_as: source_ia,
+                    interface_id: interface_id.get(),
+                    msg: "next hop not found".to_string(),
+                },
+            )) {
+            Ok(next_hop) => next_hop,
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        self.socket
+            .try_send_to(&packet.encode_to_bytes_vec().concat(), next_hop)
+            .map_err(|e| Self::map_send_io_error(e, source_ia, interface_id.get()))?;
+        Ok(())
+    }
+
     fn recv<'a>(
         &'a self,
     ) -> BoxFuture<'a, Result<ScionPacketRaw, crate::scionstack::ScionSocketReceiveError>> {
         Box::pin(async move {
             let mut buf = [0u8; UDP_DATAGRAM_BUFFER_SIZE];
             loop {
-                let (n, _src) = self.socket.recv_from(&mut buf).await?;
+                let (n, _) = self.socket.recv_from(&mut buf).await?;
                 let packet = match ScionPacketRaw::decode(&mut BytesMut::from(&buf[..n])) {
                     Ok(packet) => packet,
                     Err(e) => {
@@ -262,19 +322,7 @@ impl UnderlaySocket for UdpUnderlaySocket {
                     continue;
                 }
 
-                match packet.headers.common.next_header {
-                    UdpMessage::PROTOCOL_NUMBER => {
-                        return Ok(packet);
-                    }
-                    SCMP_PROTOCOL_NUMBER => {
-                        tracing::debug!("SCMP packet received, skipping");
-                        continue;
-                    }
-                    _ => {
-                        tracing::debug!(next_header = %packet.headers.common.next_header, "Unknown packet type, skipping");
-                        continue;
-                    }
-                }
+                return Ok(packet);
             }
         })
     }
@@ -289,6 +337,7 @@ pub struct UdpAsyncUdpUnderlaySocket {
     local_addr: SocketAddr,
     discovery: Arc<dyn UnderlayDiscovery>,
     inner: UdpSocket,
+    scmp_handlers: Vec<Box<dyn ScmpHandler>>,
 }
 
 impl UdpAsyncUdpUnderlaySocket {
@@ -296,11 +345,13 @@ impl UdpAsyncUdpUnderlaySocket {
         local_addr: SocketAddr,
         discovery: Arc<dyn UnderlayDiscovery>,
         inner: UdpSocket,
+        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> Self {
         Self {
             local_addr,
             discovery,
             inner,
+            scmp_handlers,
         }
     }
 
@@ -411,53 +462,53 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
                     continue;
                 }
             };
-            let src = match packet.headers.address.source() {
-                Some(src) => src,
-                None => {
-                    tracing::trace!("Received packet without source address header, dropping");
-                    continue;
+            // Handle SCMP packets.
+            if packet.headers.common.next_header == SCMP_PROTOCOL_NUMBER {
+                tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
+                for handler in &self.scmp_handlers {
+                    if let Some(reply) = handler.handle(packet.clone())
+                        && let Err(e) = self.try_send(reply)
+                    {
+                        tracing::warn!(error = %e, "failed to send SCMP reply");
+                    }
                 }
-            };
-            let dst = match packet.headers.address.destination() {
-                Some(dst) => dst,
-                None => {
-                    tracing::trace!("Received packet without destination address header, dropping");
-                    continue;
-                }
+                continue;
             };
 
-            let path = Path::new(
-                packet.headers.path.clone(),
-                ByEndpoint {
-                    source: src.isd_asn(),
-                    destination: dst.isd_asn(),
-                },
-                None,
-            );
+            let fallible = || {
+                let src = packet
+                    .headers
+                    .address
+                    .source()
+                    .context("reading source address")?;
+                let dst = packet
+                    .headers
+                    .address
+                    .destination()
+                    .context("reading destination address")?;
 
-            match packet.headers.common.next_header {
-                UdpMessage::PROTOCOL_NUMBER => {
-                    let packet: ScionPacketUdp = match packet.try_into() {
-                        Ok(packet) => packet,
-                        Err(e) => {
-                            tracing::error!(error = %e, "Received non UDP packet, dropping");
-                            continue;
-                        }
-                    };
+                let path = Path::new(
+                    packet.headers.path.clone(),
+                    ByEndpoint {
+                        source: src.isd_asn(),
+                        destination: dst.isd_asn(),
+                    },
+                    None,
+                );
 
-                    return Poll::Ready(Ok((
-                        SocketAddr::new(src, packet.src_port()),
-                        packet.datagram.payload,
-                        path,
-                    )));
-                }
-                SCMP_PROTOCOL_NUMBER => {
-                    // XXX(uniquefine): We should handle SCMP packets here.
-                    tracing::debug!("SCMP packet received, skipping");
-                    continue;
-                }
-                _ => {
-                    tracing::debug!(next_header = %packet.headers.common.next_header, "Unknown packet type, dropping");
+                let packet: ScionPacketUdp = packet.try_into().context("parsing UDP packet")?;
+
+                anyhow::Ok((
+                    SocketAddr::new(src, packet.src_port()),
+                    packet.datagram.payload,
+                    path,
+                ))
+            };
+
+            match fallible() {
+                Ok(result) => return Poll::Ready(Ok(result)),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Received invalid packet, skipping");
                     continue;
                 }
             }

@@ -263,7 +263,7 @@ impl IssueKind {
     pub fn target_type(&self, path: Option<&Path>) -> Option<IssueMarkerTarget> {
         match self {
             IssueKind::Scmp { error } => {
-                let Some(path) = path else {
+                if path.is_none() {
                     debug_assert!(false, "Path must be provided on SCMP errors");
                     return None;
                 };
@@ -280,10 +280,10 @@ impl IssueKind {
                             | CommunicationAdministrativelyDenied
                             | SourceAddressFailedIngressEgressPolicy
                             | RejectRouteToDestination => {
-                                let dst = path.last_hop_ingress_interface()?;
                                 let mut offending =
                                     scmp_destination_unreachable.get_offending_packet();
                                 let pkt = ScionPacketRaw::decode(&mut offending).ok()?;
+                                let dst = pkt.headers.path().last_hop_ingress_interface()?;
                                 let dst_host = pkt.headers.address.destination()?.host();
 
                                 Some(IssueMarkerTarget::DestinationNetwork {
@@ -322,7 +322,7 @@ impl IssueKind {
             IssueKind::Icmp { .. } => None,
             IssueKind::Socket { err } => {
                 let Some(path) = path else {
-                    debug_assert!(false, "Path must be provided on SCMP errors");
+                    debug_assert!(false, "Path must be provided on Socket errors");
                     return None;
                 };
 

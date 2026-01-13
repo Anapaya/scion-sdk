@@ -62,22 +62,25 @@ use std::{
 };
 
 use scc::HashIndex;
-use scion_proto::{address::IsdAsn, path::Path};
+use scion_proto::{address::IsdAsn, path::Path, scmp::ScmpErrorMessage};
 use scion_sdk_utils::backoff::BackoffConfig;
 use tokio::sync::broadcast::{self};
 
-use crate::path::{
-    PathStrategy,
-    fetcher::{
-        PathFetcherImpl,
-        traits::{PathFetchError, PathFetcher},
+use crate::{
+    path::{
+        PathStrategy,
+        fetcher::{
+            PathFetcherImpl,
+            traits::{PathFetchError, PathFetcher},
+        },
+        manager::{
+            issues::{IssueKind, IssueMarker, IssueMarkerTarget},
+            pathset::{PathSet, PathSetHandle, PathSetTask},
+            traits::{PathManager, PathPrefetcher, PathWaitError, SyncPathManager},
+        },
+        types::PathManagerPath,
     },
-    manager::{
-        issues::{IssueKind, IssueMarker, IssueMarkerTarget},
-        pathset::{PathSet, PathSetHandle, PathSetTask},
-        traits::{PathManager, PathPrefetcher, PathWaitError, SyncPathManager},
-    },
-    types::PathManagerPath,
+    scionstack::scmp_handler::ScmpErrorReceiver,
 };
 
 mod algo;
@@ -372,6 +375,16 @@ impl<F: PathFetcher> MultiPathManager<F> {
             let mut issues_guard = self.0.issue_manager.lock().unwrap();
             issues_guard.add_issue(issue, issue_marker.clone());
         }
+    }
+}
+
+impl<F: PathFetcher> ScmpErrorReceiver for MultiPathManager<F> {
+    fn report_scmp_error(&self, scmp_error: ScmpErrorMessage, path: &Path) {
+        self.report_path_issue(
+            SystemTime::now(),
+            IssueKind::Scmp { error: scmp_error },
+            Some(path),
+        );
     }
 }
 
