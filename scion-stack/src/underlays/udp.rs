@@ -112,6 +112,7 @@ impl UdpUnderlaySocket {
         }
     }
 
+    /// Dispatch a packet to the local AS network.
     fn resolve_local_dispatch_addr(
         &self,
         packet: &ScionPacketRaw,

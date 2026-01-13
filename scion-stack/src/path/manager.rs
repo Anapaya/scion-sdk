@@ -74,13 +74,15 @@ use crate::{
             traits::{PathFetchError, PathFetcher},
         },
         manager::{
-            issues::{IssueKind, IssueMarker, IssueMarkerTarget},
+            issues::{IssueKind, IssueMarker, IssueMarkerTarget, SendError},
             pathset::{PathSet, PathSetHandle, PathSetTask},
             traits::{PathManager, PathPrefetcher, PathWaitError, SyncPathManager},
         },
         types::PathManagerPath,
     },
-    scionstack::scmp_handler::ScmpErrorReceiver,
+    scionstack::{
+        ScionSocketSendError, scmp_handler::ScmpErrorReceiver, socket::SendErrorReceiver,
+    },
 };
 
 mod algo;
@@ -385,6 +387,18 @@ impl<F: PathFetcher> ScmpErrorReceiver for MultiPathManager<F> {
             IssueKind::Scmp { error: scmp_error },
             Some(path),
         );
+    }
+}
+
+impl<F: PathFetcher> SendErrorReceiver for MultiPathManager<F> {
+    fn report_send_error(&self, error: &ScionSocketSendError) {
+        if let Some(send_error) = SendError::from_socket_send_error(error) {
+            self.report_path_issue(
+                SystemTime::now(),
+                IssueKind::Socket { err: send_error },
+                None,
+            );
+        }
     }
 }
 
@@ -739,13 +753,11 @@ mod tests {
 
             // Create an issue targeting the first hop of the first path
             let issue = IssueKind::Socket {
-                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
-                    crate::scionstack::NetworkError::UnderlayNextHopUnreachable {
-                        isd_as: first_path.path.source(),
-                        interface_id: first_path.path.first_hop_egress_interface().unwrap().id,
-                        msg: "test".into(),
-                    },
-                )),
+                err: SendError::FirstHopUnreachable {
+                    isd_asn: first_path.path.source(),
+                    interface_id: first_path.path.first_hop_egress_interface().unwrap().id,
+                    msg: "test".into(),
+                },
             };
 
             let penalty = Score::new_clamped(-0.3);
@@ -817,9 +829,11 @@ mod tests {
             };
 
             let issue = IssueKind::Socket {
-                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
-                    crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
-                )),
+                err: SendError::FirstHopUnreachable {
+                    isd_asn: SRC_ADDR.isd_asn(),
+                    interface_id: 1,
+                    msg: "test".into(),
+                },
             };
 
             // Add issue first time
@@ -895,9 +909,11 @@ mod tests {
             };
 
             let issue = IssueKind::Socket {
-                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
-                    crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
-                )),
+                err: SendError::FirstHopUnreachable {
+                    isd_asn: SRC_ADDR.isd_asn(),
+                    interface_id: 1,
+                    msg: "test".into(),
+                },
             };
 
             // Add to manager's issue cache
@@ -961,9 +977,11 @@ mod tests {
             };
 
             let issue = IssueKind::Socket {
-                err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
-                    crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
-                )),
+                err: SendError::FirstHopUnreachable {
+                    isd_asn: SRC_ADDR.isd_asn(),
+                    interface_id: 1,
+                    msg: "test".into(),
+                },
             };
 
             // Add issue
@@ -1013,9 +1031,11 @@ mod tests {
 
             mgr.0.issue_manager.lock().unwrap().add_issue(
                 IssueKind::Socket {
-                    err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
-                        crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
-                    )),
+                    err: SendError::FirstHopUnreachable {
+                        isd_asn: SRC_ADDR.isd_asn(),
+                        interface_id: 1,
+                        msg: "test".into(),
+                    },
                 },
                 issue_marker,
             );
@@ -1094,9 +1114,11 @@ mod tests {
                 };
 
                 let issue = IssueKind::Socket {
-                    err: Arc::new(crate::scionstack::ScionSocketSendError::NetworkUnreachable(
-                        crate::scionstack::NetworkError::DestinationUnreachable("test".into()),
-                    )),
+                    err: SendError::FirstHopUnreachable {
+                        isd_asn: IsdAsn::new(Isd(1), Asn(1)),
+                        interface_id: i,
+                        msg: "test".into(),
+                    },
                 };
 
                 issue_mgr.add_issue(issue, issue_marker);

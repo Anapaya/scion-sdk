@@ -179,6 +179,7 @@
 //!     path_unaware_socket,
 //!     Arc::new(MyCustomPathManager),
 //!     Duration::from_secs(30),
+//!     scion_stack::types::Subscribers::new(),
 //! );
 //! socket.send_to(b"hello", destination).await?;
 //!
@@ -189,7 +190,7 @@
 pub mod builder;
 pub mod quic;
 pub mod scmp_handler;
-mod socket;
+pub mod socket;
 pub(crate) mod udp_polling;
 
 use std::{
@@ -223,7 +224,10 @@ use crate::{
         policy::PathPolicy,
         scoring::PathScoring,
     },
-    scionstack::scmp_handler::{ScmpErrorHandler, ScmpErrorReceiver, ScmpHandler},
+    scionstack::{
+        scmp_handler::{ScmpErrorHandler, ScmpErrorReceiver, ScmpHandler},
+        socket::SendErrorReceiver,
+    },
     types::Subscribers,
 };
 
@@ -236,6 +240,7 @@ pub struct ScionStack {
     client: Arc<dyn EndhostApiClient>,
     underlay: Arc<dyn DynUnderlayStack>,
     scmp_error_receivers: Subscribers<dyn ScmpErrorReceiver>,
+    send_error_receivers: Subscribers<dyn SendErrorReceiver>,
 }
 
 impl fmt::Debug for ScionStack {
@@ -256,6 +261,7 @@ impl ScionStack {
             client,
             underlay,
             scmp_error_receivers: Subscribers::new(),
+            send_error_receivers: Subscribers::new(),
         }
     }
 
@@ -313,13 +319,15 @@ impl ScionStack {
             .expect("should not fail with default configuration"),
         );
 
-        // Register the path manager as a SCMP error receiver.
+        // Register the path manager as a SCMP error receiver and send error receiver.
         self.scmp_error_receivers.register(pather.clone());
+        self.send_error_receivers.register(pather.clone());
 
         Ok(UdpScionSocket::new(
             socket,
             pather,
             socket_config.connect_timeout,
+            self.send_error_receivers.clone(),
         ))
     }
 

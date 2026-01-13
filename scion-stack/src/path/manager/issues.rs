@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use std::{
+    borrow::Cow,
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
-    ops::Deref,
-    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -233,14 +232,14 @@ pub enum IssueKind {
     /// ICMP error
     Icmp {/* icmp error details */}, //TODO: details
     /// Socket error
-    Socket { err: Arc<ScionSocketSendError> },
+    Socket { err: SendError },
 }
 impl Display for IssueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IssueKind::Scmp { error } => write!(f, "SCMP Error: {}", error),
             IssueKind::Icmp { .. } => write!(f, "ICMP Error"),
-            IssueKind::Socket { err } => write!(f, "Socket Error: {}", err),
+            IssueKind::Socket { err } => write!(f, "Socket Error: {:?}", err),
         }
     }
 }
@@ -321,46 +320,22 @@ impl IssueKind {
             }
             IssueKind::Icmp { .. } => None,
             IssueKind::Socket { err } => {
-                let Some(path) = path else {
+                if path.is_none() {
                     debug_assert!(false, "Path must be provided on Socket errors");
                     return None;
                 };
 
-                match err.deref() {
-                    ScionSocketSendError::NetworkUnreachable(network_error) => {
-                        match network_error {
-                            // XXX(ake): Destination Unreachable is used for multiple errors,
-                            // which are not relevant for paths
-                            NetworkError::DestinationUnreachable(_) => None,
-                            NetworkError::UnderlayNextHopUnreachable {
-                                isd_as,
-                                interface_id,
-                                msg: _,
-                            } => {
-                                Some(IssueMarkerTarget::FirstHop {
-                                    isd_asn: *isd_as,
-                                    egress_interface: *interface_id,
-                                })
-                            }
-                        }
+                match err {
+                    SendError::FirstHopUnreachable {
+                        isd_asn,
+                        interface_id,
+                        ..
+                    } => {
+                        Some(IssueMarkerTarget::FirstHop {
+                            isd_asn: *isd_asn,
+                            egress_interface: *interface_id,
+                        })
                     }
-                    ScionSocketSendError::IoError(error) => {
-                        match error.kind() {
-                            std::io::ErrorKind::ConnectionRefused
-                            | std::io::ErrorKind::ConnectionReset
-                            | std::io::ErrorKind::HostUnreachable
-                            | std::io::ErrorKind::NetworkUnreachable
-                            | std::io::ErrorKind::ConnectionAborted => {
-                                let first_hop = path.first_hop_egress_interface()?;
-                                Some(IssueMarkerTarget::FirstHop {
-                                    isd_asn: first_hop.isd_asn,
-                                    egress_interface: first_hop.id,
-                                })
-                            }
-                            _ => None,
-                        }
-                    }
-                    _ => None,
                 }
             }
         }
@@ -408,14 +383,8 @@ impl IssueKind {
             // Penalty: -0.4.
             // Recovers quickly (within ~45 seconds).
             IssueKind::Socket { err } => {
-                match err.as_ref() {
-                    ScionSocketSendError::NetworkUnreachable(_) => -0.4,
-                    // Errors irrelevant for paths:
-                    ScionSocketSendError::PathLookupError(_)
-                    | ScionSocketSendError::InvalidPacket(_)
-                    | ScionSocketSendError::IoError(_)
-                    | ScionSocketSendError::Closed
-                    | ScionSocketSendError::NotConnected => 0.0,
+                match err {
+                    SendError::FirstHopUnreachable { .. } => -0.4,
                 }
             }
 
@@ -424,5 +393,38 @@ impl IssueKind {
         };
 
         Score::new_clamped(magnitude)
+    }
+}
+
+/// Classification of a ScionSocketSendError send error that includes the necessary
+/// information for the path manager to handle the error.
+/// This type is necessary because ScionSocketSendError is not Clone.
+#[derive(Debug, Clone)]
+pub enum SendError {
+    FirstHopUnreachable {
+        isd_asn: IsdAsn,
+        interface_id: u16,
+        msg: Cow<'static, str>,
+    },
+}
+
+impl SendError {
+    pub fn from_socket_send_error(error: &ScionSocketSendError) -> Option<Self> {
+        match error {
+            ScionSocketSendError::NetworkUnreachable(
+                NetworkError::UnderlayNextHopUnreachable {
+                    isd_as,
+                    interface_id,
+                    msg,
+                },
+            ) => {
+                Some(Self::FirstHopUnreachable {
+                    isd_asn: *isd_as,
+                    interface_id: *interface_id,
+                    msg: msg.clone().into(),
+                })
+            }
+            _ => None,
+        }
     }
 }

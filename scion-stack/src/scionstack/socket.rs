@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//! SCION socket types.
 
 use std::{sync::Arc, time::Duration};
 
@@ -35,6 +36,7 @@ use crate::{
         ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError,
         scmp_handler::ScmpHandler,
     },
+    types::Subscribers,
 };
 
 /// A path unaware UDP SCION socket.
@@ -370,12 +372,20 @@ impl RawScionSocket {
     }
 }
 
+/// A trait for receiving socket send errors.
+pub trait SendErrorReceiver: Send + Sync {
+    /// Reports an error when sending a packet.
+    /// This function must return immediately and not block.
+    fn report_send_error(&self, error: &ScionSocketSendError);
+}
+
 /// A path aware UDP socket generic over the underlay socket and path manager.
 pub struct UdpScionSocket<P: PathManager = MultiPathManager> {
     socket: PathUnawareUdpScionSocket,
     pather: Arc<P>,
     connect_timeout: Duration,
     remote_addr: Option<SocketAddr>,
+    send_error_receivers: Subscribers<dyn SendErrorReceiver>,
 }
 
 impl<P: PathManager> std::fmt::Debug for UdpScionSocket<P> {
@@ -393,12 +403,14 @@ impl<P: PathManager> UdpScionSocket<P> {
         socket: PathUnawareUdpScionSocket,
         pather: Arc<P>,
         connect_timeout: Duration,
+        send_error_receivers: Subscribers<dyn SendErrorReceiver>,
     ) -> Self {
         Self {
             socket,
             pather,
             connect_timeout,
             remote_addr: None,
+            send_error_receivers,
         }
     }
 
@@ -473,7 +485,13 @@ impl<P: PathManager> UdpScionSocket<P> {
         destination: SocketAddr,
         path: &Path<&[u8]>,
     ) -> Result<(), ScionSocketSendError> {
-        self.socket.send_to_via(payload, destination, path).await
+        self.socket
+            .send_to_via(payload, destination, path)
+            .await
+            .inspect_err(|e| {
+                self.send_error_receivers
+                    .for_each(|receiver| receiver.report_send_error(e));
+            })
     }
 
     /// Receive a datagram from any address, along with the sender address and path.
