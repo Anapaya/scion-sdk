@@ -14,9 +14,11 @@
 
 //! Simple end-to-end test for PocketScion utilizing a topology
 
-use std::{str::FromStr, time::SystemTime};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Ok};
+use bytes::Bytes;
+use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
     network::scion::topology::{ScionAs, ScionTopology},
@@ -24,19 +26,18 @@ use pocketscion::{
     state::SharedPocketScionState,
 };
 use scion_proto::{
-    address::{IsdAsn, SocketAddr as ScionSocketAddr},
-    packet::classify_scion_packet,
+    address::{IsdAsn, SocketAddr},
+    packet::{ByEndpoint, ScionPacketUdp, classify_scion_packet},
     scmp::{DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpMessage, ScmpMessageBase},
 };
-use scion_stack::scionstack::ScionStackBuilder;
+use scion_stack::{path::manager::traits::PathManager as _, scionstack::ScionStackBuilder};
 use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
 
 #[test(tokio::test)]
 #[timeout(10_000)]
-#[ignore = "XXX(uniquefine): This test needs to be fixed when SCMP handling is implemented for the updated SCION stack."]
 async fn should_receive_scmp_messages() -> anyhow::Result<()> {
-    let server_ia = IsdAsn::from_str("1-1")?;
+    let server_ia: IsdAsn = "1-1".parse().unwrap();
 
     let mut state = SharedPocketScionState::new(SystemTime::now());
 
@@ -81,26 +82,40 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
         .await
         .expect("build SCION stack");
 
-    let client_socket = client_stack.bind(None).await?;
     let client_raw = client_stack
-        .bind_raw(Some(client_socket.local_addr()))
+        .bind_raw(None)
         .await
         .expect("bind raw SCION socket");
 
+    let client_path_manager = client_stack.create_path_manager();
+
     //
     // Actual Test
-    let random_message = [0u8; 1];
-    client_socket
-        .send_to(
-            &random_message,
-            ScionSocketAddr::new("1-2,10.0.0.1".parse()?, 1235), // Send to non existing address
-        )
+    let (src, dst) = (
+        client_raw.local_addr(),
+        "[1-2,10.0.0.1]:12345".parse::<SocketAddr>().unwrap(),
+    );
+    let path = client_path_manager
+        .path_wait(src.isd_asn(), dst.isd_asn(), Utc::now())
+        .await
+        .expect("error getting path");
+    let random_message = Bytes::from_static(b"test message");
+    let packet = ScionPacketUdp::new(
+        ByEndpoint {
+            source: src,
+            destination: dst,
+        },
+        path.data_plane_path,
+        random_message,
+    )?;
+    client_raw
+        .send(packet.into())
         .await
         .context("error sending client message")?;
 
-    let recv = client_raw
-        .recv()
+    let recv = tokio::time::timeout(Duration::from_secs(1), client_raw.recv())
         .await
+        .context("timeout receiving client message")?
         .context("error receiving client message")?;
 
     let scmp = classify_scion_packet(recv)
