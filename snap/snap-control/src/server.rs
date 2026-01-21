@@ -14,12 +14,11 @@
 //! SNAP control plane API server.
 
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use anyhow::anyhow;
 use axum::{BoxError, Router, error_handling::HandleErrorLayer};
 use endhost_api::routes::nest_endhost_api;
 use endhost_api_models::{
@@ -34,10 +33,14 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};
 use url::Url;
+use x25519_dalek::PublicKey;
 
 use crate::{
-    crpc_api::api_service::{model::SnapDataPlaneResolver, nest_snap_control_api},
-    model::{SnapResolver, UnderlayDiscovery},
+    crpc_api::api_service::{
+        model::{RegisterError, SnapDataPlaneResolver, SnapTunIdentityRegistrar},
+        nest_snap_control_api,
+    },
+    model::UnderlayDiscovery,
     server::{
         auth::AuthMiddlewareLayer,
         metrics::{Metrics, PrometheusMiddlewareLayer},
@@ -45,6 +48,7 @@ use crate::{
 };
 
 pub mod auth;
+pub mod identity_registry;
 pub mod metrics;
 pub mod mock_segment_lister;
 pub mod state;
@@ -68,7 +72,7 @@ pub async fn start<UD, SL, SR>(
 where
     UD: UnderlayDiscovery + 'static + Send + Sync,
     SL: PathDiscovery + 'static + Send + Sync,
-    SR: SnapResolver + 'static + Send + Sync,
+    SR: SnapDataPlaneResolver + 'static + Send + Sync,
 {
     let router = Router::new();
 
@@ -102,7 +106,8 @@ where
 
     let router = nest_snap_control_api(
         router,
-        Arc::new(SnapResolverAdapter::new(snap_resolver.clone())),
+        snap_resolver,
+        Arc::new(DummySnapTunIdentityRegistrar),
     );
 
     let router = router.layer(
@@ -202,30 +207,17 @@ impl<T: UnderlayDiscovery> endhost_api_models::UnderlayDiscovery for UnderlayDis
     }
 }
 
-struct SnapResolverAdapter {
-    snap_resolver: Arc<dyn SnapResolver>,
-}
+struct DummySnapTunIdentityRegistrar;
 
-impl SnapResolverAdapter {
-    fn new(snap_resolver: Arc<dyn SnapResolver>) -> Self {
-        Self { snap_resolver }
-    }
-}
-
-impl SnapDataPlaneResolver for SnapResolverAdapter {
-    fn get_data_plane_address(
+impl SnapTunIdentityRegistrar for DummySnapTunIdentityRegistrar {
+    fn register(
         &self,
-        endhost_ip: IpAddr,
-    ) -> Result<SocketAddr, (StatusCode, anyhow::Error)> {
-        match self.snap_resolver.resolve(endhost_ip) {
-            Ok(addr) => Ok(addr),
-            Err(err) => {
-                tracing::error!(?err, "Failed to resolve SNAP data plane address");
-                Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    anyhow!("Failed to resolve SNAP data plane address"),
-                ))
-            }
-        }
+        _now: Instant,
+        _initiator_identity: PublicKey,
+        _psk_share: Option<[u8; 32]>,
+        _lifetime: Duration,
+    ) -> Result<Option<[u8; 32]>, RegisterError> {
+        // XXX(uniquefine): Implement this.
+        Err(RegisterError::InvalidArgument("not implemented".into()))
     }
 }

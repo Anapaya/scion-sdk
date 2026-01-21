@@ -19,10 +19,11 @@ use async_trait::async_trait;
 use endhost_api_client::client::CrpcEndhostApiClient;
 use scion_sdk_reqwest_connect_rpc::{client::CrpcClientError, token_source::TokenSource};
 use url::Url;
+use x25519_dalek::PublicKey;
 
 use crate::{
-    crpc_api::api_service::{GET_SNAP_DATA_PLANE_ADDRESS, SERVICE_PATH},
-    protobuf::anapaya::snap::v1::api_service::{GetSnapDataPlaneRequest, GetSnapDataPlaneResponse},
+    crpc_api::api_service::{GET_SNAP_DATA_PLANE_ADDRESS, REGISTER_SNAPTUN_IDENTITY, SERVICE_PATH},
+    protobuf::anapaya::snap::v1::api_service as proto,
 };
 
 /// Re-export the endhost API client and the reqwest connect RPC cllient.
@@ -31,11 +32,31 @@ pub mod re_export {
     pub use scion_sdk_reqwest_connect_rpc::{client::CrpcClientError, token_source::*};
 }
 
+/// SNAP data plane address response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetDataPlaneAddressResponse {
+    /// The UDP endpoint (host:port) of the SNAP data plane.
+    pub address: SocketAddr,
+    /// The address (host:port) of the SNAPtun control plane API. This can be the same
+    /// XXX(uniquefine): Make this required once all servers have been updated.
+    pub snap_tun_control_address: Option<SocketAddr>,
+    /// The static identity of the snaptun-ng server.
+    /// XXX(uniquefine): Make this required once all servers have been updated.
+    pub snap_static_x25519: Option<PublicKey>,
+}
+
 /// SNAP control plane API trait.
 #[async_trait]
 pub trait ControlPlaneApi: Send + Sync {
     /// Get the SNAP data plane address.
-    async fn get_data_plane_address(&self) -> Result<SocketAddr, CrpcClientError>;
+    async fn get_data_plane_address(&self) -> Result<GetDataPlaneAddressResponse, CrpcClientError>;
+
+    /// Register a static identity for a snaptun connection.
+    async fn register_snaptun_identity(
+        &self,
+        initiator_identity: PublicKey,
+        psk_share: Option<[u8; 32]>,
+    ) -> Result<Option<[u8; 32]>, CrpcClientError>;
 }
 
 /// Connect RPC client for the SNAP control plane API.
@@ -74,21 +95,79 @@ impl CrpcSnapControlClient {
 
 #[async_trait]
 impl ControlPlaneApi for CrpcSnapControlClient {
-    async fn get_data_plane_address(&self) -> Result<SocketAddr, CrpcClientError> {
-        self.client
-            .unary_request::<GetSnapDataPlaneRequest, GetSnapDataPlaneResponse>(
+    async fn get_data_plane_address(&self) -> Result<GetDataPlaneAddressResponse, CrpcClientError> {
+        let res: proto::GetSnapDataPlaneResponse = self
+            .client
+            .unary_request::<proto::GetSnapDataPlaneRequest, proto::GetSnapDataPlaneResponse>(
                 &format!("{SERVICE_PATH}{GET_SNAP_DATA_PLANE_ADDRESS}"),
-                GetSnapDataPlaneRequest::default(),
+                proto::GetSnapDataPlaneRequest::default(),
             )
-            .await?
-            .address
-            .parse()
-            .map_err(|e: std::net::AddrParseError| {
-                CrpcClientError::DecodeError {
-                    context: "parsing data plane address".into(),
-                    source: e.into(),
-                    body: None,
-                }
+            .await?;
+        let address = res.address.parse().map_err(|e: std::net::AddrParseError| {
+            CrpcClientError::DecodeError {
+                context: "parsing data plane address".into(),
+                source: e.into(),
+                body: None,
+            }
+        })?;
+
+        let snap_tun_control_address = res
+            .snap_tun_control_address
+            .map(|address| {
+                address.parse().map_err(|e: std::net::AddrParseError| {
+                    CrpcClientError::DecodeError {
+                        context: "parsing server control address".into(),
+                        source: e.into(),
+                        body: None,
+                    }
+                })
             })
+            .transpose()?;
+        let snap_static_x25519 = res
+            .snap_static_x25519
+            .map(|key| {
+                let key_bytes: [u8; 32] =
+                    key.as_slice()
+                        .try_into()
+                        .map_err(|e: std::array::TryFromSliceError| {
+                            CrpcClientError::DecodeError {
+                                context: "server static identity is not 32 bytes".into(),
+                                source: e.into(),
+                                body: None,
+                            }
+                        })?;
+                Ok::<_, CrpcClientError>(PublicKey::from(key_bytes))
+            })
+            .transpose()?;
+        Ok(GetDataPlaneAddressResponse {
+            address,
+            snap_tun_control_address,
+            snap_static_x25519,
+        })
+    }
+
+    async fn register_snaptun_identity(
+        &self,
+        initiator_identity: PublicKey,
+        psk_share: Option<[u8; 32]>,
+    ) -> Result<Option<[u8; 32]>, CrpcClientError> {
+        let res = self.client.unary_request::<proto::RegisterSnapTunIdentityRequest, proto::RegisterSnapTunIdentityResponse>(
+            &format!("{SERVICE_PATH}{REGISTER_SNAPTUN_IDENTITY}"),
+            proto::RegisterSnapTunIdentityRequest { initiator_static_x25519: initiator_identity.to_bytes().to_vec(), psk_share: psk_share.unwrap_or([0u8;32]).to_vec() },
+        ).await?;
+        let psk_share = if res.psk_share.as_slice() == [0u8; 32] {
+            None
+        } else {
+            Some(res.psk_share.as_slice().try_into().map_err(
+                |e: std::array::TryFromSliceError| {
+                    CrpcClientError::DecodeError {
+                        context: "psk share is not 32 bytes".into(),
+                        source: e.into(),
+                        body: None,
+                    }
+                },
+            )?)
+        };
+        Ok(psk_share)
     }
 }

@@ -18,7 +18,6 @@ use std::net::SocketAddr;
 #[cfg(test)]
 use mockall::{automock, predicate::*};
 use scion_proto::address::IsdAsn;
-use thiserror::Error;
 
 /// List the available data planes.
 #[cfg_attr(test, automock)]
@@ -54,18 +53,4 @@ pub struct IsdAsInterfaces {
     pub isd_as: IsdAsn,
     /// The interface IDs for this ISD-AS
     pub interfaces: Vec<u16>,
-}
-
-/// SNAP resolution error.
-#[derive(Debug, Error)]
-pub enum ResolveSnapError {
-    /// No data plane available
-    #[error("no data plane could be found")]
-    NoDataPlaneAvailable,
-}
-
-/// SNAP data plane resolver.
-pub trait SnapResolver: Send + Sync {
-    /// Get the corresponding SNAP data plane address for a given endhost IP address.
-    fn resolve(&self, endhost_ip: std::net::IpAddr) -> Result<SocketAddr, ResolveSnapError>;
 }

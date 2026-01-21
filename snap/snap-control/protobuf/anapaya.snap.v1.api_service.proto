@@ -10,5 +10,25 @@ message GetSnapDataPlaneResponse {
   // The UDP endpoint (host:port) of the SNAP data plane.
   // The host can either be an IP address or a hostname.
   string address = 1;
-  // XXX(bunert): Extend with static identity for the snaptun-ng.
+
+  // The address (host:port) of the SNAPtun control plane API. This can be the same
+  // as the snap control plane address.
+  optional string snap_tun_control_address = 2;
+
+  // The static identity of the snaptun-ng server.
+  optional bytes snap_static_x25519 = 3;
+}
+
+// Request to register a static identity for a snaptun connection.
+message RegisterSnapTunIdentityRequest {
+  // The static public key of the client.
+  bytes initiator_static_x25519 = 1;
+  // The clients pre shared key. This can be either 32 bytes or all 0 bytes.
+  bytes psk_share = 2;
+}
+
+// Snap register identity response.
+message RegisterSnapTunIdentityResponse {
+  // The servers pre shared key. This can be either 32 bytes or all 0 bytes.
+  bytes psk_share = 1;
 }

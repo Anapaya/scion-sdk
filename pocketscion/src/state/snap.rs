@@ -16,7 +16,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::SocketAddr,
     str::FromStr,
     sync::{Arc, RwLock},
 };
@@ -25,8 +24,9 @@ use derive_more::Display;
 use pem::Pem;
 use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
-use snap_control::model::{
-    ResolveSnapError, SnapResolver, SnapUnderlay, UdpUnderlay, UnderlayDiscovery,
+use snap_control::{
+    crpc_api::api_service::model::{SnapDataPlane, SnapDataPlaneResolver},
+    model::{SnapUnderlay, UdpUnderlay, UnderlayDiscovery},
 };
 use snap_dataplane::state::Id;
 use utoipa::ToSchema;
@@ -207,13 +207,26 @@ pub(crate) struct SnapResolverHandle {
     io_config: SharedPocketScionIoConfig,
 }
 
-impl SnapResolver for SnapResolverHandle {
-    fn resolve(
+impl SnapDataPlaneResolver for SnapResolverHandle {
+    fn get_data_plane_address(
         &self,
         _endhost_ip: std::net::IpAddr,
-    ) -> Result<SocketAddr, snap_control::model::ResolveSnapError> {
-        self.io_config
-            .snap_data_plane_addr(self.snap_id)
-            .ok_or(ResolveSnapError::NoDataPlaneAvailable)
+    ) -> Result<
+        snap_control::crpc_api::api_service::model::SnapDataPlane,
+        (http::StatusCode, anyhow::Error),
+    > {
+        Ok(SnapDataPlane {
+            address: self
+                .io_config
+                .snap_data_plane_addr(self.snap_id)
+                .ok_or_else(|| {
+                    (
+                        http::StatusCode::NOT_FOUND,
+                        anyhow::anyhow!("No data plane available"),
+                    )
+                })?,
+            snap_tun_control_address: None,
+            snap_static_x25519: None,
+        })
     }
 }

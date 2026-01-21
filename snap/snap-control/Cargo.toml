@@ -13,7 +13,6 @@ categories = ["network-programming"]
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
-axum-macros = { workspace = true }
 http = { workspace = true }
 jsonwebtoken = { workspace = true }
 mockall = { workspace = true }
@@ -29,6 +28,7 @@ tower = { workspace = true, features = ["limit", "buffer"] }
 tracing = { workspace = true }
 url = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
+x25519-dalek = { workspace = true }
 
 # Local dependencies
 endhost-api = { workspace = true }

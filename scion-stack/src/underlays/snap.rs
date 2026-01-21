@@ -105,13 +105,13 @@ impl SnapUnderlaySocket {
         })?;
         snap_cp_client.use_token_source(snap_token_source.clone());
 
-        let data_plane_addr = snap_cp_client.get_data_plane_address().await.map_err(|e| {
+        let data_plane = snap_cp_client.get_data_plane_address().await.map_err(|e| {
             crate::scionstack::ScionSocketBindError::DataplaneError(
                 format!("failed to discover SNAP data plane: {e:#}").into(),
             )
         })?;
 
-        tracing::debug!(%data_plane_addr, "Connecting to dataplane");
+        tracing::debug!(%data_plane.address, "Connecting to dataplane");
 
         // Bind to the provided bind address or fall back to 0.0.0.0:0.
         let endpoint_bind_addr: net::SocketAddr =
@@ -124,7 +124,7 @@ impl SnapUnderlaySocket {
             &endpoint,
             snap_token_source.clone(),
             renewal_wait_threshold,
-            data_plane_addr,
+            data_plane.address,
             data_plane_server_name.clone(),
         )
         .await
@@ -356,13 +356,13 @@ impl SnapUnderlaySocketTask {
                             .use_token_source(self.snap_token_source.clone());
                     }
 
-                    let data_plane_addr = self.snap_cp_client.1.get_data_plane_address().await?;
+                    let data_plane = self.snap_cp_client.1.get_data_plane_address().await?;
 
                     let new_connection = new_snaptun(
                         &self.inner.endpoint,
                         self.snap_token_source.clone(),
                         self.renewal_wait_threshold,
-                        data_plane_addr,
+                        data_plane.address,
                         self.data_plane_server_name.clone(),
                     )
                     .await?;

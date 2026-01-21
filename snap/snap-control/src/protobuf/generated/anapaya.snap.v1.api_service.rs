@@ -7,8 +7,30 @@ pub struct GetSnapDataPlaneRequest {}
 pub struct GetSnapDataPlaneResponse {
     /// The UDP endpoint (host:port) of the SNAP data plane.
     /// The host can either be an IP address or a hostname.
-    ///
-    /// XXX(bunert): Extend with static identity for the snaptun-ng.
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
+    /// The address (host:port) of the SNAPtun control plane API. This can be the same
+    /// as the snap control plane address.
+    #[prost(string, optional, tag = "2")]
+    pub snap_tun_control_address: ::core::option::Option<::prost::alloc::string::String>,
+    /// The static identity of the snaptun-ng server.
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub snap_static_x25519: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+/// Request to register a static identity for a snaptun connection.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RegisterSnapTunIdentityRequest {
+    /// The static public key of the client.
+    #[prost(bytes = "vec", tag = "1")]
+    pub initiator_static_x25519: ::prost::alloc::vec::Vec<u8>,
+    /// The clients pre shared key. This can be either 32 bytes or all 0 bytes.
+    #[prost(bytes = "vec", tag = "2")]
+    pub psk_share: ::prost::alloc::vec::Vec<u8>,
+}
+/// Snap register identity response.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RegisterSnapTunIdentityResponse {
+    /// The servers pre shared key. This can be either 32 bytes or all 0 bytes.
+    #[prost(bytes = "vec", tag = "1")]
+    pub psk_share: ::prost::alloc::vec::Vec<u8>,
 }

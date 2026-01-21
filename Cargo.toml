@@ -50,7 +50,6 @@ arc-swap = "1.7"
 assert_matches = "1.5"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["http2"] }
-axum-macros = "0.5"
 bytes = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
 clap = "4.5"
@@ -124,6 +123,7 @@ utoipa-axum = "0.2"
 utoipa-redoc = { version = "6.0", features = ["axum"] }
 uuid = "1.16"
 walkdir = "2.5"
+x25519-dalek = "2.0.1"
 x509-cert = "0.2"
 zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
 
