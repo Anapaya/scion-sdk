@@ -13,11 +13,7 @@
 // limitations under the License.
 //! SNAP control plane API server.
 
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{BoxError, Router, error_handling::HandleErrorLayer};
 use endhost_api::routes::nest_endhost_api;
@@ -33,11 +29,10 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};
 use url::Url;
-use x25519_dalek::PublicKey;
 
 use crate::{
     crpc_api::api_service::{
-        model::{RegisterError, SnapDataPlaneResolver, SnapTunIdentityRegistrar},
+        model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
         nest_snap_control_api,
     },
     model::UnderlayDiscovery,
@@ -60,12 +55,13 @@ const CONTROL_PLANE_RATE_LIMIT: u64 = 20;
 const CONTROL_PLANE_RATE_LIMIT_PERIOD: Duration = Duration::from_secs(1);
 
 /// Start the SNAP control plane API server.
-pub async fn start<UD, SL, SR>(
+pub async fn start<UD, SL, SR, IR>(
     cancellation_token: CancellationToken,
     listener: TcpListener,
     underlay_discovery: UD,
     segment_lister: SL,
     snap_resolver: SR,
+    identity_registry: IR,
     snap_token_decoding_key: DecodingKey,
     metrics: Metrics,
 ) -> std::io::Result<()>
@@ -73,12 +69,14 @@ where
     UD: UnderlayDiscovery + 'static + Send + Sync,
     SL: PathDiscovery + 'static + Send + Sync,
     SR: SnapDataPlaneResolver + 'static + Send + Sync,
+    IR: SnapTunIdentityRegistry + 'static + Send + Sync,
 {
     let router = Router::new();
 
     let dp_discovery = Arc::new(underlay_discovery);
     let segment_lister = Arc::new(segment_lister);
     let snap_resolver = Arc::new(snap_resolver);
+    let identity_registry = Arc::new(identity_registry);
 
     let snap_cp_addr = listener
         .local_addr()
@@ -104,11 +102,7 @@ where
         segment_lister.clone(),
     );
 
-    let router = nest_snap_control_api(
-        router,
-        snap_resolver,
-        Arc::new(DummySnapTunIdentityRegistrar),
-    );
+    let router = nest_snap_control_api(router, snap_resolver, identity_registry);
 
     let router = router.layer(
         ServiceBuilder::new()
@@ -204,20 +198,5 @@ impl<T: UnderlayDiscovery> endhost_api_models::UnderlayDiscovery for UnderlayDis
             udp_underlay,
             snap_underlay,
         }
-    }
-}
-
-struct DummySnapTunIdentityRegistrar;
-
-impl SnapTunIdentityRegistrar for DummySnapTunIdentityRegistrar {
-    fn register(
-        &self,
-        _now: Instant,
-        _initiator_identity: PublicKey,
-        _psk_share: Option<[u8; 32]>,
-        _lifetime: Duration,
-    ) -> Result<Option<[u8; 32]>, RegisterError> {
-        // XXX(uniquefine): Implement this.
-        Err(RegisterError::InvalidArgument("not implemented".into()))
     }
 }

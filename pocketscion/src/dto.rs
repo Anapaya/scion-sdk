@@ -33,7 +33,7 @@ use utoipa::ToSchema;
 use crate::{
     endhost_api::{EndhostApiId, EndhostApiState},
     network::scion::topology::dto::ScionTopologyDto,
-    state::{RouterId, snap::SnapId},
+    state::{DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL, RouterId, snap::SnapId},
 };
 
 /// The pocket SCION system state.
@@ -45,6 +45,9 @@ pub struct SystemStateDto {
     #[schema(nullable = false)]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auth_server_state: Option<AuthServerStateDto>,
+    /// The keepalive interval for the SNAPtun connection(s).
+    #[serde(default = "default_snaptun_keepalive_interval")]
+    pub snaptun_keepalive_interval: Duration,
     /// The list of SNAPs in the system.
     pub snaps: BTreeMap<SnapId, SnapStateDto>,
     /// The list of SCION routers.
@@ -55,6 +58,10 @@ pub struct SystemStateDto {
     #[schema(nullable = false)]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub topology: Option<ScionTopologyDto>,
+}
+
+fn default_snaptun_keepalive_interval() -> Duration {
+    DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL
 }
 
 /// The state of the authentication server.

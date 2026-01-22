@@ -22,12 +22,14 @@ use std::{
 
 use x25519_dalek::PublicKey;
 
+use crate::crpc_api::api_service::model::SnapTunIdentityRegistry;
+
 struct AssociatedIdentity {
     identity: [u8; 32],
     last_active: Instant,
 }
 
-struct IdentityRegistrarState {
+struct IdentityRegistryState {
     pub keepalive_interval: Duration,
     /// Map socket addresses to their associated identity and the time it was last active.
     pub associations: BTreeMap<SocketAddr, AssociatedIdentity>,
@@ -35,7 +37,7 @@ struct IdentityRegistrarState {
     pub identity_lifetime_expirations: BTreeMap<[u8; 32], Instant>,
 }
 
-impl IdentityRegistrarState {
+impl IdentityRegistryState {
     fn new(keepalive_interval: Duration) -> Self {
         Self {
             keepalive_interval,
@@ -47,18 +49,18 @@ impl IdentityRegistrarState {
 
 /// Registrar for SNAPtun static identities.
 pub struct IdentityRegistry {
-    state: Arc<Mutex<IdentityRegistrarState>>,
+    state: Arc<Mutex<IdentityRegistryState>>,
 }
 
 impl IdentityRegistry {
     /// Creates a new identity registry with the given keepalive interval.
     pub fn new(keepalive_interval: Duration) -> Self {
         Self {
-            state: Arc::new(Mutex::new(IdentityRegistrarState::new(keepalive_interval))),
+            state: Arc::new(Mutex::new(IdentityRegistryState::new(keepalive_interval))),
         }
     }
 
-    pub(crate) fn decide_socket_addr_use(
+    pub(crate) fn authz_socket_addr_use(
         &self,
         now: Instant,
         identity: PublicKey,
@@ -113,7 +115,7 @@ impl IdentityRegistry {
         identity: PublicKey,
         socket_addr: SocketAddr,
     ) -> bool {
-        let decision = self.decide_socket_addr_use(now, identity, socket_addr);
+        let decision = self.authz_socket_addr_use(now, identity, socket_addr);
         tracing::debug!(?decision, "Reported data decision");
         match decision {
             IdentityReportingDecision::Accept(_) => {
@@ -155,6 +157,18 @@ impl IdentityRegistry {
                 last_active,
             },
         );
+    }
+}
+
+impl SnapTunIdentityRegistry for IdentityRegistry {
+    fn register(
+        &self,
+        now: Instant,
+        identity: PublicKey,
+        _psk_share: Option<[u8; 32]>,
+        lifetime: Duration,
+    ) {
+        self.register(now, identity, lifetime);
     }
 }
 
@@ -201,7 +215,7 @@ mod tests {
         let identity = create_test_identity(1);
         let socket_addr = SocketAddr::from(([127, 0, 0, 1], 8080));
 
-        let decision = registry.decide_socket_addr_use(now, identity, socket_addr);
+        let decision = registry.authz_socket_addr_use(now, identity, socket_addr);
 
         assert_eq!(
             decision,
@@ -223,7 +237,7 @@ mod tests {
         // Set lifetime to 30 seconds, so it expires before 60 seconds
         registry.register(now, identity, Duration::from_secs(30));
 
-        let decision = registry.decide_socket_addr_use(now, identity, socket_addr);
+        let decision = registry.authz_socket_addr_use(now, identity, socket_addr);
 
         assert_eq!(
             decision,
@@ -244,7 +258,7 @@ mod tests {
         // keepalive_interval is 30 seconds, so 2 * keepalive_interval = 60 seconds
         registry.register(now, identity, Duration::from_secs(60));
 
-        let decision = registry.decide_socket_addr_use(now, identity, socket_addr);
+        let decision = registry.authz_socket_addr_use(now, identity, socket_addr);
 
         // Since condition is >= (not >), at exactly the boundary:
         // (now + 60) >= (now + 60) is true, so it should reject
@@ -269,7 +283,7 @@ mod tests {
         // Set up association with same identity
         registry.test_set_association(socket_addr, identity, now);
 
-        let decision = registry.decide_socket_addr_use(now, identity, socket_addr);
+        let decision = registry.authz_socket_addr_use(now, identity, socket_addr);
 
         assert_eq!(
             decision,
@@ -297,7 +311,7 @@ mod tests {
         registry.test_set_association(socket_addr, identity1, now);
 
         // Try to use identity2 with the same socket address
-        let decision = registry.decide_socket_addr_use(check_time, identity2, socket_addr);
+        let decision = registry.authz_socket_addr_use(check_time, identity2, socket_addr);
 
         assert_eq!(
             decision,
@@ -326,7 +340,7 @@ mod tests {
         registry.test_set_association(socket_addr, identity1, expired_time);
 
         // Try to use identity2 with the same socket address
-        let decision = registry.decide_socket_addr_use(now, identity2, socket_addr);
+        let decision = registry.authz_socket_addr_use(now, identity2, socket_addr);
 
         // Occupation has expired, so should accept
         assert_eq!(
@@ -346,7 +360,7 @@ mod tests {
         registry.register(now, identity, Duration::from_secs(90));
 
         // No socket address associations set up
-        let decision = registry.decide_socket_addr_use(now, identity, socket_addr);
+        let decision = registry.authz_socket_addr_use(now, identity, socket_addr);
 
         assert_eq!(
             decision,

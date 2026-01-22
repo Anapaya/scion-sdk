@@ -440,6 +440,9 @@ components:
             type: integer
             description: The SNAP identifier.
             minimum: 0
+        snaptun_keepalive_interval:
+          type: string
+          description: The keepalive interval for the SNAPtun connection(s).
         topology:
           $ref: '#/components/schemas/ScionTopologyDto'
           description: Scion Topology used for routing

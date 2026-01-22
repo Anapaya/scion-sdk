@@ -57,6 +57,9 @@ pub mod endhost_segment_lister;
 pub mod simulation_dispatcher;
 pub mod snap;
 
+/// The default keepalive interval for the SNAPtun connection(s).
+pub const DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+
 /// The internal state of PocketScion.
 #[derive(Clone)]
 pub struct SharedPocketScionState {
@@ -215,6 +218,18 @@ impl SharedPocketScionState {
         sstate.routers.keys().cloned().collect()
     }
 }
+// SNAPtun
+impl SharedPocketScionState {
+    /// Returns the keepalive interval for the SNAPtun connection(s).
+    pub fn snaptun_keepalive_interval(&self) -> Duration {
+        self.system_state.read().unwrap().snaptun_keepalive_interval
+    }
+    /// Sets the keepalive interval for the SNAPtun connection(s).
+    pub fn set_snaptun_keepalive_interval(&mut self, interval: Duration) {
+        let mut state = self.system_state.write().unwrap();
+        state.snaptun_keepalive_interval = interval;
+    }
+}
 // Network Sim
 impl SharedPocketScionState {
     /// Applies the given topology to the system state.
@@ -283,6 +298,7 @@ impl SharedPocketScionState {
 pub struct SystemState {
     start_time: SystemTime,
     snap_token_public_pem: Pem,
+    snaptun_keepalive_interval: Duration,
     snaps: BTreeMap<SnapId, SnapState>,
     auth_server: Option<AuthServerState>,
     routers: BTreeMap<RouterId, RouterState>,
@@ -299,6 +315,7 @@ impl SystemState {
             start_time,
             snap_token_public_pem: insecure_const_ed25519_key_pair_pem().1,
             snaps: Default::default(),
+            snaptun_keepalive_interval: DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL,
             routers: Default::default(),
             auth_server: Default::default(),
             topology: Default::default(),
@@ -333,6 +350,7 @@ impl From<&SystemState> for SystemStateDto {
                 .as_ref()
                 .map(|auth_server| auth_server.into()),
             snap_token_public_key: system_state.snap_token_public_pem.to_string(),
+            snaptun_keepalive_interval: system_state.snaptun_keepalive_interval,
             snaps: system_state
                 .snaps
                 .iter()
@@ -404,6 +422,7 @@ impl TryFrom<SystemStateDto> for SystemState {
 
         Ok(SystemState {
             start_time: SystemTime::now(),
+            snaptun_keepalive_interval: dto.snaptun_keepalive_interval,
             auth_server,
             snap_token_public_pem,
             snaps,

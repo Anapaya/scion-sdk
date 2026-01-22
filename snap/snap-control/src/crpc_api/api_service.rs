@@ -31,9 +31,7 @@ use snap_tokens::snap_token::SnapTokenClaims;
 use x25519_dalek::PublicKey;
 
 use crate::{
-    crpc_api::api_service::model::{
-        RegisterError, SnapDataPlaneResolver, SnapTunIdentityRegistrar,
-    },
+    crpc_api::api_service::model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
     protobuf::anapaya::snap::v1::api_service::{
         GetSnapDataPlaneRequest, GetSnapDataPlaneResponse, RegisterSnapTunIdentityRequest,
         RegisterSnapTunIdentityResponse,
@@ -43,7 +41,6 @@ use crate::{
 /// SNAP control plane API models.
 pub mod model {
     use std::{
-        borrow::Cow,
         net::{IpAddr, SocketAddr},
         time::{Duration, Instant},
     };
@@ -74,22 +71,8 @@ pub mod model {
         pub snap_static_x25519: Option<PublicKey>,
     }
 
-    /// Error returned when registering a static identity for a snaptun connection.
-    #[derive(thiserror::Error, Debug)]
-    pub enum RegisterError {
-        /// The provided identity or psk share is invalid.
-        #[error("invalid argument: {0}")]
-        InvalidArgument(Cow<'static, str>),
-        /// The requested identity is already registered.
-        #[error("the requested identity is already registered: {0}")]
-        Conflict(Cow<'static, str>),
-        /// The requested lifetime is too short.
-        #[error("the requested lifetime is too short: {0}")]
-        InsufficientLifetime(Cow<'static, str>),
-    }
-
     /// Trait for registering a static identity for a snaptun connection.
-    pub trait SnapTunIdentityRegistrar: Send + Sync {
+    pub trait SnapTunIdentityRegistry: Send + Sync {
         /// Register a static identity for a snaptun connection.
         /// Returns the servers PSK share if the registration was successful.
         fn register(
@@ -102,7 +85,7 @@ pub mod model {
             // The lifetime the registered identity is valid for.
             // Usually this is determined by the expiration of the SNAP token.
             lifetime: Duration,
-        ) -> Result<Option<[u8; 32]>, RegisterError>;
+        );
     }
 }
 
@@ -164,7 +147,7 @@ pub(crate) const REGISTER_SNAPTUN_IDENTITY: &str = "/RegisterSnapTunIdentity";
 pub fn nest_snap_control_api(
     router: axum::Router,
     snap_resolver: Arc<dyn SnapDataPlaneResolver>,
-    identity_registrar: Arc<dyn SnapTunIdentityRegistrar>,
+    identity_registrar: Arc<dyn SnapTunIdentityRegistry>,
 ) -> axum::Router {
     router.nest(
         SERVICE_PATH,
@@ -199,7 +182,7 @@ async fn get_snap_data_plane_address_handler(
 }
 
 async fn register_snaptun_identity_handler(
-    State(identity_registrar): State<Arc<dyn SnapTunIdentityRegistrar>>,
+    State(identity_registry): State<Arc<dyn SnapTunIdentityRegistry>>,
     snap_token: Extension<SnapTokenClaims>,
     ConnectInfo(_): ConnectInfo<std::net::SocketAddr>,
     ConnectRpc(request): ConnectRpc<RegisterSnapTunIdentityRequest>,
@@ -237,22 +220,9 @@ async fn register_snaptun_identity_handler(
         })?)
     };
 
-    let psk_share = identity_registrar
-        .register(Instant::now(), initiator_identity, psk_share, lifetime)
-        .map_err(|e| {
-            match e {
-                RegisterError::InvalidArgument(e) => {
-                    CrpcError::new(CrpcErrorCode::InvalidArgument, e.to_string())
-                }
-                RegisterError::Conflict(e) => {
-                    CrpcError::new(CrpcErrorCode::AlreadyExists, e.to_string())
-                }
-                RegisterError::InsufficientLifetime(e) => {
-                    CrpcError::new(CrpcErrorCode::InvalidArgument, e.to_string())
-                }
-            }
-        })?;
+    identity_registry.register(Instant::now(), initiator_identity, psk_share, lifetime);
     Ok(ConnectRpc(RegisterSnapTunIdentityResponse {
-        psk_share: psk_share.unwrap_or([0u8; 32]).to_vec(),
+        // XXX(uniquefine): PSK is not yet supported.
+        psk_share: [0u8; 32].to_vec(),
     }))
 }

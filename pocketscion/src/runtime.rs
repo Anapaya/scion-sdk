@@ -29,6 +29,7 @@ use scion_sdk_utils::{
     io::{get_tmp_path, read_file, write_file},
     task_handler::{CancelTaskSet, InProcess},
 };
+use snap_control::server::identity_registry::IdentityRegistry;
 use snap_dataplane::tunnel_gateway::{
     dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
     start_tunnel_gateway, state::SharedTunnelGatewayState,
@@ -164,6 +165,7 @@ impl PocketScionRuntimeBuilder {
 
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
             let snap_resolver = pstate.snap_resolver(snap_id, io_config.clone());
+            let identity_registry = IdentityRegistry::new(pstate.snaptun_keepalive_interval());
             let decoding_key = snap_token_decoding_key.clone();
 
             let local_ases = snap_state.isd_ases();
@@ -178,6 +180,7 @@ impl PocketScionRuntimeBuilder {
                     dp_discovery,
                     segment_lister,
                     snap_resolver,
+                    identity_registry,
                     decoding_key,
                     snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
                 )
