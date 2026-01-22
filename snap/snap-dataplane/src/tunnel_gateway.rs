@@ -54,7 +54,7 @@ pub fn start_tunnel_gateway<T, D>(
     T: for<'de> Deserialize<'de> + Token + Clone,
     D: Dispatcher + 'static,
 {
-    let snaptun_server = snap_tun::server::Server::new(
+    let snaptun_server = snap_tun::server_deprecated::Server::new(
         token_validator.clone(),
         snap_tun::metrics::Metrics::new(&metrics_registry.clone()),
     );

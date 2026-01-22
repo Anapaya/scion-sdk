@@ -222,7 +222,7 @@ async fn delete_snap_connection(
         match guard.get(&socket_addr.0) {
             Some(sender) => {
                 sender.close(
-                    snap_tun::server::SnaptunConnErrors::InternalError,
+                    snap_tun::server_deprecated::SnaptunConnErrors::InternalError,
                     b"Connection closed through management API",
                 );
                 tracing::info!(snap_id=%snap_id, socket_addr=%socket_addr.0, "Closed connection");

@@ -45,11 +45,14 @@ scion-stack = { path = "scion-stack", version = "0.2" }
 
 # General Dependencies
 aes = "0.8"
+# We use our own version here
+ana-gotatun = { version = "0.2.1-ana.0" }
 anyhow = { version = "1" }
 arc-swap = "1.7"
 assert_matches = "1.5"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["http2"] }
+bitfield-struct = "0.12.1"
 bytes = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
 clap = "4.5"
@@ -79,6 +82,7 @@ prost-types = "0.14"
 # follow the instructions in the documentation.
 quinn = { version = "0.11.9-ana.0", package = "anapaya-quinn" }
 rand = "0.9"
+# rand_core = "0.9"
 rand_chacha = { version = "0.9", features = ["serde"] }
 rand_xorshift = "0.4"
 rcgen = "0.14"
@@ -125,6 +129,7 @@ uuid = "1.16"
 walkdir = "2.5"
 x25519-dalek = "2.0.1"
 x509-cert = "0.2"
+zerocopy = { version = "0.8.27", features = ["std", "derive"] }
 zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
 
 

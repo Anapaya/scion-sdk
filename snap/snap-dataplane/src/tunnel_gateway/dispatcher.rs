@@ -22,7 +22,7 @@ use scion_proto::{
 };
 use scion_sdk_token_validator::validator::Token;
 use serde::Deserialize;
-use snap_tun::server::{AddressAssignmentError, SendPacketError};
+use snap_tun::server_deprecated::{AddressAssignmentError, SendPacketError};
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
 
 use crate::{

@@ -10,7 +10,9 @@ keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
 [dependencies]
+ana-gotatun = { workspace = true }
 assert_matches = { workspace = true }
+bitfield-struct = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 http = { workspace = true }
@@ -28,6 +30,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 x509-cert = { workspace = true }
+zerocopy = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }

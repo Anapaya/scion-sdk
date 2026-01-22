@@ -21,11 +21,11 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use snap_tun::server::SnapTunToken;
+use snap_tun::server_deprecated::SnapTunToken;
 
 pub mod dto;
 
-type Inner<T> = Arc<RwLock<BTreeMap<SocketAddr, Arc<snap_tun::server::Sender<T>>>>>;
+type Inner<T> = Arc<RwLock<BTreeMap<SocketAddr, Arc<snap_tun::server_deprecated::Sender<T>>>>>;
 
 /// Shared tunnel gateway state.
 #[derive(Debug, Default, Clone)]
@@ -56,7 +56,7 @@ impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
     pub(crate) fn add_tunnel_mapping(
         &self,
         addr: SocketAddr,
-        tunnel: Arc<snap_tun::server::Sender<T>>,
+        tunnel: Arc<snap_tun::server_deprecated::Sender<T>>,
     ) {
         let mut tunnels = self.write().expect("no fail");
 
@@ -76,7 +76,7 @@ impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
     pub(crate) fn remove_tunnel_mapping_if_same(
         &self,
         addr: SocketAddr,
-        should_contain: &Arc<snap_tun::server::Sender<T>>,
+        should_contain: &Arc<snap_tun::server_deprecated::Sender<T>>,
     ) {
         let mut tunnels = self.write().expect("no fail");
         match tunnels.entry(addr) {
@@ -99,7 +99,7 @@ impl<T: SnapTunToken> SharedTunnelGatewayState<T> {
     pub(crate) fn get_mapped_tunnel(
         &self,
         addr: SocketAddr,
-    ) -> Option<Arc<snap_tun::server::Sender<T>>> {
+    ) -> Option<Arc<snap_tun::server_deprecated::Sender<T>>> {
         let tunnels = self.read().expect("no fail");
         tunnels.get(&addr).cloned()
     }

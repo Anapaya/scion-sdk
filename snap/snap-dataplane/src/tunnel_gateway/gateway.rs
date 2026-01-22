@@ -46,7 +46,7 @@ pub struct TunnelGateway<T>
 where
     T: for<'de> Deserialize<'de> + Token,
 {
-    snap_tunnel_endpoint: Arc<snap_tun::server::Server<T>>,
+    snap_tunnel_endpoint: Arc<snap_tun::server_deprecated::Server<T>>,
     state: SharedTunnelGatewayState<T>,
     metrics: TunnelGatewayMetrics,
 }
@@ -71,7 +71,7 @@ where
     /// Create new tunnel gateway instance.
     pub fn new(
         state: SharedTunnelGatewayState<T>,
-        server: snap_tun::server::Server<T>,
+        server: snap_tun::server_deprecated::Server<T>,
         metrics: TunnelGatewayMetrics,
     ) -> Self {
         Self {
@@ -193,18 +193,16 @@ where
                                     }
                                 }
                             }
-                            Err(e) => {
-                                match e {
-                                    snap_tun::server::ReceivePacketError::ConnectionClosed => {
-                                        tracing::info!("Connection closed by client");
-                                        break;
-                                    }
-                                    snap_tun::server::ReceivePacketError::ConnectionError(e) => {
-                                        tracing::error!(error=%e, "Connection error");
-                                        break;
-                                    }
+                            Err(e) => match e {
+                                snap_tun::server_deprecated::ReceivePacketError::ConnectionClosed => {
+                                    tracing::info!("Connection closed by client");
+                                    break;
                                 }
-                            }
+                                snap_tun::server_deprecated::ReceivePacketError::ConnectionError(e) => {
+                                    tracing::error!(error=%e, "Connection error");
+                                    break;
+                                }
+                            },
                         }
                     }
                 }
@@ -224,7 +222,7 @@ where
         data: Bytes,
         local_addr: HostAddr,
         dst_addr: EndhostAddr,
-        tx: Arc<snap_tun::server::Sender<T>>,
+        tx: Arc<snap_tun::server_deprecated::Sender<T>>,
     ) {
         let scmp_message = match create_inbound_scmp_error(err, data) {
             Ok(s) => s,

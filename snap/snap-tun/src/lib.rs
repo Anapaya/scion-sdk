@@ -17,7 +17,9 @@ pub mod cert_validator;
 pub mod client;
 pub mod metrics;
 pub mod requests;
+pub(crate) mod scion_packet;
 pub mod server;
+pub mod server_deprecated;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 

@@ -31,7 +31,7 @@ use snap_tun::{
         AutoTokenRenewal, ClientBuilder, Control, DEFAULT_RENEWAL_WAIT_THRESHOLD, Receiver, Sender,
     },
     metrics::Metrics,
-    server::ControlError,
+    server_deprecated::ControlError,
 };
 use tokio::task::JoinSet;
 
@@ -181,8 +181,13 @@ pub async fn auto_token_renewal() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 }
 
-fn prepare_snaptun_server(validator: MagicAuthorizer) -> snap_tun::server::Server<DummyToken> {
-    snap_tun::server::Server::new(Arc::new(validator), Metrics::new(&MetricsRegistry::new()))
+fn prepare_snaptun_server(
+    validator: MagicAuthorizer,
+) -> snap_tun::server_deprecated::Server<DummyToken> {
+    snap_tun::server_deprecated::Server::new(
+        Arc::new(validator),
+        Metrics::new(&MetricsRegistry::new()),
+    )
 }
 
 async fn prepare_snaptun_client(
@@ -205,7 +210,7 @@ async fn prepare_snaptun_client(
     (tx, rx, ctrl)
 }
 
-async fn run_server(ep: Endpoint, srv: snap_tun::server::Server<DummyToken>) {
+async fn run_server(ep: Endpoint, srv: snap_tun::server_deprecated::Server<DummyToken>) {
     let mut js = JoinSet::<()>::new();
     while let Some(c) = ep.accept().await {
         let c = c.await.expect("no fail");
