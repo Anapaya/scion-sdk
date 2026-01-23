@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "endhost-api/*",
+    "hsd-api/*",
     "integration-tests",
     "libs/*",
     "pocketscion",
@@ -21,6 +22,9 @@ endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.2" 
 endhost-api = { path = "endhost-api/endhost-api", version = "0.2" }
 endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.2" }
 endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.2" }
+
+# hsd-api = { path = "hsd-api/hsd-api", version = "0.2" }
+# hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.2" }
 
 scion-sdk-address-manager = { path = "libs/address-manager", version = "0.2" }
 scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.2" }

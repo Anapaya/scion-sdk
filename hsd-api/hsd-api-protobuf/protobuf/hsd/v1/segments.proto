@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package hsd.api_service.v1;
+
+import "proto/control_plane/v1/seg.proto";
+
+// ListSegmentsRequest looks up hidden segments.
+message ListSegmentsRequest {
+  // The source ISD-AS of the end-to-end path.
+  uint64 src_isd_as = 1;
+  // The destination ISD-AS of the end-to-end path.
+  uint64 dst_isd_as = 2;
+}
+
+// ListSegmentsResponse includes hidden up, down, and core path segments between the source and
+// destination ISD-AS.
+message ListSegmentsResponse {
+  // The list of returned hidden up path segments.
+  repeated proto.control_plane.v1.PathSegment up_segments = 1;
+
+  // The list of returned hidden down path segments.
+  repeated proto.control_plane.v1.PathSegment down_segments = 2;
+
+  // The list of returned hidden core path segments.
+  repeated proto.control_plane.v1.PathSegment core_segments = 3;
+}

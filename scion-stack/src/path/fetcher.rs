@@ -147,15 +147,15 @@ impl SegmentFetcher for ConnectRpcSegmentFetcher {
             .await?;
 
         tracing::debug!(
-            n_core=resp.core_segments.len(),
-            n_up=resp.up_segments.len(),
-            n_down=resp.down_segments.len(),
+            n_core=resp.segments.core_segments.len(),
+            n_up=resp.segments.up_segments.len(),
+            n_down=resp.segments.down_segments.len(),
             src = %src,
             dst = %dst,
             "Received segments from control plane"
         );
 
-        let (core_segments, non_core_segments) = resp.split_parts();
+        let (core_segments, non_core_segments) = resp.segments.split_parts();
         Ok(Segments {
             core_segments,
             non_core_segments,

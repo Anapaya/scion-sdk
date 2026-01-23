@@ -44,7 +44,7 @@
 //!         dst: scion_proto::address::IsdAsn,
 //!         page_size: i32,
 //!         page_token: String,
-//!     ) -> Result<scion_proto::path::segment::Segments, scion_proto::path::SegmentsError>
+//!     ) -> Result<scion_proto::path::segment::SegmentsPage, scion_proto::path::SegmentsError>
 //!     {
 //!         todo!();
 //!     }

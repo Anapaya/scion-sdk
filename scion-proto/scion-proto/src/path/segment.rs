@@ -54,8 +54,6 @@ pub struct Segments {
     pub down_segments: Vec<PathSegment>,
     /// Core segments.
     pub core_segments: Vec<PathSegment>,
-    /// Next page token.
-    pub next_page_token: String,
 }
 
 impl Segments {
@@ -101,6 +99,25 @@ impl std::fmt::Display for Segments {
             format_vec(&self.up_segments),
             format_vec(&self.down_segments),
             format_vec(&self.core_segments)
+        )
+    }
+}
+
+/// Segments containing up, down, and core segments along with a next page token.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct SegmentsPage {
+    /// Segments.
+    pub segments: Segments,
+    /// Next page token.
+    pub next_page_token: String,
+}
+
+impl std::fmt::Display for SegmentsPage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SegmentsPage[{}, next_page_token: {}]",
+            self.segments, self.next_page_token
         )
     }
 }

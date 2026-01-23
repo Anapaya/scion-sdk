@@ -16,7 +16,8 @@
 use prost::Message;
 
 use crate::path::{
-    ASEntry, HopEntry, Info, PathSegment, PeerEntry, SegmentHopField, Segments, SignedMessage,
+    ASEntry, HopEntry, Info, PathSegment, PeerEntry, SegmentHopField, Segments, SegmentsPage,
+    SignedMessage,
 };
 
 /// Invalid segment error.
@@ -159,7 +160,7 @@ impl From<SegmentHopField> for scion_protobuf::control_plane::v1::HopField {
 // Protobuf to Model
 //
 
-impl TryFrom<scion_protobuf::control_plane::v1::SegmentsResponse> for Segments {
+impl TryFrom<scion_protobuf::control_plane::v1::SegmentsResponse> for SegmentsPage {
     type Error = InvalidSegmentError;
     fn try_from(
         value: scion_protobuf::control_plane::v1::SegmentsResponse,
@@ -200,9 +201,11 @@ impl TryFrom<scion_protobuf::control_plane::v1::SegmentsResponse> for Segments {
         }
 
         Ok(Self {
-            up_segments,
-            down_segments,
-            core_segments,
+            segments: Segments {
+                up_segments,
+                down_segments,
+                core_segments,
+            },
             // TODO(pagination): There is no pagination in the control service.
             next_page_token: "".to_string(),
         })

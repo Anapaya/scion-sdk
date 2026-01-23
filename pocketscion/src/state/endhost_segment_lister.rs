@@ -20,7 +20,7 @@ use chrono::Utc;
 use endhost_api_models::PathDiscovery;
 use scion_proto::{
     address::IsdAsn,
-    path::{Segments, SegmentsError},
+    path::{Segments, SegmentsError, SegmentsPage},
 };
 use snap_control::server::mock_segment_lister::MockSegmentLister;
 
@@ -60,7 +60,7 @@ impl PathDiscovery for StateEndhostSegmentLister {
         dst: IsdAsn,
         page_size: i32,
         page_token: String,
-    ) -> Result<Segments, SegmentsError> {
+    ) -> Result<SegmentsPage, SegmentsError> {
         if !self.app_state.has_topology() {
             tracing::debug!("No topology available, falling back to mock segment lister");
             return self
@@ -117,10 +117,12 @@ impl PathDiscovery for StateEndhostSegmentLister {
                 SegmentsError::InternalError(e.to_string())
             })?;
 
-        Ok(Segments {
-            up_segments: segments.up,
-            down_segments: segments.down,
-            core_segments: segments.core,
+        Ok(SegmentsPage {
+            segments: Segments {
+                up_segments: segments.up,
+                down_segments: segments.down,
+                core_segments: segments.core,
+            },
             next_page_token: "".to_string(),
         })
     }

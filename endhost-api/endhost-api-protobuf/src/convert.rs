@@ -13,7 +13,7 @@
 // limitations under the License.
 //! Conversions between endhost API protobuf types and endhost API models.
 
-use scion_proto::path::convert::segment::InvalidSegmentError;
+use scion_proto::path::{Segments, convert::segment::InvalidSegmentError};
 
 use crate::endhost::api_service::v1::{
     ListSegmentsResponse, ListUnderlaysResponse, Router, Snap, SnapUnderlay, UdpUnderlay,
@@ -118,18 +118,33 @@ impl TryFrom<Snap> for endhost_api_models::underlays::Snap {
     }
 }
 
-impl From<scion_proto::path::segment::Segments> for ListSegmentsResponse {
-    fn from(segments: scion_proto::path::segment::Segments) -> Self {
+impl From<scion_proto::path::segment::SegmentsPage> for ListSegmentsResponse {
+    fn from(page: scion_proto::path::segment::SegmentsPage) -> Self {
         Self {
-            up_segments: segments.up_segments.into_iter().map(Into::into).collect(),
-            down_segments: segments.down_segments.into_iter().map(Into::into).collect(),
-            core_segments: segments.core_segments.into_iter().map(Into::into).collect(),
-            next_page_token: segments.next_page_token,
+            up_segments: page
+                .segments
+                .up_segments
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            down_segments: page
+                .segments
+                .down_segments
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            core_segments: page
+                .segments
+                .core_segments
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            next_page_token: page.next_page_token,
         }
     }
 }
 
-impl TryFrom<ListSegmentsResponse> for scion_proto::path::segment::Segments {
+impl TryFrom<ListSegmentsResponse> for scion_proto::path::segment::SegmentsPage {
     type Error = InvalidSegmentError;
     fn try_from(response: ListSegmentsResponse) -> Result<Self, Self::Error> {
         let convert = |segs: Vec<_>| {
@@ -137,10 +152,12 @@ impl TryFrom<ListSegmentsResponse> for scion_proto::path::segment::Segments {
                 .map(scion_proto::path::PathSegment::try_from)
                 .collect::<Result<_, _>>()
         };
-        Ok(scion_proto::path::segment::Segments {
-            up_segments: convert(response.up_segments)?,
-            down_segments: convert(response.down_segments)?,
-            core_segments: convert(response.core_segments)?,
+        Ok(scion_proto::path::segment::SegmentsPage {
+            segments: Segments {
+                up_segments: convert(response.up_segments)?,
+                down_segments: convert(response.down_segments)?,
+                core_segments: convert(response.core_segments)?,
+            },
             next_page_token: response.next_page_token,
         })
     }

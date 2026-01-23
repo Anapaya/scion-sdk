@@ -41,6 +41,7 @@ enum Commands {
 // Define constants for source paths to avoid repetition
 const SCION_PROTO_SRC_DIR: &str = "scion-proto/scion-protobuf/src/proto";
 const ENDHOST_API_SRC_DIR: &str = "endhost-api/endhost-api-protobuf/src/proto";
+const HSD_API_SRC_DIR: &str = "hsd-api/hsd-api-protobuf/src/proto";
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -61,9 +62,10 @@ fn run_update() -> anyhow::Result<()> {
     // Ensure output directories exist
     fs::create_dir_all(SCION_PROTO_SRC_DIR)?;
     fs::create_dir_all(ENDHOST_API_SRC_DIR)?;
-
+    fs::create_dir_all(HSD_API_SRC_DIR)?;
     compile_scion_protobuf(SCION_PROTO_SRC_DIR)?;
     compile_endhost_api_protobuf(ENDHOST_API_SRC_DIR)?;
+    compile_hsd_api_protobuf(HSD_API_SRC_DIR)?;
 
     println!("Protobuf files updated successfully.");
     Ok(())
@@ -84,19 +86,27 @@ fn run_check() -> anyhow::Result<()> {
 
     let temp_scion_dir = temp_dir_path.join("scion");
     let temp_endhost_dir = temp_dir_path.join("endhost");
+    let temp_hsd_dir = temp_dir_path.join("hsd");
 
     fs::create_dir_all(&temp_scion_dir)?;
     fs::create_dir_all(&temp_endhost_dir)?;
+    fs::create_dir_all(&temp_hsd_dir)?;
 
     // Compile protos into the temporary directories
     compile_scion_protobuf(temp_scion_dir.to_str().unwrap())?;
     compile_endhost_api_protobuf(temp_endhost_dir.to_str().unwrap())?;
+    compile_hsd_api_protobuf(temp_hsd_dir.to_str().unwrap())?;
 
     // Compare the generated files with the source files
     let scion_diffs = compare_dirs(&temp_scion_dir, Path::new(SCION_PROTO_SRC_DIR))?;
     let endhost_diffs = compare_dirs(&temp_endhost_dir, Path::new(ENDHOST_API_SRC_DIR))?;
+    let hsd_diffs = compare_dirs(&temp_hsd_dir, Path::new(HSD_API_SRC_DIR))?;
 
-    let all_diffs: Vec<_> = scion_diffs.into_iter().chain(endhost_diffs).collect();
+    let all_diffs: Vec<_> = scion_diffs
+        .into_iter()
+        .chain(endhost_diffs)
+        .chain(hsd_diffs)
+        .collect();
 
     if all_diffs.is_empty() {
         println!("Protobuf files are up-to-date.");
@@ -178,6 +188,30 @@ fn compile_endhost_api_protobuf(out_dir: &str) -> anyhow::Result<()> {
         "scion-proto/scion-protobuf",
     ];
     let proto_files = get_proto_files("endhost-api/endhost-api-protobuf/protobuf")?;
+    let mut config = prost_build::Config::new();
+    config
+        .out_dir(out_dir)
+        .protoc_arg("--experimental_allow_proto3_optional")
+        .extern_path(
+            ".proto.control_plane.v1",
+            "scion_protobuf::control_plane::v1",
+        )
+        .extern_path(
+            ".proto.control_plane.experimental.v1",
+            "scion_protobuf::control_plane::v1",
+        )
+        .extern_path(".proto.crypto.v1", "scion_protobuf::crypto::v1")
+        .compile_protos(&proto_files, &proto_roots)?;
+
+    Ok(())
+}
+
+fn compile_hsd_api_protobuf(out_dir: &str) -> anyhow::Result<()> {
+    let proto_roots = [
+        "hsd-api/hsd-api-protobuf/protobuf",
+        "scion-proto/scion-protobuf",
+    ];
+    let proto_files = get_proto_files("hsd-api/hsd-api-protobuf/protobuf")?;
     let mut config = prost_build::Config::new();
     config
         .out_dir(out_dir)

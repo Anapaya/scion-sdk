@@ -53,7 +53,7 @@ use endhost_api_models::underlays::Underlays;
 use endhost_api_protobuf::endhost::api_service::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
-use scion_proto::{address::IsdAsn, path::segment::Segments};
+use scion_proto::{address::IsdAsn, path::segment::SegmentsPage};
 use scion_sdk_reqwest_connect_rpc::{
     client::{CrpcClient, CrpcClientError},
     token_source::TokenSource,
@@ -86,7 +86,7 @@ pub trait EndhostApiClient: Send + Sync {
         dst: IsdAsn,
         page_size: i32,
         page_token: String,
-    ) -> Result<Segments, CrpcClientError>;
+    ) -> Result<SegmentsPage, CrpcClientError>;
 }
 
 /// Connect RPC endhost API client.
@@ -154,7 +154,7 @@ impl EndhostApiClient for CrpcEndhostApiClient {
         dst: IsdAsn,
         page_size: i32,
         page_token: String,
-    ) -> Result<Segments, CrpcClientError> {
+    ) -> Result<SegmentsPage, CrpcClientError> {
         self.client
             .unary_request::<ListSegmentsRequest, ListSegmentsResponse>(
                 &format!("{ENDHOST_API_V1}.{PATH_SERVICE}{LIST_PATHS}"),

@@ -86,13 +86,13 @@ async fn should_have_working_eh_api() -> anyhow::Result<()> {
 
     assert_eq!(underlays.snap_underlay.len(), 1);
 
-    let segments = eh_client
+    let page = eh_client
         .list_segments(ia1, ia2, 256, "".to_string())
         .await
         .context("error listing segments")?;
 
-    assert_eq!(segments.down_segments.len(), 1);
-    assert_eq!(segments.core_segments.len(), 1);
+    assert_eq!(page.segments.down_segments.len(), 1);
+    assert_eq!(page.segments.core_segments.len(), 1);
 
     Ok(())
 }

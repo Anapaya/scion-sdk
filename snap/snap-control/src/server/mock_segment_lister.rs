@@ -16,7 +16,7 @@
 use endhost_api_models::PathDiscovery;
 use scion_proto::{
     address::IsdAsn,
-    path::{Segments, SegmentsError},
+    path::{Segments, SegmentsError, SegmentsPage},
     test::graph::{Graph, default_graph},
 };
 use tonic::async_trait;
@@ -54,7 +54,7 @@ impl PathDiscovery for MockSegmentLister {
         dst: IsdAsn,
         _page_size: i32,
         _page_token: String,
-    ) -> Result<scion_proto::path::Segments, scion_proto::path::SegmentsError> {
+    ) -> Result<scion_proto::path::SegmentsPage, scion_proto::path::SegmentsError> {
         if self.supported_ases != (src, dst) && self.supported_ases != (dst, src) {
             return Err(SegmentsError::InvalidArgument(format!(
                 "Only queries from {} to {} and back are supported",
@@ -62,22 +62,24 @@ impl PathDiscovery for MockSegmentLister {
             )));
         };
 
-        Ok(Segments {
-            up_segments: vec![
-                self.graph
-                    .beacon("1-ff00:0:130".parse().unwrap(), &[111, 478])
-                    .unwrap(),
-            ],
-            core_segments: vec![
-                self.graph
-                    .beacon("2-ff00:0:210".parse().unwrap(), &[450, 502, 1])
-                    .unwrap(),
-            ],
-            down_segments: vec![
-                self.graph
-                    .beacon("2-ff00:0:210".parse().unwrap(), &[451, 2])
-                    .unwrap(),
-            ],
+        Ok(SegmentsPage {
+            segments: Segments {
+                up_segments: vec![
+                    self.graph
+                        .beacon("1-ff00:0:130".parse().unwrap(), &[111, 478])
+                        .unwrap(),
+                ],
+                core_segments: vec![
+                    self.graph
+                        .beacon("2-ff00:0:210".parse().unwrap(), &[450, 502, 1])
+                        .unwrap(),
+                ],
+                down_segments: vec![
+                    self.graph
+                        .beacon("2-ff00:0:210".parse().unwrap(), &[451, 2])
+                        .unwrap(),
+                ],
+            },
             next_page_token: "".to_string(),
         })
     }

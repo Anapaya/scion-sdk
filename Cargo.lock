@@ -1436,6 +1436,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hsd-api-protobuf"
+version = "0.2.0"
+dependencies = [
+ "prost",
+ "scion-proto",
+ "scion-protobuf",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

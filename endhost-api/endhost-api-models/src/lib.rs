@@ -15,7 +15,7 @@
 
 use scion_proto::{
     address::IsdAsn,
-    path::{SegmentsError, segment::Segments},
+    path::{SegmentsError, segment::SegmentsPage},
 };
 
 use crate::underlays::Underlays;
@@ -38,5 +38,5 @@ pub trait PathDiscovery: Send + Sync {
         dst: IsdAsn,
         page_size: i32,
         page_token: String,
-    ) -> Result<Segments, SegmentsError>;
+    ) -> Result<SegmentsPage, SegmentsError>;
 }
