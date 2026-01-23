@@ -17,17 +17,10 @@
 //! Use the builder pattern to configure refresh intervals, timeouts, and minimum token lifetimes.
 //! See [`RefreshTokenSourceBuilder`] for details.
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tokio::{
-    sync::{Notify, RwLock},
-    task::JoinHandle,
-    time::timeout,
-};
+use tokio::{sync::watch, task::JoinHandle};
 
 use crate::token_source::{TokenSource, TokenSourceError};
 
@@ -94,7 +87,6 @@ impl<T: TokenRefresher> RefreshTokenSourceBuilder<T> {
             self.refresh_retry_delay,
             self.refresh_threshold,
             self.refresh_timeout,
-            self.min_token_lifetime,
         )
     }
 }
@@ -105,14 +97,7 @@ impl<T: TokenRefresher> RefreshTokenSourceBuilder<T> {
 /// A [TokenSource] automatically refreshing the token before it expires.
 pub struct RefreshTokenSource {
     /// Shared state between the background refresh task and the token source.
-    result: Arc<RwLock<Option<Result<TokenWithExpiry, TokenSourceError>>>>,
-    /// Notifies waiters when a refresh has completed.
-    refresh_notify: Arc<Notify>,
-    /// The duration to wait for a refresh to complete when `get_token` is called before a timeout
-    /// error is returned.
-    refresh_timeout: Duration,
-    /// Minimum lifetime a token must have to be considered valid when returned by `get_token`.
-    min_token_lifetime: Duration,
+    watch_rx: watch::Receiver<Option<Result<String, TokenSourceError>>>,
     // Handle to manage the background task, ensuring it is aborted when the `RefreshTokenSource`
     // is dropped.
     #[allow(unused)]
@@ -142,15 +127,12 @@ impl RefreshTokenSource {
         token_refresher: impl TokenRefresher,
         refresh_retry_delay: Duration,
         refresh_threshold: Duration,
-        refresh_timeout: Duration,
         min_token_lifetime: Duration,
     ) -> Self {
-        let refresh_notify = Arc::new(Notify::new());
-        let result = Arc::new(RwLock::new(None));
+        let (watch_tx, watch_rx) = tokio::sync::watch::channel(None);
         let inner = RefreshTokenSourceTask {
             name,
-            result: result.clone(),
-            refresh_notify: refresh_notify.clone(),
+            watch_tx,
             refresh_retry_delay,
             refresh_threshold,
             min_token_lifetime,
@@ -160,10 +142,7 @@ impl RefreshTokenSource {
         let task_handle = inner.run();
 
         Self {
-            result: result.clone(),
-            refresh_notify,
-            refresh_timeout,
-            min_token_lifetime,
+            watch_rx,
             task_handle,
         }
     }
@@ -171,42 +150,13 @@ impl RefreshTokenSource {
 
 #[async_trait]
 impl TokenSource for RefreshTokenSource {
-    async fn get_token(&self) -> Result<String, TokenSourceError> {
-        loop {
-            let guard = self.result.read().await;
-
-            match guard.as_ref() {
-                // Return the token if it is still valid for at least `min_token_lifetime`
-                Some(Ok(token))
-                    if token.expires_at > (Instant::now() + self.min_token_lifetime) =>
-                {
-                    return Ok(token.token.clone());
-                }
-                // If we have an error, return it
-                Some(Err(e)) => {
-                    // Stringify the error to avoid lifetime issues
-                    return Err(e.to_string().into());
-                }
-                // If we have a expired token or no result wait for a refresh and try again
-                Some(Ok(_)) | None => {
-                    let notify = self.refresh_notify.clone();
-                    let notified = notify.notified();
-
-                    // Must drop after getting a notified to avoid missing a notification
-                    drop(guard);
-
-                    timeout(self.refresh_timeout, notified)
-                        .await
-                        .map_err(|_| "timed out waiting for token refresh".to_string())?;
-
-                    continue;
-                }
-            }
-        }
+    fn watch(&self) -> watch::Receiver<Option<Result<String, TokenSourceError>>> {
+        self.watch_rx.clone()
     }
 }
 
 /// A token with its expiry time.
+#[derive(Clone, Debug)]
 pub struct TokenWithExpiry {
     /// JWT string.
     pub token: String,
@@ -231,8 +181,7 @@ impl Drop for RefreshingTokenSourceTaskHandle {
 
 struct RefreshTokenSourceTask {
     name: String,
-    result: Arc<RwLock<Option<Result<TokenWithExpiry, TokenSourceError>>>>,
-    refresh_notify: Arc<Notify>,
+    watch_tx: watch::Sender<Option<Result<String, TokenSourceError>>>,
     refresh_retry_delay: Duration,
     refresh_threshold: Duration,
     #[allow(clippy::type_complexity)]
@@ -244,10 +193,11 @@ impl RefreshTokenSourceTask {
     fn run(self) -> RefreshingTokenSourceTaskHandle {
         let handle = tokio::spawn(async move {
             let mut fail_count = 0;
+            let mut current_token: Option<TokenWithExpiry> = None;
             loop {
                 // Determine when to next refresh the token.
-                let token_expiry = match self.result.read().await.as_ref() {
-                    Some(Ok(token)) => token.expires_at,
+                let token_expiry = match current_token {
+                    Some(ref token) => token.expires_at,
                     // No token yet, or last refreshes failed, try to get a new token immediately.
                     _ => Instant::now(),
                 };
@@ -291,12 +241,8 @@ impl RefreshTokenSourceTask {
                             "Refreshed token"
                         );
 
-                        // Store the new token and notify waiters
-                        {
-                            let mut write_guard = self.result.write().await;
-                            *write_guard = Some(Ok(token));
-                            self.refresh_notify.notify_waiters(); // Must be inside the write lock to avoid missed notifications
-                        }
+                        current_token = Some(token.clone());
+                        self.watch_tx.send_replace(Some(Ok(token.token)));
                     }
                     // Failed to refresh the token, log the error and retry after a delay
                     Err(e) => {
@@ -314,11 +260,8 @@ impl RefreshTokenSourceTask {
                         // If the current token is still valid, keep it, otherwise store the error
                         // and notify waiters
                         if token_expiry <= Instant::now() + self.min_token_lifetime {
-                            {
-                                let mut write_guard = self.result.write().await;
-                                *write_guard = Some(Err(e));
-                                self.refresh_notify.notify_waiters(); // Must be inside the write lock to avoid missed notifications
-                            }
+                            current_token = None;
+                            self.watch_tx.send_replace(Some(Err(e)));
                             continue;
                         }
 

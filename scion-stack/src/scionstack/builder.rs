@@ -18,7 +18,7 @@ use std::{borrow::Cow, net, sync::Arc, time::Duration};
 use endhost_api_client::client::CrpcEndhostApiClient;
 // Re-export for consumer
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
-use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
+use scion_sdk_reqwest_connect_rpc::token_source::{TokenSource, static_token::StaticTokenSource};
 use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
 use url::Url;
 
@@ -27,7 +27,6 @@ use crate::{
     underlays::{
         SnapSocketConfig, UnderlayStack,
         discovery::PeriodicUnderlayDiscovery,
-        snap::TokenRenewal,
         udp::{LocalIpResolver, TargetAddrLocalIpResolver},
     },
 };
@@ -103,7 +102,7 @@ impl ScionStackBuilder {
 
     /// Set a static token to use for authentication with the endhost API.
     pub fn with_endhost_api_auth_token(mut self, token: String) -> Self {
-        self.endhost_api_token_source = Some(Arc::new(token));
+        self.endhost_api_token_source = Some(Arc::new(StaticTokenSource::from(token)));
         self
     }
 
@@ -119,7 +118,7 @@ impl ScionStackBuilder {
     /// plane.
     /// If a more specific token is set, it takes precedence over this token.
     pub fn with_auth_token(mut self, token: String) -> Self {
-        self.auth_token_source = Some(Arc::new(token));
+        self.auth_token_source = Some(Arc::new(StaticTokenSource::from(token)));
         self
     }
 
@@ -190,7 +189,6 @@ impl ScionStackBuilder {
             local_ip_resolver,
             SnapSocketConfig {
                 snap_token_source: snap.snap_token_source.or(auth_token_source),
-                renewal_wait_threshold: snap.auto_token_renewal.renewal_wait_threshold,
                 reconnect_backoff: ExponentialBackoff::new_from_config(
                     snap.tunnel_reconnect_backoff,
                 ),
@@ -265,7 +263,6 @@ pub enum PreferredUnderlay {
 pub struct SnapUnderlayConfig {
     snap_token_source: Option<Arc<dyn TokenSource>>,
     snap_dp_index: usize,
-    auto_token_renewal: TokenRenewal,
     tunnel_reconnect_backoff: BackoffConfig,
 }
 
@@ -274,7 +271,6 @@ impl Default for SnapUnderlayConfig {
         Self {
             snap_token_source: None,
             snap_dp_index: 0,
-            auto_token_renewal: TokenRenewal::default(),
             tunnel_reconnect_backoff: DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF,
         }
     }
@@ -293,23 +289,13 @@ pub struct SnapUnderlayConfigBuilder(SnapUnderlayConfig);
 impl SnapUnderlayConfigBuilder {
     /// Set a static token to use for authentication with the SNAP control plane.
     pub fn with_auth_token(mut self, token: String) -> Self {
-        self.0.snap_token_source = Some(Arc::new(token));
+        self.0.snap_token_source = Some(Arc::new(StaticTokenSource::from(token)));
         self
     }
 
     /// Set a token source to use for authentication with the SNAP control plane.
     pub fn with_auth_token_source(mut self, source: impl TokenSource) -> Self {
         self.0.snap_token_source = Some(Arc::new(source));
-        self
-    }
-
-    /// Set the automatic SNAP token renewal.
-    ///
-    /// # Arguments
-    ///
-    /// * `interval` - The interval before SNAP token expiry to wait before attempting renewal.
-    pub fn with_auto_token_renewal(mut self, interval: Duration) -> Self {
-        self.0.auto_token_renewal = TokenRenewal::new(interval);
         self
     }
 

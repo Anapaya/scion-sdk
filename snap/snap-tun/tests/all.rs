@@ -24,12 +24,13 @@ use bytes::Bytes;
 use quinn::{Endpoint, TransportConfig, crypto::rustls::QuicClientConfig, rustls};
 use rustls::ClientConfig;
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
+use scion_sdk_reqwest_connect_rpc::token_source::{
+    mock::MockTokenSource, static_token::StaticTokenSource,
+};
 use scion_sdk_token_validator::validator::{Token, TokenValidator, TokenValidatorError};
 use serde::{Deserialize, Serialize};
 use snap_tun::{
-    client::{
-        AutoTokenRenewal, ClientBuilder, Control, DEFAULT_RENEWAL_WAIT_THRESHOLD, Receiver, Sender,
-    },
+    client::{ClientBuilder, Control, Receiver, Sender},
     metrics::Metrics,
     server_deprecated::ControlError,
 };
@@ -158,27 +159,32 @@ pub async fn auto_token_renewal() {
     let mut js = JoinSet::<()>::new();
     js.spawn(run_server(quic_srv, srv));
 
+    let token_src = Arc::new(MockTokenSource::new(MAGIC_TOKEN.to_string()));
+
     let c = quic_client
         .connect(srv_addr, "localhost")
         .expect("no fail")
         .await
         .expect("no_fail");
 
-    let (_tx, _rx, ctrl) = ClientBuilder::new(MAGIC_TOKEN)
-        .with_auto_token_renewal(AutoTokenRenewal::new(
-            DEFAULT_RENEWAL_WAIT_THRESHOLD,
-            Arc::new(move || Box::pin(async move { Ok(MAGIC_TOKEN.to_string()) })),
-        ))
+    let (_tx, _rx, ctrl) = ClientBuilder::new(token_src.clone())
         .connect(c)
         .await
         .expect("no fail");
-    assert_eq!(
-        ctrl.assigned_sock_addr(),
-        Some(quic_client.local_addr().unwrap())
-    );
 
-    // Given the token is only valid for 3 seconds, sleeping for 2 seconds ensures a token update.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    let validity_before = ctrl.token_expiry();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Update the token in the source to trigger auto-renewal
+    token_src.update_token(MAGIC_TOKEN.to_string());
+    // Wait some time for the update to be processed
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let validity_after = ctrl.token_expiry();
+    assert!(
+        validity_after > validity_before,
+        "token expiry should have changed {:?} > {:?}",
+        chrono::DateTime::<chrono::Utc>::from(validity_after),
+        chrono::DateTime::<chrono::Utc>::from(validity_before)
+    );
 }
 
 fn prepare_snaptun_server(
@@ -200,7 +206,7 @@ async fn prepare_snaptun_client(
         .await
         .expect("no_fail");
 
-    let client_builder = ClientBuilder::new(MAGIC_TOKEN);
+    let client_builder = ClientBuilder::new(Arc::new(StaticTokenSource::from(MAGIC_TOKEN)));
     let (tx, rx, ctrl) = client_builder.connect(c).await.expect("no fail");
     assert_eq!(
         ctrl.assigned_sock_addr(),

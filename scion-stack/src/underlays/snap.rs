@@ -34,7 +34,7 @@ use scion_proto::{
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
-use snap_tun::client::{AutoTokenRenewal, ClientBuilder, DEFAULT_RENEWAL_WAIT_THRESHOLD};
+use snap_tun::client::ClientBuilder;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{sync::futures::OwnedNotified, task::JoinHandle};
 use url::Url;
@@ -94,7 +94,6 @@ impl SnapUnderlaySocket {
         data_plane_server_name: String,
         underlay_discovery: Arc<dyn UnderlayDiscovery>,
         snap_token_source: Arc<dyn TokenSource>,
-        renewal_wait_threshold: Duration,
         backoff: ExponentialBackoff,
     ) -> Result<Self, crate::scionstack::ScionSocketBindError> {
         // Establish the initial tunnel.
@@ -123,7 +122,6 @@ impl SnapUnderlaySocket {
         let tunnel = new_snaptun(
             &endpoint,
             snap_token_source.clone(),
-            renewal_wait_threshold,
             data_plane.address,
             data_plane_server_name.clone(),
         )
@@ -178,7 +176,6 @@ impl SnapUnderlaySocket {
             backoff,
             snap_cp_client: (snap_cp.clone(), snap_cp_client),
             inner: inner.clone(),
-            renewal_wait_threshold,
             data_plane_server_name,
         };
         let task = tokio::spawn(task.run());
@@ -306,7 +303,6 @@ struct SnapUnderlaySocketTask {
     pub backoff: ExponentialBackoff,
     pub snap_cp_client: (url::Url, CrpcSnapControlClient),
     pub inner: Arc<SnapUnderlaySocketInner>,
-    pub renewal_wait_threshold: Duration,
     pub data_plane_server_name: String,
 }
 
@@ -361,7 +357,6 @@ impl SnapUnderlaySocketTask {
                     let new_connection = new_snaptun(
                         &self.inner.endpoint,
                         self.snap_token_source.clone(),
-                        self.renewal_wait_threshold,
                         data_plane.address,
                         self.data_plane_server_name.clone(),
                     )
@@ -405,7 +400,6 @@ struct SnapTunConnection {
 async fn new_snaptun(
     endpoint: &quinn::Endpoint,
     token_source: Arc<dyn TokenSource>,
-    renewal_wait_threshold: Duration,
     data_plane_addr: net::SocketAddr,
     data_plane_server_name: String,
 ) -> anyhow::Result<SnapTunConnection> {
@@ -415,17 +409,7 @@ async fn new_snaptun(
 
     tracing::trace!(%data_plane_addr, "Connected");
 
-    let token = token_source
-        .get_token()
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to get token: {e:?}"))?;
-    let client_builder = ClientBuilder::new(token).with_auto_token_renewal(AutoTokenRenewal::new(
-        renewal_wait_threshold,
-        Arc::new(move || {
-            let token_source = token_source.clone();
-            Box::pin(async move { token_source.get_token().await })
-        }),
-    ));
+    let client_builder = ClientBuilder::new(token_source);
 
     let (sender, receiver, ctrl) = client_builder.connect(conn).await?;
     Ok(SnapTunConnection {
@@ -725,28 +709,4 @@ fn quinn_client_endpoint(addr: net::SocketAddr) -> io::Result<quinn::Endpoint> {
         runtime.wrap_udp_socket(socket.into())?,
         runtime,
     )
-}
-
-/// Configuration for automatic SNAP token renewal.
-#[derive(Clone)]
-pub struct TokenRenewal {
-    /// Threshold for waiting for the next renewal of the SNAP token.
-    pub renewal_wait_threshold: std::time::Duration,
-}
-
-impl Default for TokenRenewal {
-    fn default() -> Self {
-        TokenRenewal {
-            renewal_wait_threshold: DEFAULT_RENEWAL_WAIT_THRESHOLD,
-        }
-    }
-}
-
-impl TokenRenewal {
-    /// Creates a new session renewal configuration.
-    pub fn new(renewal_wait_threshold: std::time::Duration) -> Self {
-        TokenRenewal {
-            renewal_wait_threshold,
-        }
-    }
 }

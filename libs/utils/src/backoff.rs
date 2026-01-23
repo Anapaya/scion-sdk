@@ -35,7 +35,7 @@ pub struct ExponentialBackoff {
 }
 impl ExponentialBackoff {
     /// Creates a new [`ExponentialBackoff`].
-    pub fn new(
+    pub const fn new(
         minimum_delay_secs: f32,
         maximum_delay_secs: f32,
         factor: f32,

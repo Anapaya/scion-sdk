@@ -18,3 +18,8 @@ pub mod crpc_api;
 pub mod model;
 pub mod protobuf;
 pub mod server;
+
+/// Re-exported dependencies.
+pub mod reexport {
+    pub use scion_sdk_reqwest_connect_rpc::token_source::*;
+}

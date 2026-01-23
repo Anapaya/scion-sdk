@@ -13,7 +13,7 @@
 // limitations under the License.
 //! SCION stack underlay implementations.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
@@ -42,8 +42,6 @@ pub struct SnapSocketConfig {
     /// Source for SNAP token. If this is None, no SNAP sockets
     /// can be bound.
     pub snap_token_source: Option<Arc<dyn TokenSource>>,
-    /// Threshold for waiting before sending a fresh SNAP token to the SNAP data plane.
-    pub renewal_wait_threshold: Duration,
     /// Backoff for reconnecting a SNAP tunnel.
     pub reconnect_backoff: ExponentialBackoff,
 }
@@ -127,7 +125,6 @@ impl UnderlayStack {
             "localhost".to_string(),
             self.underlay_discovery.clone(),
             token_source,
-            self.snap_socket_config.renewal_wait_threshold,
             self.snap_socket_config.reconnect_backoff,
         )
         .await?;

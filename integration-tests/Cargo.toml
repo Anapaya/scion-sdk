@@ -21,7 +21,6 @@ scion-sdk-reqwest-connect-rpc = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
 scion-stack = { workspace = true }
-snap-control = { workspace = true }
 snap-tokens = { workspace = true }
 test-log = { workspace = true }
 tokio = { workspace = true }

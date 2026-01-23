@@ -30,6 +30,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 x509-cert = { workspace = true }
+scion-sdk-reqwest-connect-rpc = { workspace = true }
 zerocopy = { workspace = true }
 
 [dev-dependencies]
