@@ -70,13 +70,14 @@ pub mod traits {
     }
 
     /// Segment fetcher trait.
+    #[async_trait::async_trait]
     pub trait SegmentFetcher: Send + Sync + 'static {
         /// Fetch path segments between src and dst.
-        fn fetch_segments<'a>(
-            &'a self,
+        async fn fetch_segments(
+            &self,
             src: IsdAsn,
             dst: IsdAsn,
-        ) -> impl Future<Output = Result<Segments, SegmentFetchError>> + Send + 'a;
+        ) -> Result<Segments, SegmentFetchError>;
     }
 
     /// Segment fetch error.
@@ -92,33 +93,73 @@ pub mod traits {
 }
 
 /// Path fetcher.
-pub struct PathFetcherImpl<F: SegmentFetcher = ConnectRpcSegmentFetcher> {
-    segment_fetcher: F,
+pub struct PathFetcherImpl {
+    segment_fetchers: Vec<Box<dyn SegmentFetcher>>,
 }
 
-impl<F: SegmentFetcher> PathFetcherImpl<F> {
+impl PathFetcherImpl {
     /// Creates a new path fetcher.
-    pub fn new(segment_fetcher: F) -> Self {
-        Self { segment_fetcher }
+    pub fn new(segment_fetchers: Vec<Box<dyn SegmentFetcher>>) -> Self {
+        Self { segment_fetchers }
     }
 }
 
-impl<L: SegmentFetcher> PathFetcher for PathFetcherImpl<L> {
+impl PathFetcher for PathFetcherImpl {
     async fn fetch_paths(&self, src: IsdAsn, dst: IsdAsn) -> Result<Vec<Path>, PathFetchError> {
-        let Segments {
-            core_segments,
-            non_core_segments,
-        } = self.segment_fetcher.fetch_segments(src, dst).await?;
+        let mut all_core_segments = Vec::new();
+        let mut all_non_core_segments = Vec::new();
 
-        tracing::trace!(
-            n_core_segments = core_segments.len(),
-            n_non_core_segments = non_core_segments.len(),
-            src = %src,
-            dst = %dst,
-            "Fetched segments"
-        );
+        // Fetch segments from all fetchers concurrently
+        let fetch_tasks: Vec<_> = self
+            .segment_fetchers
+            .iter()
+            .map(|fetcher| fetcher.fetch_segments(src, dst))
+            .collect();
 
-        let paths = path::combinator::combine(src, dst, core_segments, non_core_segments);
+        let results = futures::future::join_all(fetch_tasks).await;
+
+        // Track errors and successes
+        let mut errors = Vec::new();
+
+        for (i, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(Segments {
+                    core_segments,
+                    non_core_segments,
+                }) => {
+                    tracing::trace!(
+                        fetcher_index = i,
+                        n_core_segments = core_segments.len(),
+                        n_non_core_segments = non_core_segments.len(),
+                        %src,
+                        %dst,
+                        "Segment fetcher succeeded"
+                    );
+                    all_core_segments.extend(core_segments);
+                    all_non_core_segments.extend(non_core_segments);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        %src,
+                        %dst,
+                        %err,
+                        "Segment fetcher failed"
+                    );
+                    errors.push(err);
+                }
+            }
+        }
+
+        let paths = path::combinator::combine(src, dst, all_core_segments, all_non_core_segments);
+
+        // If there were errors but we still have paths, we still return the paths and only log the
+        // fetcher errors.
+        if !errors.is_empty() && paths.is_empty() {
+            return Err(PathFetchError::FetchSegments(
+                errors.into_iter().next().unwrap(),
+            ));
+        }
+
         Ok(paths)
     }
 }
@@ -135,6 +176,7 @@ impl ConnectRpcSegmentFetcher {
     }
 }
 
+#[async_trait::async_trait]
 impl SegmentFetcher for ConnectRpcSegmentFetcher {
     async fn fetch_segments(
         &self,

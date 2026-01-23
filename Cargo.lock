@@ -3295,6 +3295,7 @@ dependencies = [
  "anapaya-quinn",
  "anyhow",
  "arc-swap",
+ "async-trait",
  "bytes",
  "chrono",
  "endhost-api-client",

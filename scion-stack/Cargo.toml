@@ -13,6 +13,7 @@ categories = ["network-programming"]
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
+async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 endhost-api-client = { workspace = true }

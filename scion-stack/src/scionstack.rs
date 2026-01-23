@@ -219,7 +219,7 @@ pub use self::builder::ScionStackBuilder;
 use crate::{
     path::{
         PathStrategy,
-        fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl},
+        fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl, traits::SegmentFetcher},
         manager::{MultiPathManager, MultiPathManagerConfig},
         policy::PathPolicy,
         scoring::PathScoring,
@@ -303,7 +303,13 @@ impl ScionStack {
                 self.scmp_error_receivers.clone(),
             ))],
         );
-        let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+
+        if !socket_config.disable_endhost_api_segment_fetcher {
+            let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
+                Box::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+            socket_config.segment_fetchers.push(connect_rpc_fetcher);
+        }
+        let fetcher = PathFetcherImpl::new(socket_config.segment_fetchers);
 
         // Use default scorers if none are configured.
         if socket_config.path_strategy.scoring.is_empty() {
@@ -495,7 +501,13 @@ impl ScionStack {
         let address_translator = Arc::new(AddressTranslator::default());
 
         let pather = {
-            let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+            let mut segment_fetchers = socket_config.segment_fetchers;
+            if !socket_config.disable_endhost_api_segment_fetcher {
+                let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
+                    Box::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+                segment_fetchers.push(connect_rpc_fetcher);
+            }
+            let fetcher = PathFetcherImpl::new(segment_fetchers);
 
             // Use default scorers if none are configured.
             let mut strategy = socket_config.path_strategy;
@@ -546,8 +558,10 @@ impl ScionStack {
     }
 
     /// Creates a path manager with default configuration.
-    pub fn create_path_manager(&self) -> MultiPathManager {
-        let fetcher = PathFetcherImpl::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+    pub fn create_path_manager(&self) -> MultiPathManager<PathFetcherImpl> {
+        let fetcher = PathFetcherImpl::new(vec![Box::new(ConnectRpcSegmentFetcher::new(
+            self.client.clone(),
+        ))]);
         let mut strategy = PathStrategy::default();
 
         strategy.scoring.use_default_scorers();
@@ -563,6 +577,8 @@ pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Configuration for a path aware socket.
 #[derive(Default)]
 pub struct SocketConfig {
+    pub(crate) segment_fetchers: Vec<Box<dyn SegmentFetcher>>,
+    pub(crate) disable_endhost_api_segment_fetcher: bool,
     pub(crate) path_strategy: PathStrategy,
     pub(crate) connect_timeout: Duration,
 }
@@ -571,6 +587,8 @@ impl SocketConfig {
     /// Creates a new default socket configuration.
     pub fn new() -> Self {
         Self {
+            segment_fetchers: Vec::new(),
+            disable_endhost_api_segment_fetcher: false,
             path_strategy: Default::default(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
@@ -609,12 +627,27 @@ impl SocketConfig {
         self.connect_timeout = timeout;
         self
     }
+
+    /// Add an additional segment fetcher.
+    ///
+    /// By default, only path segments retrieved via the endhost API are used. Adding additional
+    /// segment fetchers enables to build paths from different segment sources.
+    pub fn with_segment_fetcher(mut self, fetcher: Box<dyn SegmentFetcher>) -> Self {
+        self.segment_fetchers.push(fetcher);
+        self
+    }
+
+    /// Disable fetching path segments from the endhost API.
+    pub fn disable_endhost_api_segment_fetcher(mut self) -> Self {
+        self.disable_endhost_api_segment_fetcher = true;
+        self
+    }
 }
 
 /// Error return when binding a socket.
 #[derive(Debug, thiserror::Error)]
 pub enum ScionSocketBindError {
-    /// The provided bind address cannot be bount to.
+    /// The provided bind address cannot be bound to.
     /// E.g. because it is not assigned to the endhost or because the address
     /// type is not supported.
     #[error("invalid bind address {0}: {1}")]
