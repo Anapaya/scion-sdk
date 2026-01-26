@@ -2385,10 +2385,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "clap",
  "derive_more",
+ "dhsd",
  "ed25519-dalek",
  "endhost-api",
  "endhost-api-client",
@@ -2424,6 +2426,7 @@ dependencies = [
  "utoipa-axum",
  "utoipa-redoc",
  "uuid",
+ "x25519-dalek",
 ]
 
 [[package]]

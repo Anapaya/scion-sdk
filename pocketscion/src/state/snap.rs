@@ -30,12 +30,15 @@ use snap_control::{
 };
 use snap_dataplane::state::Id;
 use utoipa::ToSchema;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
     dto::SnapStateDto,
     io_config::SharedPocketScionIoConfig,
     state::{SharedPocketScionState, SystemState},
 };
+
+const SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL: &str = "snaptun_server_private_key";
 
 /// Pocket SCION SNAP state.
 #[derive(Debug, PartialEq, Clone)]
@@ -215,6 +218,14 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
         snap_control::crpc_api::api_service::model::SnapDataPlane,
         (http::StatusCode, anyhow::Error),
     > {
+        let public_key = {
+            let root_secret = self.system_state.read().unwrap().root_secret();
+            let key = root_secret.derive_from_iter(vec![
+                SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL.into(),
+                self.snap_id.to_string().into(),
+            ]);
+            PublicKey::from(&StaticSecret::from(key.as_array()))
+        };
         Ok(SnapDataPlane {
             address: self
                 .io_config
@@ -225,8 +236,8 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
                         anyhow::anyhow!("No data plane available"),
                     )
                 })?,
-            snap_tun_control_address: None,
-            snap_static_x25519: None,
+            snap_tun_control_address: self.io_config.snap_control_addr(self.snap_id),
+            snap_static_x25519: Some(public_key),
         })
     }
 }

@@ -419,6 +419,13 @@ components:
             type: integer
             description: Endhost API instance identifier.
             minimum: 0
+        root_secret:
+          type:
+          - string
+          - 'null'
+          description: |-
+            The root secret used to derive the secrets for the SNAPs.
+            It must base 64 encoded and 32 bytes long.
         routers:
           type: object
           description: The list of SCION routers.

@@ -12,6 +12,7 @@ categories = ["network-programming"]
 
 [dependencies]
 # Local Dependencies
+dhsd = { workspace = true }
 scion-sdk-address-manager = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
@@ -32,6 +33,7 @@ endhost-api-models = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 anyhow = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
@@ -59,6 +61,7 @@ url = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
 utoipa-axum = { workspace = true }
 utoipa-redoc = { workspace = true, features = ["axum"] }
+x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 endhost-api-client = { workspace = true }

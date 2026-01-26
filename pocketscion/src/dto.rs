@@ -39,6 +39,9 @@ use crate::{
 /// The pocket SCION system state.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct SystemStateDto {
+    /// The root secret used to derive the secrets for the SNAPs.
+    /// It must base 64 encoded and 32 bytes long.
+    pub root_secret: Option<String>,
     /// The public key (PEM format) to verify SNAP tokens.
     pub snap_token_public_key: String,
     /// Test authentication server.

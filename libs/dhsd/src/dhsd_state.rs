@@ -52,6 +52,11 @@ impl DhsdSecret {
         path.into_iter()
             .fold(self.clone(), |a, label| a.derive(label))
     }
+
+    /// Returns the secret as a byte slice.
+    pub fn as_array(&self) -> [u8; 32] {
+        self.0
+    }
 }
 
 impl From<[u8; 32]> for DhsdSecret {
@@ -63,6 +68,18 @@ impl From<[u8; 32]> for DhsdSecret {
 impl From<[u8; 32]> for NodeLabel {
     fn from(value: [u8; 32]) -> Self {
         Self(value)
+    }
+}
+
+impl From<DhsdSecret> for [u8; 32] {
+    fn from(value: DhsdSecret) -> Self {
+        value.0
+    }
+}
+
+impl From<&DhsdSecret> for [u8; 32] {
+    fn from(value: &DhsdSecret) -> Self {
+        value.0
     }
 }
 

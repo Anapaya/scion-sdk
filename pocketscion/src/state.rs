@@ -23,7 +23,9 @@ use std::{
 };
 
 use anyhow::Context as _;
+use base64::{Engine as _, prelude::BASE64_STANDARD};
 use derive_more::Display;
+use dhsd::DhsdSecret;
 use ipnet::IpNet;
 use pem::Pem;
 use scion_proto::address::IsdAsn;
@@ -59,6 +61,8 @@ pub mod snap;
 
 /// The default keepalive interval for the SNAPtun connection(s).
 pub const DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+/// The default root secret for PocketSCION.
+pub const DEFAULT_POCKET_SCION_ROOT_SECRET: [u8; 32] = [67u8; 32];
 
 /// The internal state of PocketScion.
 #[derive(Clone)]
@@ -296,6 +300,7 @@ impl SharedPocketScionState {
 /// Pocket SCION system state.
 #[derive(Debug, Clone)]
 pub struct SystemState {
+    root_secret: DhsdSecret,
     start_time: SystemTime,
     snap_token_public_pem: Pem,
     snaptun_keepalive_interval: Duration,
@@ -312,6 +317,7 @@ impl SystemState {
     /// Creates a new [SystemState] with the given start time.
     pub fn default_from_start_time(start_time: SystemTime) -> Self {
         Self {
+            root_secret: DhsdSecret::from_root_secret([67u8; 32]),
             start_time,
             snap_token_public_pem: insecure_const_ed25519_key_pair_pem().1,
             snaps: Default::default(),
@@ -334,6 +340,11 @@ impl SystemState {
     pub fn snaps(&self) -> &BTreeMap<SnapId, SnapState> {
         &self.snaps
     }
+
+    /// Returns the root secret of the system state.
+    pub fn root_secret(&self) -> DhsdSecret {
+        self.root_secret.clone()
+    }
 }
 
 impl PartialEq for SystemState {
@@ -345,6 +356,7 @@ impl PartialEq for SystemState {
 impl From<&SystemState> for SystemStateDto {
     fn from(system_state: &SystemState) -> Self {
         Self {
+            root_secret: Some(BASE64_STANDARD.encode(system_state.root_secret.as_array())),
             auth_server_state: system_state
                 .auth_server
                 .as_ref()
@@ -374,6 +386,19 @@ impl TryFrom<SystemStateDto> for SystemState {
     type Error = anyhow::Error;
 
     fn try_from(dto: SystemStateDto) -> Result<Self, Self::Error> {
+        let root_secret = DhsdSecret::from_root_secret(
+            dto.root_secret
+                .map(|root_secret| {
+                    let bytes: [u8; 32] = BASE64_STANDARD
+                        .decode(root_secret)
+                        .context("invalid base64 encoded root secret")?
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("root secret is not 32 bytes"))?;
+                    anyhow::Ok(bytes)
+                })
+                .transpose()?
+                .unwrap_or(DEFAULT_POCKET_SCION_ROOT_SECRET),
+        );
         let snaps = dto
             .snaps
             .into_iter()
@@ -421,6 +446,7 @@ impl TryFrom<SystemStateDto> for SystemState {
         let sim_receivers = NetworkReceiverRegistry::default();
 
         Ok(SystemState {
+            root_secret,
             start_time: SystemTime::now(),
             snaptun_keepalive_interval: dto.snaptun_keepalive_interval,
             auth_server,
