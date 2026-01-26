@@ -3591,6 +3591,7 @@ name = "snap-control"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-trait",
  "axum",
  "endhost-api",
@@ -3610,6 +3611,7 @@ dependencies = [
  "scion-sdk-token-validator",
  "serde",
  "snap-tokens",
+ "snap-tun",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

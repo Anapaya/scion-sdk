@@ -12,6 +12,7 @@ categories = ["network-programming"]
 [dependencies]
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+arc-swap = { workspace = true }
 axum = { workspace = true }
 http = { workspace = true }
 jsonwebtoken = { workspace = true }
@@ -40,6 +41,7 @@ scion-sdk-observability = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 snap-tokens = { workspace = true }
+snap-tun = { workspace = true }
 
 [lints]
 workspace = true

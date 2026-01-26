@@ -74,18 +74,27 @@ pub mod model {
     /// Trait for registering a static identity for a snaptun connection.
     pub trait SnapTunIdentityRegistry: Send + Sync {
         /// Register a static identity for a snaptun connection.
-        /// Returns the servers PSK share if the registration was successful.
+        ///
+        /// For now, PSK share is ignored.
+        ///
+        /// # Return value
+        ///
+        /// Returns true if the registration is new, otherwise false.
+        ///
+        /// Eventually, might return PSK share of the server.
         fn register(
             &self,
             now: Instant,
+            // The key under which this identity is stored (at most one is allowed per identity)
+            key: &str,
             // The static identity of the client.
-            initiator_identity: PublicKey,
+            initiator_identity: [u8; 32],
             // The PSK share used to establish a shared secret with the server.
             psk_share: Option<[u8; 32]>,
             // The lifetime the registered identity is valid for.
             // Usually this is determined by the expiration of the SNAP token.
             lifetime: Duration,
-        );
+        ) -> bool;
     }
 }
 
@@ -220,7 +229,16 @@ async fn register_snaptun_identity_handler(
         })?)
     };
 
-    identity_registry.register(Instant::now(), initiator_identity, psk_share, lifetime);
+    let pssid = &snap_token.pssid.to_string();
+    if !identity_registry.register(
+        Instant::now(),
+        pssid,
+        *initiator_identity.as_bytes(),
+        psk_share,
+        lifetime,
+    ) {
+        tracing::info!(pssid, "re-registered identity");
+    }
     Ok(ConnectRpc(RegisterSnapTunIdentityResponse {
         // XXX(uniquefine): PSK is not yet supported.
         psk_share: [0u8; 32].to_vec(),

@@ -165,7 +165,7 @@ impl PocketScionRuntimeBuilder {
 
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
             let snap_resolver = pstate.snap_resolver(snap_id, io_config.clone());
-            let identity_registry = IdentityRegistry::new(pstate.snaptun_keepalive_interval());
+            let identity_registry = IdentityRegistry::new();
             let decoding_key = snap_token_decoding_key.clone();
 
             let local_ases = snap_state.isd_ases();
