@@ -61,6 +61,7 @@ axum = { version = "0.8", features = ["http2"] }
 bitfield-struct = "0.12.1"
 base64 = "0.22.1"
 bytes = "1.10"
+bitflags = "2.10"
 chrono = { version = "0.4", features = ["serde"] }
 clap = "4.5"
 cmac = "0.7"
@@ -117,6 +118,7 @@ socket2 = "0.6.1"
 tempfile = "3.23"
 test-log = { version = "0.2", features = ["trace"] }
 thiserror = "2.0"
+tinyvec = "1.10"
 tokio = { version = "1.45", features = ["full"] }
 tokio-util = "0.7"
 tonic = "0.14"

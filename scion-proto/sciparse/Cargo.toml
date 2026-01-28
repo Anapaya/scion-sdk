@@ -1,0 +1,12 @@
+[package]
+name = "sciparse"
+publish = false
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+bitflags.workspace = true
+tinyvec.workspace = true
+
+[lints]
+workspace = true

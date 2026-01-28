@@ -3324,6 +3324,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sciparse"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "thiserror 2.0.18",
+ "tinyvec",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
