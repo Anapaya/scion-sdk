@@ -92,7 +92,7 @@ pub mod path {
     // InfoFieldFlags
     bitflags::bitflags! {
         /// InfoField flags.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct InfoFieldFlags: u8 {
             /// If set to true then the hop fields are arranged in the direction they have been constructed during beaconing.
             /// (i.e. Core AS where the beacon originated )
@@ -109,7 +109,7 @@ pub mod path {
     // HopFieldFlags
     bitflags::bitflags! {
         /// HopField flags.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct HopFieldFlags: u8 {
             /// If ConsIngress Router Alert is set, the ingress router in construction direction will process the L4 payload in the packet.
             const CONS_INGRESS_ROUTER_ALERT = 0b0000_0001;
@@ -171,7 +171,7 @@ pub mod address {
 
     use tinyvec::ArrayVec;
 
-    use crate::traits::WireEncode;
+    use crate::traits::{InvalidStructureError, WireEncode};
 
     // TODO: Fully implement address types
     /// ISD (Isolation Domain) identifier.
@@ -256,13 +256,30 @@ pub mod address {
     #[repr(u8)]
     pub enum ScionHostAddrType {
         /// IPv4 address.
-        IPV4 = 0,
+        IPV4 = 0b0000,
         /// IPv6 address.
         IPV6 = 0b0011,
         /// Service address.
         Service = 0b0100,
         /// Unknown address type.
-        Unknown(u8),
+        Unknown {
+            /// Address type identifier.
+            id: u8,
+            /// Address size in bytes.
+            /// Must be 4, 8, 12, or 16.
+            size: u8,
+        },
+    }
+    impl ScionHostAddrType {
+        /// Returns the size of the address type in bytes.
+        pub fn size(&self) -> u8 {
+            match self {
+                ScionHostAddrType::IPV4 => 4,
+                ScionHostAddrType::IPV6 => 16,
+                ScionHostAddrType::Service => 4,
+                ScionHostAddrType::Unknown { size, .. } => *size,
+            }
+        }
     }
     impl From<u8> for ScionHostAddrType {
         fn from(value: u8) -> Self {
@@ -270,7 +287,11 @@ pub mod address {
                 0 => ScionHostAddrType::IPV4,
                 0b0011 => ScionHostAddrType::IPV6,
                 0b0100 => ScionHostAddrType::Service,
-                other => ScionHostAddrType::Unknown(other),
+                other => {
+                    let id = other >> 2;
+                    let size = ((other & 0b11) + 1) * 4;
+                    ScionHostAddrType::Unknown { id, size }
+                }
             }
         }
     }
@@ -280,7 +301,9 @@ pub mod address {
                 ScionHostAddrType::IPV4 => 0,
                 ScionHostAddrType::IPV6 => 0b0011,
                 ScionHostAddrType::Service => 0b0100,
-                ScionHostAddrType::Unknown(other) => other,
+                ScionHostAddrType::Unknown { id: type_id, size } => {
+                    (type_id << 2) | (size / 4).saturating_sub(1)
+                }
             }
         }
     }
@@ -300,6 +323,8 @@ pub mod address {
             /// Address type identifier.
             id: u8,
             /// Raw address bytes.
+            ///
+            /// Must be 4, 8, 12, or 16 bytes.
             bytes: ArrayVec<[u8; 16]>,
         },
     }
@@ -342,11 +367,11 @@ pub mod address {
                     })?;
                     ScionHostAddr::Service(buf)
                 }
-                ScionHostAddrType::Unknown(id) => {
+                ScionHostAddrType::Unknown { id, size } => {
                     let bytes = buf.try_into().map_err(|_| {
                         HostAddressSizeError {
                             address_type: addr_type,
-                            expected_size: 16,
+                            expected_size: size as usize,
                             actual_size: buf.len(),
                         }
                     })?;
@@ -368,41 +393,53 @@ pub mod address {
         }
 
         /// Returns the service address bytes if the address is a service address.
-        pub fn to_service_bytes(&self) -> Option<&[u8]> {
+        pub fn to_service(&self) -> Option<[u8; 4]> {
             match self {
-                ScionHostAddr::Service(bytes) => Some(bytes),
+                ScionHostAddr::Service(bytes) => Some(*bytes),
                 _ => None,
             }
         }
 
-        /// Returns the size of the address in 4-byte units minus one.
-        ///
-        /// Used for encoding the address length in SCION headers.
-        pub(crate) fn size_units(&self) -> u8 {
-            debug_assert!(
-                self.required_size().is_multiple_of(4),
-                "address size must be a multiple of 4"
-            );
-
-            (self.required_size() / 4) as u8 - 1
+        /// Returns the address type of the address.
+        pub fn addr_type(&self) -> ScionHostAddrType {
+            match self {
+                ScionHostAddr::Ipv4(_) => ScionHostAddrType::IPV4,
+                ScionHostAddr::Ipv6(_) => ScionHostAddrType::IPV6,
+                ScionHostAddr::Service(_) => ScionHostAddrType::Service,
+                ScionHostAddr::Unknown { id, bytes } => {
+                    ScionHostAddrType::Unknown {
+                        id: *id,
+                        size: bytes.len() as u8,
+                    }
+                }
+            }
         }
     }
     impl WireEncode for ScionHostAddr {
         fn required_size(&self) -> usize {
-            let size = match self {
+            match self {
                 ScionHostAddr::Ipv4(_) => 4,
                 ScionHostAddr::Ipv6(_) => 16,
                 ScionHostAddr::Service(bytes) => bytes.len(),
                 ScionHostAddr::Unknown { bytes, .. } => bytes.len(),
-            };
+            }
+        }
 
-            debug_assert!(
-                size.is_multiple_of(4),
-                "address size must be a multiple of 4, got {}",
-                size
-            );
-
-            size
+        fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+            match self {
+                ScionHostAddr::Ipv4(_) => Ok(()),
+                ScionHostAddr::Ipv6(_) => Ok(()),
+                ScionHostAddr::Service(_) => Ok(()),
+                ScionHostAddr::Unknown { bytes, .. } => {
+                    if bytes.is_empty() {
+                        Err("ScionHostAddr::Unknown bytes.len() must be non-zero".into())
+                    } else if !bytes.len().is_multiple_of(4) {
+                        Err("ScionHostAddr::Unknown bytes.len() must be a multiple of 4".into())
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
         }
 
         unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {

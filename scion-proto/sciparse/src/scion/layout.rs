@@ -25,6 +25,8 @@
 
 use crate::{
     helper::debug::Annotations,
+    loaded::ScionPacketHeader,
+    traits::WireEncode,
     types::path::PathType,
     views::{ScionHeaderView, StandardPathView, View},
 };
@@ -143,10 +145,10 @@ impl ScionHeaderLayout {
 
         let path_type = common_view.path_type();
 
-        let src_addr_len = common_view.src_addr_len();
-        let dst_addr_len = common_view.dst_addr_len();
+        let src_addr_len = common_view.src_addr_type().size();
+        let dst_addr_len = common_view.dst_addr_type().size();
 
-        let total_header_size = common_view.header_len();
+        let total_header_size = common_view.header_len() as usize;
         let payload_size = common_view.payload_len() as usize;
 
         let addr_header_end =
@@ -188,6 +190,15 @@ impl ScionHeaderLayout {
             }
             PathType::Empty => ScionHeaderPathLayout::Empty,
             path_type => {
+                // For unknown path types, we assume the rest of the header is path data
+                if total_header_size < addr_header_end {
+                    return Err(LayoutParseError::BufferTooSmall {
+                        at: "path",
+                        required: addr_header_end * 8,
+                        actual: total_header_size * 8,
+                    });
+                }
+
                 ScionHeaderPathLayout::Unknown {
                     path_type,
                     range: BitRange::from_range(addr_header_end * 8..(total_header_size * 8)),
@@ -230,6 +241,44 @@ impl ScionHeaderLayout {
             payload_len: payload_size,
         })
     }
+
+    /// Constructs the layout from a loaded SCION packet header
+    pub fn from_loaded(packet: &ScionPacketHeader) -> Self {
+        let common = CommonHeaderLayout;
+        let address = AddressHeaderLayout::new(
+            packet.address.src_host_addr.required_size() as u8,
+            packet.address.dst_host_addr.required_size() as u8,
+        );
+
+        let path = match &packet.path {
+            crate::loaded::Path::Standard(std_path) => {
+                let (seg0, seg1, seg2) = std_path.segment_lengths();
+
+                ScionHeaderPathLayout::Standard(
+                    StdPathMetaLayout,
+                    StdPathDataLayout::new(seg0, seg1, seg2),
+                )
+            }
+            crate::loaded::Path::Empty => ScionHeaderPathLayout::Empty,
+            crate::loaded::Path::Unsupported { path_type, data } => {
+                let addr_end = common.size_bytes() + address.size_bytes();
+                ScionHeaderPathLayout::Unknown {
+                    path_type: *path_type,
+                    range: BitRange::from_range(addr_end * 8..(addr_end + data.len()) * 8), /* Placeholder, actual range unknown */
+                }
+            }
+        };
+
+        let header_len = common.size_bytes() + address.size_bytes() + path.size_bytes();
+
+        Self {
+            common,
+            address,
+            path,
+            header_len,
+            payload_len: 0,
+        }
+    }
 }
 impl ScionHeaderLayout {
     /// Returns annotations for all SCION header fields
@@ -270,10 +319,8 @@ impl CommonHeaderLayout {
     gen_bitrange_const!(HEADER_LEN_RNG, 40, 8);
     gen_bitrange_const!(PAYLOAD_LEN_RNG, 48, 16);
     gen_bitrange_const!(PATH_TYPE_RNG, 64, 8);
-    gen_bitrange_const!(DST_ADDR_TYPE_RNG, 72, 2);
-    gen_bitrange_const!(DST_ADDR_LEN_RNG, 74, 2);
-    gen_bitrange_const!(SRC_ADDR_TYPE_RNG, 76, 2);
-    gen_bitrange_const!(SRC_ADDR_LEN_RNG, 78, 2);
+    gen_bitrange_const!(DST_ADDR_INFO_RNG, 72, 4);
+    gen_bitrange_const!(SRC_ADDR_INFO_RNG, 76, 4);
     gen_bitrange_const!(RSV_RNG, 80, 16);
     gen_bitrange_const!(TOTAL_RNG, 0, 96);
 
@@ -291,10 +338,8 @@ impl CommonHeaderLayout {
             (CommonHeaderLayout::HEADER_LEN_RNG, "header_length"),
             (CommonHeaderLayout::PAYLOAD_LEN_RNG, "payload_length"),
             (CommonHeaderLayout::PATH_TYPE_RNG, "path_type"),
-            (CommonHeaderLayout::DST_ADDR_TYPE_RNG, "dst_addr_type"),
-            (CommonHeaderLayout::DST_ADDR_LEN_RNG, "dst_addr_len"),
-            (CommonHeaderLayout::SRC_ADDR_TYPE_RNG, "src_addr_type"),
-            (CommonHeaderLayout::SRC_ADDR_LEN_RNG, "src_addr_len"),
+            (CommonHeaderLayout::DST_ADDR_INFO_RNG, "dst_addr_info"),
+            (CommonHeaderLayout::SRC_ADDR_INFO_RNG, "src_addr_info"),
             (CommonHeaderLayout::RSV_RNG, "rsv"),
         ];
 
@@ -753,6 +798,12 @@ impl BitRange {
         }
     }
 
+    /// Returns the maximum unsigned integer that can be represented by the BitRange
+    #[inline]
+    pub const fn max_uint(&self) -> usize {
+        (1 << self.size_bits()) - 1
+    }
+
     /// Creates a BitRange from a standard Range
     #[inline]
     pub const fn from_range(range: std::ops::Range<usize>) -> Self {
@@ -824,6 +875,125 @@ impl BitRange {
         BitRange {
             start: (self.start as isize + offset) as usize,
             end: (self.end as isize + offset) as usize,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::{prelude::*, prop_assert_eq};
+
+    use super::*;
+    use crate::layout::{CommonHeaderLayout, StdPathMetaLayout};
+
+    /// Reimplements all size calculations in one place for cross-checking
+    ///
+    /// This purposefully does not reuse any static constants from the main code,
+    /// to ensure that any changes to the main code are caught by tests.
+    struct SimpleTestCalc;
+    impl SimpleTestCalc {
+        fn common_size() -> usize {
+            12 // Fixed Size
+        }
+        fn address_size(dst_addr_len: u8, src_addr_len: u8) -> usize {
+            16 // Fixed Size
+             + (dst_addr_len as usize)
+             + (src_addr_len as usize)
+        }
+
+        fn standard_path_size(seg0_len: u8, seg1_len: u8, seg2_len: u8) -> usize {
+            Self::standard_path_meta_size()
+                + Self::standard_path_data_size(seg0_len, seg1_len, seg2_len)
+        }
+        fn standard_path_meta_size() -> usize {
+            4 // Fixed Size
+        }
+        fn standard_path_data_size(seg0_len: u8, seg1_len: u8, seg2_len: u8) -> usize {
+            let info_fields =
+                (seg0_len > 0) as usize + (seg1_len > 0) as usize + (seg2_len > 0) as usize;
+            let hop_fields = (seg0_len as usize) + (seg1_len as usize) + (seg2_len as usize);
+
+            info_fields * 8 // Info Field Size
+            + hop_fields * 12 // Hop Field Size
+        }
+    }
+
+    // Ensure test coverage of edge cases for segment lengths
+    fn seg() -> impl Strategy<Value = u8> {
+        prop_oneof![
+        1 => Just(0),
+        1 => Just(63),
+        5 => 1u8..62,
+        ]
+    }
+
+    #[test]
+    fn should_calculate_correct_total_sizes() {
+        proptest!(
+            |(dst_addr_len_unit in 0u8..=4,
+              src_addr_len_unit in 0u8..=4,
+              seg0 in seg(),
+              seg1 in seg(),
+              seg2 in seg(),)| {
+                println!(
+                    "{}, {}, {}, {}, {}",
+                    dst_addr_len_unit, src_addr_len_unit, seg0, seg1, seg2
+                );
+                test_impl(
+                    dst_addr_len_unit,
+                    src_addr_len_unit,
+                    seg0,
+                    seg1,
+                    seg2,
+                )?;
+            }
+        );
+
+        fn test_impl(
+            dst_addr_len_unit: u8,
+            src_addr_len_unit: u8,
+            seg0: u8,
+            seg1: u8,
+            seg2: u8,
+        ) -> Result<(), proptest::prelude::TestCaseError> {
+            let dst_addr_len = (dst_addr_len_unit + 1) * 4; // 4, 8, 12, 16
+            let src_addr_len = (src_addr_len_unit + 1) * 4; // 4, 8, 12, 16
+
+            let common = CommonHeaderLayout;
+            let address = AddressHeaderLayout::new(src_addr_len, dst_addr_len);
+            let meta = StdPathMetaLayout;
+            let data = StdPathDataLayout::new(seg0, seg1, seg2);
+
+            prop_assert_eq!(
+                common.size_bytes(),
+                SimpleTestCalc::common_size(),
+                "Common header size does not match"
+            );
+
+            prop_assert_eq!(
+                address.size_bytes(),
+                SimpleTestCalc::address_size(dst_addr_len, src_addr_len),
+                "Address header size does not match"
+            );
+            prop_assert_eq!(
+                meta.size_bytes(),
+                SimpleTestCalc::standard_path_meta_size(),
+                "Standard path meta size does not match"
+            );
+            prop_assert_eq!(
+                data.size_bytes(),
+                SimpleTestCalc::standard_path_data_size(seg0, seg1, seg2),
+                "Standard path data size does not match"
+            );
+
+            let path_layout = ScionHeaderPathLayout::Standard(meta, data);
+            prop_assert_eq!(
+                path_layout.size_bytes(),
+                SimpleTestCalc::standard_path_size(seg0, seg1, seg2),
+                "Path layout size does not match"
+            );
+
+            Ok(())
         }
     }
 }

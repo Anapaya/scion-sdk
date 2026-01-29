@@ -8,5 +8,9 @@ thiserror.workspace = true
 bitflags.workspace = true
 tinyvec.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+proptest-derive.workspace = true
+
 [lints]
 workspace = true

@@ -23,28 +23,59 @@ pub trait WireEncode {
     /// If this size is smaller than the actual encoded size, undefined behavior will occur.
     fn required_size(&self) -> usize;
 
+    /// Validates that all fields in the structure are valid for encoding.
+    ///
+    /// Note: This only checks the minimal set of fields required for encoding, do not expect
+    /// comprehensive validation.
+    ///
+    /// Returns Ok(()) if valid, otherwise a static error reference.
+    fn wire_valid(&self) -> Result<(), InvalidStructureError>;
+
     /// Writes the wire encoding into the provided buffer.
     ///
     /// Returns the number of bytes written.
     ///
     /// ## SAFETY
-    /// The buffer must be at least `self.required_size()` bytes long, otherwise
-    /// behavior is undefined.
+    /// 1. The buffer must be at least `self.required_size()` bytes long
+    /// 2. The structure must be valid for encoding, i.e., `self.valid()` must return `Ok(())`
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize;
 
     /// Writes the wire encoding into the provided buffer.
     ///
     /// Returns the number of bytes written on success, or `Err(usize)` of the required size if the
-    /// buffer is too small.
+    /// buffer is too small or the packet.
     ///
     /// The buffer must be at least `self.required_size()` bytes long.
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, usize> {
+    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
+        self.wire_valid()?;
+
         let required_size = self.required_size();
         if buf.len() < required_size {
-            return Err(required_size);
+            return Err(EncodeError::BufferTooSmall(required_size));
         }
 
         // SAFETY: buffer length is checked above
         unsafe { Ok(self.encode_unchecked(buf)) }
+    }
+}
+
+/// Errors that can occur during encoding.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EncodeError {
+    /// The structure which was attempted to be encoded is invalid.
+    #[error(transparent)]
+    InvalidStructure(#[from] InvalidStructureError),
+    /// The provided buffer is too small.
+    #[error("buffer too small: required {0}")]
+    BufferTooSmall(usize),
+}
+
+/// Given Structure has invalid fields to encode correctly.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("cannot encode structure: {0}")]
+pub struct InvalidStructureError(&'static str);
+impl From<&'static str> for InvalidStructureError {
+    fn from(s: &'static str) -> Self {
+        InvalidStructureError(s)
     }
 }

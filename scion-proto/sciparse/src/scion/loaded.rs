@@ -27,7 +27,7 @@ use crate::{
     helper::write::unchecked_bit_range_be_write,
     layout::{AddressHeaderLayout, CommonHeaderLayout, Layout},
     loaded::standard_path::StandardPath,
-    traits::WireEncode,
+    traits::{InvalidStructureError, WireEncode},
     types::{
         address::{IsdAsn, ScionHostAddr, ScionHostAddrType},
         path::PathType,
@@ -75,6 +75,16 @@ impl ScionPacket {
 impl WireEncode for ScionPacket {
     fn required_size(&self) -> usize {
         self.header.required_size() + self.payload.len()
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        self.header.wire_valid()?;
+
+        if self.payload.len() != self.header.common.payload_size as usize {
+            return Err("Payload size does not match header's payload_size field".into());
+        }
+
+        Ok(())
     }
 
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
@@ -139,6 +149,13 @@ impl WireEncode for ScionPacketHeader {
         CommonHeaderLayout::SIZE_BYTES + self.address.required_size() + self.path.required_size()
     }
 
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        self.common.valid()?;
+        self.address.wire_valid()?;
+        self.path.wire_valid()?;
+        Ok(())
+    }
+
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         unsafe {
             use CommonHeaderLayout as CHL;
@@ -148,9 +165,7 @@ impl WireEncode for ScionPacketHeader {
                 self.size_units(),
                 self.path.path_type(),
                 self.address.dst_addr_type(),
-                self.address.dst_host_addr.size_units(),
                 self.address.src_addr_type(),
-                self.address.src_host_addr.size_units(),
             );
 
             // Encode address header
@@ -171,8 +186,6 @@ impl WireEncode for ScionPacketHeader {
 /// Represents the common header of a SCION packet
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommonHeader {
-    /// Version of the SCION protocol
-    pub version: u8,
     /// Traffic class of the SCION packet
     pub traffic_class: u8,
     /// Flow ID of the SCION packet
@@ -188,8 +201,8 @@ pub struct CommonHeader {
 impl CommonHeader {
     /// Constructs a `CommonHeader` from a `ScionHeaderView`
     pub fn from_view(view: &ScionHeaderView) -> Self {
+        debug_assert!(view.version() == Self::VERSION, "Unsupported SCION version");
         CommonHeader {
-            version: view.version(),
             traffic_class: view.traffic_class(),
             flow_id: view.flow_id(),
             next_header: view.next_header(),
@@ -199,6 +212,21 @@ impl CommonHeader {
 }
 // Wire Encode (needs size, so can't use trait)
 impl CommonHeader {
+    /// Validates that all fields in the `CommonHeader` are valid for encoding
+    pub fn valid(&self) -> Result<(), InvalidStructureError> {
+        use CommonHeaderLayout as CHL;
+
+        if self.flow_id > CHL::FLOW_ID_RNG.max_uint() as u32 {
+            return Err("flow_id exceeds maximum encodeable value".into());
+        }
+
+        // Payload size is u16, so all values are valid
+        // Next header is a u8, so all values are valid
+
+        Ok(())
+    }
+
+    const VERSION: u8 = 0;
     /// Encodes the `CommonHeader` into the provided buffer
     pub fn encode(
         &self,
@@ -206,24 +234,22 @@ impl CommonHeader {
         header_len_units: u8,
         path_type: PathType,
         dst_addr_type: ScionHostAddrType,
-        dst_addr_len_units: u8,
         src_addr_type: ScionHostAddrType,
-        src_addr_len_units: u8,
     ) -> usize {
         unsafe {
             use CommonHeaderLayout as CHL;
             // Encode common header
-            unchecked_bit_range_be_write(buf, CHL::VERSION_RNG, self.version);
+            unchecked_bit_range_be_write(buf, CHL::VERSION_RNG, Self::VERSION);
             unchecked_bit_range_be_write(buf, CHL::TRAFFIC_CLASS_RNG, self.traffic_class);
             unchecked_bit_range_be_write(buf, CHL::FLOW_ID_RNG, self.flow_id);
             unchecked_bit_range_be_write(buf, CHL::NEXT_HEADER_RNG, self.next_header);
             unchecked_bit_range_be_write(buf, CHL::HEADER_LEN_RNG, header_len_units);
             unchecked_bit_range_be_write(buf, CHL::PAYLOAD_LEN_RNG, self.payload_size);
             unchecked_bit_range_be_write::<u8>(buf, CHL::PATH_TYPE_RNG, path_type.into());
-            unchecked_bit_range_be_write::<u8>(buf, CHL::DST_ADDR_TYPE_RNG, dst_addr_type.into());
-            unchecked_bit_range_be_write(buf, CHL::DST_ADDR_LEN_RNG, dst_addr_len_units);
-            unchecked_bit_range_be_write::<u8>(buf, CHL::SRC_ADDR_TYPE_RNG, src_addr_type.into());
-            unchecked_bit_range_be_write(buf, CHL::SRC_ADDR_LEN_RNG, src_addr_len_units);
+            let dst_addr_info: u8 = dst_addr_type.into();
+            unchecked_bit_range_be_write::<u8>(buf, CHL::DST_ADDR_INFO_RNG, dst_addr_info);
+            let src_addr_info: u8 = src_addr_type.into();
+            unchecked_bit_range_be_write::<u8>(buf, CHL::SRC_ADDR_INFO_RNG, src_addr_info);
             unchecked_bit_range_be_write(buf, CHL::RSV_RNG, 0u16); // Reserved
         }
 
@@ -257,22 +283,12 @@ impl AddressHeader {
 
     /// Returns the destination address type
     pub fn dst_addr_type(&self) -> ScionHostAddrType {
-        match &self.dst_host_addr {
-            ScionHostAddr::Ipv4(_) => ScionHostAddrType::IPV4,
-            ScionHostAddr::Ipv6(_) => ScionHostAddrType::IPV6,
-            ScionHostAddr::Service(_) => ScionHostAddrType::Service,
-            ScionHostAddr::Unknown { id, .. } => ScionHostAddrType::Unknown(*id),
-        }
+        self.dst_host_addr.addr_type()
     }
 
     /// Returns the source address type
     pub fn src_addr_type(&self) -> ScionHostAddrType {
-        match &self.src_host_addr {
-            ScionHostAddr::Ipv4(_) => ScionHostAddrType::IPV4,
-            ScionHostAddr::Ipv6(_) => ScionHostAddrType::IPV6,
-            ScionHostAddr::Service(_) => ScionHostAddrType::Service,
-            ScionHostAddr::Unknown { id, .. } => ScionHostAddrType::Unknown(*id),
-        }
+        self.src_host_addr.addr_type()
     }
 }
 
@@ -285,6 +301,15 @@ impl WireEncode for AddressHeader {
         .size_bytes()
     }
 
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        // ISD and ASN are newtypes, so assumed valid
+
+        self.dst_host_addr.wire_valid()?;
+        self.src_host_addr.wire_valid()?;
+
+        Ok(())
+    }
+
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         unsafe {
             use AddressHeaderLayout as AHL;
@@ -294,8 +319,8 @@ impl WireEncode for AddressHeader {
             unchecked_bit_range_be_write(buf, AHL::SRC_AS_RNG, self.src_ia.asn().0);
 
             let layout = AddressHeaderLayout::new(
-                self.dst_host_addr.required_size() as u8,
                 self.src_host_addr.required_size() as u8,
+                self.dst_host_addr.required_size() as u8,
             );
 
             {
@@ -350,13 +375,22 @@ impl Path {
             }
         }
     }
-
+}
+impl Path {
     /// Returns the type of the path
     pub fn path_type(&self) -> PathType {
         match self {
             Path::Standard(_) => PathType::Scion,
             Path::Empty => PathType::Empty,
             Path::Unsupported { path_type, .. } => PathType::Other((*path_type).into()),
+        }
+    }
+
+    /// Returns a reference to the standard path if it is of that type
+    pub fn standard(&self) -> Option<&StandardPath> {
+        match self {
+            Path::Standard(path) => Some(path),
+            _ => None,
         }
     }
 }
@@ -368,6 +402,20 @@ impl WireEncode for Path {
             Path::Unsupported { data, .. } => data.len(),
             Path::Empty => 0,
         }
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        match self {
+            Self::Standard(standard_path) => standard_path.wire_valid()?,
+            Self::Empty => {}
+            Self::Unsupported { path_type: _, data } => {
+                if !data.len().is_multiple_of(4) {
+                    return Err("Path data must be a multiple of 4 bytes".into());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
@@ -393,7 +441,7 @@ pub mod standard_path {
     use crate::{
         helper::write::unchecked_bit_range_be_write,
         layout::{HopFieldLayout, InfoFieldLayout, Layout, StdPathDataLayout, StdPathMetaLayout},
-        traits::WireEncode,
+        traits::{InvalidStructureError, WireEncode},
         types::path::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
         views::{HopFieldView, InfoFieldView, StandardPathView},
     };
@@ -455,6 +503,14 @@ pub mod standard_path {
             self.segments.len()
         }
 
+        /// Returns the lengths of each segment in the path as a tuple
+        pub fn segment_lengths(&self) -> (u8, u8, u8) {
+            let seg0 = self.segments.first().map_or(0, |s| s.hop_fields.len()) as u8;
+            let seg1 = self.segments.get(1).map_or(0, |s| s.hop_fields.len()) as u8;
+            let seg2 = self.segments.get(2).map_or(0, |s| s.hop_fields.len()) as u8;
+            (seg0, seg1, seg2)
+        }
+
         /// Returns an iterator over all hop fields in the path
         pub fn iter_hop_fields(&self) -> impl Iterator<Item = &HopField> {
             self.segments
@@ -480,6 +536,40 @@ pub mod standard_path {
         fn required_size(&self) -> usize {
             let [seg0, seg1, seg2] = self.segment_sizes();
             StdPathMetaLayout::SIZE_BYTES + StdPathDataLayout::new(seg0, seg1, seg2).size_bytes()
+        }
+
+        fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+            if self.curr_hop_field != 0 && self.curr_hop_field as usize >= self.hop_field_count() {
+                return Err("curr_hop_field exceeds total number of hop fields".into());
+            }
+
+            if self.current_info_field != 0
+                && self.current_info_field as usize >= self.info_field_count()
+            {
+                return Err("current_info_field exceeds total number of info fields".into());
+            }
+
+            if self.segments.is_empty() {
+                return Err("Standard path must contain at least one segment".into());
+            }
+
+            for segment in &self.segments {
+                if segment.hop_fields.len() > StdPathMetaLayout::MAX_SEGMENT_LENGTH {
+                    return Err("Number of hop fields in segment exceeds maximum allowed".into());
+                }
+
+                if segment.hop_fields.is_empty() {
+                    return Err("Segment must contain at least one hop field".into());
+                }
+
+                segment.info_field.wire_valid()?;
+
+                for hop_field in &segment.hop_fields {
+                    hop_field.wire_valid()?;
+                }
+            }
+
+            Ok(())
         }
 
         unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
@@ -566,6 +656,11 @@ pub mod standard_path {
             InfoFieldLayout::SIZE_BYTES
         }
 
+        fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+            // All values are full range, so always valid
+            Ok(())
+        }
+
         unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
             unsafe {
                 use InfoFieldLayout as IFL;
@@ -638,6 +733,11 @@ pub mod standard_path {
     impl WireEncode for HopField {
         fn required_size(&self) -> usize {
             HopFieldLayout::SIZE_BYTES
+        }
+
+        fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+            // All values are full range, so always valid
+            Ok(())
         }
 
         unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {

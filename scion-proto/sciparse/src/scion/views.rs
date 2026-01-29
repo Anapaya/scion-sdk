@@ -113,7 +113,7 @@ impl ScionPacketView {
     pub fn header(&self) -> &ScionHeaderView {
         // Safety: Buffer size is checked on construction of ScionPacketView
         unsafe {
-            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len();
+            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len() as usize;
             ScionHeaderView::from_slice_unchecked(self.0.get_unchecked(..header_len))
         }
     }
@@ -123,7 +123,7 @@ impl ScionPacketView {
     pub fn header_mut(&mut self) -> &mut ScionHeaderView {
         // Safety: Buffer size is checked on construction of ScionPacketView
         unsafe {
-            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len();
+            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len() as usize;
             ScionHeaderView::from_mut_slice_unchecked(self.0.get_unchecked_mut(..header_len))
         }
     }
@@ -133,7 +133,7 @@ impl ScionPacketView {
     pub fn payload(&self) -> &[u8] {
         // Safety: Buffer size is checked on construction of ScionPacketView
         unsafe {
-            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len();
+            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len() as usize;
             self.0.get_unchecked(header_len..)
         }
     }
@@ -143,7 +143,7 @@ impl ScionPacketView {
     pub fn payload_mut(&mut self) -> &mut [u8] {
         // Safety: Buffer size is checked on construction of ScionPacketView
         unsafe {
-            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len();
+            let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len() as usize;
             self.0.get_unchecked_mut(header_len..)
         }
     }
@@ -200,10 +200,10 @@ impl ScionHeaderView {
 
     /// Returns the header length in bytes
     #[inline]
-    pub fn header_len(&self) -> usize {
+    pub fn header_len(&self) -> u16 {
         // SAFETY: buffer size is checked on construction
         unsafe {
-            unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::HEADER_LEN_RNG) as usize
+            unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::HEADER_LEN_RNG) as u16
                 * 4
         }
     }
@@ -220,42 +220,16 @@ impl ScionHeaderView {
     #[inline]
     pub fn dst_addr_type(&self) -> ScionHostAddrType {
         // SAFETY: buffer size is checked on construction
-        unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::DST_ADDR_TYPE_RNG) }
+        unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::DST_ADDR_INFO_RNG) }
             .into()
-    }
-
-    /// Returns size of the destination address in bytes
-    #[inline]
-    pub fn dst_addr_len(&self) -> u8 {
-        // SAFETY: buffer size is checked on construction
-        let raw_dst_addr_len = unsafe {
-            unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::DST_ADDR_LEN_RNG)
-        };
-
-        // Length is stored as units of 4 bytes where 0 means 4 bytes
-        ((raw_dst_addr_len as u8) + 1) * 4
     }
 
     /// Returns the source address type
     #[inline]
     pub fn src_addr_type(&self) -> ScionHostAddrType {
         // SAFETY: buffer size is checked on construction
-        let raw_src_addr_type = unsafe {
-            unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::SRC_ADDR_TYPE_RNG)
-        };
-        raw_src_addr_type.into()
-    }
-
-    /// Returns size of the source address in bytes
-    #[inline]
-    pub fn src_addr_len(&self) -> u8 {
-        // SAFETY: buffer size is checked on construction
-        let raw_src_addr_len = unsafe {
-            unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::SRC_ADDR_LEN_RNG)
-        };
-
-        // Length is stored as units of 4 bytes where 0 means 4 bytes
-        ((raw_src_addr_len as u8) + 1) * 4
+        unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::SRC_ADDR_INFO_RNG) }
+            .into()
     }
 }
 // Mut Common header
@@ -275,7 +249,7 @@ impl ScionHeaderView {
     /// Modifying the header length can lead to undefined behavior on subsequent accesses to the
     /// View. If the new length surpasses the actual buffer size, out-of-bounds accesses can occur.
     #[inline]
-    pub unsafe fn set_header_len(&mut self, len: usize) {
+    pub unsafe fn set_header_len(&mut self, len: u16) {
         debug_assert!(
             len.is_multiple_of(4),
             "Header length must be a multiple of 4"
@@ -316,88 +290,48 @@ impl ScionHeaderView {
 
     /// Sets the destination address type
     ///
-    /// This function does not modify the actual address data or the address length.
+    /// This function does not modify the actual address data.
     /// If a different address type should be used, prefer using a loaded packet instead of a view.
-    #[inline]
-    pub fn set_dst_addr_type(&mut self, addr_type: ScionHostAddrType) {
-        let raw_addr_type: u8 = addr_type.into();
-
-        // SAFETY: buffer size is checked on construction
-        unsafe {
-            unchecked_bit_range_be_write::<u8>(
-                &mut self.0,
-                CommonHeaderLayout::DST_ADDR_TYPE_RNG,
-                raw_addr_type,
-            )
-        }
-    }
-
-    /// Sets the destination address length in bytes
-    ///
-    /// The length may only be set to (4, 8, 12, 16) bytes.
     ///
     /// # Safety
-    /// Modifying the address length can lead to undefined behavior on subsequent accesses to the
-    /// View. If the new length surpasses the actual buffer size, out-of-bounds accesses can occur.
+    /// This field is changes the size requirements of the header. The caller has to ensure
+    /// that the buffer is large enough to accommodate the new address size. If the new size
+    /// surpasses the actual buffer size, out-of-bounds accesses can occur on subsequent accesses to
+    /// the View.
     #[inline]
-    pub unsafe fn set_dst_addr_len(&mut self, len: u8) {
-        let raw_len = (len / 4) - 1;
-
-        debug_assert!(
-            matches!(len, 4 | 8 | 12 | 16),
-            "Destination address length must be one of (4, 8, 12, 16) bytes"
-        );
+    pub unsafe fn set_dst_addr_type(&mut self, addr_type: ScionHostAddrType) {
+        let addr_info: u8 = addr_type.into();
 
         // SAFETY: buffer size is checked on construction
         unsafe {
             unchecked_bit_range_be_write::<u8>(
                 &mut self.0,
-                CommonHeaderLayout::DST_ADDR_LEN_RNG,
-                raw_len,
+                CommonHeaderLayout::DST_ADDR_INFO_RNG,
+                addr_info,
             )
         }
     }
 
     /// Sets the source address type
     ///
-    /// This function does not modify the actual address data or the address length.
+    /// This function does not modify the actual address data.
     /// If a different address type should be used, prefer using a loaded packet instead of a view.
-    #[inline]
-    pub fn set_src_addr_type(&mut self, addr_type: ScionHostAddrType) {
-        let raw_addr_type: u8 = addr_type.into();
-
-        // SAFETY: buffer size is checked on construction
-        unsafe {
-            unchecked_bit_range_be_write::<u8>(
-                &mut self.0,
-                CommonHeaderLayout::SRC_ADDR_TYPE_RNG,
-                raw_addr_type,
-            )
-        }
-    }
-
-    /// Sets the source address length in bytes
-    ///
-    /// The length may only be set to (4, 8, 12, 16) bytes.
     ///
     /// # Safety
-    /// Modifying the address length can lead to undefined behavior on subsequent accesses to the
-    /// View. If the new length surpasses the actual buffer size, out-of-bounds accesses can occur.
+    /// This field is changes the size requirements of the header. The caller has to ensure
+    /// that the buffer is large enough to accommodate the new address size. If the new size
+    /// surpasses the actual buffer size, out-of-bounds accesses can occur on subsequent accesses to
+    /// the View.
     #[inline]
-    pub unsafe fn set_src_addr_len(&mut self, len: u8) {
-        let raw_len = (len / 4) - 1;
-
-        debug_assert!(
-            matches!(len, 4 | 8 | 12 | 16),
-            "Destination address length must be one of (4, 8, 12, 16) bytes"
-        );
+    pub unsafe fn set_src_addr_type(&mut self, addr_type: ScionHostAddrType) {
+        let addr_info: u8 = addr_type.into();
 
         // SAFETY: buffer size is checked on construction
         unsafe {
             unchecked_bit_range_be_write::<u8>(
                 &mut self.0,
-                CommonHeaderLayout::SRC_ADDR_LEN_RNG,
-                raw_len,
+                CommonHeaderLayout::SRC_ADDR_INFO_RNG,
+                addr_info,
             )
         }
     }
@@ -461,7 +395,9 @@ impl ScionHeaderView {
     /// If the address type and length do not match, an error is returned.
     #[inline]
     pub fn dst_host_addr(&self) -> Result<ScionHostAddr, HostAddressSizeError> {
-        let range = AddressHeaderLayout::new(self.src_addr_len(), self.dst_addr_len())
+        let src_len = self.src_addr_type().size();
+        let dst_len = self.dst_addr_type().size();
+        let range = AddressHeaderLayout::new(src_len, dst_len)
             .dst_host_addr_range()
             .shift(CommonHeaderLayout::SIZE_BYTES);
 
@@ -476,7 +412,9 @@ impl ScionHeaderView {
     /// If the address type and length do not match, an error is returned.
     #[inline]
     pub fn src_host_addr(&self) -> Result<ScionHostAddr, HostAddressSizeError> {
-        let range = AddressHeaderLayout::new(self.src_addr_len(), self.dst_addr_len())
+        let src_len = self.src_addr_type().size();
+        let dst_len = self.dst_addr_type().size();
+        let range = AddressHeaderLayout::new(src_len, dst_len)
             .src_host_addr_range()
             .shift(CommonHeaderLayout::SIZE_BYTES);
 
@@ -545,9 +483,10 @@ impl ScionHeaderView {
     #[inline]
     pub fn path(&self) -> ScionPathView<'_> {
         let path_offset = CommonHeaderLayout::SIZE_BYTES
-            + AddressHeaderLayout::new(self.src_addr_len(), self.dst_addr_len()).size_bytes();
+            + AddressHeaderLayout::new(self.dst_addr_type().size(), self.src_addr_type().size())
+                .size_bytes();
 
-        let len = self.header_len();
+        let len = self.header_len() as usize;
 
         match self.path_type() {
             PathType::Empty => ScionPathView::Empty,
@@ -573,9 +512,10 @@ impl ScionHeaderView {
     #[inline]
     pub fn path_mut(&mut self) -> ScionPathViewMut<'_> {
         let path_offset = CommonHeaderLayout::SIZE_BYTES
-            + AddressHeaderLayout::new(self.src_addr_len(), self.dst_addr_len()).size_bytes();
+            + AddressHeaderLayout::new(self.dst_addr_type().size(), self.src_addr_type().size())
+                .size_bytes();
 
-        let len = self.header_len();
+        let len = self.header_len() as usize;
 
         match self.path_type() {
             PathType::Empty => ScionPathViewMut::Empty,
@@ -609,9 +549,7 @@ impl Debug for ScionHeaderView {
             .field("header_len", &self.header_len())
             .field("path_type", &self.path_type())
             .field("dst_addr_type", &self.dst_addr_type())
-            .field("dst_addr_len", &self.dst_addr_len())
             .field("src_addr_type", &self.src_addr_type())
-            .field("src_addr_len", &self.src_addr_len())
             .field("dst_isd", &self.dst_isd())
             .field("dst_as", &self.dst_as())
             .field("src_isd", &self.src_isd())

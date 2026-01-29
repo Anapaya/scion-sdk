@@ -35,7 +35,6 @@ use sciparse::{
 fn main() {
     let header = ScionPacketHeader {
         common: CommonHeader {
-            version: 0,
             traffic_class: 1,
             flow_id: 2,
             next_header: 3,

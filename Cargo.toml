@@ -83,6 +83,8 @@ ntest = "0.9"
 pem = "3.0"
 pin-project-lite = "0.2"
 prometheus = { version = "0.14", features = ["process"] }
+proptest = "1.9"
+proptest-derive = "0.7"
 prost = "0.14"
 prost-build = "0.14"
 prost-types = "0.14"
