@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
+use scion_proto::address::{Isd, IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use tokio::net::UdpSocket;
@@ -23,8 +23,8 @@ use url::Url;
 
 use crate::{
     scionstack::{
-        AsyncUdpUnderlaySocket, DynUnderlayStack, ScionSocketBindError, UnderlaySocket,
-        builder::PreferredUnderlay, scmp_handler::ScmpHandler,
+        AsyncUdpUnderlaySocket, DynUnderlayStack, InvalidBindAddressError, ScionSocketBindError,
+        SnapConnectionError, UnderlaySocket, builder::PreferredUnderlay, scmp_handler::ScmpHandler,
     },
     underlays::{
         discovery::{UnderlayDiscovery, UnderlayInfo},
@@ -107,14 +107,13 @@ impl UnderlayStack {
         cp_url: Url,
         token_source: Option<Arc<dyn TokenSource>>,
     ) -> Result<SnapUnderlaySocket, ScionSocketBindError> {
-        let token_source = token_source.ok_or(ScionSocketBindError::DataplaneError(
-            "cannot bind SNAP socket without SNAP token (source)".into(),
+        let token_source = token_source.ok_or(ScionSocketBindError::SnapConnectionError(
+            SnapConnectionError::SnapTokenSourceMissing,
         ))?;
 
         if let Some(SocketAddr::Svc(_)) = bind_addr {
             return Err(ScionSocketBindError::InvalidBindAddress(
-                bind_addr.unwrap(),
-                "service addresses can't be bound".to_string(),
+                InvalidBindAddressError::ServiceAddress(bind_addr.unwrap()),
             ));
         }
 
@@ -140,15 +139,16 @@ impl UnderlayStack {
             Some(addr) => {
                 if addr.is_service() {
                     return Err(ScionSocketBindError::InvalidBindAddress(
-                        addr,
-                        "service addresses can't be bound".to_string(),
+                        InvalidBindAddressError::ServiceAddress(addr),
                     ));
                 }
                 addr
             }
             None => {
                 let local_address = *self.local_ip_resolver.local_ips().first().ok_or(
-                    ScionSocketBindError::UnderlayUnavailable("no local IP address found".into()),
+                    ScionSocketBindError::InvalidBindAddress(
+                        InvalidBindAddressError::NoLocalIpAddressFound,
+                    ),
                 )?;
                 SocketAddr::new(ScionAddr::new(isd_as, local_address.into()), 0)
             }
@@ -166,8 +166,7 @@ impl UnderlayStack {
             bind_addr
                 .local_address()
                 .ok_or(ScionSocketBindError::InvalidBindAddress(
-                    bind_addr,
-                    "Service addresses can't be bound".to_string(),
+                    InvalidBindAddressError::ServiceAddress(bind_addr),
                 ))?;
         let socket = UdpSocket::bind(local_addr).await.map_err(|e| {
             match e.kind() {
@@ -176,8 +175,10 @@ impl UnderlayStack {
                 }
                 std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::InvalidInput => {
                     ScionSocketBindError::InvalidBindAddress(
-                        bind_addr,
-                        format!("Failed to bind socket: {e:#}"),
+                        InvalidBindAddressError::CannotBindToRequestedAddress(
+                            bind_addr,
+                            format!("Failed to bind socket: {e:#}").into(),
+                        ),
                     )
                 }
                 _ => ScionSocketBindError::Other(Box::new(e)),
@@ -229,14 +230,13 @@ impl DynUnderlayStack for UnderlayStack {
                         self.underlay_discovery.clone(),
                     )) as Box<dyn UnderlaySocket>)
                 }
-                None => Err(
-                    crate::scionstack::ScionSocketBindError::UnderlayUnavailable(
-                        format!(
-                            "no underlay available to bind the requested ISD-AS {requested_isd_as}"
-                        )
-                        .into(),
-                    ),
-                ),
+                None => {
+                    Err(
+                        crate::scionstack::ScionSocketBindError::NoUnderlayAvailable(
+                            requested_isd_as.isd(),
+                        ),
+                    )
+                }
             }
         })
     }
@@ -282,8 +282,10 @@ impl DynUnderlayStack for UnderlayStack {
                 }
                 None => {
                     Err(
-                        crate::scionstack::ScionSocketBindError::UnderlayUnavailable(
-                            "no underlay available".into(),
+                        crate::scionstack::ScionSocketBindError::NoUnderlayAvailable(
+                            bind_addr
+                                .map(|addr| addr.isd_asn().isd())
+                                .unwrap_or(Isd::WILDCARD),
                         ),
                     )
                 }

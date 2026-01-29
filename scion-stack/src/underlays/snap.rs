@@ -41,8 +41,9 @@ use url::Url;
 
 use crate::{
     scionstack::{
-        AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket,
-        scmp_handler::ScmpHandler, udp_polling::UdpPoller,
+        AsyncUdpUnderlaySocket, InvalidBindAddressError, ScionSocketReceiveError,
+        ScionSocketSendError, SnapConnectionError, UnderlaySocket, scmp_handler::ScmpHandler,
+        udp_polling::UdpPoller,
     },
     underlays::discovery::{UnderlayDiscovery, UnderlayInfo},
 };
@@ -73,8 +74,10 @@ fn map_quinn_endpoint_error(
         std::io::ErrorKind::AddrInUse => ScionSocketBindError::PortAlreadyInUse(addr.port()),
         std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::InvalidInput => {
             ScionSocketBindError::InvalidBindAddress(
-                SocketAddr::new(ScionAddr::new(isd_asn, addr.ip().into()), addr.port()),
-                format!("failed to bind quinn endpoint: {e:#}"),
+                InvalidBindAddressError::CannotBindToRequestedAddress(
+                    SocketAddr::new(ScionAddr::new(isd_asn, addr.ip().into()), addr.port()),
+                    format!("failed to bind quinn endpoint: {e:#}").into(),
+                ),
             )
         }
         #[cfg(windows)]
@@ -98,15 +101,15 @@ impl SnapUnderlaySocket {
     ) -> Result<Self, crate::scionstack::ScionSocketBindError> {
         // Establish the initial tunnel.
         let mut snap_cp_client = CrpcSnapControlClient::new(&snap_cp).map_err(|e| {
-            crate::scionstack::ScionSocketBindError::DataplaneError(
-                format!("failed to create SNAP control plane client: {e:#}").into(),
+            crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::ControlPlaneClientCreationError(e),
             )
         })?;
         snap_cp_client.use_token_source(snap_token_source.clone());
 
         let data_plane = snap_cp_client.get_data_plane_address().await.map_err(|e| {
-            crate::scionstack::ScionSocketBindError::DataplaneError(
-                format!("failed to discover SNAP data plane: {e:#}").into(),
+            crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::DataPlaneDiscoveryError(e),
             )
         })?;
 
@@ -127,15 +130,17 @@ impl SnapUnderlaySocket {
         )
         .await
         .map_err(|e| {
-            crate::scionstack::ScionSocketBindError::DataplaneError(
-                format!("failed to establish SNAP tunnel: {e:#}").into(),
+            crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::ConnectionEstablishmentError(e),
             )
         })?;
 
         // Construct the inner socket.
         let assigned_addr = tunnel.ctrl.assigned_sock_addr().ok_or_else(|| {
-            crate::scionstack::ScionSocketBindError::Internal(
-                "SNAP tunnel connected but no address assigned".to_string(),
+            crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::ConnectionEstablishmentError(anyhow::anyhow!(
+                    "no address assigned by server, this should never happen"
+                )),
             )
         })?;
 
@@ -148,13 +153,16 @@ impl SnapUnderlaySocket {
                 || (bind_addr.port() != 0 && assigned_addr.port() != bind_addr.port()))
         {
             return Err(crate::scionstack::ScionSocketBindError::InvalidBindAddress(
-                SocketAddr::new(
-                    ScionAddr::new(isd_asn, bind_addr.ip().into()),
-                    bind_addr.port(),
-                ),
-                format!(
-                    "assigned address ({assigned_addr}) does not match requested address ({bind_addr}), likely due to NAT",
-                ),
+                InvalidBindAddressError::AddressMismatch {
+                    assigned_addr: SocketAddr::new(
+                        ScionAddr::new(isd_asn, assigned_addr.ip().into()),
+                        assigned_addr.port(),
+                    ),
+                    bind_addr: SocketAddr::new(
+                        ScionAddr::new(isd_asn, bind_addr.ip().into()),
+                        bind_addr.port(),
+                    ),
+                },
             ));
         }
 
@@ -192,13 +200,7 @@ impl SnapUnderlaySocket {
             quinn::SendDatagramError::TooLarge => {
                 ScionSocketSendError::InvalidPacket("Packet too large".into())
             }
-            quinn::SendDatagramError::ConnectionLost(_) => {
-                ScionSocketSendError::NetworkUnreachable(
-                    crate::scionstack::NetworkError::DestinationUnreachable(
-                        "Connection lost, reconnecting".into(),
-                    ),
-                )
-            }
+            quinn::SendDatagramError::ConnectionLost(_) => ScionSocketSendError::Closed,
             quinn::SendDatagramError::Disabled | quinn::SendDatagramError::UnsupportedByPeer => {
                 ScionSocketSendError::IoError(std::io::Error::other(format!(
                     "unexpected error from SNAP tunnel: {e:?}"

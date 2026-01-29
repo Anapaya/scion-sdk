@@ -161,14 +161,6 @@ impl MultiPathManagerConfig {
     }
 }
 
-/// Errors that can occur when getting a path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum GetPathError {
-    /// No paths are available for the given src-dst pair.
-    #[error("no paths are available for the given src-dst pair")]
-    NoPaths,
-}
-
 /// Path manager managing multiple paths per src-dst pair.
 pub struct MultiPathManager<F: PathFetcher = PathFetcherImpl>(Arc<MultiPathManagerInner<F>>);
 
@@ -756,6 +748,7 @@ mod tests {
                 err: SendError::FirstHopUnreachable {
                     isd_asn: first_path.path.source(),
                     interface_id: first_path.path.first_hop_egress_interface().unwrap().id,
+                    address: None,
                     msg: "test".into(),
                 },
             };
@@ -832,6 +825,7 @@ mod tests {
                 err: SendError::FirstHopUnreachable {
                     isd_asn: SRC_ADDR.isd_asn(),
                     interface_id: 1,
+                    address: None,
                     msg: "test".into(),
                 },
             };
@@ -912,6 +906,7 @@ mod tests {
                 err: SendError::FirstHopUnreachable {
                     isd_asn: SRC_ADDR.isd_asn(),
                     interface_id: 1,
+                    address: None,
                     msg: "test".into(),
                 },
             };
@@ -980,6 +975,7 @@ mod tests {
                 err: SendError::FirstHopUnreachable {
                     isd_asn: SRC_ADDR.isd_asn(),
                     interface_id: 1,
+                    address: None,
                     msg: "test".into(),
                 },
             };
@@ -1034,6 +1030,7 @@ mod tests {
                     err: SendError::FirstHopUnreachable {
                         isd_asn: SRC_ADDR.isd_asn(),
                         interface_id: 1,
+                        address: None,
                         msg: "test".into(),
                     },
                 },
@@ -1117,6 +1114,7 @@ mod tests {
                     err: SendError::FirstHopUnreachable {
                         isd_asn: IsdAsn::new(Isd(1), Asn(1)),
                         interface_id: i,
+                        address: None,
                         msg: "test".into(),
                     },
                 };

@@ -35,8 +35,8 @@ use tokio::{io::ReadBuf, net::UdpSocket};
 
 use crate::{
     scionstack::{
-        AsyncUdpUnderlaySocket, NetworkError, ScionSocketSendError, UnderlaySocket,
-        scmp_handler::ScmpHandler, udp_polling::UdpPollHelper,
+        AsyncUdpUnderlaySocket, ScionSocketSendError, UnderlaySocket, scmp_handler::ScmpHandler,
+        udp_polling::UdpPollHelper,
     },
     underlays::discovery::UnderlayDiscovery,
 };
@@ -150,7 +150,9 @@ impl UdpUnderlaySocket {
         let packet_bytes = packet.encode_to_bytes_vec().concat();
         self.socket
             .try_send_to(&packet_bytes, dst_addr)
-            .map_err(|e| Self::map_send_io_error(e, packet.headers.address.ia.source, 0))?;
+            .map_err(|e| {
+                Self::map_send_io_error(e, packet.headers.address.ia.source, 0, dst_addr)
+            })?;
         Ok(())
     }
 
@@ -164,20 +166,28 @@ impl UdpUnderlaySocket {
         self.socket
             .send_to(&packet_bytes, dst_addr)
             .await
-            .map_err(|e| Self::map_send_io_error(e, packet.headers.address.ia.source, 0))?;
+            .map_err(|e| {
+                Self::map_send_io_error(e, packet.headers.address.ia.source, 0, dst_addr)
+            })?;
         Ok(())
     }
 
     /// Map a UDP send error to a SCION socket send error.
-    fn map_send_io_error(e: io::Error, src: IsdAsn, interface_id: u16) -> ScionSocketSendError {
+    fn map_send_io_error(
+        e: io::Error,
+        src: IsdAsn,
+        interface_id: u16,
+        next_hop: net::SocketAddr,
+    ) -> ScionSocketSendError {
         use std::io::ErrorKind::*;
         match e.kind() {
             HostUnreachable | NetworkUnreachable => {
-                ScionSocketSendError::NetworkUnreachable(NetworkError::UnderlayNextHopUnreachable {
+                ScionSocketSendError::UnderlayNextHopUnreachable {
                     isd_as: src,
                     interface_id,
+                    address: Some(next_hop),
                     msg: e.to_string(),
-                })
+                }
             }
             ConnectionAborted | ConnectionReset | BrokenPipe => ScionSocketSendError::Closed,
             _ => ScionSocketSendError::IoError(e),
@@ -217,13 +227,12 @@ impl UnderlaySocket for UdpUnderlaySocket {
                 isd_asn: source_ia,
                 id: interface_id.get(),
             })
-            .ok_or(ScionSocketSendError::NetworkUnreachable(
-                NetworkError::UnderlayNextHopUnreachable {
-                    isd_as: source_ia,
-                    interface_id: interface_id.get(),
-                    msg: "next hop not found".to_string(),
-                },
-            )) {
+            .ok_or(ScionSocketSendError::UnderlayNextHopUnreachable {
+                isd_as: source_ia,
+                interface_id: interface_id.get(),
+                address: None,
+                msg: "next hop not found".to_string(),
+            }) {
             Ok(next_hop) => next_hop,
             Err(e) => {
                 return Box::pin(async move { Err(e) });
@@ -239,13 +248,12 @@ impl UnderlaySocket for UdpUnderlaySocket {
                     use std::io::ErrorKind::*;
                     match e.kind() {
                         HostUnreachable | NetworkUnreachable => {
-                            ScionSocketSendError::NetworkUnreachable(
-                                NetworkError::UnderlayNextHopUnreachable {
-                                    isd_as: source_ia,
-                                    interface_id: interface_id.get(),
-                                    msg: e.to_string(),
-                                },
-                            )
+                            ScionSocketSendError::UnderlayNextHopUnreachable {
+                                isd_as: source_ia,
+                                interface_id: interface_id.get(),
+                                address: Some(next_hop),
+                                msg: e.to_string(),
+                            }
                         }
                         ConnectionAborted | ConnectionReset | BrokenPipe => {
                             ScionSocketSendError::Closed
@@ -282,13 +290,12 @@ impl UnderlaySocket for UdpUnderlaySocket {
                 isd_asn: source_ia,
                 id: interface_id.get(),
             })
-            .ok_or(ScionSocketSendError::NetworkUnreachable(
-                NetworkError::UnderlayNextHopUnreachable {
-                    isd_as: source_ia,
-                    interface_id: interface_id.get(),
-                    msg: "next hop not found".to_string(),
-                },
-            )) {
+            .ok_or(ScionSocketSendError::UnderlayNextHopUnreachable {
+                isd_as: source_ia,
+                interface_id: interface_id.get(),
+                address: None,
+                msg: "next hop not found".to_string(),
+            }) {
             Ok(next_hop) => next_hop,
             Err(e) => {
                 return Err(e);
@@ -297,7 +304,7 @@ impl UnderlaySocket for UdpUnderlaySocket {
 
         self.socket
             .try_send_to(&packet.encode_to_bytes_vec().concat(), next_hop)
-            .map_err(|e| Self::map_send_io_error(e, source_ia, interface_id.get()))?;
+            .map_err(|e| Self::map_send_io_error(e, source_ia, interface_id.get(), next_hop))?;
         Ok(())
     }
 

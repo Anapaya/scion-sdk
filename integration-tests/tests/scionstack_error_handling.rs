@@ -17,7 +17,8 @@ use integration_tests::{UnderlayType, minimal_pocketscion_setup};
 use scion_proto::address::{ScionAddrSvc, ServiceAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_stack::scionstack::{
-    ScionSocketBindError, ScionStackBuilder, builder::BuildScionStackError,
+    InvalidBindAddressError, ScionSocketBindError, ScionStackBuilder, SnapConnectionError,
+    builder::BuildScionStackError,
 };
 use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
@@ -62,7 +63,12 @@ async fn test_invalid_snap_token() {
     // TODO(uniquefine): this should match a more specific error to indicate that the auth token
     // is invalid.
     assert!(
-        matches!(result, Err(ScionSocketBindError::DataplaneError(_))),
+        matches!(
+            result,
+            Err(ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::DataPlaneDiscoveryError(_)
+            ))
+        ),
         "expected Snap::DataPlaneDiscoveryError::CrpcError with Unauthenticated code for invalid token, got {result:?}"
     );
 }
@@ -81,7 +87,7 @@ async fn test_bind_service_address_fails_impl(underlay: UnderlayType) {
     let result = stack.bind(Some(service_addr)).await;
     let error = result.unwrap_err();
     assert!(
-        matches!(error, ScionSocketBindError::InvalidBindAddress(addr, _) if addr == service_addr),
+        matches!(error, ScionSocketBindError::InvalidBindAddress(InvalidBindAddressError::ServiceAddress(addr)) if addr == service_addr),
         "expected InvalidBindAddress({service_addr:?}) when binding to service address, got {error:?}"
     );
 }

@@ -16,6 +16,7 @@ use std::{
     borrow::Cow,
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
+    net,
     time::{Duration, SystemTime},
 };
 
@@ -29,7 +30,7 @@ use scion_proto::{
 
 use crate::{
     path::{manager::algo::exponential_decay, types::Score},
-    scionstack::{NetworkError, ScionSocketSendError},
+    scionstack::ScionSocketSendError,
 };
 
 /// Marker for a path issue
@@ -404,6 +405,7 @@ pub enum SendError {
     FirstHopUnreachable {
         isd_asn: IsdAsn,
         interface_id: u16,
+        address: Option<net::SocketAddr>,
         msg: Cow<'static, str>,
     },
 }
@@ -411,16 +413,16 @@ pub enum SendError {
 impl SendError {
     pub fn from_socket_send_error(error: &ScionSocketSendError) -> Option<Self> {
         match error {
-            ScionSocketSendError::NetworkUnreachable(
-                NetworkError::UnderlayNextHopUnreachable {
-                    isd_as,
-                    interface_id,
-                    msg,
-                },
-            ) => {
+            ScionSocketSendError::UnderlayNextHopUnreachable {
+                isd_as,
+                interface_id,
+                address,
+                msg,
+            } => {
                 Some(Self::FirstHopUnreachable {
                     isd_asn: *isd_as,
                     interface_id: *interface_id,
+                    address: *address,
                     msg: msg.clone().into(),
                 })
             }

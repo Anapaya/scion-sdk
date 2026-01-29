@@ -195,7 +195,7 @@ pub(crate) mod udp_polling;
 
 use std::{
     borrow::Cow,
-    fmt,
+    fmt, net,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -208,10 +208,11 @@ use endhost_api_client::client::EndhostApiClient;
 use futures::future::BoxFuture;
 use quic::{AddressTranslator, Endpoint, ScionAsyncUdpSocket};
 use scion_proto::{
-    address::{IsdAsn, SocketAddr},
+    address::{Isd, IsdAsn, SocketAddr},
     packet::ScionPacketRaw,
     path::Path,
 };
+use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
 
 // Re-export the main types from the modules
@@ -220,7 +221,10 @@ use crate::{
     path::{
         PathStrategy,
         fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl, traits::SegmentFetcher},
-        manager::{MultiPathManager, MultiPathManagerConfig},
+        manager::{
+            MultiPathManager, MultiPathManagerConfig,
+            traits::{PathWaitError, PathWaitTimeoutError},
+        },
         policy::PathPolicy,
         scoring::PathScoring,
     },
@@ -650,25 +654,62 @@ pub enum ScionSocketBindError {
     /// The provided bind address cannot be bound to.
     /// E.g. because it is not assigned to the endhost or because the address
     /// type is not supported.
-    #[error("invalid bind address {0}: {1}")]
-    InvalidBindAddress(SocketAddr, String),
+    #[error(transparent)]
+    InvalidBindAddress(InvalidBindAddressError),
     /// The provided port is already in use.
     #[error("port {0} is already in use")]
     PortAlreadyInUse(u16),
     /// Failed to connect to SNAP data plane.
-    #[error("SNAP data plane connection failed: {0}")]
-    DataplaneError(Cow<'static, str>),
+    #[error(transparent)]
+    SnapConnectionError(SnapConnectionError),
     /// No underlay available to bind the requested address.
-    #[error("underlay unavailable: {0}")]
-    UnderlayUnavailable(Cow<'static, str>),
+    #[error("underlay unavailable for the requested ISD: {0}")]
+    NoUnderlayAvailable(Isd),
     /// An error that is not covered by the variants above.
     #[error("other error: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
-    /// Internal error.
+}
+
+/// Error related to the bind address of the socket.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum InvalidBindAddressError {
+    /// The provided bind address is a service address.
+    #[error("cannot bind to service addresses: {0}")]
+    ServiceAddress(SocketAddr),
+    /// The requested bind address cannot be bound to.
+    #[error("cannot bind to requested address: {0}")]
+    CannotBindToRequestedAddress(SocketAddr, Cow<'static, str>),
+    /// The assigned address does not match the requested address.
+    /// This is likely due to NAT.
     #[error(
-        "internal error in the SCION stack, this should never happen, please report this to the developers: {0}"
+        "assigned address ({assigned_addr}) does not match requested address ({bind_addr}), likely due to NAT"
     )]
-    Internal(String),
+    AddressMismatch {
+        /// The assigned address.
+        assigned_addr: SocketAddr,
+        /// The requested bind address.
+        bind_addr: SocketAddr,
+    },
+    /// Could not find any local IP address to bind to.
+    #[error("could not find any local IP address to bind to")]
+    NoLocalIpAddressFound,
+}
+
+/// Error related to the connection to the SNAP data plane.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapConnectionError {
+    /// Snap sockets cannot be bound without a SNAP token source.
+    #[error("SNAP token source is missing")]
+    SnapTokenSourceMissing,
+    /// Failed to create the SNAP control plane client.
+    #[error("failed to create SNAP control plane client: {0}")]
+    ControlPlaneClientCreationError(anyhow::Error),
+    /// Failed to discover the SNAP data plane.
+    #[error("failed to discover SNAP data plane: {0}")]
+    DataPlaneDiscoveryError(CrpcClientError),
+    /// Failed to establish the SNAP tunnel.
+    #[error("failed to establish SNAP tunnel: {0}")]
+    ConnectionEstablishmentError(anyhow::Error),
 }
 
 /// Available kinds of SCION sockets.
@@ -756,7 +797,7 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
 pub enum ScionSocketConnectError {
     /// Could not get a path to the destination
     #[error("failed to get path to destination: {0}")]
-    PathLookupError(Cow<'static, str>),
+    PathLookupError(#[from] PathWaitTimeoutError),
     /// Could not bind the socket
     #[error(transparent)]
     BindError(#[from] ScionSocketBindError),
@@ -767,11 +808,20 @@ pub enum ScionSocketConnectError {
 pub enum ScionSocketSendError {
     /// There was an error looking up the path in the path registry.
     #[error("path lookup error: {0}")]
-    PathLookupError(Cow<'static, str>),
-    /// The destination is not reachable. E.g. because no path is available
-    /// or because the connection to the snap is unavailable.
-    #[error("network unreachable: {0}")]
-    NetworkUnreachable(NetworkError),
+    PathLookupError(#[from] PathWaitError),
+    /// UDP underlay next hop unreachable. This is only
+    /// returned if the selected underlay is UDP.
+    #[error("udp next hop {address:?} unreachable: {isd_as}#{interface_id}: {msg}")]
+    UnderlayNextHopUnreachable {
+        /// ISD-AS of the next hop.
+        isd_as: IsdAsn,
+        /// Interface ID of the next hop.
+        interface_id: u16,
+        /// Address of the next hop, if known.
+        address: Option<net::SocketAddr>,
+        /// Additional message.
+        msg: String,
+    },
     /// The provided packet is invalid. The underlying socket is
     /// not able to process the packet.
     #[error("invalid packet: {0}")]
@@ -785,25 +835,6 @@ pub enum ScionSocketSendError {
     /// Error return when send is called on a socket that is not connected.
     #[error("socket is not connected")]
     NotConnected,
-}
-
-/// Network errors.
-#[derive(Debug, thiserror::Error)]
-pub enum NetworkError {
-    /// The destination is unreachable.
-    #[error("destination unreachable: {0}")]
-    DestinationUnreachable(Cow<'static, str>),
-    /// UDP underlay next hop unreachable. This is only
-    /// returned if the selected underlay is UDP.
-    #[error("udp next hop unreachable: {isd_as}#{interface_id}: {msg}")]
-    UnderlayNextHopUnreachable {
-        /// ISD-AS of the next hop.
-        isd_as: IsdAsn,
-        /// Interface ID of the next hop.
-        interface_id: u16,
-        /// Additional message.
-        msg: String,
-    },
 }
 
 /// SCION socket receive errors.

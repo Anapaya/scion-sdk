@@ -31,7 +31,7 @@ use scion_proto::{
 };
 use scion_stack::{
     path::manager::traits::PathManager,
-    scionstack::{NetworkError, ScionSocketBindError, ScionSocketSendError, ScionStackBuilder},
+    scionstack::{ScionSocketBindError, ScionSocketSendError, ScionStackBuilder},
 };
 use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
@@ -488,13 +488,8 @@ async fn should_snaptun_sender_reconnects_snap_impl(test_env: PocketscionTestEnv
                                     }
                                     Err(e) => {
                                         assert!(
-                                            matches!(
-                                                e,
-                                                ScionSocketSendError::NetworkUnreachable(
-                                                    NetworkError::DestinationUnreachable(_)
-                                                )
-                                            ),
-                                            "expected NetworkUnreachable, got {e:?}"
+                                            matches!(e, ScionSocketSendError::Closed),
+                                            "expected Closed, got {e:?}"
                                         );
                                     }
                                 }
@@ -667,13 +662,8 @@ async fn should_snaptun_reconnects_bind_socket_snap_impl(test_env: PocketscionTe
                 Ok(_) => {}
                 Err(e) => {
                     assert!(
-                        matches!(
-                            e,
-                            ScionSocketSendError::NetworkUnreachable(
-                                NetworkError::DestinationUnreachable(_)
-                            )
-                        ),
-                        "expected NetworkUnreachable, got {e:?}"
+                        matches!(e, ScionSocketSendError::Closed),
+                        "expected Closed, got {e:?}"
                     );
                 }
             }

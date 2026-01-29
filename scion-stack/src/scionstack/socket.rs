@@ -26,12 +26,9 @@ use scion_proto::{
     scmp::{SCMP_PROTOCOL_NUMBER, ScmpMessage},
 };
 
-use super::{NetworkError, UnderlaySocket};
+use super::UnderlaySocket;
 use crate::{
-    path::manager::{
-        MultiPathManager,
-        traits::{PathManager, PathWaitError},
-    },
+    path::manager::{MultiPathManager, traits::PathManager},
     scionstack::{
         ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError,
         scmp_handler::ScmpHandler,
@@ -429,8 +426,7 @@ impl<P: PathManager> UdpScionSocket<P> {
                 Utc::now(),
                 self.connect_timeout,
             )
-            .await
-            .map_err(|e| e.to_string());
+            .await?;
 
         Ok(Self {
             remote_addr: Some(remote_addr),
@@ -460,19 +456,7 @@ impl<P: PathManager> UdpScionSocket<P> {
                 destination.isd_asn(),
                 Utc::now(),
             )
-            .await
-            .map_err(|e| {
-                match e {
-                    PathWaitError::FetchFailed(e) => {
-                        ScionSocketSendError::PathLookupError(e.into())
-                    }
-                    PathWaitError::NoPathFound => {
-                        ScionSocketSendError::NetworkUnreachable(
-                            NetworkError::DestinationUnreachable("No path found".into()),
-                        )
-                    }
-                }
-            })?;
+            .await?;
         self.socket
             .send_to_via(payload, destination, &path.to_slice_path())
             .await
