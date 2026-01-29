@@ -22,11 +22,13 @@ in
         clang
         llvmPackages.bintools
         m4
+        cmake
+        ninja
 
         # Libs
         zlib
         libbpf
-        glibc
+        linuxHeaders
         openssl
       ]
       ++ extraPackages;
@@ -73,5 +75,7 @@ in
       "zerocallusedregs"
       "stackclashprotection"
     ];
-    NIX_CFLAGS_COMPILE = "-Wno-unused-command-line-argument"; # Ignore some errors while building shell
+    NIX_CFLAGS_COMPILE = "-Wno-unused-command-line-argument -idirafter ${pkgs.glibc.dev}/include"; # Ignore some errors while building shell
+    CFLAGS = "-idirafter ${pkgs.glibc.dev}/include";
+    CXXFLAGS = "-idirafter ${pkgs.glibc.dev}/include";
 }
