@@ -1,4 +1,4 @@
-// Copyright 2025 Anapaya Systems
+// Copyright 2026 Anapaya Systems
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,15 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Tunnel gateway.
+//! Gateway
 
 use std::{
+    collections::VecDeque,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
+use ana_gotatun::{
+    noise::{TunnResult, rate_limiter::RateLimiter},
+    packet::{Packet, WgKind},
+    x25519,
+};
 use bytes::Bytes;
-use quinn::{Connection, Endpoint as QuinnEndpoint};
 use scion_proto::{
     address::{EndhostAddr, HostAddr, IsdAsn, ScionAddr},
     packet::{ByEndpoint, ScionPacketScmp, ScmpEncodeError, layout::ScionPacketOffset},
@@ -27,194 +33,189 @@ use scion_proto::{
     scmp::{ParameterProblemCode, ScmpMessage, ScmpParameterProblem},
     wire_encoding::WireEncodeVec,
 };
-use scion_sdk_token_validator::validator::Token;
-use serde::Deserialize;
+use snap_tun::server::{SnapTunAuthorization, SnapTunNgServer};
+use tokio::{net::UdpSocket, sync::mpsc::Receiver, time::interval};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, instrument};
 
 use crate::{
     dispatcher::Dispatcher,
     tunnel_gateway::{
-        metrics::TunnelGatewayMetrics,
+        dispatcher::TunnelGatewayDispatcherReceiver,
         packet_policy::{PacketPolicyError, inbound_datagram_check},
-        state::SharedTunnelGatewayState,
     },
 };
 
-/// Tunnel gateway.
-pub struct TunnelGateway<T>
-where
-    T: for<'de> Deserialize<'de> + Token,
-{
-    snap_tunnel_endpoint: Arc<snap_tun::server_deprecated::Server<T>>,
-    state: SharedTunnelGatewayState<T>,
-    metrics: TunnelGatewayMetrics,
+// XXX(dsd): Assume jumbo frames up to 9KiB = 9216 Bytes.
+pub(crate) type PacketPool = ana_gotatun::packet::PacketBufPool<9216>;
+// Assuming a packet size of 1 KiB, 50*1024*1024 Bytes = 50 MiB ~= 500 Mbps.
+pub(crate) const PACKET_PER_SEC_LIMIT: u64 = 50 * 1024;
+
+/// The tunnel gateway.
+pub struct TunnelGateway<A, D> {
+    /// The socket shared by the server (which in our case is just handling
+    /// inbound traffic) and the dispatcher (which processes outbound traffic).
+    socket: tokio::net::UdpSocket,
+    static_server_secret: x25519::StaticSecret,
+    authz: Arc<A>,
+    pool: PacketPool,
+    /// The receiving end of the outbound queue, containing SCION packets
+    /// dispatched to endhosts. The first entry of the pair is the socket
+    /// address that the packet should be sent to.
+    outbound_queue: Receiver<(SocketAddr, Packet)>,
+    dispatcher: Arc<D>,
 }
 
-impl<T> Clone for TunnelGateway<T>
+impl<A, D> TunnelGateway<A, D>
 where
-    T: for<'de> Deserialize<'de> + Token + Clone,
+    D: Dispatcher + 'static,
+    A: SnapTunAuthorization + 'static,
 {
-    fn clone(&self) -> Self {
-        Self {
-            snap_tunnel_endpoint: self.snap_tunnel_endpoint.clone(),
-            state: self.state.clone(),
-            metrics: self.metrics.clone(),
-        }
-    }
-}
-
-impl<T> TunnelGateway<T>
-where
-    T: for<'de> Deserialize<'de> + Token + Clone,
-{
-    /// Create new tunnel gateway instance.
+    /// Create new tunnel gateway exposed on `socket`.
     pub fn new(
-        state: SharedTunnelGatewayState<T>,
-        server: snap_tun::server_deprecated::Server<T>,
-        metrics: TunnelGatewayMetrics,
+        socket: tokio::net::UdpSocket,
+        static_server_secret: x25519::StaticSecret,
+        authz: Arc<A>,
+        dispatcher: Arc<D>,
+        tun_dispatcher_rx: TunnelGatewayDispatcherReceiver,
     ) -> Self {
+        let TunnelGatewayDispatcherReceiver {
+            pool,
+            outbound_queue,
+        } = tun_dispatcher_rx;
         Self {
-            snap_tunnel_endpoint: Arc::new(server),
-            state,
-            metrics,
+            socket,
+            static_server_secret,
+            authz,
+            pool,
+            outbound_queue,
+            dispatcher,
         }
     }
 
-    /// Starts the tunnel gateway server.
-    ///
-    /// The tunnel gateway accepts incoming QUIC connections and tries to establish SNAP tunnels on
-    /// the accepted connections.
-    pub async fn start_server<D: Dispatcher + 'static>(
-        &self,
-        cancellation_token: CancellationToken,
-        endpoint: QuinnEndpoint,
-        dispatcher: Arc<D>,
-    ) -> std::io::Result<()> {
-        while let Some(connection) = endpoint.accept().await {
-            match connection.await {
-                Ok(c) => {
-                    tokio::spawn(self.clone().handle_connection(
-                        c,
-                        cancellation_token.child_token(),
-                        dispatcher.clone(),
-                    ));
-                }
-                Err(e) => {
-                    tracing::warn!(error=%e, "Client connection was not accepted");
-                }
-            }
-        }
-
-        Err(std::io::Error::other(
-            "Tunnel gateway server stopped unexpectedly",
-        ))
-    }
-
-    #[instrument(name = "conn", skip_all, fields(remote = %conn.remote_address(), assigned))]
-    async fn handle_connection<D: Dispatcher + 'static>(
-        self,
-        conn: Connection,
-        cancellation_token: CancellationToken,
-        dispatcher: Arc<D>,
-    ) {
-        let local_addr =
-            HostAddr::from(conn.local_ip().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
-
-        let (tx, rx, ctrl) = match self.snap_tunnel_endpoint.accept_with_timeout(conn).await {
-            Ok(session) => session,
-            Err(e) => {
-                tracing::error!(error=%e, "Failed to accept snaptun tunnel");
-                return;
-            }
-        };
-
-        // XXX: we only assigned a single address. Once we switch to socket
-        // based addressing, this is removed.
-        let assigned_addr = tx
-            .assigned_addresses()
-            .first()
-            .map(|a| SocketAddr::new(a.local_address(), 0))
-            .xor(tx.assigned_socket_addr())
-            .expect("At least one address or socket addr must be assigned");
-
-        self.metrics.snaptun_connections_active.inc();
-
-        // Record the assigned addresses in the tracing span.
-        Span::current().record("assigned", assigned_addr.to_string());
-
-        // Spawn a task to handle the session control stream.
-        tokio::spawn(
-            async move {
-                match ctrl.await {
-                    Ok(_) => {
-                        tracing::debug!("Session control stream closed gracefully");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error=%e, "Session control stream closed with error");
-                    }
-                }
-            }
-            .in_current_span(),
+    /// start the server
+    pub async fn start_server(mut self, cancel: CancellationToken) {
+        let pubkey = x25519::PublicKey::from(&self.static_server_secret);
+        let rate_limiter = Arc::new(RateLimiter::new(&pubkey, PACKET_PER_SEC_LIMIT));
+        let mut snaptun_srv =
+            SnapTunNgServer::new(self.static_server_secret, rate_limiter, self.authz);
+        let mut timer = interval(Duration::from_millis(250));
+        let socket = self.socket;
+        let local_addr = HostAddr::from(
+            socket
+                .local_addr()
+                .map(|s| s.ip())
+                .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
         );
+        let server_task = async move {
+            let mut send_to_network: VecDeque<WgKind> = Default::default();
+            loop {
+                let mut in_pkt = self.pool.get();
 
-        // XXX: assembles socket addresses that correspond to the assigned
-        // endhost addresses.
-        let shared_tx = Arc::new(tx);
-        self.state
-            .add_tunnel_mapping(assigned_addr, shared_tx.clone());
+                tokio::select! {
+                    recv_res = socket.recv_from(in_pkt.as_mut()) => {
+                        let (n, from) = match recv_res {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::error!(err=?e, "i/o error on udp socket recv_from()");
+                                continue;
+                            }
+                        };
 
-        cancellation_token
-            .run_until_cancelled({
-                let shared_tx = shared_tx.clone();
-                async move {
-                    loop {
-                        // Handle new datagram.
-                        match rx.receive().await {
-                            Ok(data) => {
-                                match inbound_datagram_check(&data[..], assigned_addr.ip()) {
-                                    Ok(pkt) => {
-                                        dispatcher.try_dispatch(pkt);
+                        in_pkt.truncate(n);
+
+                        let res = snaptun_srv.handle_incoming_packet(in_pkt, from, &mut send_to_network);
+
+                        // first, process whatever needs to be returned
+                        while let Some(pkt) = send_to_network.pop_front() {
+                            Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(pkt), from);
+                        }
+
+                        match res {
+                            TunnResult::Done => continue,
+                            TunnResult::Err(wire_guard_error) => {
+                                tracing::error!(err=?wire_guard_error, "wireguard error on incoming packet");
+                            },
+                            TunnResult::WriteToNetwork(_wg_kind) => {
+                                // This variant is not expected for inbound packets. The gateway expects
+                                // `Done`, `Err`, or `WriteToTunnel` from `handle_incoming_packet`.
+                                // Log and drop the packet so we can diagnose protocol/state issues
+                                // without crashing the process.
+                                tracing::error!(
+                                    "unexpected TunnResult::WriteToNetwork for incoming packet; \
+                                     expected Done, Err, or WriteToTunnel; dropping packet"
+                                );
+                            },
+                            TunnResult::WriteToTunnel(packet) => {
+                            match inbound_datagram_check(&packet[..], from.ip()) {
+                                Ok(pkt) => {
+                                    self.dispatcher.try_dispatch(pkt);
+                                }
+                                Err(e) => {
+                                    tracing::debug!(err=%e, "Inbound datagram check failed");
+                                    // Use the first assigned address for the SCMP reply.
+                                    let (mut temp_buf, mut target_buf) = (self.pool.get(), self.pool.get());
+                                    if Self::create_scmp_error(
+                                        e,
+                                        Bytes::copy_from_slice(&packet[..]),
+                                        local_addr,
+                                        // XXX: the SNAP generating SCMP errors
+                                        // is a bit bogus, as the SNAP
+                                        // technically is not a node in the
+                                        // SCION-network.
+                                        EndhostAddr::new(IsdAsn::from(0), from.ip()),
+                                        &mut temp_buf,
+                                        &mut target_buf
+                                    ) {
+                                        // XXX: `handle_outgoing_packet`
+                                        // allocates a new packet for the
+                                        // response (see comment in impl)
+                                        let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(target_buf, from) else {continue};
+                                        Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(out_pkt), from);
                                     }
-                                    Err(e) => {
-                                        tracing::debug!(err=%e, "Inbound datagram check failed");
-                                        // Use the first assigned address for the SCMP reply.
-                                        Self::create_scmp_error(
-                                            e,
-                                            data,
-                                            local_addr,
-                                            // XXX: the SNAP generating SCMP
-                                            // errors is a bit bogus, as the
-                                            // SNAP technically is not a node in
-                                            // the SCION-network.
-                                            EndhostAddr::new(IsdAsn::from(0), assigned_addr.ip()),
-                                            shared_tx.clone(),
-                                        );
-                                    }
+
                                 }
                             }
-                            Err(e) => match e {
-                                snap_tun::server_deprecated::ReceivePacketError::ConnectionClosed => {
-                                    tracing::info!("Connection closed by client");
-                                    break;
-                                }
-                                snap_tun::server_deprecated::ReceivePacketError::ConnectionError(e) => {
-                                    tracing::error!(error=%e, "Connection error");
-                                    break;
-                                }
                             },
+                        }
+
+                    },
+                    outbound = self.outbound_queue.recv() => {
+                        let Some((target, packet)) = outbound else {
+                            tracing::info!("outbound channel closed");
+                            break;
+                        };
+
+                        let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(packet, target) else {continue};
+                        Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(out_pkt), target);
+                    }
+                    _ = timer.tick() => {
+                        // Update timers inside SnapTun server.
+                        for (addr, action) in snaptun_srv.update_timers() {
+                            Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(action), addr);
                         }
                     }
                 }
-                .in_current_span()
-            })
-            .await;
+            }
+        };
 
-        // The session was closed by the client or cancelled by the server.
-        self.state
-            .remove_tunnel_mapping_if_same(assigned_addr, &shared_tx);
+        cancel.run_until_cancelled_owned(server_task).await;
+    }
 
-        self.metrics.snaptun_connections_active.dec();
+    #[inline]
+    fn wg_kind_to_bytes(wg_kind: WgKind) -> Packet {
+        match wg_kind {
+            WgKind::HandshakeInit(packet) => packet.into_bytes(),
+            WgKind::HandshakeResp(packet) => packet.into_bytes(),
+            WgKind::CookieReply(packet) => packet.into_bytes(),
+            WgKind::Data(packet) => packet.into_bytes(),
+        }
+    }
+
+    #[inline]
+    fn try_send_log_err(socket: &UdpSocket, data: &[u8], target: SocketAddr) {
+        if let Err(e) = socket.try_send_to(data, target) {
+            tracing::error!(data_len=data.len(), err=?e, ?target, "could not send to network");
+        }
     }
 
     fn create_scmp_error(
@@ -222,13 +223,14 @@ where
         data: Bytes,
         local_addr: HostAddr,
         dst_addr: EndhostAddr,
-        tx: Arc<snap_tun::server_deprecated::Sender<T>>,
-    ) {
+        temp_buf: &mut Packet,
+        target_buf: &mut Packet,
+    ) -> bool {
         let scmp_message = match create_inbound_scmp_error(err, data) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(error=%e, "Error creating SCMP message");
-                return;
+                return false;
             }
         };
 
@@ -244,13 +246,13 @@ where
             Ok(p) => p,
             Err(e) => {
                 tracing::error!(error=%e, "Error creating SCMP packet");
-                return;
+                return false;
             }
         };
 
-        if let Err(e) = tx.send(scmp_packet.encode_to_bytes_vec().concat().into()) {
-            tracing::info!(error=%e, "Error sending SCMP message");
-        }
+        // XXX(dsd): WHY?
+        wire_encode(&scmp_packet, temp_buf, target_buf);
+        true
     }
 }
 
@@ -315,10 +317,84 @@ fn create_inbound_scmp_error(
     Ok(scmp_message)
 }
 
-/// Tunnel gateway error.
-#[derive(Debug, thiserror::Error)]
-pub enum TunnelGatewayError {
-    /// I/O error.
-    #[error("i/o error: {0:?}")]
-    IoError(#[from] std::io::Error),
+// XXX(dsd): This function exists to avoid unnecessary vec-allocations when
+// dealing with the scion-proto API.
+//
+// # Arguments
+// * `packet`: the packet to be serialized
+// * `temp_buf`: a temporary buffer that is used for internal packet assembly
+// * `target_buf`: the buffer that will contain the final result
+#[inline]
+pub(crate) fn wire_encode<W, const N: usize>(
+    packet: &W,
+    temp_buf: &mut Packet,
+    target_buf: &mut Packet,
+) where
+    W: WireEncodeVec<N>,
+{
+    temp_buf.truncate(0);
+    let parts = packet.encode_with_unchecked(temp_buf.buf_mut());
+
+    let mut n = 0;
+    parts.iter().for_each(|x| {
+        target_buf.as_mut()[n..(n + x.len())].copy_from_slice(x);
+        n += x.len();
+    });
+    target_buf.truncate(n);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use ana_gotatun::packet::PacketBufPool;
+    use bytes::Bytes;
+    use scion_proto::{
+        address::{HostAddr, IsdAsn, ScionAddr},
+        packet::{ByEndpoint, ScionPacketScmp},
+        path::DataPlanePath,
+        scmp::{ScmpEchoRequest, ScmpMessage},
+        wire_encoding::WireDecode,
+    };
+
+    use crate::tunnel_gateway::gateway::wire_encode;
+
+    #[test]
+    fn wire_encode_decode_scion_packet_scmp_succeeds() {
+        let pool = PacketBufPool::<2048>::new(2);
+
+        // 1. Build a simple SCMP echo request message
+        let echo = ScmpEchoRequest::new(42, 7, Bytes::copy_from_slice(b"hello"));
+        let msg: ScmpMessage = echo.into();
+
+        // 2. Build trivial endhost addresses (loopback, arbitrary ports) Adjust IA / address
+        //    constructors as needed for your test setup.
+        let src_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let dst_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let src = ScionAddr::new(IsdAsn::from(0), HostAddr::from(src_ip));
+        let dst = ScionAddr::new(IsdAsn::from(0), HostAddr::from(dst_ip));
+
+        let endhosts = ByEndpoint {
+            source: src,
+            destination: dst,
+        };
+
+        // 3. Use an empty standard path (or a suitable path for your tests)
+        let path = DataPlanePath::EmptyPath; // or DataPlanePath::Standard(...)
+
+        // 4. Build the SCMP packet (this also sets the checksum correctly)
+        let packet =
+            ScionPacketScmp::new(endhosts, path, msg).expect("failed to build SCMP packet");
+
+        let mut buf = pool.get();
+        buf.truncate(0);
+        let mut second_buf = pool.get();
+        wire_encode(&packet, &mut buf, &mut second_buf);
+
+        let decoded = ScionPacketScmp::decode(&mut second_buf.as_ref())
+            .expect("failed to decode SCMP packet");
+
+        assert_eq!(packet.headers.common, decoded.headers.common);
+        assert_eq!(packet.message, decoded.message);
+    }
 }

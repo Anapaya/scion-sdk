@@ -14,6 +14,7 @@
 //! PocketSCION network receivers.
 
 use scion_proto::packet::ScionPacketRaw;
+use snap_dataplane::dispatcher::Dispatcher;
 
 pub mod router_socket;
 pub mod tunnel_gateway;
@@ -25,4 +26,10 @@ pub mod tunnel_gateway;
 pub trait Receiver: Sync + Send {
     /// Callback called by the network simulation to deliver a packet to this receiver.
     fn receive_packet(&self, packet: ScionPacketRaw);
+}
+
+impl<T: Dispatcher> Receiver for T {
+    fn receive_packet(&self, packet: ScionPacketRaw) {
+        self.try_dispatch(packet);
+    }
 }

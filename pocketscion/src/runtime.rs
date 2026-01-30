@@ -14,7 +14,7 @@
 //! PocketSCION runtime.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io,
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
@@ -30,12 +30,20 @@ use scion_sdk_utils::{
     task_handler::{CancelTaskSet, InProcess},
 };
 use snap_control::server::identity_registry::IdentityRegistry;
-use snap_dataplane::tunnel_gateway::{
-    dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
-    start_tunnel_gateway, state::SharedTunnelGatewayState,
+use snap_dataplane::{
+    tunnel_gateway::{
+        dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
+        start_tunnel_gateway,
+    },
+    tunnel_gateway_deprecated::{
+        dispatcher::TunnelGatewayDispatcherDeprecated, start_tunnel_gateway_deprecated,
+        state::SharedTunnelGatewayState,
+    },
 };
+use snap_tokens::snap_token::SnapTokenClaims;
 use thiserror::Error;
 use tokio::{net::TcpListener, time::sleep};
+use x25519_dalek::StaticSecret;
 
 use crate::{
     addr_to_http_url,
@@ -50,9 +58,10 @@ use crate::{
         tunnel_gateway::TunnelGatewayReceiver,
     },
     state::{
-        SharedPocketScionState, SystemState, TunnelGatewayStates,
+        SharedPocketScionState, SystemState,
         endhost_segment_lister::StateEndhostSegmentLister,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
+        snap::{SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL, SnapId},
     },
 };
 
@@ -131,8 +140,8 @@ impl PocketScionRuntimeBuilder {
             TimestampOrNow::Timestamp(system_time) => system_time,
         };
         let system_state = self.system_state.load(start_time).await?;
+        let root_secret = system_state.root_secret();
         let pstate = SharedPocketScionState::from_system_state(system_state);
-        let mut tunnel_gateway_states = TunnelGatewayStates::default();
 
         let io_config = self.io_config.load().await?;
         let io_config = SharedPocketScionIoConfig::from_state(io_config);
@@ -140,6 +149,8 @@ impl PocketScionRuntimeBuilder {
         let snap_token_decoding_key =
             DecodingKey::from_ed_pem(pem::encode(&pstate.snap_token_public_key()).as_bytes())
                 .unwrap();
+
+        let mut snap_authz_map: BTreeMap<SnapId, Arc<IdentityRegistry>> = Default::default();
 
         // Start Control plane API for each SNAP
         for (snap_id, snap_state) in pstate.snaps() {
@@ -165,7 +176,7 @@ impl PocketScionRuntimeBuilder {
 
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
             let snap_resolver = pstate.snap_resolver(snap_id, io_config.clone());
-            let identity_registry = IdentityRegistry::new();
+            let identity_registry = Arc::new(IdentityRegistry::new());
             let decoding_key = snap_token_decoding_key.clone();
 
             let local_ases = snap_state.isd_ases();
@@ -173,19 +184,23 @@ impl PocketScionRuntimeBuilder {
             let segment_lister =
                 StateEndhostSegmentLister::new(pstate.clone(), local_ases.into_iter().collect());
 
-            task_set.join_set.spawn(async move {
-                snap_control::server::start(
-                    token,
-                    listener,
-                    dp_discovery,
-                    segment_lister,
-                    snap_resolver,
-                    identity_registry,
-                    decoding_key,
-                    snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
-                )
-                .await
+            task_set.join_set.spawn({
+                let identity_registry = identity_registry.clone();
+                async move {
+                    snap_control::server::start(
+                        token,
+                        listener,
+                        dp_discovery,
+                        segment_lister,
+                        snap_resolver,
+                        identity_registry,
+                        decoding_key,
+                        snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
+                    )
+                    .await
+                }
             });
+            snap_authz_map.insert(snap_id, identity_registry);
         }
 
         for (id, _) in pstate.endhost_apis() {
@@ -223,68 +238,116 @@ impl PocketScionRuntimeBuilder {
         }
 
         for (snap_id, snap) in pstate.snaps() {
-            let validator = Arc::new(Validator::new(snap_token_decoding_key.clone(), None));
-
-            // Start TunnelGateway
             let metrics_registry = MetricsRegistry::new();
+            if pstate.temporary_is_snaptun_ng_enabled() {
+                let key = root_secret.derive_from_iter(vec![
+                    SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL.into(),
+                    snap_id.to_string().into(),
+                ]);
+                let static_secret = StaticSecret::from(key.as_array());
 
-            let (_cert_der, server_config) = scion_sdk_utils::test::generate_cert(
-                [42u8; 32],
-                vec!["localhost".into()],
-                vec![b"snaptun".to_vec()],
-            );
+                let socket = match io_config.snap_data_plane_addr(snap_id) {
+                    Some(addr) => tokio::net::UdpSocket::bind(addr).await?,
+                    None => {
+                        tracing::debug!(%snap_id, "No listen address specified for SNAP dataplane");
+                        let udp_socket =
+                            tokio::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                                .await?;
+                        io_config.set_snap_data_plane_addr(snap_id, udp_socket.local_addr()?);
+                        udp_socket
+                    }
+                };
 
-            // tunnel gateway server quinn endpoint
-            let server_endpoint = match io_config.snap_data_plane_addr(snap_id) {
-                Some(addr) => quinn::Endpoint::server(server_config, addr)?,
-                None => {
-                    tracing::debug!(%snap_id, "No listen address specified for SNAP dataplane");
-                    let server_endpoint = quinn::Endpoint::server(
-                        server_config,
-                        SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-                    )?;
-                    io_config.set_snap_data_plane_addr(snap_id, server_endpoint.local_addr()?);
-                    server_endpoint
+                let addr = socket.local_addr()?;
+
+                let tun_gw_metrics = TunnelGatewayDispatcherMetrics::new(&metrics_registry);
+                let (tunnel_gw_dispatcher, tun_dispatcher_rx) =
+                    TunnelGatewayDispatcher::new(tun_gw_metrics);
+
+                // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
+                // sim_receiver and all traffic is forwarded to the SNAP.
+                let tunnel_gw_dispatcher = Arc::new(tunnel_gw_dispatcher);
+                for isd_as in snap.isd_ases() {
+                    pstate
+                        .add_wildcard_sim_receiver(isd_as, tunnel_gw_dispatcher.clone())
+                        .expect("Failed to add wildcard receiver");
                 }
-            };
+                let authz = snap_authz_map
+                    .remove(&snap_id)
+                    .expect("no authz found for snap");
 
-            let shared_tunnel_gw_state = SharedTunnelGatewayState::new();
-            tunnel_gateway_states.insert(snap_id, shared_tunnel_gw_state.clone());
+                tracing::info!(%addr, %snap_id, "Starting snap dataplane");
+                start_tunnel_gateway(
+                    &mut task_set,
+                    socket,
+                    authz,
+                    Arc::new(NetSimDispatcher::new(pstate.clone())),
+                    tun_dispatcher_rx,
+                    static_secret,
+                );
+            } else {
+                let validator = Arc::new(Validator::<SnapTokenClaims>::new(
+                    snap_token_decoding_key.clone(),
+                    None,
+                ));
 
-            let tunnel_gw_dispatcher = TunnelGatewayDispatcher::new(
-                shared_tunnel_gw_state.clone(),
-                TunnelGatewayDispatcherMetrics::new(&metrics_registry),
-            );
+                let (_cert_der, server_config) = scion_sdk_utils::test::generate_cert(
+                    [42u8; 32],
+                    vec!["localhost".into()],
+                    vec![b"snaptun".to_vec()],
+                );
 
-            task_set.spawn_cancellable_task({
-                let dispatcher = tunnel_gw_dispatcher.clone();
-                async move { dispatcher.start_dispatching().await }
-            });
+                // tunnel gateway server quinn endpoint
+                let server_endpoint = match io_config.snap_data_plane_addr(snap_id) {
+                    Some(addr) => quinn::Endpoint::server(server_config, addr)?,
+                    None => {
+                        tracing::debug!(%snap_id, "No listen address specified for SNAP dataplane");
+                        let server_endpoint = quinn::Endpoint::server(
+                            server_config,
+                            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+                        )?;
+                        io_config.set_snap_data_plane_addr(snap_id, server_endpoint.local_addr()?);
+                        server_endpoint
+                    }
+                };
 
-            // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
-            // sim_receiver and all traffic is forwarded to the SNAP.
-            for isd_as in snap.isd_ases() {
-                pstate
-                    .add_wildcard_sim_receiver(
-                        isd_as,
-                        Arc::new(TunnelGatewayReceiver::new(tunnel_gw_dispatcher.clone())),
-                    )
-                    .expect("Failed to add wildcard receiver");
+                let shared_tunnel_gw_state = SharedTunnelGatewayState::new();
+
+                let tunnel_gw_dispatcher = TunnelGatewayDispatcherDeprecated::new(
+                    shared_tunnel_gw_state.clone(),
+                    TunnelGatewayDispatcherMetrics::new(&metrics_registry),
+                );
+
+                task_set.spawn_cancellable_task({
+                    let dispatcher = tunnel_gw_dispatcher.clone();
+                    async move { dispatcher.start_dispatching().await }
+                });
+
+                // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
+                // sim_receiver and all traffic is forwarded to the SNAP.
+                for isd_as in snap.isd_ases() {
+                    pstate
+                        .add_wildcard_sim_receiver(
+                            isd_as,
+                            Arc::new(TunnelGatewayReceiver::new(tunnel_gw_dispatcher.clone())),
+                        )
+                        .expect("Failed to add wildcard receiver");
+                }
+
+                let addr = server_endpoint
+                    .local_addr()
+                    .expect("should have local addr");
+                tracing::info!(%addr, %snap_id, "Starting snap dataplane");
+
+                start_tunnel_gateway_deprecated(
+                    &mut task_set,
+                    shared_tunnel_gw_state,
+                    validator.clone(),
+                    server_endpoint,
+                    Arc::new(NetSimDispatcher::new(pstate.clone())),
+                    metrics_registry,
+                );
             }
-
-            let addr = server_endpoint
-                .local_addr()
-                .expect("should have local addr");
-            tracing::info!(%addr, %snap_id, "Starting snap dataplane");
-
-            start_tunnel_gateway(
-                &mut task_set,
-                shared_tunnel_gw_state,
-                validator.clone(),
-                server_endpoint,
-                Arc::new(NetSimDispatcher::new(pstate.clone())),
-                metrics_registry,
-            );
         }
 
         for sock_id in pstate.router_ids() {
@@ -342,15 +405,8 @@ impl PocketScionRuntimeBuilder {
             tracing::info!(addr=%listen_address, "Starting management API");
 
             task_set.join_set.spawn(async move {
-                management_api::start(
-                    token,
-                    ready_state_clone,
-                    system_state,
-                    io_config,
-                    tunnel_gateway_states,
-                    listener,
-                )
-                .await
+                management_api::start(token, ready_state_clone, system_state, io_config, listener)
+                    .await
             });
             io::Result::Ok(listen_address)
         }?;

@@ -32,8 +32,7 @@ use scion_proto::address::IsdAsn;
 use scion_sdk_address_manager::manager::AddressRegistrationError;
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use serde::{Deserialize, Serialize};
-use snap_dataplane::{state::Id, tunnel_gateway::state::SharedTunnelGatewayState};
-use snap_tokens::snap_token::SnapTokenClaims;
+use snap_dataplane::state::Id;
 use utoipa::ToSchema;
 
 use crate::{
@@ -233,6 +232,22 @@ impl SharedPocketScionState {
         let mut state = self.system_state.write().unwrap();
         state.snaptun_keepalive_interval = interval;
     }
+
+    /// Use wireguard-inspired snaptun(-ng)
+    /// This is a temporary option used during transition from old to new snaptun.
+    pub fn temporary_snaptun_ng_enable(&mut self) {
+        let mut state = self.system_state.write().unwrap();
+        state.temporary_snaptun_ng_enabled = true;
+    }
+
+    /// Use wireguard-inspired snaptun(-ng)
+    /// This is a temporary option used during transition from old to new snaptun.
+    pub fn temporary_is_snaptun_ng_enabled(&self) -> bool {
+        self.system_state
+            .read()
+            .unwrap()
+            .temporary_snaptun_ng_enabled
+    }
 }
 // Network Sim
 impl SharedPocketScionState {
@@ -304,6 +319,7 @@ pub struct SystemState {
     start_time: SystemTime,
     snap_token_public_pem: Pem,
     snaptun_keepalive_interval: Duration,
+    temporary_snaptun_ng_enabled: bool,
     snaps: BTreeMap<SnapId, SnapState>,
     auth_server: Option<AuthServerState>,
     routers: BTreeMap<RouterId, RouterState>,
@@ -320,6 +336,7 @@ impl SystemState {
             root_secret: DhsdSecret::from_root_secret([67u8; 32]),
             start_time,
             snap_token_public_pem: insecure_const_ed25519_key_pair_pem().1,
+            temporary_snaptun_ng_enabled: Default::default(),
             snaps: Default::default(),
             snaptun_keepalive_interval: DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL,
             routers: Default::default(),
@@ -363,6 +380,7 @@ impl From<&SystemState> for SystemStateDto {
                 .map(|auth_server| auth_server.into()),
             snap_token_public_key: system_state.snap_token_public_pem.to_string(),
             snaptun_keepalive_interval: system_state.snaptun_keepalive_interval,
+            temporary_snaptun_ng_enabled: system_state.temporary_snaptun_ng_enabled,
             snaps: system_state
                 .snaps
                 .iter()
@@ -444,6 +462,7 @@ impl TryFrom<SystemStateDto> for SystemState {
             .map(|topology| SegmentRegistry::new(&FastTopologyLookup::new(topology)));
 
         let sim_receivers = NetworkReceiverRegistry::default();
+        let temporary_snaptun_ng_enabled = dto.temporary_snaptun_ng_enabled;
 
         Ok(SystemState {
             root_secret,
@@ -451,6 +470,7 @@ impl TryFrom<SystemStateDto> for SystemState {
             snaptun_keepalive_interval: dto.snaptun_keepalive_interval,
             auth_server,
             snap_token_public_pem,
+            temporary_snaptun_ng_enabled,
             snaps,
             routers: router_sockets,
             topology,
@@ -640,9 +660,6 @@ impl Id for RouterId {
         Self(val)
     }
 }
-
-/// Map of all tunnel gateway states indexed by SNAP ID and SNAP data plane ID.
-pub type TunnelGatewayStates = BTreeMap<SnapId, SharedTunnelGatewayState<SnapTokenClaims>>;
 
 #[cfg(test)]
 mod tests {

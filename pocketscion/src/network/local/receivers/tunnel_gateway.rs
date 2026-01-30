@@ -15,7 +15,10 @@
 
 use scion_sdk_token_validator::validator::Token;
 use serde::Deserialize;
-use snap_dataplane::{dispatcher::Dispatcher, tunnel_gateway::dispatcher::TunnelGatewayDispatcher};
+use snap_dataplane::{
+    dispatcher::Dispatcher,
+    tunnel_gateway_deprecated::dispatcher::TunnelGatewayDispatcherDeprecated,
+};
 
 use crate::network::local::receivers::Receiver;
 
@@ -24,14 +27,14 @@ pub struct TunnelGatewayReceiver<T>
 where
     T: for<'de> Deserialize<'de> + Token,
 {
-    dispatcher: TunnelGatewayDispatcher<T>,
+    dispatcher: TunnelGatewayDispatcherDeprecated<T>,
 }
 impl<T> TunnelGatewayReceiver<T>
 where
     T: for<'de> Deserialize<'de> + Token,
 {
     /// Creates a new TunnelGatewayReceiver with the given dispatcher.
-    pub fn new(dispatcher: TunnelGatewayDispatcher<T>) -> Self {
+    pub fn new(dispatcher: TunnelGatewayDispatcherDeprecated<T>) -> Self {
         Self { dispatcher }
     }
 }

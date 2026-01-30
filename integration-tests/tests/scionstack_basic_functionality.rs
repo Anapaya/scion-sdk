@@ -15,7 +15,6 @@
 
 use std::{
     net::{self, IpAddr},
-    sync::Arc,
     time::Duration,
 };
 
@@ -31,12 +30,11 @@ use scion_proto::{
 };
 use scion_stack::{
     path::manager::traits::PathManager,
-    scionstack::{ScionSocketBindError, ScionSocketSendError, ScionStackBuilder},
+    scionstack::{ScionSocketBindError, ScionStackBuilder},
 };
 use snap_tokens::snap_token::dummy_snap_token;
 use test_log::test;
-use tokio::{net::UdpSocket, time::sleep};
-use tokio_util::sync::CancellationToken;
+use tokio::net::UdpSocket;
 use tracing::info;
 
 const MS_100: Duration = Duration::from_millis(1000);
@@ -98,31 +96,6 @@ async fn test_quic_endpoint_creation_snap() {
 #[ntest::timeout(10_000)]
 async fn test_quic_endpoint_creation_udp() {
     test_quic_endpoint_creation_impl(minimal_pocketscion_setup(UnderlayType::Udp).await).await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn should_snaptun_sender_reconnects_snap() {
-    should_snaptun_sender_reconnects_snap_impl(minimal_pocketscion_setup(UnderlayType::Snap).await)
-        .await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn should_snaptun_receiver_reconnects_snap() {
-    should_snaptun_receiver_reconnects_snap_impl(
-        minimal_pocketscion_setup(UnderlayType::Snap).await,
-    )
-    .await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn should_snaptun_reconnects_bind_socket_snap() {
-    should_snaptun_reconnects_bind_socket_snap_impl(
-        minimal_pocketscion_setup(UnderlayType::Snap).await,
-    )
-    .await;
 }
 
 #[test(tokio::test)]
@@ -425,256 +398,6 @@ async fn test_scmp_with_port_is_received_raw_udp_impl() {
 #[ntest::timeout(10_000)]
 async fn test_scmp_with_port_is_received_raw_snap_impl() {
     test_scmp_with_port_is_received_raw_impl(UnderlayType::Snap).await;
-}
-
-fn test_packet(i: u32) -> Bytes {
-    Bytes::from(format!("test {i}").as_bytes().to_owned())
-}
-fn test_packet_index(bytes: &[u8]) -> Option<u32> {
-    str::from_utf8(bytes)
-        .ok()
-        .and_then(|s| s.split_whitespace().nth(1))
-        .and_then(|s| s.parse::<u32>().ok())
-}
-
-async fn should_snaptun_sender_reconnects_snap_impl(test_env: PocketscionTestEnv) {
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build sender SCION stack");
-
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build receiver SCION stack");
-
-    let sender = Arc::new(sender_stack.bind(None).await.unwrap());
-    let receiver = Arc::new(receiver_stack.bind(None).await.unwrap());
-
-    // 1. close the sender's snaptun connection on the server (pocketscion).
-    // 2. send packets and wait for the sender's snaptun connection to recover.
-    // 2 a) We expect all errors to be ConnectionClosed.
-    // 2 b) We expect the sender to eventually recover and successfully send packets.
-
-    let delete_address = sender.local_addr().local_address().unwrap();
-
-    let client = test_env.pocketscion.api_client();
-    client
-        .delete_snap_connection(test_env.snap132.unwrap(), delete_address)
-        .await
-        .unwrap();
-
-    let cancel_sender = CancellationToken::new();
-    let sender_addr = sender.local_addr();
-    let receiver_addr = receiver.local_addr();
-    tokio::join!(
-        {
-            let sender = sender.clone();
-            let cancel_sender = cancel_sender.clone();
-            async move {
-                assert!(
-                    cancel_sender
-                        .run_until_cancelled(async move {
-                            let mut index = 0;
-                            loop {
-                                match &sender
-                                    .send_to(test_packet(index).as_ref(), receiver_addr)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        index += 1;
-                                    }
-                                    Err(e) => {
-                                        assert!(
-                                            matches!(e, ScionSocketSendError::Closed),
-                                            "expected Closed, got {e:?}"
-                                        );
-                                    }
-                                }
-                                sleep(Duration::from_millis(200)).await;
-                            }
-                        })
-                        .await
-                        .is_none(),
-                    "sender should eventually recover and be able to send packets",
-                )
-            }
-        },
-        {
-            let receiver = receiver.clone();
-            async move {
-                let mut recv_buffer = [0u8; 1024];
-                let (n_read, source) =
-                    within_duration!(Duration::from_secs(3), receiver.recv_from(&mut recv_buffer))
-                        .unwrap();
-                assert!(
-                    test_packet_index(&recv_buffer[..n_read]).is_some(),
-                    "receiver should receive packets"
-                );
-                assert_eq!(
-                    source, sender_addr,
-                    "receiver should receive packets from the sender"
-                );
-                cancel_sender.cancel();
-            }
-        },
-    );
-}
-
-async fn should_snaptun_receiver_reconnects_snap_impl(test_env: PocketscionTestEnv) {
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build sender SCION stack");
-
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build receiver SCION stack");
-
-    let sender = Arc::new(sender_stack.bind(None).await.unwrap());
-    let receiver = Arc::new(receiver_stack.bind(None).await.unwrap());
-
-    // 1. Start to receive
-    // 2. Close the receiver's snaptun connection on the server (pocketscion).
-    // 3. Send packets towards the receiver and wait for the receiver's snaptun connection to
-    //    recover.
-
-    let sender_addr = sender.local_addr();
-    let receiver_addr = receiver.local_addr();
-
-    // Start a receive on the receiver.
-    let receive_join_handle = tokio::spawn(async move {
-        let mut recv_buffer = [0u8; 1024];
-        let (n_read, source) = receiver.recv_from(&mut recv_buffer).await.unwrap();
-        assert!(
-            test_packet_index(&recv_buffer[..n_read]).is_some(),
-            "receiver should receive packets"
-        );
-        assert_eq!(
-            source, sender_addr,
-            "receiver should receive packets from the sender"
-        );
-    });
-
-    let delete_address = receiver_addr.local_address().unwrap();
-
-    // Close the receiver connection.
-    let client = test_env.pocketscion.api_client();
-    client
-        .delete_snap_connection(test_env.snap212.unwrap(), delete_address)
-        .await
-        .unwrap();
-
-    let sender_join_handle = tokio::spawn(async move {
-        let mut index = 0;
-        loop {
-            sender
-                .send_to(test_packet(index).as_ref(), receiver_addr)
-                .await
-                .unwrap();
-            index += 1;
-            sleep(Duration::from_millis(200)).await;
-        }
-    });
-
-    // Wait 3 seconds for a successful receive.
-    within_duration!(Duration::from_secs(3), receive_join_handle).unwrap();
-    sender_join_handle.abort();
-}
-
-async fn should_snaptun_reconnects_bind_socket_snap_impl(test_env: PocketscionTestEnv) {
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build sender SCION stack");
-
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build receiver SCION stack");
-    let receiver = Arc::new(receiver_stack.bind(None).await.unwrap());
-
-    let initial_sender = sender_stack.bind(None).await.unwrap();
-    let sender_addr: scion_proto::address::EndhostAddr = initial_sender
-        .local_addr()
-        .scion_address()
-        .try_into()
-        .expect("local address is an endhost address");
-
-    // Address to delete the connection on the server.
-    let delete_address = initial_sender.local_addr().local_address().unwrap();
-
-    drop(initial_sender);
-
-    // 1. Create a SCION stack
-    // 2. Close the sender's snaptun connection on the server (pocketscion).
-    // 3. Bind a socket to the stack, no error.
-    // 4. Wait for the socket send function to succeed.
-
-    let client = test_env.pocketscion.api_client();
-    client
-        .delete_snap_connection(test_env.snap132.unwrap(), delete_address)
-        .await
-        .unwrap();
-
-    let sender = Arc::new(sender_stack.bind(None).await.unwrap());
-    assert_eq!(
-        sender_addr,
-        sender
-            .local_addr()
-            .scion_address()
-            .try_into()
-            .expect("local address is an endhost address"),
-        "Expected the socket to be bound to the same address as the stack, got {sender:?}"
-    );
-
-    let sender_addr = sender.local_addr();
-    let receiver_addr = receiver.local_addr();
-
-    // Start a receive on the receiver.
-    let receive_join_handle = tokio::spawn(async move {
-        let mut recv_buffer = [0u8; 1024];
-        let (n_read, source) = receiver.recv_from(&mut recv_buffer).await.unwrap();
-        assert!(
-            test_packet_index(&recv_buffer[..n_read]).is_some(),
-            "receiver should receive packets"
-        );
-        assert_eq!(
-            source, sender_addr,
-            "receiver should receive packets from the sender"
-        );
-    });
-
-    let sender_join_handle = tokio::spawn(async move {
-        let mut index = 0;
-        loop {
-            match sender
-                .send_to(test_packet(index).as_ref(), receiver_addr)
-                .await
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    assert!(
-                        matches!(e, ScionSocketSendError::Closed),
-                        "expected Closed, got {e:?}"
-                    );
-                }
-            }
-            index += 1;
-            sleep(Duration::from_millis(200)).await;
-        }
-    });
-
-    // Wait 3 seconds for a successful receive.
-    within_duration!(Duration::from_secs(3), receive_join_handle).unwrap();
-    sender_join_handle.abort();
 }
 
 /// Creates a raw SCION packet with unknown next_header (67) for local communication.

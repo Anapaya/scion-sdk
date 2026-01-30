@@ -38,7 +38,8 @@ use crate::{
     state::{SharedPocketScionState, SystemState},
 };
 
-const SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL: &str = "snaptun_server_private_key";
+/// The path prefix for deterministic derivation of the SNAP's static secret.
+pub const SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL: &str = "snaptun_server_private_key";
 
 /// Pocket SCION SNAP state.
 #[derive(Debug, PartialEq, Clone)]

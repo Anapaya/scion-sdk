@@ -203,11 +203,11 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
     ///
     /// As a result of this call, all expired tunnels are removed. Note that
     /// this is not the same as unauthorized tunnels.
-    pub fn update_timers(&mut self) -> Vec<WgKind> {
+    pub fn update_timers(&mut self) -> Vec<(SocketAddr, WgKind)> {
         let mut res = vec![];
         self.active_tunnels.retain(|k, (_, tunn)| {
             match tunn.update_timers() {
-                Ok(Some(wg)) => res.push(wg),
+                Ok(Some(wg)) => res.push((*k, wg)),
                 Ok(None) => {},
                 Err(e) => tracing::error!(err=?e, remote_sockaddr=?k, "error when updating timers on tunnel"),
             }
@@ -227,6 +227,8 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
                 q.push_back(p);
                 TunnResult::Done
             }
+            // keep alive
+            TunnResult::WriteToTunnel(p) if p.is_empty() => TunnResult::Done,
             r => r,
         };
         for p in tunn.get_queued_packets() {
@@ -237,7 +239,7 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
 }
 
 /// Authorization layer for the snaptun server.
-pub trait SnapTunAuthorization {
+pub trait SnapTunAuthorization: Send + Sync {
     /// Returns true iff the peer is allowed to send traffic to the server.
     fn is_authorized(&self, now: Instant, identity: &[u8; 32]) -> bool;
 }

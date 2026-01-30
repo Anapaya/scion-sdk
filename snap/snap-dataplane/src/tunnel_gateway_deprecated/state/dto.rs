@@ -17,7 +17,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::tunnel_gateway::state::TunnelGatewayIoConfig;
+use crate::tunnel_gateway_deprecated::state::TunnelGatewayIoConfig;
 
 /// The I/O configuration of a SNAP data plane.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

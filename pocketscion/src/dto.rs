@@ -27,7 +27,7 @@ use std::{collections::BTreeMap, time::Duration};
 use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::dto::IoControlPlaneConfigDto;
-use snap_dataplane::tunnel_gateway::state::dto::IoDataPlaneConfigDto;
+use snap_dataplane::tunnel_gateway_deprecated::state::dto::IoDataPlaneConfigDto;
 use utoipa::ToSchema;
 
 use crate::{
@@ -44,6 +44,8 @@ pub struct SystemStateDto {
     pub root_secret: Option<String>,
     /// The public key (PEM format) to verify SNAP tokens.
     pub snap_token_public_key: String,
+    /// Whether to use the next generation snaptun protocol. Only needed for transition period.
+    pub temporary_snaptun_ng_enabled: bool,
     /// Test authentication server.
     #[schema(nullable = false)]
     #[serde(skip_serializing_if = "Option::is_none", default)]

@@ -61,7 +61,7 @@ pub async fn start<UD, SL, SR, IR>(
     underlay_discovery: UD,
     segment_lister: SL,
     snap_resolver: SR,
-    identity_registry: IR,
+    identity_registry: Arc<IR>,
     snap_token_decoding_key: DecodingKey,
     metrics: Metrics,
 ) -> std::io::Result<()>
@@ -76,7 +76,6 @@ where
     let dp_discovery = Arc::new(underlay_discovery);
     let segment_lister = Arc::new(segment_lister);
     let snap_resolver = Arc::new(snap_resolver);
-    let identity_registry = Arc::new(identity_registry);
 
     let snap_cp_addr = listener
         .local_addr()

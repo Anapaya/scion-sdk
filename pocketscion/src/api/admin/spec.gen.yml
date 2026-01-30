@@ -79,17 +79,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SnapsResponse'
-  /snaps/{snap_id}/connections/{socket_addr}:
-    delete:
-      tags:
-      - management
-      summary: Delete (close) a snaptun connection from the server side.
-      operationId: delete_snap_connection
-      responses:
-        '204':
-          description: Connection closed successfully
-        '404':
-          description: Connection not found
   /status:
     get:
       tags:
@@ -403,6 +392,7 @@ components:
       description: The pocket SCION system state.
       required:
       - snap_token_public_key
+      - temporary_snaptun_ng_enabled
       - snaps
       - routers
       - endhost_apis
@@ -450,6 +440,9 @@ components:
         snaptun_keepalive_interval:
           type: string
           description: The keepalive interval for the SNAPtun connection(s).
+        temporary_snaptun_ng_enabled:
+          type: boolean
+          description: Whether to use the next generation snaptun protocol. Only needed for transition period.
         topology:
           $ref: '#/components/schemas/ScionTopologyDto'
           description: Scion Topology used for routing
