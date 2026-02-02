@@ -19,17 +19,17 @@
 use std::net::Ipv4Addr;
 
 use sciparse::{
-    layout::ScionHeaderLayout,
-    loaded::{
-        AddressHeader, CommonHeader, Path, ScionPacketHeader,
-        standard_path::{HopField, InfoField, Segment, StandardPath},
+    core::{encode::WireEncode, view::View},
+    header::{
+        layout::ScionHeaderLayout,
+        model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
+        view::ScionHeaderView,
     },
-    traits::WireEncode,
-    types::{
-        address::{IsdAsn, ScionHostAddr},
-        path::{HopFieldFlags, InfoFieldFlags},
+    path::standard::{
+        model::{HopField, InfoField, Segment, StandardPath},
+        types::{HopFieldFlags, InfoFieldFlags},
     },
-    views::{ScionHeaderView, View},
+    types::address::{IsdAsn, ScionHostAddr},
 };
 
 fn main() {
@@ -91,7 +91,6 @@ fn main() {
     let layout = ScionHeaderLayout::from_slice(&buf).unwrap();
     let ann = layout.annotations();
 
-    // println!("Annotations: {:#?}", ann);
     ann.fmt_on_buffer(&mut output, &buf, 4).unwrap();
     print!("{output}");
 

@@ -14,75 +14,25 @@
 
 //! SCION protocol header layout calculations
 //!
-//! These structs and traits define the layout of the SCION protocol headers
-//! and provide methods to calculate sizes and offsets of various fields.
-//!
-//! The main struct is [ScionHeaderLayout], which represents the layout of a SCION
-//! header, including the common header, address header, and path header.
-//!
-//! Each header layout struct provides methods to calculate the size in bytes,
-//! as well as bit ranges for individual fields.
+//! See [`Layout`](crate::core::layout) for more information about layouts in general.
 
 use crate::{
-    helper::debug::Annotations,
-    loaded::ScionPacketHeader,
-    traits::WireEncode,
-    types::path::PathType,
-    views::{ScionHeaderView, StandardPathView, View},
+    core::{
+        debug::Annotations,
+        encode::WireEncode,
+        layout::{BitRange, Layout, LayoutParseError, macros::gen_bitrange_const},
+        view::View,
+    },
+    header::{
+        model::{Path, ScionPacketHeader},
+        view::ScionHeaderView,
+    },
+    path::standard::{
+        layout::{StdPathDataLayout, StdPathMetaLayout},
+        types::PathType,
+        view::StandardPathView,
+    },
 };
-
-/// Helper macro to generate bit range constants
-macro_rules! gen_bitrange_const {
-    ($range_name:ident, $start:expr, $offset:expr) => {
-        /// Bit range constant for the specified field
-        pub const $range_name: BitRange = BitRange::new($start, $offset);
-    };
-}
-
-/// Trait representing the layout of a protocol header or field
-pub trait Layout {
-    /// Returns the expected size of the layout in bytes
-    fn size_bytes(&self) -> usize;
-
-    /// Returns the expected size of the layout in bits
-    #[inline(always)]
-    fn size_bits(&self) -> usize {
-        self.size_bytes() * 8
-    }
-
-    /// Attempts to Split the buffer into two at the size of the layout
-    /// Returns None if the buffer is too small
-    #[inline]
-    fn split_off_checked<'a>(&self, buf: &'a [u8]) -> Option<(&'a [u8], &'a [u8])> {
-        buf.split_at_checked(self.size_bytes())
-    }
-}
-
-/// Errors that can occur when parsing a SCION header layout from a byte slice
-#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq, Hash)]
-pub enum LayoutParseError {
-    /// The SCION version is unsupported
-    #[error("Unsupported version")]
-    UnsupportedVersion,
-    /// The buffer is too small to contain the expected layout
-    #[error("Buffer too small at {at}: required {required}, actual {actual}")]
-    BufferTooSmall {
-        /// Location where the buffer was too small
-        at: &'static str,
-        /// Number of bytes required
-        required: usize,
-        /// Number of bytes actually available
-        actual: usize,
-    },
-    /// The advertised header length does not match the actual calculated length
-    #[error("Invalid header length: advertised {advertised}, actual {actual}")]
-    InvalidHeaderLength {
-        /// Advertised header length
-        advertised: usize,
-        /// Actual calculated header length
-        actual: usize,
-    },
-}
 
 /// Metadata about the SCION header layout
 ///
@@ -110,6 +60,27 @@ impl ScionHeaderLayout {
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     // |                              Path                             |
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    /// Constructs the layout from its individual parts
+    pub fn from_parts(
+        src_addr_len: u8,
+        dst_addr_len: u8,
+        path: ScionHeaderPathLayout,
+        payload_len: usize,
+    ) -> Self {
+        let common = CommonHeaderLayout;
+        let address = AddressHeaderLayout::new(src_addr_len, dst_addr_len);
+        let header_len = common.size_bytes() + address.size_bytes() + path.size_bytes();
+
+        ScionHeaderLayout {
+            common,
+            address,
+            path,
+
+            header_len,
+            payload_len,
+        }
+    }
 
     /// Reads minimal header information from the buffer to construct the layout
     ///
@@ -251,7 +222,7 @@ impl ScionHeaderLayout {
         );
 
         let path = match &packet.path {
-            crate::loaded::Path::Standard(std_path) => {
+            Path::Standard(std_path) => {
                 let (seg0, seg1, seg2) = std_path.segment_lengths();
 
                 ScionHeaderPathLayout::Standard(
@@ -259,8 +230,8 @@ impl ScionHeaderLayout {
                     StdPathDataLayout::new(seg0, seg1, seg2),
                 )
             }
-            crate::loaded::Path::Empty => ScionHeaderPathLayout::Empty,
-            crate::loaded::Path::Unsupported { path_type, data } => {
+            Path::Empty => ScionHeaderPathLayout::Empty,
+            Path::Unsupported { path_type, data } => {
                 let addr_end = common.size_bytes() + address.size_bytes();
                 ScionHeaderPathLayout::Unknown {
                     path_type: *path_type,
@@ -377,7 +348,8 @@ impl AddressHeaderLayout {
     // |                    SrcHostAddr (variable Len)                 |
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    /// Creates a new AddressHeaderLayout with the given source and destination address lengths
+    /// Creates a new AddressHeaderLayout with the given source and destination address lengths in
+    /// bytes
     #[inline]
     pub const fn new(src_addr_len: u8, dst_addr_len: u8) -> Self {
         Self {
@@ -493,389 +465,9 @@ impl Layout for ScionHeaderPathLayout {
         }
     }
 }
-
-/// Layout for the standard SCION path, composed of a meta header and data
-pub struct StdPathLayout {
-    /// Layout of the path meta header
-    pub meta: StdPathMetaLayout,
-    /// Layout of the path data
-    pub data: StdPathDataLayout,
-}
-impl StdPathLayout {
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                           PathMeta                            |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                           PathData                            |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-    /// Attempts to parse the standard SCION path layout from the given buffer
-    pub fn from_slice(buf: &[u8]) -> Result<Self, LayoutParseError> {
-        // Check Meta header
-        let (meta_buf, _rest) = StdPathMetaLayout.split_off_checked(buf).ok_or_else(|| {
-            LayoutParseError::BufferTooSmall {
-                at: "StdPathMeta",
-                required: StdPathMetaLayout.size_bytes(),
-                actual: buf.len(),
-            }
-        })?;
-
-        let meta_view = unsafe { StandardPathView::from_slice_unchecked(meta_buf) };
-        let seg0_len = meta_view.seg0_len();
-        let seg1_len = meta_view.seg1_len();
-        let seg2_len = meta_view.seg2_len();
-
-        // Check data is contained
-        let data_layout = StdPathDataLayout::new(seg0_len, seg1_len, seg2_len);
-        let required_size = StdPathMetaLayout.size_bytes() + data_layout.size_bytes();
-
-        if buf.len() < required_size {
-            return Err(LayoutParseError::BufferTooSmall {
-                at: "StdPathData",
-                required: required_size,
-                actual: buf.len(),
-            });
-        }
-
-        Ok(Self {
-            meta: StdPathMetaLayout,
-            data: data_layout,
-        })
-    }
-}
-impl Layout for StdPathLayout {
-    #[inline]
-    fn size_bytes(&self) -> usize {
-        self.meta.size_bytes() + self.data.size_bytes()
-    }
-}
-
-/// Layout for the standard SCION path meta header
-pub struct StdPathMetaLayout;
-impl StdPathMetaLayout {
-    //  0                   1                   2                   3
-    //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // | C |  CurrHF   |    RSV    |  Seg0Len  |  Seg1Len  |  Seg2Len  |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-    gen_bitrange_const!(CURR_INFO_FIELD_RNG, 0, 2);
-    gen_bitrange_const!(CURR_HOP_FIELD_RNG, 2, 6);
-    gen_bitrange_const!(RSV_RNG, 8, 6);
-    gen_bitrange_const!(SEG0_LEN_RNG, 14, 6);
-    gen_bitrange_const!(SEG1_LEN_RNG, 20, 6);
-    gen_bitrange_const!(SEG2_LEN_RNG, 26, 6);
-    gen_bitrange_const!(TOTAL_RNG, 0, 32);
-
-    /// Size of meta header in bytes
-    pub const SIZE_BYTES: usize = Self::TOTAL_RNG.end / 8;
-
-    /// Maximum length of a path segment
-    pub const MAX_SEGMENT_LENGTH: usize = 63;
-}
-impl StdPathMetaLayout {
-    /// Returns annotations for the common header fields
-    pub fn annotations(&self) -> Annotations {
-        let ann = vec![
-            (StdPathMetaLayout::CURR_INFO_FIELD_RNG, "curr_info_field"),
-            (StdPathMetaLayout::CURR_HOP_FIELD_RNG, "curr_hop_field"),
-            (StdPathMetaLayout::RSV_RNG, "rsv"),
-            (StdPathMetaLayout::SEG0_LEN_RNG, "seg0_len"),
-            (StdPathMetaLayout::SEG1_LEN_RNG, "seg1_len"),
-            (StdPathMetaLayout::SEG2_LEN_RNG, "seg2_len"),
-        ];
-
-        Annotations::new_with("StandardPathMetaHeader".to_string(), ann)
-    }
-}
-impl Layout for StdPathMetaLayout {
-    #[inline]
-    fn size_bytes(&self) -> usize {
-        Self::SIZE_BYTES
-    }
-}
-
-/// Layout for the standard SCION path data
-pub struct StdPathDataLayout {
-    /// Lengths of the three path segments
-    pub segment_lengths: (u8, u8, u8),
-}
-impl StdPathDataLayout {
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                           InfoField                           |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                              ...                              |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                           InfoField                           |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                           HopField                            |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                           HopField                            |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                              ...                              |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-    /// Creates a new StdPathDataLayout with the given segment lengths
-    #[inline]
-    pub const fn new(seg0len: u8, seg1len: u8, seg2len: u8) -> Self {
-        Self {
-            segment_lengths: (seg0len, seg1len, seg2len),
-        }
-    }
-
-    /// Returns the number of info fields
-    #[inline]
-    pub const fn info_field_count(&self) -> usize {
-        (self.segment_lengths.0 > 0) as usize
-            + (self.segment_lengths.1 > 0) as usize
-            + (self.segment_lengths.2 > 0) as usize
-    }
-
-    /// Returns the number of hop fields
-    #[inline]
-    pub const fn hop_field_count(&self) -> usize {
-        (self.segment_lengths.0 as usize)
-            + (self.segment_lengths.1 as usize)
-            + (self.segment_lengths.2 as usize)
-    }
-
-    /// Returns the bit range for the info field at the given index
-    #[inline]
-    pub fn info_field_range(&self, index: usize) -> BitRange {
-        InfoFieldLayout::TOTAL_RNG.shift(index * InfoFieldLayout.size_bytes())
-    }
-
-    /// Returns the bit range for the hop field at the given index
-    #[inline]
-    pub fn hop_field_range(&self, index: usize) -> BitRange {
-        let base = self.info_fields_range().size_bytes();
-        HopFieldLayout::TOTAL_RNG.shift(base + index * HopFieldLayout.size_bytes())
-    }
-
-    /// Returns the bit range for all info fields
-    #[inline]
-    pub fn info_fields_range(&self) -> BitRange {
-        let info_field_count = self.info_field_count();
-        BitRange {
-            start: 0,
-            end: info_field_count * InfoFieldLayout.size_bits(),
-        }
-    }
-
-    /// Returns the bit range for all hop fields
-    #[inline]
-    pub fn hop_fields_range(&self) -> BitRange {
-        let info_fields_end = self.info_fields_range().end;
-        let hop_field_count = self.hop_field_count();
-        BitRange {
-            start: info_fields_end,
-            end: info_fields_end + hop_field_count * HopFieldLayout.size_bits(),
-        }
-    }
-}
-impl StdPathDataLayout {
-    /// Returns annotations for all info and hop fields
-    pub fn annotations(&self) -> Annotations {
-        let mut annotations = Annotations::new();
-
-        for _ in 0..self.info_field_count() {
-            annotations.extend(InfoFieldLayout.annotations());
-        }
-
-        for _ in 0..self.hop_field_count() {
-            annotations.extend(HopFieldLayout.annotations());
-        }
-
-        annotations
-    }
-}
-impl Layout for StdPathDataLayout {
-    #[inline]
-    fn size_bytes(&self) -> usize {
-        let info_fields_size = self.info_field_count() * InfoFieldLayout.size_bytes();
-        let hop_fields_size = self.hop_field_count() * HopFieldLayout.size_bytes();
-        info_fields_size + hop_fields_size
-    }
-}
-
-/// Layout for a SCION standard path info field
-pub struct InfoFieldLayout;
-impl InfoFieldLayout {
-    //  0                   1                   2                   3
-    //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |r r r r r r P C|      RSV      |             SegID             |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |                           Timestamp                           |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-    gen_bitrange_const!(FLAGS_RNG, 0, 8);
-    gen_bitrange_const!(RSV_RNG, 8, 8);
-    gen_bitrange_const!(SEGMENT_ID_RNG, 16, 16);
-    gen_bitrange_const!(TIMESTAMP_RNG, 32, 32);
-    gen_bitrange_const!(TOTAL_RNG, 0, 64);
-
-    /// Size of info field in bytes
-    pub const SIZE_BYTES: usize = Self::TOTAL_RNG.end / 8;
-}
-impl InfoFieldLayout {
-    /// Returns annotations for the info field
-    pub fn annotations(&self) -> Annotations {
-        let ann = vec![
-            (InfoFieldLayout::FLAGS_RNG, "flags"),
-            (InfoFieldLayout::RSV_RNG, "rsv"),
-            (InfoFieldLayout::SEGMENT_ID_RNG, "segment_id"),
-            (InfoFieldLayout::TIMESTAMP_RNG, "timestamp"),
-        ];
-
-        Annotations::new_with("InfoField".to_string(), ann)
-    }
-}
-impl Layout for InfoFieldLayout {
-    fn size_bytes(&self) -> usize {
-        Self::SIZE_BYTES
-    }
-}
-
-/// Layout for a SCION standard path hop field
-pub struct HopFieldLayout;
-impl HopFieldLayout {
-    //  0                   1                   2                   3
-    //  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |r r r r r r I E|    ExpTime    |           ConsIngress         |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-    // |        ConsEgress             |                               |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               +
-    // |                              MAC                              |
-    // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-    gen_bitrange_const!(FLAGS_RNG, 0, 8);
-    gen_bitrange_const!(EXP_TIME_RNG, 8, 8);
-    gen_bitrange_const!(CONS_INGRESS_RNG, 16, 16);
-    gen_bitrange_const!(CONS_EGRESS_RNG, 32, 16);
-    gen_bitrange_const!(MAC_RNG, 48, 48);
-    gen_bitrange_const!(TOTAL_RNG, 0, 96);
-
-    /// Size of hop field in bytes
-    pub const SIZE_BYTES: usize = Self::TOTAL_RNG.end / 8;
-}
-impl HopFieldLayout {
-    /// Returns annotations for the hop field
-    pub fn annotations(&self) -> Annotations {
-        let ann = vec![
-            (HopFieldLayout::FLAGS_RNG, "flags"),
-            (HopFieldLayout::EXP_TIME_RNG, "exp_time"),
-            (HopFieldLayout::CONS_INGRESS_RNG, "cons_ingress"),
-            (HopFieldLayout::CONS_EGRESS_RNG, "cons_egress"),
-            (HopFieldLayout::MAC_RNG, "mac"),
-        ];
-
-        Annotations::new_with("HopField".to_string(), ann)
-    }
-}
-impl Layout for HopFieldLayout {
-    #[inline]
-    fn size_bytes(&self) -> usize {
-        Self::SIZE_BYTES
-    }
-}
-
-/// Represents a range of bits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BitRange {
-    /// Start bit (inclusive)
-    pub start: usize,
-    /// End bit (exclusive)
-    pub end: usize,
-}
-impl BitRange {
-    /// Creates a new BitRange with the given start and width
-    #[inline]
-    pub const fn new(start: usize, width: usize) -> Self {
-        Self {
-            start,
-            end: start + width,
-        }
-    }
-
-    /// Returns the maximum unsigned integer that can be represented by the BitRange
-    #[inline]
-    pub const fn max_uint(&self) -> usize {
-        (1 << self.size_bits()) - 1
-    }
-
-    /// Creates a BitRange from a standard Range
-    #[inline]
-    pub const fn from_range(range: std::ops::Range<usize>) -> Self {
-        Self {
-            start: range.start,
-            end: range.end,
-        }
-    }
-
-    /// Returns the standard Range representation of the BitRange
-    #[inline]
-    pub const fn bit_range(&self) -> std::ops::Range<usize> {
-        self.start..self.end
-    }
-
-    /// Checks if the given bit is contained within the BitRange
-    #[inline]
-    pub const fn contains(&self, bit: usize) -> bool {
-        bit >= self.start && bit < self.end
-    }
-
-    /// Returns the byte range, assuming the start and end are byte-aligned
-    ///
-    /// This function will panic in debug mode if the start or end are not byte-aligned
-    /// Otherwise, the behavior is undefined.
-    #[inline]
-    pub const fn aligned_byte_range(&self) -> std::ops::Range<usize> {
-        debug_assert!(
-            self.start.is_multiple_of(8),
-            "Start bit is not byte-aligned"
-        );
-        debug_assert!(self.end.is_multiple_of(8), "End bit is not byte-aligned");
-        self.start / 8..self.end.div_ceil(8)
-    }
-
-    /// Returns the byte range containing the bit range
-    ///
-    /// Does not require byte alignment
-    pub const fn containing_byte_range(&self) -> std::ops::Range<usize> {
-        let start_byte = self.start / 8; // floor division
-        let end_byte = self.end.div_ceil(8); // ceiling division
-        start_byte..end_byte
-    }
-
-    /// Returns the size of the bit range in bytes
-    #[inline]
-    pub const fn size_bytes(&self) -> usize {
-        let range = self.containing_byte_range();
-        range.end - range.start
-    }
-
-    /// Returns the size of the bit range in bits
-    #[inline]
-    pub const fn size_bits(&self) -> usize {
-        self.end - self.start
-    }
-
-    /// Shifts the bit range forward by the given number of bytes
-    #[inline]
-    pub const fn shift(mut self, bytes: usize) -> Self {
-        self.start += bytes * 8;
-        self.end += bytes * 8;
-        self
-    }
-
-    /// Offsets the bit range by the given number of bits (can be negative)
-    #[inline]
-    pub fn offset_bits(&self, offset: isize) -> Self {
-        BitRange {
-            start: (self.start as isize + offset) as usize,
-            end: (self.end as isize + offset) as usize,
-        }
+impl From<StdPathDataLayout> for ScionHeaderPathLayout {
+    fn from(data_layout: StdPathDataLayout) -> Self {
+        ScionHeaderPathLayout::Standard(StdPathMetaLayout, data_layout)
     }
 }
 
@@ -884,7 +476,6 @@ mod tests {
     use proptest::{prelude::*, prop_assert_eq};
 
     use super::*;
-    use crate::layout::{CommonHeaderLayout, StdPathMetaLayout};
 
     /// Reimplements all size calculations in one place for cross-checking
     ///

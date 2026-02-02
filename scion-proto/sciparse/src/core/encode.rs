@@ -12,7 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Traits
+//! Utilities for encoding model representations into byte buffers
+//!
+//! All model structures intended for encoding should implement the `WireEncode` trait.
+//!
+//! This trait has three main responsibilities:
+//!
+//! 1. Calculating the required size for the wire encoding
+//! 2. Validating that the structure is in a valid state for encoding
+//! 3. Writing the wire format into a provided byte buffer
+//!
+//! ### Validation
+//!
+//! In this case, validation does not mean comprehensive semantic validation of all fields.
+//! Instead, it focuses on ensuring that all fields required for encoding are valid.
+//! E.g. we can not encode a unknown path, if the data inside is not aligned to 4 bytes.
+//!
+//! This validation is purely aims to prevent encoding data which would lead to an invalid wire
+//! format.
 
 /// Allows encoding to wire format.
 pub trait WireEncode {

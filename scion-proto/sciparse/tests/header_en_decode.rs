@@ -29,16 +29,14 @@ use proptest::{
 };
 use proptest_derive::Arbitrary;
 use sciparse::{
-    loaded::{
-        AddressHeader, CommonHeader, Path, ScionPacketHeader,
-        standard_path::{HopField, InfoField, Segment, StandardPath},
+    core::{
+        encode::{EncodeError, WireEncode},
+        view::{View, ViewConversionError},
     },
-    traits::{EncodeError, WireEncode},
-    types::{
-        address::{Asn, Isd, IsdAsn, ScionHostAddr},
-        path::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
+    header::{
+        model::ScionPacketHeader,
+        view::{ScionHeaderView, ScionPathViewMut},
     },
-    views::{ScionHeaderView, View, ViewConversionError},
 };
 use tinyvec::ArrayVec;
 
@@ -320,7 +318,7 @@ fn exec_every_view_function(view: &mut ScionHeaderView) {
     view.set_dst_isd(view.dst_isd());
     view.set_dst_as(view.dst_as());
 
-    if let sciparse::views::ScionPathViewMut::Standard(path_view) = view.path_mut() {
+    if let ScionPathViewMut::Standard(path_view) = view.path_mut() {
         // Standard path - immutable functions
         let _ = path_view.curr_info_field();
         let _ = path_view.curr_hop_field();
@@ -341,6 +339,15 @@ fn exec_every_view_function(view: &mut ScionHeaderView) {
 
 /// Strategies for generating valid SCION headers
 mod valid {
+    use sciparse::{
+        header::model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
+        path::standard::{
+            model::{HopField, InfoField, Segment, StandardPath},
+            types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, PathType},
+        },
+        types::address::{Asn, Isd, IsdAsn, ScionHostAddr},
+    };
+
     use super::*;
 
     /// Options for constructing a valid SCION header for testing
@@ -392,7 +399,7 @@ mod valid {
                 HeaderPathOptions::Empty => Path::Empty,
                 HeaderPathOptions::Unknown { path_id, raw_bytes } => {
                     Path::Unsupported {
-                        path_type: sciparse::types::path::PathType::Other(*path_id),
+                        path_type: PathType::Other(*path_id),
                         data: raw_bytes.clone(),
                     }
                 }
@@ -592,7 +599,15 @@ mod valid {
 /// Strategic manipulation of loaded headers to create invalid headers
 mod header_manipulation {
     use proptest::prelude::Arbitrary;
-    use sciparse::layout::StdPathMetaLayout;
+    use sciparse::{
+        header::model::{Path, ScionPacketHeader},
+        path::standard::{
+            layout::StdPathMetaLayout,
+            model::HopField,
+            types::{HopFieldFlags, HopFieldMac, PathType},
+        },
+        types::address::ScionHostAddr,
+    };
 
     use super::*;
     use crate::valid::HeaderPathOptions;
@@ -699,7 +714,7 @@ mod header_manipulation {
 
                     HeaderModification::InvalidUnknownPathBytes(raw_bytes) => {
                         header.path = Path::Unsupported {
-                            path_type: sciparse::types::path::PathType::Other(6),
+                            path_type: PathType::Other(6),
                             data: raw_bytes,
                         };
                     }
@@ -801,7 +816,7 @@ mod header_manipulation {
 /// Strategic manipulation of important header fields on the wire format
 mod wire_manipulation {
     use proptest::prelude::{Arbitrary, BoxedStrategy};
-    use sciparse::views::{ScionHeaderView, ScionPathViewMut, View};
+    use sciparse::core::encode::WireEncode;
 
     use super::*;
     use crate::valid::ValidHeaderOptions;
