@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package endhost.discovery.v1;
+
+// Endhost API Discovery service.
+//
+// This service allows clients to discover available Endhost APIs.
+service EndhostApiDiscoveryService {
+  // GetEndhostApis returns the available Endhost APIs.
+  rpc GetEndhostApis(RpcGetEndhostApisRequest) returns (RpcGetEndhostApisResponse);
+}
+
+// Request to discovery available Endhost APIs.
+message RpcGetEndhostApisRequest {}
+
+// Endhost APIs response message.
+message RpcGetEndhostApisResponse {
+  // Set of Endhost APIs.
+  // These should be used in order, using the first reachable one.
+  repeated RpcEndhostApiInfo endhost_apis = 1;
+}
+
+// Information about a single Endhost API.
+message RpcEndhostApiInfo {
+  // URL of the Endhost API.
+  string address = 1;
+}

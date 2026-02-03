@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "endhost-api/*",
+    "endhost-api-discovery/*",
     "hsd-api/*",
     "integration-tests",
     "libs/*",
@@ -24,6 +25,11 @@ endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.3.0
 endhost-api = { path = "endhost-api/endhost-api", version = "0.3.0" }
 endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.3.0" }
 endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.3.0" }
+
+endhost-api-discovery-client = { path = "endhost-api-discovery/ead-client", version = "0.3.0" }
+endhost-api-discovery-api = { path = "endhost-api-discovery/ead-api", version = "0.3.0" }
+endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", version = "0.3.0" }
+
 
 # hsd-api = { path = "hsd-api/hsd-api", version = "0.2" }
 # hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.2" }
@@ -151,7 +157,13 @@ mem_forget = "deny"
 missing_docs = "warn"
 
 [workspace.metadata.cargo-shear]
-ignored = ["foldhash", "scion-proto"]
+ignored = [
+    "foldhash",
+    "scion-proto",
+    #todo: remove once ead is in use
+    "endhost-api-discovery-api",
+    "endhost-api-discovery-client"
+]
 
 [profile.ci]
 inherits = "dev"            # https://doc.rust-lang.org/cargo/reference/profiles.html#dev

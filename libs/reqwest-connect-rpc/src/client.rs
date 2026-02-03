@@ -46,7 +46,7 @@ pub enum CrpcClientError {
         /// Additional context about the decoding error.
         context: Cow<'static, str>,
         /// The underlying source error.
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
         /// The response body, if available.
         body: Option<Bytes>,
     },
@@ -195,7 +195,7 @@ impl CrpcClient {
         let body = response.bytes().await.map_err(|e| {
             CrpcClientError::DecodeError {
                 context: "error reading response body".into(),
-                source: e.into(),
+                source: Some(e.into()),
                 body: None,
             }
         })?;
@@ -203,7 +203,7 @@ impl CrpcClient {
         Res::decode(&body[..]).map_err(|e| {
             CrpcClientError::DecodeError {
                 context: "error decoding response body".into(),
-                source: e.into(),
+                source: Some(e.into()),
                 body: Some(body.clone()),
             }
         })

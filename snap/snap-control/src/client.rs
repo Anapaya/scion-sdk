@@ -106,7 +106,7 @@ impl ControlPlaneApi for CrpcSnapControlClient {
         let address = res.address.parse().map_err(|e: std::net::AddrParseError| {
             CrpcClientError::DecodeError {
                 context: "parsing data plane address".into(),
-                source: e.into(),
+                source: Some(e.into()),
                 body: None,
             }
         })?;
@@ -117,7 +117,7 @@ impl ControlPlaneApi for CrpcSnapControlClient {
                 address.parse().map_err(|e: std::net::AddrParseError| {
                     CrpcClientError::DecodeError {
                         context: "parsing server control address".into(),
-                        source: e.into(),
+                        source: Some(e.into()),
                         body: None,
                     }
                 })
@@ -132,7 +132,7 @@ impl ControlPlaneApi for CrpcSnapControlClient {
                         .map_err(|e: std::array::TryFromSliceError| {
                             CrpcClientError::DecodeError {
                                 context: "server static identity is not 32 bytes".into(),
-                                source: e.into(),
+                                source: Some(e.into()),
                                 body: None,
                             }
                         })?;
@@ -162,7 +162,7 @@ impl ControlPlaneApi for CrpcSnapControlClient {
                 |e: std::array::TryFromSliceError| {
                     CrpcClientError::DecodeError {
                         context: "psk share is not 32 bytes".into(),
-                        source: e.into(),
+                        source: Some(e.into()),
                         body: None,
                     }
                 },

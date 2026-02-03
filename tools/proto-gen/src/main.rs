@@ -67,6 +67,14 @@ fn main() -> anyhow::Result<()> {
             use_tonic: false,
         },
         CompileConfig {
+            name: "endhost-api-discovery",
+            out_dir: "endhost-api-discovery/ead-models/src/proto/gen",
+            proto_dirs: vec!["endhost-api-discovery/ead-models/protobuf"],
+            extern_includes: vec![],
+            protoc_args: vec![],
+            use_tonic: false,
+        },
+        CompileConfig {
             name: "hsd-api",
             out_dir: "hsd-api/hsd-api-protobuf/src/proto",
             proto_dirs: vec!["hsd-api/hsd-api-protobuf/protobuf"],
@@ -282,7 +290,6 @@ impl CompileConfig {
 
         // Configure and run the prost_build compiler
         let mut config = prost_build::Config::new();
-
         config.out_dir(out_dir);
 
         for arg in &self.protoc_args {

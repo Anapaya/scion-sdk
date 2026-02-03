@@ -1,0 +1,28 @@
+[package]
+name = "endhost-api-discovery-api"
+version = "0.3.0"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "SCION endhost API discovery"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+
+[dependencies]
+# Local Dependencies
+endhost-api-discovery-models = { workspace = true }
+scion-sdk-axum-connect-rpc = { workspace = true }
+
+# Global Dependencies
+axum = { workspace = true }
+axum-client-ip = "*"
+
+[dev-dependencies]
+async-trait = { workspace = true } # only used in doc-tests
+tokio = { workspace = true }       # only used in doc-tests
+
+[package.metadata.cargo-shear]
+ignored = ["tokio", "async-trait"]
+
+[lints]
+workspace = true

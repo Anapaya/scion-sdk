@@ -139,7 +139,7 @@ impl EndhostApiClient for CrpcEndhostApiClient {
             .map_err(|e: url::ParseError| {
                 CrpcClientError::DecodeError {
                     context: "parsing underlay address as URL".into(),
-                    source: e.into(),
+                    source: Some(e.into()),
                     body: None,
                 }
             })
@@ -171,7 +171,7 @@ impl EndhostApiClient for CrpcEndhostApiClient {
                 |e: scion_proto::path::convert::segment::InvalidSegmentError| {
                     CrpcClientError::DecodeError {
                         context: "decoding segments".into(),
-                        source: e.into(),
+                        source: Some(e.into()),
                         body: None,
                     }
                 },
