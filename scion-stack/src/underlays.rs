@@ -35,7 +35,7 @@ use crate::{
 };
 
 pub mod discovery;
-pub mod snap_ng;
+pub mod snap;
 pub mod udp;
 
 /// Configuration needed to create a SNAP socket(s).
@@ -113,7 +113,7 @@ impl UnderlayStack {
         isd_as: IsdAsn,
         cp_url: Url,
         token_source: Option<Arc<dyn TokenSource>>,
-    ) -> Result<snap_ng::SnapUnderlaySocket, ScionSocketBindError> {
+    ) -> Result<snap::SnapUnderlaySocket, ScionSocketBindError> {
         let token_source = token_source.ok_or(ScionSocketBindError::SnapConnectionError(
             SnapConnectionError::SnapTokenSourceMissing,
         ))?;
@@ -132,7 +132,7 @@ impl UnderlayStack {
 
         let udp_socket = bind_udp_underlay_socket(local_addr)?;
 
-        let socket = snap_ng::SnapUnderlaySocket::new(
+        let socket = snap::SnapUnderlaySocket::new(
             bind_addr,
             cp_url,
             udp_socket,
@@ -266,7 +266,7 @@ impl DynUnderlayStack for UnderlayStack {
                             self.snap_socket_config.snap_token_source.clone(),
                         )
                         .await?;
-                    let async_udp_socket = snap_ng::SnapAsyncUdpSocket::new(socket, scmp_handlers);
+                    let async_udp_socket = snap::SnapAsyncUdpSocket::new(socket, scmp_handlers);
                     Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
                 }
                 Some((isd_as, UnderlayInfo::Udp(_))) => {
