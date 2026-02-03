@@ -138,7 +138,7 @@ utoipa-axum = "0.2"
 utoipa-redoc = { version = "6.0", features = ["axum"] }
 uuid = "1.16"
 walkdir = "2.5"
-x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "getrandom"] }
 x509-cert = "0.2"
 zerocopy = { version = "0.8.27", features = ["std", "derive"] }
 zeroize = { version = "1.8.2", features = ["zeroize_derive"] }

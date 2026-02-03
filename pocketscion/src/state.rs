@@ -235,9 +235,9 @@ impl SharedPocketScionState {
 
     /// Use wireguard-inspired snaptun(-ng)
     /// This is a temporary option used during transition from old to new snaptun.
-    pub fn temporary_snaptun_ng_enable(&mut self) {
+    pub fn temporary_snaptun_ng_enable(&mut self, enable: bool) {
         let mut state = self.system_state.write().unwrap();
-        state.temporary_snaptun_ng_enabled = true;
+        state.temporary_snaptun_ng_enabled = enable;
     }
 
     /// Use wireguard-inspired snaptun(-ng)
@@ -336,7 +336,7 @@ impl SystemState {
             root_secret: DhsdSecret::from_root_secret([67u8; 32]),
             start_time,
             snap_token_public_pem: insecure_const_ed25519_key_pair_pem().1,
-            temporary_snaptun_ng_enabled: Default::default(),
+            temporary_snaptun_ng_enabled: true,
             snaps: Default::default(),
             snaptun_keepalive_interval: DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL,
             routers: Default::default(),

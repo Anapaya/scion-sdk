@@ -3369,7 +3369,6 @@ dependencies = [
  "mockall",
  "pin-project-lite",
  "prost",
- "rustls",
  "scc",
  "scion-proto",
  "scion-sdk-reqwest-connect-rpc",
@@ -3384,6 +3383,7 @@ dependencies = [
  "tracing",
  "url",
  "windows-sys 0.61.2",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -3754,11 +3754,8 @@ dependencies = [
  "rcgen",
  "scion-proto",
  "scion-sdk-observability",
- "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-token-validator",
- "scion-sdk-utils",
  "serde",
- "test-log",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

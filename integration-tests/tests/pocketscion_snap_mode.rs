@@ -30,9 +30,9 @@ use scion_proto::address::{IsdAsn, SocketAddr};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use scion_stack::{
     quic::QuinnConn as _,
-    scionstack::{ScionStackBuilder, UdpScionSocket, builder::SnapUnderlayConfig},
+    scionstack::{ScionStackBuilder, UdpScionSocket},
 };
-use snap_tokens::snap_token::dummy_snap_token;
+use snap_tokens::snap_token::{dummy_snap_token, seeded_dummy_snap_token};
 use test_log::test;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -76,15 +76,14 @@ async fn multi_client() {
 
     // stack1
     let stack1 = ScionStackBuilder::new(snap1_cp_addr.clone())
-        .with_auth_token(dummy_snap_token())
+        .with_auth_token(seeded_dummy_snap_token("client1".to_string()))
         .build()
         .await
         .unwrap();
 
     // stack2
     let stack2 = ScionStackBuilder::new(snap1_cp_addr)
-        .with_auth_token(dummy_snap_token())
-        .with_snap_underlay_config(SnapUnderlayConfig::builder().with_snap_dp_index(1).build())
+        .with_auth_token(seeded_dummy_snap_token("client2".to_string()))
         .build()
         .await
         .unwrap();
@@ -103,8 +102,11 @@ async fn multi_client() {
         .unwrap();
 
     let server_socket = server_stack.bind(None).await.unwrap();
+    info!("binding first client socket");
     let socket1 = stack1.bind(None).await.unwrap();
+    info!("bound first client socket, binding second client socket");
     let socket2 = stack2.bind(None).await.unwrap();
+    info!("bound second client socket, binding server socket");
     let server_addr = server_socket.local_addr();
     info!(
         "Server addr: {}, client1 addr: {}, client2 addr: {}",

@@ -49,14 +49,14 @@ macro_rules! within_duration {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(10_000)]
+#[ntest::timeout(5_000)]
 async fn test_bind_two_sockets_send_receive_snap() {
     test_bind_two_sockets_send_receive_impl(minimal_pocketscion_setup(UnderlayType::Snap).await)
         .await;
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(10_000)]
+#[ntest::timeout(5_000)]
 async fn test_bind_two_sockets_send_receive_udp() {
     test_bind_two_sockets_send_receive_impl(minimal_pocketscion_setup(UnderlayType::Udp).await)
         .await;
@@ -93,13 +93,13 @@ async fn test_quic_endpoint_creation_snap() {
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(10_000)]
+#[ntest::timeout(5_000)]
 async fn test_quic_endpoint_creation_udp() {
     test_quic_endpoint_creation_impl(minimal_pocketscion_setup(UnderlayType::Udp).await).await;
 }
 
 #[test(tokio::test)]
-#[ntest::timeout(10_000)]
+#[ntest::timeout(5_000)]
 async fn test_bind_two_endpoints_socket_already_in_use() {
     let first_endpoint = quinn::Endpoint::client(("0.0.0.0:0").parse().unwrap()).unwrap();
     let local_addr = first_endpoint.local_addr().unwrap();
@@ -129,8 +129,12 @@ async fn test_bind_two_sockets_send_receive_impl(test_env: PocketscionTestEnv) {
     let sender_socket = sender_stack.bind(None).await.unwrap();
     let sender_addr = sender_socket.local_addr();
 
+    info!("sender socket bound to {sender_addr:?}");
+
     let receiver_socket = receiver_stack.bind(None).await.unwrap();
     let receiver_addr = receiver_socket.local_addr();
+
+    info!("receiver socket bound to {receiver_addr:?}");
 
     // Send packet from sender to receiver
     let test_data = Bytes::from("Hello, World!");

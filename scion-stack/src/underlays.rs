@@ -13,13 +13,15 @@
 // limitations under the License.
 //! SCION stack underlay implementations.
 
-use std::sync::Arc;
+use std::{net, sync::Arc};
 
 use scion_proto::address::{Isd, IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use scion_sdk_utils::backoff::ExponentialBackoff;
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use url::Url;
+use x25519_dalek::StaticSecret;
 
 use crate::{
     scionstack::{
@@ -28,13 +30,12 @@ use crate::{
     },
     underlays::{
         discovery::{UnderlayDiscovery, UnderlayInfo},
-        snap::{SnapAsyncUdpSocket, SnapUnderlaySocket},
         udp::{LocalIpResolver, UdpAsyncUdpUnderlaySocket, UdpUnderlaySocket},
     },
 };
 
 pub mod discovery;
-pub mod snap;
+pub mod snap_ng;
 pub mod udp;
 
 /// Configuration needed to create a SNAP socket(s).
@@ -53,6 +54,11 @@ pub struct UnderlayStack {
     /// Resolver for the local IP address for UDP underlay sockets.
     local_ip_resolver: Arc<dyn LocalIpResolver>,
     snap_socket_config: SnapSocketConfig,
+    // TODO(uniquefine): This should be handled by a
+    // global identity registration component.
+    // https://github.com/Anapaya/scion/issues/27486
+    // Generate an register an identity for this socket.
+    snap_static_identity: StaticSecret,
 }
 
 impl UnderlayStack {
@@ -68,6 +74,7 @@ impl UnderlayStack {
             underlay_discovery,
             local_ip_resolver,
             snap_socket_config,
+            snap_static_identity: StaticSecret::random(),
         }
     }
 
@@ -106,25 +113,32 @@ impl UnderlayStack {
         isd_as: IsdAsn,
         cp_url: Url,
         token_source: Option<Arc<dyn TokenSource>>,
-    ) -> Result<SnapUnderlaySocket, ScionSocketBindError> {
+    ) -> Result<snap_ng::SnapUnderlaySocket, ScionSocketBindError> {
         let token_source = token_source.ok_or(ScionSocketBindError::SnapConnectionError(
             SnapConnectionError::SnapTokenSourceMissing,
         ))?;
 
-        if let Some(SocketAddr::Svc(_)) = bind_addr {
-            return Err(ScionSocketBindError::InvalidBindAddress(
-                InvalidBindAddressError::ServiceAddress(bind_addr.unwrap()),
-            ));
-        }
+        let local_addr = match bind_addr {
+            Some(addr) => {
+                addr.local_address()
+                    .ok_or(ScionSocketBindError::InvalidBindAddress(
+                        InvalidBindAddressError::ServiceAddress(addr),
+                    ))?
+            }
+            None => "0.0.0.0:0".parse().unwrap(),
+        };
 
-        let socket = SnapUnderlaySocket::new(
-            isd_as,
-            bind_addr.and_then(|addr| addr.local_address()),
+        let bind_addr = SocketAddr::from_std(isd_as, local_addr);
+
+        let udp_socket = bind_udp_underlay_socket(local_addr)?;
+
+        let socket = snap_ng::SnapUnderlaySocket::new(
+            bind_addr,
             cp_url,
-            "localhost".to_string(),
-            self.underlay_discovery.clone(),
+            udp_socket,
             token_source,
-            self.snap_socket_config.reconnect_backoff,
+            self.snap_static_identity.clone(),
+            1024,
         )
         .await?;
         Ok(socket)
@@ -162,28 +176,13 @@ impl UnderlayStack {
         bind_addr: Option<SocketAddr>,
     ) -> Result<(SocketAddr, UdpSocket), ScionSocketBindError> {
         let bind_addr = self.resolve_udp_bind_addr(isd_as, bind_addr)?;
-        let local_addr =
+        let local_addr: net::SocketAddr =
             bind_addr
                 .local_address()
                 .ok_or(ScionSocketBindError::InvalidBindAddress(
                     InvalidBindAddressError::ServiceAddress(bind_addr),
                 ))?;
-        let socket = UdpSocket::bind(local_addr).await.map_err(|e| {
-            match e.kind() {
-                std::io::ErrorKind::AddrInUse => {
-                    ScionSocketBindError::PortAlreadyInUse(local_addr.port())
-                }
-                std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::InvalidInput => {
-                    ScionSocketBindError::InvalidBindAddress(
-                        InvalidBindAddressError::CannotBindToRequestedAddress(
-                            bind_addr,
-                            format!("Failed to bind socket: {e:#}").into(),
-                        ),
-                    )
-                }
-                _ => ScionSocketBindError::Other(Box::new(e)),
-            }
-        })?;
+        let socket = bind_udp_underlay_socket(local_addr)?;
         let local_addr = socket.local_addr().map_err(|e| {
             ScionSocketBindError::Other(
                 anyhow::anyhow!("failed to get local address: {e}").into_boxed_dyn_error(),
@@ -267,7 +266,7 @@ impl DynUnderlayStack for UnderlayStack {
                             self.snap_socket_config.snap_token_source.clone(),
                         )
                         .await?;
-                    let async_udp_socket = SnapAsyncUdpSocket::new(socket, scmp_handlers);
+                    let async_udp_socket = snap_ng::SnapAsyncUdpSocket::new(socket, scmp_handlers);
                     Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
                 }
                 Some((isd_as, UnderlayInfo::Udp(_))) => {
@@ -298,4 +297,79 @@ impl DynUnderlayStack for UnderlayStack {
         isd_ases.sort();
         isd_ases
     }
+}
+
+#[cfg(windows)]
+fn set_exclusive_addr_use(sock: &Socket, enable: bool) -> std::io::Result<()> {
+    use std::{mem, os::windows::io::AsRawSocket};
+
+    use windows_sys::Win32::Networking::WinSock;
+
+    // Winsock expects an int/bool-ish value passed by pointer.
+    let val: u32 = if enable { 1 } else { 0 };
+
+    let rc = unsafe {
+        WinSock::setsockopt(
+            sock.as_raw_socket() as usize,
+            WinSock::SOL_SOCKET,
+            WinSock::SO_EXCLUSIVEADDRUSE,
+            &val as *const _ as *const _,
+            mem::size_of_val(&val) as _,
+        )
+    };
+
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// This is equivalent to tokio::net::UdpSocket::bind(addr) but with the exclusive address use set
+/// to true on windows.
+/// This is because on windows, by default, multiple sockets can bind to the same address:port
+/// if one binds to wildcard address.
+fn bind_udp_underlay_socket(
+    addr: net::SocketAddr,
+) -> Result<tokio::net::UdpSocket, ScionSocketBindError> {
+    let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))
+        .map_err(|e| ScionSocketBindError::Other(Box::new(e)))?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| ScionSocketBindError::Other(Box::new(e)))?;
+    if addr.is_ipv6()
+        && let Err(e) = socket.set_only_v6(false)
+    {
+        tracing::debug!(%e, "unable to make socket dual-stack");
+    }
+
+    // XXX(uniquefine): on windows, we need to set the exclusive address use to true to
+    // prevent multiple sockets from binding to the same address.
+    #[cfg(windows)]
+    set_exclusive_addr_use(&socket, true).map_err(|e| ScionSocketBindError::Other(Box::new(e)))?;
+
+    socket.bind(&addr.into()).map_err(|e| {
+        match e.kind() {
+            std::io::ErrorKind::AddrInUse => ScionSocketBindError::PortAlreadyInUse(addr.port()),
+            std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::InvalidInput => {
+                ScionSocketBindError::InvalidBindAddress(
+                    InvalidBindAddressError::CannotBindToRequestedAddress(
+                        SocketAddr::from_std(IsdAsn::WILDCARD, addr),
+                        format!("Failed to bind socket: {e:#}").into(),
+                    ),
+                )
+            }
+            #[cfg(windows)]
+            // On windows, if a port is already in use the error returned is sometimes
+            // code 10013 WSAEACCES.
+            // see https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse
+            std::io::ErrorKind::PermissionDenied => {
+                ScionSocketBindError::PortAlreadyInUse(addr.port())
+            }
+            _ => ScionSocketBindError::Other(Box::new(e)),
+        }
+    })?;
+
+    tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(socket))
+        .map_err(|e| ScionSocketBindError::Other(Box::new(e)))
 }

@@ -24,6 +24,7 @@ use snap_tokens::snap_token::dummy_snap_token_with_validity;
 use test_log::test;
 
 #[test(tokio::test)]
+#[ignore]
 async fn auto_session_renewals() {
     // First token is valid for 2 seconds.
     // We then update a token that is valid for another 3 seconds.

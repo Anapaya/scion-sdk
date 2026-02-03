@@ -52,6 +52,6 @@ pub async fn write_file(path: impl AsRef<Path>, content: &impl Serialize) -> std
 /// Returns a temporary path in the system's temp directory, prefixed with the current thread name.
 pub fn get_tmp_path<S: AsRef<str>>(name: S) -> PathBuf {
     let path = std::env::temp_dir();
-    let current_thread = std::thread::current().name().unwrap().to_string();
-    path.join(format!("{}_{}", current_thread, name.as_ref()))
+    let current_thread = std::thread::current().id();
+    path.join(format!("{:?}_{}", current_thread, name.as_ref()))
 }

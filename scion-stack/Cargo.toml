@@ -22,7 +22,6 @@ futures = { workspace = true }
 pin-project-lite = { workspace = true }
 prost = { workspace = true }
 quinn = { workspace = true }
-rustls = { workspace = true, features = ["ring"] }
 scc = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }
@@ -35,6 +34,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 mockall = "0.13"

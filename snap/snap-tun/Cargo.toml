@@ -24,20 +24,17 @@ quinn = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
-scion-sdk-utils = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 x509-cert = { workspace = true }
-scion-sdk-reqwest-connect-rpc = { workspace = true }
 zerocopy = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
 pem = { workspace = true }
 rcgen = { workspace = true }
-test-log = { workspace = true, features = ["trace"] }
 
 [lints]
 workspace = true

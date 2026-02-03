@@ -31,6 +31,7 @@ use tokio::{
 use tracing::info;
 
 #[test(tokio::test)]
+#[ntest::timeout(5_000)]
 async fn should_failover_on_link_error() {
     let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
 

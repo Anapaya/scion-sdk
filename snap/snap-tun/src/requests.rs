@@ -21,10 +21,6 @@ use std::{
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use scion_proto::address::{EndhostAddr, IsdAsn};
 
-pub(crate) fn system_time_from_unix_epoch_secs(secs: u64) -> std::time::SystemTime {
-    std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)
-}
-
 pub(crate) fn unix_epoch_from_system_time(time: SystemTime) -> u64 {
     time.duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
