@@ -38,17 +38,47 @@ enum Commands {
     Check,
 }
 
-// Define constants for source paths to avoid repetition
-const SCION_PROTO_SRC_DIR: &str = "scion-proto/scion-protobuf/src/proto";
-const ENDHOST_API_SRC_DIR: &str = "endhost-api/endhost-api-protobuf/src/proto";
-const HSD_API_SRC_DIR: &str = "hsd-api/hsd-api-protobuf/src/proto";
-
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Common extern paths for SCION protobufs
+    //
+    // When depending on scion-protobuf, add as extern_includes.
+    let scion_proto_externs = ExternIncludes {
+        proto_dirs: vec!["scion-proto/scion-protobuf"],
+        extern_paths: vec![(".proto", "scion_protobuf")],
+    };
+
+    let targets = vec![
+        CompileConfig {
+            name: "scion-proto",
+            out_dir: "scion-proto/scion-protobuf/src/proto",
+            proto_dirs: vec!["scion-proto/scion-protobuf/"],
+            extern_includes: vec![],
+            protoc_args: vec![],
+            use_tonic: true,
+        },
+        CompileConfig {
+            name: "endhost-api",
+            out_dir: "endhost-api/endhost-api-protobuf/src/proto",
+            proto_dirs: vec!["endhost-api/endhost-api-protobuf/protobuf"],
+            extern_includes: vec![scion_proto_externs.clone()],
+            protoc_args: vec!["--experimental_allow_proto3_optional"],
+            use_tonic: false,
+        },
+        CompileConfig {
+            name: "hsd-api",
+            out_dir: "hsd-api/hsd-api-protobuf/src/proto",
+            proto_dirs: vec!["hsd-api/hsd-api-protobuf/protobuf"],
+            extern_includes: vec![scion_proto_externs.clone()],
+            protoc_args: vec!["--experimental_allow_proto3_optional"],
+            use_tonic: false,
+        },
+    ];
+
     match cli.command {
-        Commands::Update => run_update(),
-        Commands::Check => run_check(),
+        Commands::Update => run_update(targets),
+        Commands::Check => run_check(targets),
     }
 }
 
@@ -56,16 +86,17 @@ fn main() -> anyhow::Result<()> {
 ///
 /// This function executes the original behavior: compiling protobufs
 /// and writing the output directly into the source directories.
-fn run_update() -> anyhow::Result<()> {
+fn run_update(targets: Vec<CompileConfig>) -> anyhow::Result<()> {
     println!("Updating generated protobuf files...");
 
     // Ensure output directories exist
-    fs::create_dir_all(SCION_PROTO_SRC_DIR)?;
-    fs::create_dir_all(ENDHOST_API_SRC_DIR)?;
-    fs::create_dir_all(HSD_API_SRC_DIR)?;
-    compile_scion_protobuf(SCION_PROTO_SRC_DIR)?;
-    compile_endhost_api_protobuf(ENDHOST_API_SRC_DIR)?;
-    compile_hsd_api_protobuf(HSD_API_SRC_DIR)?;
+    for target in &targets {
+        fs::create_dir_all(target.out_dir)?;
+    }
+
+    for target in &targets {
+        target.generate()?;
+    }
 
     println!("Protobuf files updated successfully.");
     Ok(())
@@ -75,51 +106,30 @@ fn run_update() -> anyhow::Result<()> {
 ///
 /// This function compiles protobufs to a temporary directory and then
 /// compares the generated files with the ones in the source tree.
-fn run_check() -> anyhow::Result<()> {
+fn run_check(targets: Vec<CompileConfig>) -> anyhow::Result<()> {
     println!("Checking if generated protobuf files are up-to-date...");
 
-    // Create a temporary directory for the generated files
-    let temp_dir = tempfile::Builder::new()
-        .prefix("proto-gen-check-")
-        .tempdir()?;
-    let temp_dir_path = temp_dir.path();
+    let mut all_diffs = Vec::new();
 
-    let temp_scion_dir = temp_dir_path.join("scion");
-    let temp_endhost_dir = temp_dir_path.join("endhost");
-    let temp_hsd_dir = temp_dir_path.join("hsd");
-
-    fs::create_dir_all(&temp_scion_dir)?;
-    fs::create_dir_all(&temp_endhost_dir)?;
-    fs::create_dir_all(&temp_hsd_dir)?;
-
-    // Compile protos into the temporary directories
-    compile_scion_protobuf(temp_scion_dir.to_str().unwrap())?;
-    compile_endhost_api_protobuf(temp_endhost_dir.to_str().unwrap())?;
-    compile_hsd_api_protobuf(temp_hsd_dir.to_str().unwrap())?;
-
-    // Compare the generated files with the source files
-    let scion_diffs = compare_dirs(&temp_scion_dir, Path::new(SCION_PROTO_SRC_DIR))?;
-    let endhost_diffs = compare_dirs(&temp_endhost_dir, Path::new(ENDHOST_API_SRC_DIR))?;
-    let hsd_diffs = compare_dirs(&temp_hsd_dir, Path::new(HSD_API_SRC_DIR))?;
-
-    let all_diffs: Vec<_> = scion_diffs
-        .into_iter()
-        .chain(endhost_diffs)
-        .chain(hsd_diffs)
-        .collect();
+    for target in &targets {
+        let diffs = target.check()?;
+        all_diffs.extend(diffs);
+    }
 
     if all_diffs.is_empty() {
         println!("Protobuf files are up-to-date.");
-        Ok(())
     } else {
         println!("Found differences in the following generated files:");
         for file in &all_diffs {
             println!("  - {}", file.display());
         }
+
         bail!(
             "Generated protobuf files are out of date. Please run the update command:\n. cargo run -p proto-gen -- update"
         )
     }
+
+    Ok(())
 }
 
 /// Compares two directories and returns a list of paths that are different.
@@ -172,64 +182,138 @@ fn compare_dirs(gen_dir: &Path, src_dir: &Path) -> anyhow::Result<Vec<PathBuf>> 
     Ok(sorted_diffs)
 }
 
-fn compile_scion_protobuf(out_dir: &str) -> anyhow::Result<()> {
-    let proto_root = "scion-proto/scion-protobuf/";
-    let proto_files = get_proto_files(proto_root)?;
-    tonic_prost_build::configure()
-        .out_dir(out_dir)
-        .compile_protos(&proto_files, &[proto_root.to_string()])
-        .context("failed to compile scion-protobuf")?;
-    Ok(())
+struct CompileConfig {
+    /// Name of the target being compiled (for logging purposes)
+    name: &'static str,
+    /// Output directory for generated files
+    out_dir: &'static str,
+    /// Root directories containing .proto files
+    ///
+    /// The directories will be searched recursively to find all .proto files.
+    proto_dirs: Vec<&'static str>,
+    /// External includes and their Rust module mappings
+    ///
+    /// Allows reusing existing generated code instead of generating new code.
+    extern_includes: Vec<ExternIncludes>,
+    /// Additional arguments to pass to protoc
+    protoc_args: Vec<&'static str>,
+    /// If true, use tonic to generate gRPC service code.
+    /// If false, use prost to generate only message code.
+    use_tonic: bool,
 }
 
-fn compile_endhost_api_protobuf(out_dir: &str) -> anyhow::Result<()> {
-    let proto_roots = [
-        "endhost-api/endhost-api-protobuf/protobuf",
-        "scion-proto/scion-protobuf",
-    ];
-    let proto_files = get_proto_files("endhost-api/endhost-api-protobuf/protobuf")?;
-    let mut config = prost_build::Config::new();
-    config
-        .out_dir(out_dir)
-        .protoc_arg("--experimental_allow_proto3_optional")
-        .extern_path(
-            ".proto.control_plane.v1",
-            "scion_protobuf::control_plane::v1",
-        )
-        .extern_path(
-            ".proto.control_plane.experimental.v1",
-            "scion_protobuf::control_plane::v1",
-        )
-        .extern_path(".proto.crypto.v1", "scion_protobuf::crypto::v1")
-        .compile_protos(&proto_files, &proto_roots)?;
-
-    Ok(())
+#[derive(Clone)]
+struct ExternIncludes {
+    /// Root directories containing external .proto files
+    proto_dirs: Vec<&'static str>,
+    /// Generate external type mappings.
+    /// (proto package, Rust module path)
+    ///
+    /// E.g., (".proto.control_plane.v1", "scion_protobuf::control_plane::v1")
+    ///
+    /// Allows reusing existing generated code instead of regenerating.
+    extern_paths: Vec<(&'static str, &'static str)>,
 }
 
-fn compile_hsd_api_protobuf(out_dir: &str) -> anyhow::Result<()> {
-    let proto_roots = [
-        "hsd-api/hsd-api-protobuf/protobuf",
-        "scion-proto/scion-protobuf",
-    ];
-    let proto_files = get_proto_files("hsd-api/hsd-api-protobuf/protobuf")?;
-    let mut config = prost_build::Config::new();
-    config
-        .out_dir(out_dir)
-        .protoc_arg("--experimental_allow_proto3_optional")
-        .extern_path(
-            ".proto.control_plane.v1",
-            "scion_protobuf::control_plane::v1",
-        )
-        .extern_path(
-            ".proto.control_plane.experimental.v1",
-            "scion_protobuf::control_plane::v1",
-        )
-        .extern_path(".proto.crypto.v1", "scion_protobuf::crypto::v1")
-        .compile_protos(&proto_files, &proto_roots)?;
+impl CompileConfig {
+    /// Generates the protobuf files into the specified output directory.
+    ///
+    /// Will overwrite existing files.
+    pub fn generate(&self) -> anyhow::Result<()> {
+        self.compile(self.out_dir)
+    }
 
-    Ok(())
+    /// Checks if the generated files are up-to-date without writing them.
+    ///
+    /// If they are not up-to-date, returns a list of differing files.
+    pub fn check(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("proto-gen-check-")
+            .tempdir()?;
+
+        let tmp_dir_path = tmp_dir.path();
+        let tmp_dir_str = tmp_dir_path
+            .to_str()
+            .context("failed to convert temp dir path to str")?;
+
+        self.compile(tmp_dir_str)?;
+
+        // Compare generated files with existing ones
+        let diffs = compare_dirs(tmp_dir_path, Path::new(self.out_dir))?;
+
+        Ok(diffs)
+    }
+
+    /// Compiles the protobuf files into the specified output directory.
+    ///
+    /// Uses prost_build, generating only messages.
+    fn compile(&self, out_dir: &str) -> anyhow::Result<()> {
+        let (mut config, include_dirs, proto_files) = self.prost_config(out_dir)?;
+
+        fs::create_dir_all(out_dir)
+            .with_context(|| format!("failed to create output directory {}", out_dir))?;
+
+        config
+            .compile_protos(&proto_files, &include_dirs)
+            .with_context(|| format!("failed to compile {}", self.name))?;
+
+        Ok(())
+    }
+
+    /// Compiles the protobuf files into the specified output directory.
+    ///
+    /// Uses prost_build, generating only message code without gRPC services.
+    ///
+    /// Returns
+    /// (Config, include, proto_files)
+    fn prost_config(
+        &self,
+        out_dir: &str,
+    ) -> anyhow::Result<(prost_build::Config, Vec<String>, Vec<String>)> {
+        let mut proto_files = Vec::new();
+        let mut include_dirs = Vec::new();
+
+        // Gather all .proto files from the specified root directories
+        for proto_root in &self.proto_dirs {
+            let files = get_proto_files(proto_root)?;
+            proto_files.extend(files);
+            include_dirs.push(proto_root.to_string());
+        }
+
+        // Configure and run the prost_build compiler
+        let mut config = prost_build::Config::new();
+
+        config.out_dir(out_dir);
+
+        for arg in &self.protoc_args {
+            config.protoc_arg(arg);
+        }
+
+        // Set up extern includes
+        for ext in &self.extern_includes {
+            // Gather extern .proto files
+            for proto_root in &ext.proto_dirs {
+                include_dirs.push(proto_root.to_string());
+            }
+            // Set extern path mappings
+            for (proto_pkg, rust_mod) in &ext.extern_paths {
+                config.extern_path(proto_pkg.to_string(), rust_mod.to_string());
+            }
+        }
+
+        // If using tonic, set up the service generator
+        // Tonic uses prost under the hood, and inserts itself as service generator.
+        // So we can just get the tonic service generator and set it here.
+        if self.use_tonic {
+            let svc_gen = tonic_prost_build::configure().service_generator();
+            config.service_generator(svc_gen);
+        }
+
+        Ok((config, include_dirs, proto_files))
+    }
 }
 
+/// Recursively collects all .proto files from the specified root directory.
 fn get_proto_files(proto_root: &str) -> anyhow::Result<Vec<String>> {
     let mut proto_files: Vec<String> = walkdir::WalkDir::new(proto_root)
         .into_iter()
