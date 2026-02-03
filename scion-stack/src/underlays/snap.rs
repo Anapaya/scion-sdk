@@ -86,7 +86,19 @@ impl SnapUnderlaySocket {
         // https://github.com/Anapaya/scion/issues/27486
         // in a followup issue to be handled globally.
         let static_public = x25519_dalek::PublicKey::from(&static_private);
-        let _ = snap_cp_client
+        let mut snap_tun_cp_client = CrpcSnapControlClient::new(
+            &data_plane.snap_tun_control_address.ok_or(crate::scionstack::ScionSocketBindError::Other(
+                anyhow::anyhow!("data plane did not provide snap tun control address, the snap data plane needs to be updated.").into_boxed_dyn_error(),
+                )
+            )?,
+        )
+        .map_err(|e| {
+            crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::ControlPlaneClientCreationError(e),
+            )
+        })?;
+        snap_tun_cp_client.use_token_source(snap_token_source.clone());
+        let _ = snap_tun_cp_client
             .register_snaptun_identity(static_public, None)
             .await
             .map_err(|e| {

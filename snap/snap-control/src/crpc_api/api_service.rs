@@ -46,6 +46,7 @@ pub mod model {
     };
 
     use axum::http::StatusCode;
+    use url::Url;
     use x25519_dalek::PublicKey;
 
     /// SNAP data plane discovery trait.
@@ -65,7 +66,7 @@ pub mod model {
         /// XXX(uniquefine): Make this required once all servers have been updated.
         /// The address (host:port) of the SNAPtun control plane API. This can be the same
         /// as the data plane address.
-        pub snap_tun_control_address: Option<SocketAddr>,
+        pub snap_tun_control_address: Option<Url>,
         /// XXX(uniquefine): Make this required once all servers have been updated.
         /// The static identity of the snaptun-ng server.
         pub snap_static_x25519: Option<PublicKey>,
@@ -99,8 +100,9 @@ pub mod model {
 }
 
 pub(crate) mod convert {
-    use std::net::AddrParseError;
+    use std::net::{AddrParseError, SocketAddr};
 
+    use url::Url;
     use x25519_dalek::PublicKey;
 
     use crate::{
@@ -126,9 +128,19 @@ pub(crate) mod convert {
             let snap_tun_control_address = value
                 .snap_tun_control_address
                 .map(|address| {
-                    address
-                        .parse()
-                        .map_err(ConvertError::ParseSnapTunControlAddr)
+                    // Try to parse the address as a URL first.
+                    if let Ok(url) = Url::parse(&address) {
+                        return Ok(url);
+                    }
+                    match address.parse::<SocketAddr>() {
+                        Ok(addr) => {
+                            let mut u = Url::parse("http://.").unwrap();
+                            let _ = u.set_ip_host(addr.ip());
+                            let _ = u.set_port(Some(addr.port()));
+                            Ok(u)
+                        }
+                        Err(e) => Err(ConvertError::ParseSnapTunControlAddr(e)),
+                    }
                 })
                 .transpose()?;
             let snap_static_x25519 = value

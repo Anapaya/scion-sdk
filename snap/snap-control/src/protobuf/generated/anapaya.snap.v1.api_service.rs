@@ -9,8 +9,8 @@ pub struct GetSnapDataPlaneResponse {
     /// The host can either be an IP address or a hostname.
     #[prost(string, tag = "1")]
     pub address: ::prost::alloc::string::String,
-    /// The address (host:port) of the SNAPtun control plane API. This can be the same
-    /// as the snap control plane address.
+    /// The URL of the SNAPtun control plane API. This can be the same
+    /// as the snap control plane URL.
     #[prost(string, optional, tag = "2")]
     pub snap_tun_control_address: ::core::option::Option<::prost::alloc::string::String>,
     /// The static identity of the snaptun-ng server.

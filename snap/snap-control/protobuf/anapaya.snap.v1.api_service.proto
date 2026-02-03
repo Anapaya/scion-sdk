@@ -11,8 +11,8 @@ message GetSnapDataPlaneResponse {
   // The host can either be an IP address or a hostname.
   string address = 1;
 
-  // The address (host:port) of the SNAPtun control plane API. This can be the same
-  // as the snap control plane address.
+  // The URL of the SNAPtun control plane API. This can be the same
+  // as the snap control plane URL.
   optional string snap_tun_control_address = 2;
 
   // The static identity of the snaptun-ng server.

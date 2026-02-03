@@ -37,9 +37,9 @@ pub mod re_export {
 pub struct GetDataPlaneAddressResponse {
     /// The UDP endpoint (host:port) of the SNAP data plane.
     pub address: SocketAddr,
-    /// The address (host:port) of the SNAPtun control plane API. This can be the same
+    /// The URL of the SNAPtun control plane API. This can be the same as the data plane address.
     /// XXX(uniquefine): Make this required once all servers have been updated.
-    pub snap_tun_control_address: Option<SocketAddr>,
+    pub snap_tun_control_address: Option<Url>,
     /// The static identity of the snaptun-ng server.
     /// XXX(uniquefine): Make this required once all servers have been updated.
     pub snap_static_x25519: Option<PublicKey>,
@@ -114,13 +114,25 @@ impl ControlPlaneApi for CrpcSnapControlClient {
         let snap_tun_control_address = res
             .snap_tun_control_address
             .map(|address| {
-                address.parse().map_err(|e: std::net::AddrParseError| {
-                    CrpcClientError::DecodeError {
-                        context: "parsing server control address".into(),
-                        source: Some(e.into()),
-                        body: None,
+                // Try to parse the address as a URL first.
+                if let Ok(url) = Url::parse(&address) {
+                    return Ok(url);
+                }
+                match address.parse::<SocketAddr>() {
+                    Ok(addr) => {
+                        let mut u = Url::parse("http://.").unwrap();
+                        let _ = u.set_ip_host(addr.ip());
+                        let _ = u.set_port(Some(addr.port()));
+                        Ok(u)
                     }
-                })
+                    Err(e) => {
+                        Err(CrpcClientError::DecodeError {
+                            context: "parsing server control address".into(),
+                            source: Some(e.into()),
+                            body: None,
+                        })
+                    }
+                }
             })
             .transpose()?;
         let snap_static_x25519 = res

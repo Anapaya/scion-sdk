@@ -16,6 +16,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
     str::FromStr,
     sync::{Arc, RwLock},
 };
@@ -29,6 +30,7 @@ use snap_control::{
     model::{SnapUnderlay, UdpUnderlay, UnderlayDiscovery},
 };
 use snap_dataplane::state::Id;
+use url::Url;
 use utoipa::ToSchema;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -237,7 +239,18 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
                         anyhow::anyhow!("No data plane available"),
                     )
                 })?,
-            snap_tun_control_address: self.io_config.snap_control_addr(self.snap_id),
+            snap_tun_control_address: self.io_config.snap_control_addr(self.snap_id).map(|a| {
+                match a {
+                    SocketAddr::V4(addr) => {
+                        Url::parse(&format!("http://{}", addr))
+                            .expect("It is safe to format a SocketAddr as a URL")
+                    }
+                    SocketAddr::V6(addr) => {
+                        Url::parse(&format!("http://[{}]:{}", addr.ip(), addr.port()))
+                            .expect("It is safe to format a SocketAddr as a URL")
+                    }
+                }
+            }),
             snap_static_x25519: Some(public_key),
         })
     }
