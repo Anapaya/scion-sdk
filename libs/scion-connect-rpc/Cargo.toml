@@ -1,0 +1,25 @@
+[package]
+name = "scion-sdk-scion-connect-rpc"
+version = "0.3.0"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Connect RPC client library over QUIC/HTTP3 via SCION"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["HTTP3", "QUIC", "RPC"]
+
+[dependencies]
+async-trait = { workspace = true }
+http = { workspace = true }
+prost = { workspace = true }
+scion-proto = { workspace = true }
+scion-sdk-quic-scion = { workspace = true }
+scion-stack = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "scion-sdk-quic-scion"
+version = "0.3.0"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "QUIC via SCION as transport"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["HTTP3", "QUIC", "SCION"]
+
+[dependencies]
+http = { workspace = true }
+ring = { workspace = true }
+scion-proto = { workspace = true }
+scion-stack = { workspace = true }
+squiche = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[lints]
+workspace = true

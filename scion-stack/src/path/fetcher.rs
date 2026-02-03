@@ -16,9 +16,6 @@
 //!
 //! The default implementation [PathFetcherImpl] uses a [SegmentFetcher] to fetch path segments and
 //! combine them into end-to-end paths.
-//!
-//! The default [SegmentFetcher] implementation is [ConnectRpcSegmentFetcher], requesting segments
-//! from the Endhost API.
 
 use std::sync::Arc;
 
@@ -84,6 +81,7 @@ pub mod traits {
     pub type SegmentFetchError = Box<dyn std::error::Error + Send + Sync>;
 
     /// Path segments.
+    #[derive(Debug)]
     pub struct Segments {
         /// Core segments.
         pub core_segments: Vec<PathSegment>,
@@ -138,19 +136,23 @@ impl PathFetcher for PathFetcherImpl {
                     all_core_segments.extend(core_segments);
                     all_non_core_segments.extend(non_core_segments);
                 }
-                Err(err) => {
-                    tracing::warn!(
-                        %src,
-                        %dst,
-                        %err,
-                        "Segment fetcher failed"
-                    );
-                    errors.push(err);
+                Err(e) => {
+                    errors.push(e);
                 }
             }
         }
 
         let paths = path::combinator::combine(src, dst, all_core_segments, all_non_core_segments);
+
+        for (i, error) in errors.iter().enumerate() {
+            tracing::warn!(
+                error_index = i,
+                %error,
+                %src,
+                %dst,
+                "Segment fetcher failed"
+            );
+        }
 
         // If there were errors but we still have paths, we still return the paths and only log the
         // fetcher errors.
@@ -164,20 +166,20 @@ impl PathFetcher for PathFetcherImpl {
     }
 }
 
-/// Connect RPC segment fetcher.
-pub struct ConnectRpcSegmentFetcher {
+/// Segment fetcher that uses the endhost API via Connect-RPC to fetch segments.
+pub struct EndhostApiSegmentFetcher {
     client: Arc<dyn EndhostApiClient>,
 }
 
-impl ConnectRpcSegmentFetcher {
-    /// Creates a new connect RPC segment fetcher.
+impl EndhostApiSegmentFetcher {
+    /// Creates a new endhost API segment fetcher.
     pub fn new(client: Arc<dyn EndhostApiClient>) -> Self {
         Self { client }
     }
 }
 
 #[async_trait::async_trait]
-impl SegmentFetcher for ConnectRpcSegmentFetcher {
+impl SegmentFetcher for EndhostApiSegmentFetcher {
     async fn fetch_segments(
         &self,
         src: IsdAsn,
@@ -188,13 +190,13 @@ impl SegmentFetcher for ConnectRpcSegmentFetcher {
             .list_segments(src, dst, 128, "".to_string())
             .await?;
 
-        tracing::debug!(
+        tracing::trace!(
             n_core=resp.segments.core_segments.len(),
             n_up=resp.segments.up_segments.len(),
             n_down=resp.segments.down_segments.len(),
             src = %src,
             dst = %dst,
-            "Received segments from control plane"
+            "Received segments from endhost API"
         );
 
         let (core_segments, non_core_segments) = resp.segments.split_parts();

@@ -432,11 +432,14 @@ impl<T> std::fmt::Display for Path<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "src:{}, dst:{}, next hop: {}, path: ",
+            "src:{}, dst:{}, next hop: {}, MTU: {}, path: ",
             self.isd_asn.source,
             self.isd_asn.destination,
             self.underlay_next_hop
                 .map_or_else(|| "none".to_string(), |a| a.to_string()),
+            self.metadata
+                .as_ref()
+                .map_or_else(|| "none".to_string(), |m| m.mtu.to_string()),
         )?;
 
         match self.metadata.as_ref() {

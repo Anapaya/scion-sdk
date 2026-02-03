@@ -33,17 +33,20 @@ endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", vers
 
 # hsd-api = { path = "hsd-api/hsd-api", version = "0.2" }
 # hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.2" }
+# hsd-api-client = { path = "hsd-api/hsd-api-client", version = "0.3" }
+hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.3" }
 
 scion-sdk-address-manager = { path = "libs/address-manager", version = "0.3.0" }
 scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.3.0" }
 # scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
-scion-sdk-observability = { path = "libs/observability", version = "0.3.0" }
-scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.3.0" }
-scion-sdk-token-validator = { path = "libs/token-validator", version = "0.3.0" }
-scion-sdk-utils = { path = "libs/utils", version = "0.3.0" }
+scion-sdk-observability = { path = "libs/observability", version = "0.3" }
+scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.3" }
+scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.3" }
+scion-sdk-scion-connect-rpc = { path = "libs/scion-connect-rpc", version = "0.3" }
+scion-sdk-token-validator = { path = "libs/token-validator", version = "0.3" }
+scion-sdk-utils = { path = "libs/utils", version = "0.3" }
 
-
-pocketscion = { path = "pocketscion", version = "0.3.0" }
+pocketscion = { path = "pocketscion", version = "0.3" }
 
 scion-proto = { path = "scion-proto/scion-proto", version = "0.3.0" }
 scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.3.0" }
@@ -123,6 +126,7 @@ serde_with = "3.14"
 serde_yaml_ng = "0.10"
 sha2 = "0.10"
 socket2 = "0.6.1"
+squiche = "0.24.8-ana.0"
 tempfile = "3.23"
 test-log = { version = "0.2", features = ["trace"] }
 thiserror = "2.0"
@@ -138,6 +142,7 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-bunyan-formatter = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
+tracing-log = "0.2"
 url = { version = "2.5", features = ["serde"] }
 utoipa = { version = "5.3", features = ["chrono", "url", "uuid"] }
 utoipa-axum = "0.2"

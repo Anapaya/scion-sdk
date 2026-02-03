@@ -220,7 +220,7 @@ pub use self::builder::ScionStackBuilder;
 use crate::{
     path::{
         PathStrategy,
-        fetcher::{ConnectRpcSegmentFetcher, PathFetcherImpl, traits::SegmentFetcher},
+        fetcher::{EndhostApiSegmentFetcher, PathFetcherImpl, traits::SegmentFetcher},
         manager::{
             MultiPathManager, MultiPathManagerConfig,
             traits::{PathWaitError, PathWaitTimeoutError},
@@ -310,7 +310,7 @@ impl ScionStack {
 
         if !socket_config.disable_endhost_api_segment_fetcher {
             let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
-                Box::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+                Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
             socket_config.segment_fetchers.push(connect_rpc_fetcher);
         }
         let fetcher = PathFetcherImpl::new(socket_config.segment_fetchers);
@@ -508,7 +508,7 @@ impl ScionStack {
             let mut segment_fetchers = socket_config.segment_fetchers;
             if !socket_config.disable_endhost_api_segment_fetcher {
                 let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
-                    Box::new(ConnectRpcSegmentFetcher::new(self.client.clone()));
+                    Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
                 segment_fetchers.push(connect_rpc_fetcher);
             }
             let fetcher = PathFetcherImpl::new(segment_fetchers);
@@ -563,7 +563,7 @@ impl ScionStack {
 
     /// Creates a path manager with default configuration.
     pub fn create_path_manager(&self) -> MultiPathManager<PathFetcherImpl> {
-        let fetcher = PathFetcherImpl::new(vec![Box::new(ConnectRpcSegmentFetcher::new(
+        let fetcher = PathFetcherImpl::new(vec![Box::new(EndhostApiSegmentFetcher::new(
             self.client.clone(),
         ))]);
         let mut strategy = PathStrategy::default();

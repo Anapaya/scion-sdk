@@ -46,6 +46,10 @@ pub const LOG_LEVEL_ENV: &str = "RUST_LOG";
 ///   executable in this directory.
 /// * `log_to_stderr`: If true, logs will additionally printed to stderr.
 pub fn setup_tracing<P: AsRef<Path>>(log_dir: Option<P>, log_to_stderr: bool) -> Vec<WorkerGuard> {
+    // Setup log tracer to forward log records to tracing subscriber, this is required to capture
+    // logs from dependencies such as squiche.
+    tracing_log::LogTracer::init().expect("Failed to set log tracer");
+
     let log_level =
         EnvFilter::try_from_env(LOG_LEVEL_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
 

@@ -1,0 +1,20 @@
+[package]
+name = "hsd-api-client"
+version = "0.3.0"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Hidden segment directory API client"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+
+[dependencies]
+async-trait = { workspace = true }
+hsd-api-protobuf = { workspace = true }
+scion-proto = { workspace = true }
+scion-sdk-scion-connect-rpc = { workspace = true }
+scion-stack = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
