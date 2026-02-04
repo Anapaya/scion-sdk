@@ -30,7 +30,8 @@ pub trait Token: std::fmt::Debug + Send + Clone + 'static {
     fn id(&self) -> String;
     /// Returns the absolute expiration time of the token.
     fn exp_time(&self) -> SystemTime;
-    /// Returns the required claims for the token.
+    /// Returns the required claims for the token. This is enforced during
+    /// JWT validation.
     fn required_claims() -> Vec<&'static str>;
 }
 

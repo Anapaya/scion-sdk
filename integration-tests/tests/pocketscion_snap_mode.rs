@@ -32,7 +32,7 @@ use scion_stack::{
     quic::QuinnConn as _,
     scionstack::{ScionStackBuilder, UdpScionSocket},
 };
-use snap_tokens::snap_token::{dummy_snap_token, seeded_dummy_snap_token};
+use snap_tokens::v0::{dummy_snap_token, seeded_dummy_snap_token};
 use test_log::test;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};

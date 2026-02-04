@@ -305,7 +305,7 @@ mod tests {
     use scion_sdk_token_validator::validator::{
         TokenValidator, Validator, insecure_const_ed25519_key_pair_pem,
     };
-    use snap_tokens::snap_token::SnapTokenClaims;
+    use snap_tokens::AnyClaims;
     use test_log::test;
 
     use super::*;
@@ -354,7 +354,7 @@ mod tests {
             assert_eq!(res.token_type, NO_ACCESS_TOKEN_TYPE);
             assert_eq!(res.issued_token_type, JWT_TOKEN_TYPE);
 
-            let _claims = Validator::<SnapTokenClaims>::new(snap_token_dec_key, None)
+            let _claims = Validator::<AnyClaims>::new(snap_token_dec_key, None)
                 .validate(SystemTime::now(), &res.access_token)
                 .expect("failed to verify SNAP token");
         }

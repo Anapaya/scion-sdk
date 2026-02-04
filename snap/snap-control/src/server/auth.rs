@@ -25,13 +25,13 @@ use axum::body::Body;
 use http::{Request, Response};
 use jsonwebtoken::DecodingKey;
 use scion_sdk_token_validator::validator::{TokenValidator, Validator};
-use snap_tokens::snap_token::SnapTokenClaims;
+use snap_tokens::AnyClaims;
 use thiserror::Error;
 use tower::{BoxError, Layer, Service};
 
 #[derive(Clone)]
 pub(crate) struct AuthMiddlewareLayer {
-    validator: Validator<SnapTokenClaims>,
+    validator: Validator<AnyClaims>,
 }
 
 impl AuthMiddlewareLayer {
@@ -53,11 +53,11 @@ impl<S> Layer<S> for AuthMiddlewareLayer {
 #[derive(Clone)]
 pub(crate) struct AuthMiddleware<S> {
     inner: S,
-    validator: Validator<SnapTokenClaims>,
+    validator: Validator<AnyClaims>,
 }
 
 impl<S> AuthMiddleware<S> {
-    pub(crate) fn new(inner: S, validator: Validator<SnapTokenClaims>) -> Self {
+    pub(crate) fn new(inner: S, validator: Validator<AnyClaims>) -> Self {
         Self { inner, validator }
     }
 }
@@ -87,7 +87,14 @@ where
 
         match self.validator.validate(SystemTime::now(), token.as_str()) {
             Ok(token_claims) => {
-                request.extensions_mut().insert(token_claims);
+                match token_claims {
+                    AnyClaims::V0(claims) => {
+                        request.extensions_mut().insert(claims);
+                    }
+                    AnyClaims::V1(claims) => {
+                        request.extensions_mut().insert(claims);
+                    }
+                }
                 let mut inner = self.inner.clone();
                 Box::pin(async move { inner.call(request).await.map_err(Into::into) })
             }

@@ -25,7 +25,7 @@ use jsonwebtoken::{
 };
 use pem::Pem;
 use serde::{Deserialize, Serialize};
-use snap_tokens::{Pssid, snap_token::SnapTokenClaims};
+use snap_tokens::v0::{Pssid, SnapTokenClaims};
 use thiserror::Error;
 use uuid::Uuid;
 

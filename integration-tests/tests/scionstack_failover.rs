@@ -22,7 +22,7 @@ use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use rustls::ClientConfig;
 use scion_proto::address::IsdAsn;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
-use snap_tokens::snap_token::dummy_snap_token;
+use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
 use tokio::{
     sync::Barrier,

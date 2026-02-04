@@ -3863,10 +3863,13 @@ dependencies = [
 name = "snap-tokens"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "jsonwebtoken",
  "pem",
+ "scion-proto",
  "scion-sdk-token-validator",
  "serde",
+ "serde_json",
  "test-log",
  "uuid",
 ]

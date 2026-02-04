@@ -40,7 +40,7 @@ use snap_dataplane::{
         state::SharedTunnelGatewayState,
     },
 };
-use snap_tokens::snap_token::SnapTokenClaims;
+use snap_tokens::AnyClaims;
 use thiserror::Error;
 use tokio::{net::TcpListener, time::sleep};
 use x25519_dalek::StaticSecret;
@@ -286,7 +286,7 @@ impl PocketScionRuntimeBuilder {
                     static_secret,
                 );
             } else {
-                let validator = Arc::new(Validator::<SnapTokenClaims>::new(
+                let validator = Arc::new(Validator::<AnyClaims>::new(
                     snap_token_decoding_key.clone(),
                     None,
                 ));

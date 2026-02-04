@@ -20,7 +20,7 @@ use integration_tests::single_snap_pocketscion_setup;
 use scion_proto::address::{HostAddr, IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::token_source::mock::MockTokenSource;
 use scion_stack::scionstack::{ScionStackBuilder, builder::SnapUnderlayConfig};
-use snap_tokens::snap_token::dummy_snap_token_with_validity;
+use snap_tokens::v0::dummy_snap_token_with_validity;
 use test_log::test;
 
 #[test(tokio::test)]

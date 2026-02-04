@@ -25,7 +25,7 @@ use pocketscion::{
 };
 use scion_proto::address::IsdAsn;
 use scion_stack::scionstack::ScionStackBuilder;
-use snap_tokens::snap_token::dummy_snap_token;
+use snap_tokens::v0::dummy_snap_token;
 
 #[tokio::test]
 #[timeout(10_000)]

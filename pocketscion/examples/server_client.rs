@@ -61,7 +61,7 @@ use scion_stack::{
     scionstack::ScionStackBuilder,
 };
 use serde::{Deserialize, Serialize};
-use snap_tokens::snap_token::dummy_snap_token;
+use snap_tokens::v0::dummy_snap_token;
 use tokio::{select, time::interval, try_join};
 use tracing::{Instrument, info_span, level_filters::LevelFilter};
 use url::Url;

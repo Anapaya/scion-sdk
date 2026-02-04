@@ -10,11 +10,14 @@ keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
 [dependencies]
+base64 = { workspace = true }
 jsonwebtoken = { workspace = true }
 pem = { workspace = true }
-serde = { workspace = true }
-test-log = { workspace = true, features = ["trace"] }
 scion-sdk-token-validator = { workspace = true }
+scion-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+test-log = { workspace = true, features = ["trace"] }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 
 [lints]

@@ -32,7 +32,7 @@ use scion_stack::{
     path::manager::traits::PathManager,
     scionstack::{ScionSocketBindError, ScionStackBuilder},
 };
-use snap_tokens::snap_token::dummy_snap_token;
+use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
 use tokio::net::UdpSocket;
 use tracing::info;

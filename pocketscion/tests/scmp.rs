@@ -31,7 +31,7 @@ use scion_proto::{
     scmp::{DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpMessage, ScmpMessageBase},
 };
 use scion_stack::{path::manager::traits::PathManager as _, scionstack::ScionStackBuilder};
-use snap_tokens::snap_token::dummy_snap_token;
+use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
 
 #[test(tokio::test)]

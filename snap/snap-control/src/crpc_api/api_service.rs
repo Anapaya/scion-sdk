@@ -27,7 +27,7 @@ use scion_sdk_axum_connect_rpc::{
     extractor::ConnectRpc,
 };
 use scion_sdk_token_validator::validator::Token;
-use snap_tokens::snap_token::SnapTokenClaims;
+use snap_tokens::v0::SnapTokenClaims;
 use x25519_dalek::PublicKey;
 
 use crate::{

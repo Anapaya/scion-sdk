@@ -11,21 +11,67 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! SNAP token.
+//! The v0 SNAP token implementation.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    fmt::Display,
+    str::FromStr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header};
 use scion_sdk_token_validator::validator::{Token, insecure_const_ed25519_key_pair_pem};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::Pssid;
-
 // The default validity period for SNAP tokens, in seconds.
 const DEFAULT_SNAP_TOKEN_VALIDITY: u64 = 86400; // 1d
 
-/// Represents the SNAP token claims contained in a JWT.
+/// The v0 pseudo SCION subscriber identity (PSSID).
+#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize, Clone)]
+pub struct Pssid(pub Uuid);
+
+impl Default for Pssid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Pssid {
+    /// Generates a new random PSSID.
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl FromStr for Pssid {
+    type Err = std::io::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match Uuid::parse_str(value) {
+            Ok(uuid) => Ok(Pssid(uuid)),
+            Err(_) => {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid PSSID",
+                ))
+            }
+        }
+    }
+}
+
+impl From<Pssid> for String {
+    fn from(pssid: Pssid) -> Self {
+        pssid.0.to_string()
+    }
+}
+
+impl Display for Pssid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Represents the v0 SNAP token claims contained in a JWT.
 ///
 /// The claims include the pseudo SCION subscriber identity (`pssid`) and the expiration
 /// time (`exp`) of the JWT.
@@ -139,11 +185,12 @@ mod tests {
     use test_log::test;
 
     use super::*;
+    use crate::AnyClaims;
 
     #[test]
     fn validate_valid_token_succeeds() {
         let (_, decoding_key) = insecure_const_snap_token_key_pair();
-        let validator: Validator<SnapTokenClaims> = Validator::new(decoding_key, None);
+        let validator: Validator<AnyClaims> = Validator::new(decoding_key, None);
         let token = dummy_snap_token();
         let result = validator.validate(SystemTime::now(), &token);
         assert!(result.is_ok());
@@ -152,7 +199,7 @@ mod tests {
     #[test]
     fn validate_invalid_token_returns_error() {
         let (_encoding_key, decoding_key) = insecure_const_snap_token_key_pair();
-        let validator: Validator<SnapTokenClaims> = Validator::new(decoding_key, None);
+        let validator: Validator<AnyClaims> = Validator::new(decoding_key, None);
         let token = "invalid-jwt-token";
         let result = validator.validate(SystemTime::now(), token);
         assert!(matches!(result, Err(TokenValidatorError::JwtError(_))));
@@ -162,7 +209,7 @@ mod tests {
     fn validate_expired_token_returns_error() {
         // A token expires at the exact expiry time. So if expiry == now
         let (encoding_key, decoding_key) = insecure_const_snap_token_key_pair();
-        let validator: Validator<SnapTokenClaims> = Validator::new(decoding_key, None);
+        let validator: Validator<AnyClaims> = Validator::new(decoding_key, None);
 
         let now = SystemTime::now();
         let expiry = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
@@ -170,6 +217,7 @@ mod tests {
             pssid: Pssid(Uuid::new_v4()),
             exp: expiry,
         };
+
         let token = encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key).unwrap();
 
         let result = validator.validate(now, &token);

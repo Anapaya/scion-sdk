@@ -20,7 +20,7 @@ use scion_stack::scionstack::{
     InvalidBindAddressError, ScionSocketBindError, ScionStackBuilder, SnapConnectionError,
     builder::BuildScionStackError,
 };
-use snap_tokens::snap_token::dummy_snap_token;
+use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
 
 // Test implementations and their corresponding test functions
