@@ -36,7 +36,6 @@ endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", vers
 # hsd-api-client = { path = "hsd-api/hsd-api-client", version = "0.3" }
 hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.4.0" }
 
-scion-sdk-address-manager = { path = "libs/address-manager", version = "0.4.0" }
 scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.4.0" }
 # scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
 scion-sdk-observability = { path = "libs/observability", version = "0.4.0" }
@@ -64,7 +63,6 @@ aes = "0.8"
 ana-gotatun = { version = "0.2.1-ana.0" }
 anyhow = { version = "1" }
 arc-swap = "1.7"
-assert_matches = "1.5"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["http2"] }
 bitfield-struct = "0.12.1"
@@ -81,9 +79,7 @@ der = { version = "0.7", features = ["pem", "derive"] }
 ed25519-dalek = { version = "2.1", features = ["pkcs8", "pem"] }
 foldhash = "0.2"
 futures = "0.3"
-hex = "0.4"
 http = "1.3"
-httparse = "1.10"
 ipnet = "2.11"
 jsonwebtoken = "9.3"
 mockall = "0.13"

@@ -13,7 +13,6 @@ categories = ["network-programming"]
 [dependencies]
 # Local Dependencies
 dhsd = { workspace = true }
-scion-sdk-address-manager = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
@@ -23,7 +22,6 @@ scion-proto = { workspace = true }
 
 snap-control = { workspace = true }
 snap-dataplane = { workspace = true }
-snap-tun = { workspace = true }
 snap-tokens = { workspace = true }
 
 endhost-api = { workspace = true }

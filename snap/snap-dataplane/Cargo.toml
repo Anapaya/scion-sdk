@@ -15,7 +15,6 @@ anyhow = { workspace = true }
 bytes = { workspace = true }
 x25519-dalek = { workspace = true }
 prometheus = { workspace = true }
-quinn = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
@@ -28,7 +27,6 @@ utoipa = { workspace = true, features = ["yaml", "time"] }
 # Local dependencies
 scion-proto = { workspace = true }
 scion-sdk-observability = { workspace = true }
-scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
 snap-tun = { workspace = true }
 

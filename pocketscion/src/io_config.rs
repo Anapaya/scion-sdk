@@ -22,7 +22,7 @@ use std::{
 use anyhow::{Context, Ok};
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::ControlPlaneIoConfig;
-use snap_dataplane::tunnel_gateway_deprecated::state::TunnelGatewayIoConfig;
+use snap_dataplane::tunnel_gateway::state::TunnelGatewayIoConfig;
 
 use crate::{
     authorization_server::api::IoAuthServerConfig,

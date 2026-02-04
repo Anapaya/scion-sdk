@@ -11,20 +11,12 @@ categories = ["network-programming"]
 
 [dependencies]
 ana-gotatun = { workspace = true }
-assert_matches = { workspace = true }
 bitfield-struct = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
-http = { workspace = true }
-httparse = { workspace = true }
-ipnet = { workspace = true }
 prometheus = { workspace = true }
-prost = { workspace = true }
 quinn = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-observability = { workspace = true }
-scion-sdk-token-validator = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

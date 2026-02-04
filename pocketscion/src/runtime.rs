@@ -24,23 +24,15 @@ use std::{
 
 use jsonwebtoken::DecodingKey;
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
-use scion_sdk_token_validator::validator::Validator;
 use scion_sdk_utils::{
     io::{get_tmp_path, read_file, write_file},
     task_handler::{CancelTaskSet, InProcess},
 };
 use snap_control::server::identity_registry::IdentityRegistry;
-use snap_dataplane::{
-    tunnel_gateway::{
-        dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
-        start_tunnel_gateway,
-    },
-    tunnel_gateway_deprecated::{
-        dispatcher::TunnelGatewayDispatcherDeprecated, start_tunnel_gateway_deprecated,
-        state::SharedTunnelGatewayState,
-    },
+use snap_dataplane::tunnel_gateway::{
+    dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
+    start_tunnel_gateway,
 };
-use snap_tokens::AnyClaims;
 use thiserror::Error;
 use tokio::{net::TcpListener, time::sleep};
 use x25519_dalek::StaticSecret;
@@ -53,10 +45,7 @@ use crate::{
     endhost_api::PsEndhostApi,
     io_config::{IoConfig, SharedPocketScionIoConfig},
     management_api,
-    network::local::receivers::{
-        router_socket::{RouterSocket, SharedRouterSocket},
-        tunnel_gateway::TunnelGatewayReceiver,
-    },
+    network::local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
     state::{
         SharedPocketScionState, SystemState,
         endhost_segment_lister::StateEndhostSegmentLister,
@@ -239,115 +228,51 @@ impl PocketScionRuntimeBuilder {
 
         for (snap_id, snap) in pstate.snaps() {
             let metrics_registry = MetricsRegistry::new();
-            if pstate.temporary_is_snaptun_ng_enabled() {
-                let key = root_secret.derive_from_iter(vec![
-                    SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL.into(),
-                    snap_id.to_string().into(),
-                ]);
-                let static_secret = StaticSecret::from(key.as_array());
+            let key = root_secret.derive_from_iter(vec![
+                SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL.into(),
+                snap_id.to_string().into(),
+            ]);
+            let static_secret = StaticSecret::from(key.as_array());
 
-                let socket = match io_config.snap_data_plane_addr(snap_id) {
-                    Some(addr) => tokio::net::UdpSocket::bind(addr).await?,
-                    None => {
-                        tracing::debug!(%snap_id, "No listen address specified for SNAP dataplane");
-                        let udp_socket =
-                            tokio::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-                                .await?;
-                        io_config.set_snap_data_plane_addr(snap_id, udp_socket.local_addr()?);
-                        udp_socket
-                    }
-                };
-
-                let addr = socket.local_addr()?;
-
-                let tun_gw_metrics = TunnelGatewayDispatcherMetrics::new(&metrics_registry);
-                let (tunnel_gw_dispatcher, tun_dispatcher_rx) =
-                    TunnelGatewayDispatcher::new(tun_gw_metrics);
-
-                // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
-                // sim_receiver and all traffic is forwarded to the SNAP.
-                let tunnel_gw_dispatcher = Arc::new(tunnel_gw_dispatcher);
-                for isd_as in snap.isd_ases() {
-                    pstate
-                        .add_wildcard_sim_receiver(isd_as, tunnel_gw_dispatcher.clone())
-                        .expect("Failed to add wildcard receiver");
+            let socket = match io_config.snap_data_plane_addr(snap_id) {
+                Some(addr) => tokio::net::UdpSocket::bind(addr).await?,
+                None => {
+                    tracing::debug!(%snap_id, "No listen address specified for SNAP dataplane");
+                    let udp_socket =
+                        tokio::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                            .await?;
+                    io_config.set_snap_data_plane_addr(snap_id, udp_socket.local_addr()?);
+                    udp_socket
                 }
-                let authz = snap_authz_map
-                    .remove(&snap_id)
-                    .expect("no authz found for snap");
+            };
 
-                tracing::info!(%addr, %snap_id, "Starting snap dataplane");
-                start_tunnel_gateway(
-                    &mut task_set,
-                    socket,
-                    authz,
-                    Arc::new(NetSimDispatcher::new(pstate.clone())),
-                    tun_dispatcher_rx,
-                    static_secret,
-                );
-            } else {
-                let validator = Arc::new(Validator::<AnyClaims>::new(
-                    snap_token_decoding_key.clone(),
-                    None,
-                ));
+            let addr = socket.local_addr()?;
 
-                let (_cert_der, server_config) = scion_sdk_utils::test::generate_cert(
-                    [42u8; 32],
-                    vec!["localhost".into()],
-                    vec![b"snaptun".to_vec()],
-                );
+            let tun_gw_metrics = TunnelGatewayDispatcherMetrics::new(&metrics_registry);
+            let (tunnel_gw_dispatcher, tun_dispatcher_rx) =
+                TunnelGatewayDispatcher::new(tun_gw_metrics);
 
-                // tunnel gateway server quinn endpoint
-                let server_endpoint = match io_config.snap_data_plane_addr(snap_id) {
-                    Some(addr) => quinn::Endpoint::server(server_config, addr)?,
-                    None => {
-                        tracing::debug!(%snap_id, "No listen address specified for SNAP dataplane");
-                        let server_endpoint = quinn::Endpoint::server(
-                            server_config,
-                            SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-                        )?;
-                        io_config.set_snap_data_plane_addr(snap_id, server_endpoint.local_addr()?);
-                        server_endpoint
-                    }
-                };
-
-                let shared_tunnel_gw_state = SharedTunnelGatewayState::new();
-
-                let tunnel_gw_dispatcher = TunnelGatewayDispatcherDeprecated::new(
-                    shared_tunnel_gw_state.clone(),
-                    TunnelGatewayDispatcherMetrics::new(&metrics_registry),
-                );
-
-                task_set.spawn_cancellable_task({
-                    let dispatcher = tunnel_gw_dispatcher.clone();
-                    async move { dispatcher.start_dispatching().await }
-                });
-
-                // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
-                // sim_receiver and all traffic is forwarded to the SNAP.
-                for isd_as in snap.isd_ases() {
-                    pstate
-                        .add_wildcard_sim_receiver(
-                            isd_as,
-                            Arc::new(TunnelGatewayReceiver::new(tunnel_gw_dispatcher.clone())),
-                        )
-                        .expect("Failed to add wildcard receiver");
-                }
-
-                let addr = server_endpoint
-                    .local_addr()
-                    .expect("should have local addr");
-                tracing::info!(%addr, %snap_id, "Starting snap dataplane");
-
-                start_tunnel_gateway_deprecated(
-                    &mut task_set,
-                    shared_tunnel_gw_state,
-                    validator.clone(),
-                    server_endpoint,
-                    Arc::new(NetSimDispatcher::new(pstate.clone())),
-                    metrics_registry,
-                );
+            // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
+            // sim_receiver and all traffic is forwarded to the SNAP.
+            let tunnel_gw_dispatcher = Arc::new(tunnel_gw_dispatcher);
+            for isd_as in snap.isd_ases() {
+                pstate
+                    .add_wildcard_sim_receiver(isd_as, tunnel_gw_dispatcher.clone())
+                    .expect("Failed to add wildcard receiver");
             }
+            let authz = snap_authz_map
+                .remove(&snap_id)
+                .expect("no authz found for snap");
+
+            tracing::info!(%addr, %snap_id, "Starting snap dataplane");
+            start_tunnel_gateway(
+                &mut task_set,
+                socket,
+                authz,
+                Arc::new(NetSimDispatcher::new(pstate.clone())),
+                tun_dispatcher_rx,
+                static_secret,
+            );
         }
 
         for sock_id in pstate.router_ids() {

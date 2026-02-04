@@ -270,12 +270,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "assert_matches"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2522,7 +2516,6 @@ dependencies = [
  "rand",
  "reqwest",
  "scion-proto",
- "scion-sdk-address-manager",
  "scion-sdk-observability",
  "scion-sdk-token-validator",
  "scion-sdk-utils",
@@ -2533,7 +2526,6 @@ dependencies = [
  "snap-control",
  "snap-dataplane",
  "snap-tokens",
- "snap-tun",
  "test-log",
  "thiserror 2.0.18",
  "tokio",
@@ -3338,23 +3330,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scion-sdk-address-manager"
-version = "0.4.0"
-dependencies = [
- "anyhow",
- "hex",
- "ipnet",
- "rand",
- "rand_chacha",
- "scion-proto",
- "scion-sdk-utils",
- "serde",
- "thiserror 2.0.18",
- "tracing",
- "utoipa",
-]
-
-[[package]]
 name = "scion-sdk-axum-connect-rpc"
 version = "0.4.0"
 dependencies = [
@@ -3839,14 +3814,12 @@ name = "snap-dataplane"
 version = "0.4.0"
 dependencies = [
  "ana-gotatun",
- "anapaya-quinn",
  "anyhow",
  "bytes",
  "prometheus",
  "regex",
  "scion-proto",
  "scion-sdk-observability",
- "scion-sdk-token-validator",
  "scion-sdk-utils",
  "serde",
  "snap-tun",
@@ -3880,22 +3853,14 @@ version = "0.4.0"
 dependencies = [
  "ana-gotatun",
  "anapaya-quinn",
- "assert_matches",
  "bitfield-struct 0.12.1",
  "bytes",
- "chrono",
  "ed25519-dalek",
- "http",
- "httparse",
- "ipnet",
  "pem",
  "prometheus",
- "prost",
  "rcgen",
  "scion-proto",
  "scion-sdk-observability",
- "scion-sdk-token-validator",
- "serde",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

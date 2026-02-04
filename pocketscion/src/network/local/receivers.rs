@@ -17,7 +17,6 @@ use scion_proto::packet::ScionPacketRaw;
 use snap_dataplane::dispatcher::Dispatcher;
 
 pub mod router_socket;
-pub mod tunnel_gateway;
 
 /// A simulated network receiver that can receive packets from the network simulation.
 ///

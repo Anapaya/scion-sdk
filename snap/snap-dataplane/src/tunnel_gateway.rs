@@ -28,6 +28,7 @@ pub mod dispatcher;
 pub mod gateway;
 pub mod metrics;
 pub(crate) mod packet_policy;
+pub mod state;
 
 /// Start the tunnel gateway.
 ///
