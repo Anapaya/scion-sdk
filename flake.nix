@@ -18,9 +18,9 @@
       pkgs = import nixpkgs {inherit system;};
       pkgsUnstable = import nixpkgs-unstable {inherit system;};
     in {
-      devShells.default = import ./dev-env.nix {
+      devShells.default = pkgs.mkShell (import ./dev-env.nix {
         inherit pkgs pkgsUnstable system;
         rootDir = self;
-      };
+      });
     });
 }
