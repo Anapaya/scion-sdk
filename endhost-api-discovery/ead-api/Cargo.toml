@@ -15,7 +15,7 @@ scion-sdk-axum-connect-rpc = { workspace = true }
 
 # Global Dependencies
 axum = { workspace = true }
-axum-client-ip = "*"
+axum-client-ip = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true } # only used in doc-tests
