@@ -23,7 +23,7 @@ use url::Url;
 
 use super::api::{AuthServerResponse, SnapsResponse, StatusResponse};
 use crate::{
-    api::admin::api::{EndhostApisResponse, SetLinkStateRequest},
+    api::admin::api::{EndhostApisResponse, RoutersResponse, SetLinkStateRequest},
     dto::IoConfigDto,
     state::snap::SnapId,
 };
@@ -64,6 +64,11 @@ impl ApiClient {
     /// Retrieves a list of SNAPs with their control plane API addresses.
     pub async fn get_snaps(&self) -> Result<SnapsResponse, ClientError> {
         self.get("snaps").await
+    }
+
+    /// Retrieves a list of UDP router addresses for the AS.
+    pub async fn get_routers(&self) -> Result<RoutersResponse, ClientError> {
+        self.get("routers").await
     }
 
     /// Retrieves a Map of Endhost APIs with their configuration and state.

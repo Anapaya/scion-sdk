@@ -20,7 +20,9 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
-use integration_tests::{PocketscionTestEnv, UnderlayType, minimal_pocketscion_setup};
+use pocketscion::topologies::{
+    IA132, IA212, PocketScionHandle, UnderlayType, minimal::two_path_topology,
+};
 use scion_proto::{
     address::{ScionAddr, SocketAddr},
     packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp},
@@ -51,51 +53,49 @@ macro_rules! within_duration {
 #[test(tokio::test)]
 #[ntest::timeout(5_000)]
 async fn test_bind_two_sockets_send_receive_snap() {
-    test_bind_two_sockets_send_receive_impl(minimal_pocketscion_setup(UnderlayType::Snap).await)
-        .await;
+    test_bind_two_sockets_send_receive_impl(two_path_topology(UnderlayType::Snap).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(5_000)]
 async fn test_bind_two_sockets_send_receive_udp() {
-    test_bind_two_sockets_send_receive_impl(minimal_pocketscion_setup(UnderlayType::Udp).await)
-        .await;
+    test_bind_two_sockets_send_receive_impl(two_path_topology(UnderlayType::Udp).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_with_specific_address_snap() {
-    test_bind_with_specific_address_impl(UnderlayType::Snap).await;
+    test_bind_with_specific_address_impl(two_path_topology(UnderlayType::Snap).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_with_specific_address_udp() {
-    test_bind_with_specific_address_impl(UnderlayType::Udp).await;
+    test_bind_with_specific_address_impl(two_path_topology(UnderlayType::Udp).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_port_already_in_use_snap() {
-    test_bind_port_already_in_use_impl(minimal_pocketscion_setup(UnderlayType::Snap).await).await;
+    test_bind_port_already_in_use_impl(two_path_topology(UnderlayType::Snap).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_bind_port_already_in_use_udp() {
-    test_bind_port_already_in_use_impl(minimal_pocketscion_setup(UnderlayType::Udp).await).await;
+    test_bind_port_already_in_use_impl(two_path_topology(UnderlayType::Udp).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_quic_endpoint_creation_snap() {
-    test_quic_endpoint_creation_impl(minimal_pocketscion_setup(UnderlayType::Snap).await).await;
+    test_quic_endpoint_creation_impl(two_path_topology(UnderlayType::Snap).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(5_000)]
 async fn test_quic_endpoint_creation_udp() {
-    test_quic_endpoint_creation_impl(minimal_pocketscion_setup(UnderlayType::Udp).await).await;
+    test_quic_endpoint_creation_impl(two_path_topology(UnderlayType::Udp).await).await;
 }
 
 #[test(tokio::test)]
@@ -112,14 +112,14 @@ async fn test_bind_two_endpoints_socket_already_in_use() {
     info!("Local address again: {:?}", first_endpoint.local_addr());
 }
 
-async fn test_bind_two_sockets_send_receive_impl(test_env: PocketscionTestEnv) {
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
+async fn test_bind_two_sockets_send_receive_impl(ps_handle: PocketScionHandle) {
+    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build SCION stack");
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
+    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -164,10 +164,8 @@ async fn test_bind_two_sockets_send_receive_impl(test_env: PocketscionTestEnv) {
     );
 }
 
-async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
-    let test_env = minimal_pocketscion_setup(underlay).await;
-
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+async fn test_bind_with_specific_address_impl(ps_handle: PocketScionHandle) {
+    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -192,8 +190,8 @@ async fn test_bind_with_specific_address_impl(underlay: UnderlayType) {
     assert_eq!(socket.local_addr(), specific_addr);
 }
 
-async fn test_bind_port_already_in_use_impl(test_env: PocketscionTestEnv) {
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+async fn test_bind_port_already_in_use_impl(ps_handle: PocketScionHandle) {
+    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -216,8 +214,8 @@ async fn test_bind_port_already_in_use_impl(test_env: PocketscionTestEnv) {
     drop(socket);
 }
 
-async fn test_quic_endpoint_creation_impl(test_env: PocketscionTestEnv) {
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+async fn test_quic_endpoint_creation_impl(ps_handle: PocketScionHandle) {
+    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -231,15 +229,14 @@ async fn test_quic_endpoint_creation_impl(test_env: PocketscionTestEnv) {
 }
 
 /// Test that an SCMP socket receives SCMP messages.
-async fn test_scmp_with_port_is_received_scmp_impl(underlay: UnderlayType) {
-    let test_env = minimal_pocketscion_setup(underlay).await;
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
+async fn test_scmp_with_port_is_received_scmp_impl(ps_handle: PocketScionHandle) {
+    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build sender SCION stack");
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
+    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -308,25 +305,24 @@ async fn test_scmp_with_port_is_received_scmp_impl(underlay: UnderlayType) {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_scmp_with_port_is_received_scmp_udp_impl() {
-    test_scmp_with_port_is_received_scmp_impl(UnderlayType::Udp).await;
+    test_scmp_with_port_is_received_scmp_impl(two_path_topology(UnderlayType::Udp).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_scmp_with_port_is_received_scmp_snap_impl() {
-    test_scmp_with_port_is_received_scmp_impl(UnderlayType::Snap).await;
+    test_scmp_with_port_is_received_scmp_impl(two_path_topology(UnderlayType::Snap).await).await;
 }
 
 /// Test that a Raw socket receives SCMP messages.
-async fn test_scmp_with_port_is_received_raw_impl(underlay: UnderlayType) {
-    let test_env = minimal_pocketscion_setup(underlay).await;
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
+async fn test_scmp_with_port_is_received_raw_impl(ps_handle: PocketScionHandle) {
+    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build sender SCION stack");
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
+    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -395,13 +391,13 @@ async fn test_scmp_with_port_is_received_raw_impl(underlay: UnderlayType) {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_scmp_with_port_is_received_raw_udp_impl() {
-    test_scmp_with_port_is_received_raw_impl(UnderlayType::Udp).await;
+    test_scmp_with_port_is_received_raw_impl(two_path_topology(UnderlayType::Udp).await).await;
 }
 
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn test_scmp_with_port_is_received_raw_snap_impl() {
-    test_scmp_with_port_is_received_raw_impl(UnderlayType::Snap).await;
+    test_scmp_with_port_is_received_raw_impl(two_path_topology(UnderlayType::Snap).await).await;
 }
 
 /// Creates a raw SCION packet with unknown next_header (67) for local communication.
@@ -440,8 +436,8 @@ async fn send_raw_packet_directly(
 
 /// Test that a UDP socket ignores packets with unknown next_header (67).
 async fn test_udp_socket_ignores_unknown_next_header_impl() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Udp).await;
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+    let ps_handle = two_path_topology(UnderlayType::Udp).await;
+    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -477,8 +473,8 @@ async fn test_udp_socket_ignores_unknown_next_header_impl() {
 
 /// Test that an SCMP socket ignores packets with unknown next_header (67).
 async fn test_scmp_socket_ignores_unknown_next_header_impl() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Udp).await;
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+    let ps_handle = two_path_topology(UnderlayType::Udp).await;
+    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -510,8 +506,8 @@ async fn test_scmp_socket_ignores_unknown_next_header_impl() {
 
 /// Test that a RAW socket receives packets with unknown next_header (67).
 async fn test_raw_socket_receives_unknown_next_header_impl() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Udp).await;
-    let stack = ScionStackBuilder::new(test_env.eh_api132.url)
+    let ps_handle = two_path_topology(UnderlayType::Udp).await;
+    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await

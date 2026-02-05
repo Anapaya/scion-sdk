@@ -5,7 +5,6 @@ members = [
     "endhost-api/*",
     "endhost-api-discovery/*",
     "hsd-api/*",
-    "integration-tests",
     "libs/*",
     "pocketscion",
     "scion-proto/*",

@@ -17,10 +17,9 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Context as _;
 use bytes::Bytes;
-use integration_tests::{UnderlayType, minimal_pocketscion_setup};
+use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::two_path_topology};
 use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use rustls::ClientConfig;
-use scion_proto::address::IsdAsn;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
@@ -33,15 +32,15 @@ use tracing::info;
 #[test(tokio::test)]
 #[ntest::timeout(5_000)]
 async fn should_failover_on_link_error() {
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
+    let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
+    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
+    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -124,8 +123,8 @@ async fn should_failover_on_link_error() {
         .expect("path should have first hop egress interface");
 
     // Make direct link between ASes unavailable
-    let client = test_env.pocketscion.api_client();
-    client
+    ps_handle
+        .api_client
         .set_link_state(egress.isd_asn, egress.id, false)
         .await
         .unwrap();
@@ -228,21 +227,22 @@ async fn verify_quic_bidirectional_communication(
 async fn should_quic_failover_on_link_error() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
-    let test_env = minimal_pocketscion_setup(UnderlayType::Snap).await;
-
-    let client = test_env.pocketscion.api_client();
-    let ia132: IsdAsn = "1-ff00:0:132".parse().unwrap();
+    let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
     // Start with link b down to ensure the connection is established via a.
-    client.set_link_state(ia132, 2, false).await.unwrap();
+    ps_handle
+        .api_client
+        .set_link_state(IA132, 2, false)
+        .await
+        .unwrap();
 
-    let sender_stack = ScionStackBuilder::new(test_env.eh_api132.url)
+    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(test_env.eh_api212.url)
+    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -307,8 +307,16 @@ async fn should_quic_failover_on_link_error() {
 
     // Now test failover: bring down the direct link a and bring up the indirect link b.
     // This forces the connection to use the indirect path via link b and c
-    client.set_link_state(ia132, 2, true).await.unwrap();
-    client.set_link_state(ia132, 1, false).await.unwrap();
+    ps_handle
+        .api_client
+        .set_link_state(IA132, 2, true)
+        .await
+        .unwrap();
+    ps_handle
+        .api_client
+        .set_link_state(IA132, 1, false)
+        .await
+        .unwrap();
 
     // Continue sending/receiving to verify communication still works after path change
     let test_data2 = Bytes::from("Hello after path change!");

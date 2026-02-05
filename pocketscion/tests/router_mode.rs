@@ -23,11 +23,12 @@ use std::{
 use bytes::Bytes;
 use ipnet::IpNet;
 use pocketscion::{
-    runtime::{PocketScionRuntime, PocketScionRuntimeBuilder},
-    state::{RouterId, SharedPocketScionState},
+    runtime::PocketScionRuntimeBuilder,
+    state::SharedPocketScionState,
+    topologies::{IA132, IA212, PocketScionHandle},
 };
 use scion_proto::{
-    address::{IsdAsn, ScionAddr, SocketAddr},
+    address::{ScionAddr, SocketAddr},
     packet::{ByEndpoint, ScionPacketScmp, ScionPacketUdp},
     path::{DataPlanePath, EncodedStandardPath, HopField, InfoField, StandardPath},
     scmp::{ScmpEchoRequest, ScmpExternalInterfaceDown, ScmpMessage},
@@ -36,80 +37,14 @@ use scion_proto::{
 use test_log::test;
 use tokio::time::timeout;
 
-struct PocketscionTestEnv {
-    pub _pocketscion: PocketScionRuntime,
-    pub ia_110: IsdAsn, // 1-ff00:0:110
-    pub ia_111: IsdAsn, // 1-ff00:0:111
-    pub _rid_110: RouterId,
-    pub _rid_111: RouterId,
-    pub raddr_110: std::net::SocketAddr,
-    pub raddr_111: std::net::SocketAddr,
-}
-
-async fn minimal_pocketscion_setup_router(
-    snap_data_plane_interfaces: BTreeMap<String, std::net::SocketAddr>,
-    snap_data_plane_excludes: Vec<IpNet>,
-) -> PocketscionTestEnv {
-    let mut pstate = SharedPocketScionState::new(SystemTime::now());
-
-    let ia_110: IsdAsn = "1-ff00:0:110".parse().unwrap();
-    let ia_111: IsdAsn = "1-ff00:0:111".parse().unwrap();
-
-    let rid_110 = pstate.add_router(
-        ia_110,
-        vec![NonZeroU16::new(1).unwrap(), NonZeroU16::new(2).unwrap()],
-        snap_data_plane_excludes,
-        snap_data_plane_interfaces,
-    );
-    let rid_111 = pstate.add_router(
-        ia_111,
-        vec![NonZeroU16::new(3).unwrap(), NonZeroU16::new(4).unwrap()],
-        vec![],
-        BTreeMap::new(),
-    );
-
-    let pocketscion = PocketScionRuntimeBuilder::new()
-        .with_system_state(pstate.into_state())
-        .with_mgmt_listen_addr("127.0.0.1:0".parse().unwrap())
-        .start()
-        .await
-        .expect("Failed to start PocketScion runtime");
-
-    let io_config = pocketscion.api_client().get_io_config().await.unwrap();
-    let raddr_110 = io_config
-        .router_sockets
-        .get(&rid_110)
-        .unwrap()
-        .parse()
-        .unwrap();
-    let raddr_111 = io_config
-        .router_sockets
-        .get(&rid_111)
-        .unwrap()
-        .parse()
-        .unwrap();
-
-    PocketscionTestEnv {
-        _pocketscion: pocketscion,
-        ia_110,
-        ia_111,
-        _rid_110: rid_110,
-        _rid_111: rid_111,
-        raddr_110,
-        raddr_111,
-    }
-}
-
-async fn minimal_pocketscion_setup() -> PocketscionTestEnv {
-    minimal_pocketscion_setup_router(BTreeMap::new(), vec![]).await
-}
-
 // Test implementing a simple echo of an echo client and echo server using pocketscion in router
 // mode, i.e., without SNAPs.
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn echo() {
-    let test_env = minimal_pocketscion_setup().await;
+    let pocketscion = setup_pocketscion().await;
+
+    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
 
     // Bind sockets early to get allocated ports
     let client_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
@@ -176,8 +111,8 @@ async fn echo() {
         // Construct a simple SCION UDP packet.
         let packet = ScionPacketUdp::new(
             ByEndpoint {
-                source: SocketAddr::from_std(test_env.ia_110, client_addr),
-                destination: SocketAddr::from_std(test_env.ia_111, server_addr),
+                source: SocketAddr::from_std(IA132, client_addr),
+                destination: SocketAddr::from_std(IA212, server_addr),
             },
             DataPlanePath::Standard(scion_path()),
             b"Hello SCION!".as_ref().into(),
@@ -187,7 +122,7 @@ async fn echo() {
         let pkt_raw = packet.encode_to_bytes_vec().concat();
 
         client_socket
-            .send_to(&pkt_raw, test_env.raddr_110)
+            .send_to(&pkt_raw, ia132_router_addr)
             .await
             .expect("Failed to send packet");
 
@@ -227,7 +162,7 @@ async fn echo() {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn send_scmp() {
-    let test_env = minimal_pocketscion_setup().await;
+    let pocketscion = setup_pocketscion().await;
 
     // Bind sockets early to get allocated ports
     let sender_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
@@ -298,6 +233,7 @@ async fn send_scmp() {
     });
 
     // Spawn a task for the sender.
+    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
     let sender_task = tokio::spawn(async move {
         let dp_path = DataPlanePath::Standard(scion_path());
 
@@ -310,8 +246,8 @@ async fn send_scmp() {
 
         let echo_packet = ScionPacketScmp::new(
             ByEndpoint {
-                source: ScionAddr::new(test_env.ia_110, sender_addr.ip().into()),
-                destination: ScionAddr::new(test_env.ia_111, receiver_addr.ip().into()),
+                source: ScionAddr::new(IA132, sender_addr.ip().into()),
+                destination: ScionAddr::new(IA212, receiver_addr.ip().into()),
             },
             dp_path.clone(),
             echo_request,
@@ -320,7 +256,7 @@ async fn send_scmp() {
 
         let echo_raw = echo_packet.encode_to_bytes_vec().concat();
         sender_socket
-            .send_to(&echo_raw, test_env.raddr_110)
+            .send_to(&echo_raw, ia132_router_addr)
             .await
             .expect("Failed to send SCMP echo packet");
 
@@ -328,8 +264,8 @@ async fn send_scmp() {
         // Create a UDP packet that will be quoted in the SCMP error
         let quoted_udp = ScionPacketUdp::new(
             ByEndpoint {
-                source: SocketAddr::from_std(test_env.ia_111, receiver_addr), // receiver as source
-                destination: SocketAddr::from_std(test_env.ia_110, sender_addr), // sender as destination
+                source: SocketAddr::from_std(IA212, receiver_addr), // receiver as source
+                destination: SocketAddr::from_std(IA132, sender_addr), // sender as destination
             },
             dp_path.clone(),
             Bytes::from_static(b"quoted payload"),
@@ -337,15 +273,15 @@ async fn send_scmp() {
         .expect("Failed to create quoted UDP packet");
 
         let interface_down = ScmpMessage::ExternalInterfaceDown(ScmpExternalInterfaceDown::new(
-            test_env.ia_110,
+            IA132,
             42,
             quoted_udp.encode_to_bytes_vec().concat().into(),
         ));
 
         let interface_down_packet = ScionPacketScmp::new(
             ByEndpoint {
-                source: ScionAddr::new(test_env.ia_110, sender_addr.ip().into()),
-                destination: ScionAddr::new(test_env.ia_111, receiver_addr.ip().into()),
+                source: ScionAddr::new(IA132, sender_addr.ip().into()),
+                destination: ScionAddr::new(IA212, receiver_addr.ip().into()),
             },
             dp_path,
             interface_down,
@@ -354,7 +290,7 @@ async fn send_scmp() {
 
         let interface_down_raw = interface_down_packet.encode_to_bytes_vec().concat();
         sender_socket
-            .send_to(&interface_down_raw, test_env.raddr_110)
+            .send_to(&interface_down_raw, ia132_router_addr)
             .await
             .expect("Failed to send SCMP interface down packet");
 
@@ -418,26 +354,26 @@ fn scion_path() -> EncodedStandardPath {
 // Test that SCION packets are forwarded to the SNAP udp ip interface if it is configured.
 //
 // Topology:
-//   ┌──────────────────────AS1 (1-ff00:0:110) ─┐
+//   ┌──────────────────────AS1 ────────────────┐
 //   │ endhost_behind_snap                      │
 //   │          │                               |
 //   │          ↓                               |
 //   │     snap_socket                          |
 //   │    (127.0.0.1:...)                       |
 //   │         ↕                                |
-//   └─── router_110#1 ─────────────────────────┘
+//   └─── router#1 ─────────────────────────┘
 //             ↕
 //        [core link]
 //             ↕
-//   ┌─── router_111#3 ─────AS2 (1-ff00:0:111)─┐
+//   ┌─── router#3 ─────────AS2 ───────────────┐
 //   |         ↕                               |
 //   │     remote_socket                       |
 //   │     (127.0.0.1:...)                     │
 //   └─────────────────────────────────────────┘
 //
 // Test sends two packets:
-//   1. remote_socket → router_111 → router_110 → snap_socket (packet dest: 10.0.0.42:8080)
-//   2. snap_socket → router_110 → router_111 → remote_socket (packet source: 10.0.0.42:8080)
+//   1. remote_socket → router#3 → router#1 → snap_socket (packet dest: 10.0.0.42:8080)
+//   2. snap_socket → router#1 → router#3 → remote_socket (packet source: 10.0.0.42:8080)
 //
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
@@ -454,13 +390,16 @@ async fn snap_interface_forwarding() {
     let remote_addr = remote_socket.local_addr().unwrap();
 
     // Setup PocketSCION with SNAP interface
-    let env =
-        minimal_pocketscion_setup_router(BTreeMap::from([("dp-0".to_string(), snap_addr)]), vec![])
-            .await;
+    let pocketscion =
+        setup_pocketscion_router(vec![], BTreeMap::from([("dp-0".to_string(), snap_addr)])).await;
+
+    // Router socket addresses
+    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
+    let ia212_router_addr = pocketscion.router_addr(IA212).await.unwrap();
 
     // Hypothetical endhost behind the SNAP (packets to this address are forwarded to snap_socket)
     let endhost_behind_snap_addr = "10.0.0.42:8080".parse::<std::net::SocketAddr>().unwrap();
-    let endhost_behind_snap_scion_addr = SocketAddr::from_std(env.ia_110, endhost_behind_snap_addr);
+    let endhost_behind_snap_scion_addr = SocketAddr::from_std(IA132, endhost_behind_snap_addr);
 
     tracing::info!(
         %snap_addr,
@@ -469,7 +408,7 @@ async fn snap_interface_forwarding() {
         "Starting SNAP interface forwarding test"
     );
 
-    let remote_scion_addr = SocketAddr::from_std(env.ia_111, remote_addr);
+    let remote_scion_addr = SocketAddr::from_std(IA212, remote_addr);
     let test_payload_1 = b"Test from remote to endhost behind SNAP";
     let test_payload_2 = b"Response from endhost behind SNAP to remote";
 
@@ -520,7 +459,7 @@ async fn snap_interface_forwarding() {
 
         let response_raw = response_pkt.encode_to_bytes_vec().concat();
         snap_socket
-            .send_to(&response_raw, env.raddr_110)
+            .send_to(&response_raw, ia132_router_addr)
             .await
             .expect("Failed to send from SNAP socket to router");
 
@@ -540,7 +479,7 @@ async fn snap_interface_forwarding() {
 
     let pkt_raw = packet_to_snap.encode_to_bytes_vec().concat();
     remote_socket
-        .send_to(&pkt_raw, env.raddr_111)
+        .send_to(&pkt_raw, ia212_router_addr)
         .await
         .expect("Failed to send from remote");
     tracing::info!("Remote sent packet to endhost behind SNAP");
@@ -584,28 +523,28 @@ async fn snap_interface_forwarding() {
 // the destination is in the exclude list.
 //
 // Topology:
-//   ┌ AS1 (1-ff00:0:110) ──────────────────────────────┐
+//   ┌ AS1 ─────────────────────────────────────────────┐
 //   |                                                  |
 //   │snap_socket (not used) excluded_socket            |
 //   │ (127.0.0.1:...)       (127.0.0.1:...)            |
 //   |       |                  ↑                       |
 //   │       └─────────────┐    ↓                       |
-//   └──────────────────── router_110#1 ────────────────┘
+//   └──────────────────── router#1 ────────────────────┘
 //                              ↕
 //                         [core link]
 //                              ↕
-//   ┌ AS2 (1-ff00:0:111)──── router_111#3 ─────────────┐
+//   ┌ AS2 ──────────────── router#3 ───────────────────┐
 //   |                          ↕                       |
 //   │                     remote_socket                |
 //   │                     (127.0.0.1:...)              │
 //   └──────────────────────────────────────────────────┘
 //
-// Config: router_110 has SNAP interface configured, but also has
+// Config: router#1 has SNAP interface configured, but also has
 //         exclude list: 127.0.0.1/32 (bypasses SNAP for local traffic)
 //
 // Test sends two packets:
-//   1. remote_socket → router_111 → router_110 → excluded_socket (snap_socket does NOT receive)
-//   2. excluded_socket → router_110 → router_111 → remote_socket
+//   1. remote_socket → router#3 → router#1 → excluded_socket (snap_socket does NOT receive)
+//   2. excluded_socket → router#1 → router#3 → remote_socket
 //
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
@@ -627,9 +566,9 @@ async fn snap_excluded_networks() {
     let remote_addr = remote_socket.local_addr().unwrap();
 
     // Setup PocketSCION with SNAP interface and exclude list
-    let env = minimal_pocketscion_setup_router(
-        BTreeMap::from([("dp-0".to_string(), snap_addr)]),
+    let pocketscion = setup_pocketscion_router(
         vec!["127.0.0.1/32".parse::<IpNet>().unwrap()],
+        BTreeMap::from([("dp-0".to_string(), snap_addr)]),
     )
     .await;
 
@@ -639,14 +578,13 @@ async fn snap_excluded_networks() {
         "Starting SNAP excluded networks test"
     );
 
-    let excluded_scion_addr = SocketAddr::from_std(env.ia_110, excluded_addr);
-    let remote_scion_addr = SocketAddr::from_std(env.ia_111, remote_addr);
+    let excluded_scion_addr = SocketAddr::from_std(IA132, excluded_addr);
+    let remote_scion_addr = SocketAddr::from_std(IA212, remote_addr);
     let test_payload_1 = b"Test from remote to excluded";
     let test_payload_2 = b"Response from excluded to remote";
 
-    let raddr_110 = env.raddr_110;
-    let raddr_111 = env.raddr_111;
-    let ia_110 = env.ia_110;
+    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
+    let ia212_router_addr = pocketscion.router_addr(IA212).await.unwrap();
 
     // Spawn excluded receiver task
     let excluded_task = tokio::spawn(async move {
@@ -692,7 +630,7 @@ async fn snap_excluded_networks() {
 
         let response_pkt = ScionPacketUdp::new(
             ByEndpoint {
-                source: SocketAddr::from_std(ia_110, excluded_addr),
+                source: SocketAddr::from_std(IA132, excluded_addr),
                 destination: packet.source().unwrap(),
             },
             reversed_path,
@@ -702,7 +640,7 @@ async fn snap_excluded_networks() {
 
         let response_raw = response_pkt.encode_to_bytes_vec().concat();
         excluded_socket
-            .send_to(&response_raw, raddr_110)
+            .send_to(&response_raw, ia132_router_addr)
             .await
             .expect("Failed to send from excluded socket to router");
 
@@ -722,7 +660,7 @@ async fn snap_excluded_networks() {
 
     let pkt_raw = packet_to_excluded.encode_to_bytes_vec().concat();
     remote_socket
-        .send_to(&pkt_raw, raddr_111)
+        .send_to(&pkt_raw, ia212_router_addr)
         .await
         .expect("Failed to send from remote");
     tracing::info!("Remote sent packet to excluded socket");
@@ -753,4 +691,39 @@ async fn snap_excluded_networks() {
     );
 
     tracing::info!("SNAP excluded networks test completed successfully");
+}
+
+async fn setup_pocketscion() -> PocketScionHandle {
+    setup_pocketscion_router(vec![], BTreeMap::new()).await
+}
+
+async fn setup_pocketscion_router(
+    snap_data_plane_excludes: Vec<IpNet>,
+    snap_data_plane_interfaces: BTreeMap<String, std::net::SocketAddr>,
+) -> PocketScionHandle {
+    let mut pstate = SharedPocketScionState::new(SystemTime::now());
+
+    let _router1 = pstate.add_router(
+        IA132,
+        vec![NonZeroU16::new(1).unwrap(), NonZeroU16::new(2).unwrap()],
+        snap_data_plane_excludes,
+        snap_data_plane_interfaces,
+    );
+    let _router2 = pstate.add_router(
+        IA212,
+        vec![NonZeroU16::new(3).unwrap(), NonZeroU16::new(4).unwrap()],
+        vec![],
+        BTreeMap::new(),
+    );
+
+    let pocketscion = PocketScionRuntimeBuilder::new()
+        .with_system_state(pstate.into_state())
+        .with_mgmt_listen_addr("127.0.0.1:0".parse().unwrap())
+        .start()
+        .await
+        .expect("Failed to start PocketScion runtime");
+
+    let api_client = pocketscion.api_client();
+
+    PocketScionHandle::new(pocketscion, api_client)
 }

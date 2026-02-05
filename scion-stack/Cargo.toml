@@ -38,7 +38,12 @@ x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 mockall = "0.13"
+ntest = { workspace = true }
+pocketscion = { workspace = true }
+snap-tokens = { workspace = true }
 test-log = { workspace = true }
+rustls = { workspace = true }
+scion-sdk-token-validator = { workspace = true }
 
 [lints]
 workspace = true

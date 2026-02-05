@@ -13,10 +13,12 @@
 // limitations under the License.
 //! Integration tests for SNAP data plane session renewal in PocketSCION.
 
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, time::SystemTime};
 
 use bytes::Bytes;
-use integration_tests::single_snap_pocketscion_setup;
+use pocketscion::{
+    runtime::PocketScionRuntimeBuilder, state::SharedPocketScionState, topologies::IA132,
+};
 use scion_proto::address::{HostAddr, IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::token_source::mock::MockTokenSource;
 use scion_stack::scionstack::{ScionStackBuilder, builder::SnapUnderlayConfig};
@@ -25,14 +27,31 @@ use test_log::test;
 
 #[test(tokio::test)]
 #[ignore]
-async fn auto_session_renewals() {
+async fn auto_token_renewal() {
     // First token is valid for 2 seconds.
     // We then update a token that is valid for another 3 seconds.
     // Both tokens should allow sending packets.
 
+    // Setup pocketscion
+    scion_sdk_utils::test::install_rustls_crypto_provider();
+
+    let mut pstate = SharedPocketScionState::new(SystemTime::now());
+
+    let snap = pstate.add_snap(IA132).unwrap();
+
+    let pocketscion = PocketScionRuntimeBuilder::new()
+        .with_system_state(pstate.into_state())
+        .with_mgmt_listen_addr("127.0.0.1:0".parse().unwrap())
+        .start()
+        .await
+        .expect("Failed to start PocketSCION");
+
+    let snaps = pocketscion.api_client().get_snaps().await.unwrap();
+
+    let snap_cp_addr = snaps.snaps.get(&snap).unwrap().control_plane_api.clone();
+
     let mock_token_source = MockTokenSource::new(dummy_snap_token_with_validity(2));
 
-    let (_pocketscion, snap_cp_addr) = single_snap_pocketscion_setup().await;
     let stack = ScionStackBuilder::new(snap_cp_addr)
         .with_auth_token_source(mock_token_source.clone())
         .with_snap_underlay_config(SnapUnderlayConfig::builder().build())

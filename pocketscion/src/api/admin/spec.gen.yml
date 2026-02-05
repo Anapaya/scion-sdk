@@ -66,6 +66,19 @@ paths:
           description: Link state set successfully
         '404':
           description: Link not found
+  /routers:
+    get:
+      tags:
+      - management
+      summary: List all available routers in pocket SCION.
+      operationId: get_routers
+      responses:
+        '200':
+          description: List all available routers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoutersResponse'
   /snaps:
     get:
       tags:
@@ -281,6 +294,19 @@ components:
       enum:
       - Ready
       - NotReady
+    Router:
+      type: object
+      description: Router in pocketSCION.
+      required:
+      - isd_as
+      - addr
+      properties:
+        addr:
+          type: string
+          description: Router socket address.
+        isd_as:
+          $ref: '#/components/schemas/IsdAsn'
+          description: The ISD-AS of the AS the router belongs to.
     RouterStateDto:
       type: object
       description: The state of a SCION router emulated by PocketScion.
@@ -312,6 +338,21 @@ components:
             type: string
           propertyNames:
             type: string
+    RoutersResponse:
+      type: object
+      description: Router response.
+      required:
+      - routers
+      properties:
+        routers:
+          type: object
+          description: Map of routers.
+          additionalProperties:
+            $ref: '#/components/schemas/Router'
+          propertyNames:
+            type: integer
+            description: The router identifier.
+            minimum: 0
     ScionAsDto:
       type: object
       description: Human readable Pocket SCION AS

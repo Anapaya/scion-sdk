@@ -38,7 +38,7 @@ use crate::{
     dto::{IoConfigDto, SystemStateDto},
     endhost_api::EndhostApiId,
     io_config::SharedPocketScionIoConfig,
-    state::{SharedPocketScionState, snap::SnapId},
+    state::{RouterId, SharedPocketScionState, snap::SnapId},
 };
 
 const MANAGEMENT_TAG: &str = "management";
@@ -75,6 +75,7 @@ pub(crate) fn build_management_api(
         .merge(
             OpenApiRouter::new()
                 .routes(routes!(get_snaps))
+                .routes(routes!(get_routers))
                 .routes(routes!(get_io_config))
                 .routes(routes!(get_system_state))
                 .routes(routes!(get_auth_server))
@@ -179,6 +180,60 @@ async fn get_snaps(
     });
 
     Json(SnapsResponse { snaps })
+}
+
+/// Router response.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct RoutersResponse {
+    /// Map of routers.
+    pub routers: BTreeMap<RouterId, Router>,
+}
+
+/// Router in pocketSCION.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct Router {
+    /// The ISD-AS of the AS the router belongs to.
+    pub isd_as: IsdAsn,
+    /// Router socket address.
+    #[schema(value_type = String)]
+    pub addr: SocketAddr,
+}
+
+/// List all available routers in pocket SCION.
+#[utoipa::path(
+    get,
+    path = "/routers",
+    tag = MANAGEMENT_TAG,
+    responses(
+        (
+            status = 200,
+            description = "List all available routers",
+            body = RoutersResponse
+        )
+    )
+)]
+async fn get_routers(
+    State((system_state, io_config)): State<(SharedPocketScionState, SharedPocketScionIoConfig)>,
+) -> Json<RoutersResponse> {
+    let mut routers: BTreeMap<RouterId, Router> = BTreeMap::new();
+    system_state.routers().iter().for_each(|(id, router)| {
+        match io_config.router_socket_addr(*id) {
+            Some(addr) => {
+                routers.insert(
+                    *id,
+                    Router {
+                        addr,
+                        isd_as: router.isd_as,
+                    },
+                );
+            }
+            None => {
+                tracing::error!(router=%id, "No socket address for router in I/O config");
+            }
+        }
+    });
+
+    Json(RoutersResponse { routers })
 }
 
 /// Authorization server response.

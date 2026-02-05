@@ -17,7 +17,6 @@ scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
 
-scion-stack = { workspace = true }
 scion-proto = { workspace = true }
 
 snap-control = { workspace = true }
@@ -39,7 +38,6 @@ derive_more = { workspace = true }
 ed25519-dalek = { workspace = true }
 http = { workspace = true }
 ipnet = { workspace = true, features = ["serde"] }
-ntest = { workspace = true }
 pem = { workspace = true, features = ["serde"] }
 quinn = { workspace = true }
 rand = { workspace = true }
@@ -63,6 +61,9 @@ x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 endhost-api-client = { workspace = true }
+ntest = { workspace = true }
+scion-stack = { workspace = true }
+snap-tokens = { workspace = true }
 
 [lints]
 workspace = true

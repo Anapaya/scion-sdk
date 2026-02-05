@@ -18,7 +18,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use scion_proto::{address::IsdAsn, path::Path};
 use thiserror::Error;
-use tracing::error;
 
 use crate::types::ResFut;
 

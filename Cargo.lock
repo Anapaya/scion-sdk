@@ -1836,31 +1836,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "integration-tests"
-version = "0.0.0"
-dependencies = [
- "anapaya-quinn",
- "anyhow",
- "bytes",
- "chrono",
- "ipnet",
- "ntest",
- "pocketscion",
- "rustls",
- "scion-proto",
- "scion-sdk-reqwest-connect-rpc",
- "scion-sdk-token-validator",
- "scion-sdk-utils",
- "scion-stack",
- "snap-tokens",
- "test-log",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "intrusive-collections"
 version = "0.9.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3479,13 +3454,18 @@ dependencies = [
  "foldhash 0.2.0",
  "futures",
  "mockall",
+ "ntest",
  "pin-project-lite",
+ "pocketscion",
  "prost",
+ "rustls",
  "scc",
  "scion-proto",
  "scion-sdk-reqwest-connect-rpc",
+ "scion-sdk-token-validator",
  "scion-sdk-utils",
  "snap-control",
+ "snap-tokens",
  "snap-tun",
  "socket2",
  "test-log",

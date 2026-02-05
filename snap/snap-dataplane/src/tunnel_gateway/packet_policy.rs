@@ -26,7 +26,6 @@ use scion_proto::{
     wire_encoding::{WireDecode, WireDecodeWithContext, WireEncodeVec},
 };
 use thiserror::Error;
-use tracing::error;
 
 /// Enforce policies for the inbound SCION packet.
 ///

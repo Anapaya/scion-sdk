@@ -23,6 +23,7 @@ pub mod management_api;
 pub mod network;
 pub mod runtime;
 pub mod state;
+pub mod topologies;
 
 /// Transform a [`std::net::SocketAddr`] into a [`url::Url`].
 pub fn addr_to_http_url(addr: std::net::SocketAddr) -> url::Url {
