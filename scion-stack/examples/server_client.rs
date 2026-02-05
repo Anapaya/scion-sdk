@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Simple end-to-end example using PocketScion and a ScionStack
+//! Simple end-to-end example using a ScionStack with Pocket SCION.
 //!
 //! ## Overview
 //!

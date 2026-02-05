@@ -37,13 +37,16 @@ url = { workspace = true }
 x25519-dalek = { workspace = true }
 
 [dev-dependencies]
-mockall = "0.13"
+derive_more = { workspace = true }
+mockall = { workspace = true }
 ntest = { workspace = true }
 pocketscion = { workspace = true }
-snap-tokens = { workspace = true }
-test-log = { workspace = true }
+rand = { workspace = true }
 rustls = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
+serde = { workspace = true }
+snap-tokens = { workspace = true }
+test-log = { workspace = true }
 
 [lints]
 workspace = true

@@ -39,8 +39,6 @@ ed25519-dalek = { workspace = true }
 http = { workspace = true }
 ipnet = { workspace = true, features = ["serde"] }
 pem = { workspace = true, features = ["serde"] }
-quinn = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 jsonwebtoken = { workspace = true }
 serde = { workspace = true }
@@ -62,7 +60,6 @@ x25519-dalek = { workspace = true }
 [dev-dependencies]
 endhost-api-client = { workspace = true }
 ntest = { workspace = true }
-scion-stack = { workspace = true }
 snap-tokens = { workspace = true }
 
 [lints]
