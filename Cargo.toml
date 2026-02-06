@@ -140,7 +140,7 @@ tracing-bunyan-formatter = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
 tracing-log = "0.2"
 url = { version = "2.5", features = ["serde"] }
-utoipa = { version = "5.3", features = ["chrono", "url", "uuid"] }
+utoipa = { version = "5.4", features = ["chrono", "url", "uuid"] }
 utoipa-axum = "0.2"
 utoipa-redoc = { version = "6.0", features = ["axum"] }
 uuid = "1.16"
