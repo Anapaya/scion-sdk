@@ -18,6 +18,7 @@ use std::{net::SocketAddr, ops::Deref, sync::Arc};
 use async_trait::async_trait;
 use endhost_api_client::client::CrpcEndhostApiClient;
 use scion_sdk_reqwest_connect_rpc::{client::CrpcClientError, token_source::TokenSource};
+use snap_tun::client::SnapTunNgControlPlaneClient;
 use url::Url;
 use x25519_dalek::PublicKey;
 
@@ -181,5 +182,17 @@ impl ControlPlaneApi for CrpcSnapControlClient {
             )?)
         };
         Ok(psk_share)
+    }
+}
+
+#[async_trait]
+impl SnapTunNgControlPlaneClient for CrpcSnapControlClient {
+    async fn register_identity(
+        &self,
+        initiator_identity: PublicKey,
+        psk_share: Option<[u8; 32]>,
+    ) -> Result<Option<[u8; 32]>, CrpcClientError> {
+        self.register_snaptun_identity(initiator_identity, psk_share)
+            .await
     }
 }

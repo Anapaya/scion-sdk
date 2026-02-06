@@ -11,16 +11,20 @@ categories = ["network-programming"]
 
 [dependencies]
 ana-gotatun = { workspace = true }
+async-trait = { workspace = true }
 bitfield-struct = { workspace = true }
 bytes = { workspace = true }
 prometheus = { workspace = true }
 quinn = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-observability = { workspace = true }
+scion-sdk-utils = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 x509-cert = { workspace = true }
+scion-sdk-reqwest-connect-rpc = { workspace = true }
+url = { workspace = true }
 zerocopy = { workspace = true }
 
 [dev-dependencies]

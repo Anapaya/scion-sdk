@@ -30,10 +30,9 @@ use scion_proto::{
 };
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
-use snap_tun::client::SnapTunNgSocket;
+use snap_tun::client::{SnapTunNgEndpoint, SnapTunnel};
 use tokio::{net::UdpSocket, task::JoinHandle};
 use url::Url;
-use x25519_dalek::StaticSecret;
 
 use crate::scionstack::{
     AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError,
@@ -54,7 +53,7 @@ impl Drop for SnapUnderlaySocketTaskHandle {
 
 #[derive(Clone)]
 pub(crate) struct SnapUnderlaySocket {
-    pub inner: Arc<SnapTunNgSocket>,
+    pub inner: Arc<SnapTunnel>,
     local_addr: SocketAddr,
     _task: Arc<SnapUnderlaySocketTaskHandle>,
 }
@@ -64,8 +63,8 @@ impl SnapUnderlaySocket {
         bind_addr: SocketAddr,
         snap_cp: Url,
         socket: UdpSocket,
+        snaptunnel_manager: &'_ SnapTunNgEndpoint,
         snap_token_source: Arc<dyn TokenSource>,
-        static_private: StaticSecret,
         receive_queue_capacity: usize,
     ) -> Result<Self, crate::scionstack::ScionSocketBindError> {
         // Establish the initial tunnel.
@@ -82,56 +81,26 @@ impl SnapUnderlaySocket {
             )
         })?;
 
-        // TODO(uniquefine): we register the identity once here, but this must refactored
-        // https://github.com/Anapaya/scion/issues/27486
-        // in a followup issue to be handled globally.
-        let static_public = x25519_dalek::PublicKey::from(&static_private);
-        let mut snap_tun_cp_client = CrpcSnapControlClient::new(
-            &data_plane.snap_tun_control_address.ok_or(crate::scionstack::ScionSocketBindError::Other(
-                anyhow::anyhow!("data plane did not provide snap tun control address, the snap data plane needs to be updated.").into_boxed_dyn_error(),
-                )
-            )?,
-        )
-        .map_err(|e| {
-            crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::ControlPlaneClientCreationError(e),
-            )
-        })?;
-        snap_tun_cp_client.use_token_source(snap_token_source.clone());
-        let _ = snap_tun_cp_client
-            .register_snaptun_identity(static_public, None)
-            .await
-            .map_err(|e| {
-                crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                    SnapConnectionError::ConnectionEstablishmentError(anyhow::anyhow!(
-                        "failed to register SNAP identity: {e:#}"
-                    )),
-                )
-            })?;
-
         tracing::debug!(%data_plane.address, "Connecting to dataplane");
 
-        let tunnel = SnapTunNgSocket::new(
-            static_private,
-            data_plane
-                .snap_static_x25519
-                .ok_or(crate::scionstack::ScionSocketBindError::Other(
+        let tunnel = snaptunnel_manager.connect_tunnel(
+            data_plane.snap_static_x25519.ok_or(crate::scionstack::ScionSocketBindError::Other(
                 anyhow::anyhow!(
-                    "data plane did not provide static public key, the snap data plane needs to be updated."
+                    "data plane did not provide static public key, the snap needs to be updated."
                 )
                 .into_boxed_dyn_error(),
             ))?,
-            Arc::new(socket),
             data_plane.address,
+            data_plane.snap_tun_control_address.ok_or(crate::scionstack::ScionSocketBindError::Other(
+                anyhow::anyhow!(
+                    "data plane did not provide snap tun control address, the snap needs to be updated."
+                )
+                .into_boxed_dyn_error(),
+            ))?,
+            Arc::new(snap_cp_client),
+            Arc::new(socket),
             receive_queue_capacity,
-        )
-        .await
-        // XXX(uniquefine): This error handling needs to be cleaned up.
-        .map_err(|e| {
-            crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::ConnectionEstablishmentError(e.into()),
-            )
-        })?;
+        ).await.map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
 
         let assigned_addr = tunnel.local_addr();
 

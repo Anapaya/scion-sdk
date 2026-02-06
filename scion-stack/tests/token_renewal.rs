@@ -11,87 +11,179 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Integration tests for SNAP data plane session renewal in PocketSCION.
+//! Integration tests for SNAP token renewal in PocketSCION.
 
-use std::{net::Ipv4Addr, time::SystemTime};
+use std::time::Duration;
 
 use bytes::Bytes;
-use pocketscion::{
-    runtime::PocketScionRuntimeBuilder, state::SharedPocketScionState, topologies::IA132,
-};
-use scion_proto::address::{HostAddr, IsdAsn, ScionAddr, SocketAddr};
+use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
 use scion_sdk_reqwest_connect_rpc::token_source::mock::MockTokenSource;
 use scion_stack::scionstack::{ScionStackBuilder, builder::SnapUnderlayConfig};
-use snap_tokens::v0::dummy_snap_token_with_validity;
+use snap_tokens::v0::{dummy_snap_token, dummy_snap_token_with_validity};
 use test_log::test;
 
+/// Test that after the token expires, packets are dropped.
 #[test(tokio::test)]
-#[ignore]
-async fn auto_token_renewal() {
-    // First token is valid for 2 seconds.
-    // We then update a token that is valid for another 3 seconds.
-    // Both tokens should allow sending packets.
-
-    // Setup pocketscion
+async fn token_expiry_causes_send_failure() {
     scion_sdk_utils::test::install_rustls_crypto_provider();
 
-    let mut pstate = SharedPocketScionState::new(SystemTime::now());
+    let ps_handle = minimal_topology(UnderlayType::Snap).await;
 
-    let snap = pstate.add_snap(IA132).unwrap();
+    // Token expires in 1 second
+    let start_time = std::time::Instant::now();
+    let mock_token_source = MockTokenSource::new(dummy_snap_token_with_validity(1));
 
-    let pocketscion = PocketScionRuntimeBuilder::new()
-        .with_system_state(pstate.into_state())
-        .with_mgmt_listen_addr("127.0.0.1:0".parse().unwrap())
-        .start()
+    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_auth_token_source(mock_token_source)
+        .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
+        .build()
         .await
-        .expect("Failed to start PocketSCION");
+        .unwrap();
 
-    let snaps = pocketscion.api_client().get_snaps().await.unwrap();
+    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .unwrap();
 
-    let snap_cp_addr = snaps.snaps.get(&snap).unwrap().control_plane_api.clone();
+    let sender = sender_stack.bind(None).await.unwrap();
+    let receiver = receiver_stack.bind(None).await.unwrap();
+    let receiver_addr = receiver.local_addr();
+    let test_data = Bytes::from("Hello, World!");
 
-    let mock_token_source = MockTokenSource::new(dummy_snap_token_with_validity(2));
+    let mut iteration = 0;
+    let mut recv_buffer = [0u8; 1024];
 
-    let stack = ScionStackBuilder::new(snap_cp_addr)
+    // Loop until send/receive fails (expected after ~1s)
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            iteration += 1;
+            tracing::debug!("Iteration {}: Attempting send/receive", iteration,);
+
+            // Try to send and receive with timeout
+            let (send_result, recv_result) = tokio::join!(
+                sender.send_to(&test_data, receiver_addr),
+                tokio::time::timeout(
+                    Duration::from_millis(200),
+                    receiver.recv_from(&mut recv_buffer)
+                )
+            );
+
+            match (send_result, recv_result) {
+                (_, Err(_)) => {
+                    tracing::debug!(
+                        "Packet dropped after {}ms",
+                        start_time.elapsed().as_millis()
+                    );
+                    break;
+                }
+                (Err(send_err), _) => {
+                    panic!("Unexpected send error: {:?}", send_err);
+                }
+                (_, Ok(Err(recv_err))) => {
+                    panic!("Unexpected receive error: {:?}", recv_err);
+                }
+                _ => {
+                    tracing::debug!("Packet {} succeeded", iteration);
+                }
+            };
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// Tests that an updated token with longer expiration time extends the session.
+#[test(tokio::test)]
+async fn updated_token_extends_session() {
+    scion_sdk_utils::test::install_rustls_crypto_provider();
+
+    let ps_handle = minimal_topology(UnderlayType::Snap).await;
+
+    // Initial token expires in 1 second
+    let start_time = std::time::Instant::now();
+    let mock_token_source = MockTokenSource::new(dummy_snap_token_with_validity(1));
+
+    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token_source(mock_token_source.clone())
         .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
         .build()
         .await
         .unwrap();
 
-    let sender = stack.bind(None).await.unwrap();
+    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .unwrap();
 
+    let sender = sender_stack.bind(None).await.unwrap();
+    let receiver = receiver_stack.bind(None).await.unwrap();
+    let receiver_addr = receiver.local_addr();
     let test_data = Bytes::from("Hello, World!");
-    let dst_isd_as: IsdAsn = "2-ff00:0:212".parse().unwrap();
-    let test_destination = SocketAddr::new(
-        ScionAddr::new(dst_isd_as, HostAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
-        8080,
+
+    // Immediately update token to 2 seconds validity
+    mock_token_source.update_token(dummy_snap_token_with_validity(2));
+    tracing::info!("Updated token from 1s to 2s validity");
+
+    let mut iteration = 0;
+    let mut recv_buffer = [0u8; 1024];
+
+    // Continue sending until failure
+    let elapsed_at_failure = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            iteration += 1;
+            tracing::debug!(
+                "Iteration {}: Attempting send/receive at {}ms",
+                iteration,
+                start_time.elapsed().as_millis()
+            );
+
+            let (send_result, recv_result) = tokio::join!(
+                sender.send_to(&test_data, receiver_addr),
+                tokio::time::timeout(
+                    Duration::from_millis(200),
+                    receiver.recv_from(&mut recv_buffer)
+                )
+            );
+
+            match (send_result, recv_result) {
+                (_, Err(_)) => {
+                    tracing::debug!(
+                        "Packet dropped after {}ms",
+                        start_time.elapsed().as_millis()
+                    );
+                    break start_time.elapsed();
+                }
+                (Err(send_err), _) => {
+                    panic!("Unexpected send error: {:?}", send_err);
+                }
+                (_, Ok(Err(recv_err))) => {
+                    panic!("Unexpected receive error: {:?}", recv_err);
+                }
+                _ => {
+                    tracing::debug!("Packet {} succeeded", iteration);
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Make sure the sending lasted longer than the initial token validity
+    assert!(
+        (elapsed_at_failure - Duration::from_millis(200)) >= Duration::from_secs(1),
+        "Session lasted {}ms, must be > 1000ms to prove token update worked",
+        elapsed_at_failure.as_millis()
     );
 
-    tracing::info!("Sending first packet...");
-    sender
-        .send_to(&test_data.clone(), test_destination)
-        .await
-        .expect("must be able to send in the first session timeframe");
+    tracing::info!(
+        "✓ Session lasted {}ms, which is > 1000ms initial token validity",
+        elapsed_at_failure.as_millis()
+    );
 
-    // Update token
-    mock_token_source.update_token(dummy_snap_token_with_validity(3));
-
-    // Skip to after the first token expired
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-    tracing::info!("Sending second packet...");
-    sender
-        .send_to(&test_data.clone(), test_destination)
-        .await
-        .expect("must be able to send in the second session timeframe");
-
-    // Wait for session to fully expire
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-    tracing::info!("Sending third packet...");
-    // Session should now be expired and the SNAP token is no longer valid.
-    let res = sender.send_to(&test_data.clone(), test_destination).await;
-    let err = res.expect_err("must fail to send after session fully expired");
-    tracing::info!("Got expected error: {err:?}");
+    tracing::info!("Test completed successfully");
 }

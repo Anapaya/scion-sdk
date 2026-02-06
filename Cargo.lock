@@ -3833,6 +3833,7 @@ version = "0.4.0"
 dependencies = [
  "ana-gotatun",
  "anapaya-quinn",
+ "async-trait",
  "bitfield-struct 0.12.1",
  "bytes",
  "ed25519-dalek",
@@ -3841,9 +3842,12 @@ dependencies = [
  "rcgen",
  "scion-proto",
  "scion-sdk-observability",
+ "scion-sdk-reqwest-connect-rpc",
+ "scion-sdk-utils",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "url",
  "x509-cert",
  "zerocopy",
 ]

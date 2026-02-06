@@ -1,4 +1,4 @@
-// Copyright 2025 Anapaya Systems
+// Copyright 2026 Anapaya Systems
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,359 +13,254 @@
 // limitations under the License.
 //! SNAP tunnel client.
 
+mod tunnel;
+
 use std::{
-    io,
+    collections::{
+        BTreeMap,
+        btree_map::Entry::{Occupied, Vacant},
+    },
     net::SocketAddr,
-    pin,
     sync::{Arc, Mutex},
-    task::ready,
-    time::Duration,
 };
 
-use ana_gotatun::{
-    noise::{Tunn, TunnResult, errors::WireGuardError, rate_limiter::RateLimiter},
-    packet::{Packet, WgKind},
-    x25519::{self},
-};
-use bytes::{Bytes, BytesMut};
-use tokio::{
-    select,
-    sync::mpsc::{self, error::TrySendError},
-    task::JoinHandle,
-    time::Interval,
-};
-use tracing::instrument;
-use zerocopy::IntoBytes as _;
+use ana_gotatun::x25519::{self, PublicKey};
+use scion_sdk_reqwest_connect_rpc::{client::CrpcClientError, token_source::TokenSource};
+use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
+use tokio::task::{AbortHandle, JoinSet};
+pub use tunnel::{SnapTunnel, SnapTunnelDriverError, SnapTunnelReceiveError};
 
-const UDP_DATAGRAM_BUFFER_SIZE: usize = 65535;
-const HANDSHAKE_RATE_LIMIT: u64 = 20;
+/// Trait for a control plane client.
+#[async_trait::async_trait]
+pub trait SnapTunNgControlPlaneClient: Send + Sync {
+    /// Register an identity with the control plane.
+    async fn register_identity(
+        &self,
+        identity: PublicKey,
+        psk_share: Option<[u8; 32]>,
+    ) -> Result<Option<[u8; 32]>, CrpcClientError>;
 
-/// Error when sending or receiving packets on the SNAP tunnel.
-#[derive(Debug, thiserror::Error)]
-pub enum SnapTunNgSocketError {
-    /// I/O error.
-    #[error("i/o error: {0}")]
-    IoError(#[from] std::io::Error),
-    /// Receive queue closed.
-    #[error("receive queue closed")]
-    ReceiveQueueClosed,
-    /// Initial handshake timed out.
-    #[error("initial handshake timed out")]
-    InitialHandshakeTimeout,
-    /// Wireguard error.
-    #[error("wireguard error: {0:?}")]
-    WireguardError(WireGuardError),
-}
-
-struct SnapTunNgClientDriver {
-    pub tunn: Arc<Mutex<Tunn>>,
-    pub underlay_socket: Arc<tokio::net::UdpSocket>,
-    pub dataplane_address: SocketAddr,
-    pub update_timers_interval: Interval,
-    pub packet_sender: mpsc::Sender<BytesMut>,
-    pub local_sockaddr: Option<SocketAddr>,
-}
-
-fn to_bytes(wg: WgKind) -> Packet<[u8]> {
-    match wg {
-        WgKind::HandshakeInit(p) => p.into_bytes(),
-        WgKind::HandshakeResp(p) => p.into_bytes(),
-        WgKind::CookieReply(p) => p.into_bytes(),
-        WgKind::Data(p) => p.into_bytes(),
+    /// Register an identity with the control plane with retries.
+    async fn register_identity_with_retries(
+        &self,
+        identity: PublicKey,
+        psk_share: Option<[u8; 32]>,
+        backoff: ExponentialBackoff,
+        max_attempts: u32,
+    ) -> Result<Option<[u8; 32]>, CrpcClientError> {
+        let mut attempt = 0u32;
+        loop {
+            match self.register_identity(identity, psk_share).await {
+                Ok(psk_share) => return Ok(psk_share),
+                Err(e) => {
+                    if attempt == max_attempts - 1 {
+                        return Err(e);
+                    }
+                    attempt += 1;
+                    tokio::time::sleep(backoff.duration(attempt)).await;
+                }
+            }
+        }
     }
 }
 
-impl SnapTunNgClientDriver {
-    fn new(
-        tunn: Arc<Mutex<Tunn>>,
-        underlay_socket: Arc<tokio::net::UdpSocket>,
-        dataplane_address: SocketAddr,
-        packet_sender: mpsc::Sender<BytesMut>,
-    ) -> Self {
-        let update_timers_interval = tokio::time::interval_at(
-            tokio::time::Instant::now() + Duration::from_millis(250),
-            Duration::from_millis(250),
-        );
+/// Struct to hold information about a snap-tun control plane
+/// and the number of tunnels connected to it.
+struct SnapTunNgControlPlane {
+    address: url::Url,
+    client: Arc<dyn SnapTunNgControlPlaneClient>,
+    tunnel_count: u64,
+}
+
+impl Clone for SnapTunNgControlPlane {
+    fn clone(&self) -> Self {
         Self {
-            tunn,
-            underlay_socket,
-            dataplane_address,
-            update_timers_interval,
-            packet_sender,
-            local_sockaddr: None,
+            address: self.address.clone(),
+            client: self.client.clone(),
+            tunnel_count: self.tunnel_count,
         }
     }
+}
 
-    #[instrument(name = "st-client", skip(self), fields(socket_addr= ?self.local_sockaddr))]
-    async fn initial_connection(&mut self) -> Result<SocketAddr, SnapTunNgSocketError> {
-        let handshake_init = self.tunn.lock().unwrap().format_handshake_initiation(false);
-        if let Some(wg_init) = handshake_init
-            && let Err(e) = self
-                .underlay_socket
-                .send_to(
-                    to_bytes(WgKind::HandshakeInit(wg_init)).as_bytes(),
-                    self.dataplane_address,
-                )
-                .await
-        {
-            return Err(SnapTunNgSocketError::IoError(e));
-        }
-        // Drive the tunnel until any error occurs or the handshake is completed.
-        loop {
-            self.drive_once().await?;
-            if let Some(sockaddr) = self.tunn.lock().unwrap().get_initiator_remote_sockaddr() {
-                self.local_sockaddr = Some(sockaddr);
-                tracing::debug!(socket_addr=?sockaddr, "handshake completed, socket address assigned");
-                return Ok(sockaddr);
-            }
-        }
+struct SnapTunNgEndpointState {
+    control_planes: Arc<Mutex<BTreeMap<url::Url, SnapTunNgControlPlane>>>,
+    pub static_private: x25519::StaticSecret,
+    pub static_public: x25519::PublicKey,
+    pub backoff: ExponentialBackoff,
+    pub max_attempts: u32,
+}
+
+/// Guard that decrements the tunnel count when dropped.
+/// When the tunnel count reaches 0, the control plane is removed from the map
+/// of managed control planes.
+pub(super) struct TunnelGuard {
+    endpoint_state: Arc<SnapTunNgEndpointState>,
+    control_plane: url::Url,
+}
+
+impl Drop for TunnelGuard {
+    fn drop(&mut self) {
+        self.endpoint_state
+            .remove_tunnel(self.control_plane.clone());
     }
+}
 
-    #[instrument(name = "st-client", skip(self), fields(socket_addr= ?self.local_sockaddr))]
-    async fn main_loop(mut self) {
+impl SnapTunNgEndpointState {
+    /// Task to register the endpoints identity with all control planes
+    async fn identity_registration_loop(&self, token_source: Arc<dyn TokenSource>) {
+        let mut watch = token_source.watch();
         loop {
-            let result = self.drive_once().await;
-            if let Err(ref e) = result {
-                tracing::error!(err=?e, "error driving tunnel");
+            // register the identity with all managed control planes.
+            let control_planes = self
+                .control_planes
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut set = JoinSet::new();
+            for control_plane in control_planes {
+                let static_public = self.static_public;
+                let backoff = self.backoff;
+                let max_attempts = self.max_attempts;
+                set.spawn(async move {
+                    if let Err(e) = control_plane.client.register_identity_with_retries(static_public, None, backoff, max_attempts).await {
+                        tracing::error!(cp_address=%control_plane.address, err=?e, "error registering identity with control plane");
+                    }
+                });
             }
-            if let Err(SnapTunNgSocketError::ReceiveQueueClosed) = result {
-                tracing::info!("receive queue closed, snap tunnel driver shutting down");
+            set.join_all().await;
+            if watch.changed().await.is_err() {
+                tracing::info!(
+                    "token source watch channel closed, stopping identity registration loop"
+                );
                 return;
             }
         }
     }
 
-    async fn drive_once(&mut self) -> Result<(), SnapTunNgSocketError> {
-        let mut buf = BytesMut::zeroed(UDP_DATAGRAM_BUFFER_SIZE);
-        select! {
-            _ = self.update_timers_interval.tick() => {
-                let p = match self.tunn.lock().unwrap().update_timers() {
-                    Ok(Some(wg)) => { Some(wg) },
-                    Ok(None) => None,
-                    Err(WireGuardError::ConnectionExpired) => {
-                        return Err(SnapTunNgSocketError::InitialHandshakeTimeout);
-                    }
-                    Err(e) => {
-                        tracing::error!(err=?e, "error updating timers on tunnel");
-                        None
-                    }
-                };
-                if let Some(wg) = p && let Err(e) = self.underlay_socket.send_to(to_bytes(wg).as_bytes(), self.dataplane_address).await {
-                    return Err(SnapTunNgSocketError::IoError(e));
+    async fn add_tunnel(
+        self: Arc<Self>,
+        address: url::Url,
+        client: Arc<dyn SnapTunNgControlPlaneClient>,
+    ) -> Result<TunnelGuard, CrpcClientError> {
+        let new = {
+            let mut control_planes = self.control_planes.lock().unwrap();
+            match control_planes.entry(address.clone()) {
+                Occupied(mut entry) => {
+                    entry.get_mut().tunnel_count += 1;
+                    false
                 }
-            },
-            recv = self.underlay_socket.recv_from(&mut buf) => {
-                let (n, sender_addr) = match recv {
-                    Ok((n, sender_addr)) => (n, sender_addr),
-                    Err(e) => {
-                        return Err(SnapTunNgSocketError::IoError(e));
-                    }
-                };
-                if sender_addr != self.dataplane_address {
-                    // Ignore packets that are not from the dataplane address.
-                    return Ok(());
-                }
-                buf.truncate(n);
-                let packet: Packet<[u8]> = Packet::from_bytes(buf);
-                let wg = packet.try_into_wg().expect("this needs to be handled");
-                // Process the packet and release the lock before accessing it again
-                let result = self.tunn.lock().unwrap().handle_incoming_packet(wg);
-                let ps = match result {
-                    TunnResult::Done => None,
-                    TunnResult::Err(e) => {
-                        return Err(SnapTunNgSocketError::WireguardError(e));
-                    }
-                    TunnResult::WriteToNetwork(p) => {
-                        // Send all queued packets to the network.
-                        let queued_packets = self.tunn.lock().unwrap().get_queued_packets().collect::<Vec<_>>();
-                        let packets = std::iter::once(p).chain(queued_packets.into_iter());
-                        Some(packets)
-
-                    }
-                    TunnResult::WriteToTunnel(mut p) => {
-                        let buf = p.buf_mut().to_owned();
-
-                        // Ignore empty packets, they are keepalive packets.
-                        if !buf.is_empty() {
-                            match self.packet_sender.try_send(buf) {
-                                Ok(()) => {},
-                                Err(TrySendError::Full(_)) => {
-                                    tracing::error!("receive channel is full, dropping packet");
-                                }
-                                Err(_) => {
-                                    // The channel is closed. Stop the task.
-                                    return Err(SnapTunNgSocketError::ReceiveQueueClosed);
-                                }
-                            }
-                        }
-                        None
-                    }
-                };
-                if let Some(packets) = ps {
-                    for p in packets {
-                        if let Err(e) = self.underlay_socket.send_to(to_bytes(p).as_bytes(), self.dataplane_address).await {
-                            return Err(SnapTunNgSocketError::IoError(e));
-                        }
-                    }
+                Vacant(entry) => {
+                    entry.insert(SnapTunNgControlPlane {
+                        address: address.clone(),
+                        client: client.clone(),
+                        tunnel_count: 1,
+                    });
+                    true
                 }
             }
+        };
+        if new {
+            let static_public = self.static_public;
+            let backoff = self.backoff;
+            let max_attempts = self.max_attempts / 2;
+            client
+                .register_identity_with_retries(static_public, None, backoff, max_attempts)
+                .await?;
         }
-        Ok(())
-    }
-}
-
-/// A SNAP tun ng socket.
-pub struct SnapTunNgSocket {
-    tunn: Arc<Mutex<Tunn>>,
-    underlay_socket: Arc<tokio::net::UdpSocket>,
-    dataplane_address: SocketAddr,
-    local_sockaddr: SocketAddr,
-    receive_queue: tokio::sync::Mutex<mpsc::Receiver<BytesMut>>,
-    /// Tasks that drives the SNAP tunnel.
-    /// Cancelled when the socket is dropped.
-    driver_task: JoinHandle<()>,
-}
-
-impl Drop for SnapTunNgSocket {
-    fn drop(&mut self) {
-        self.driver_task.abort();
-    }
-}
-
-impl SnapTunNgSocket {
-    /// Creates a new SNAP tunnel and waits for the handshake to complete.
-    ///
-    /// # Arguments
-    ///
-    /// * `static_private` - The client's static private key
-    /// * `peer_public` - The server's static public key (needed for handshake)
-    /// * `rate_limiter` - Rate limiter for the tunnel
-    /// * `underlay_socket` - UDP socket for sending/receiving packets
-    /// * `dataplane_address` - Address of the remote server
-    /// * `receive_queue_capacity` - Capacity of the receive queue
-    pub async fn new(
-        static_private: x25519::StaticSecret,
-        peer_public: x25519::PublicKey,
-        underlay_socket: Arc<tokio::net::UdpSocket>,
-        dataplane_address: SocketAddr,
-        receive_queue_capacity: usize,
-    ) -> Result<Self, SnapTunNgSocketError> {
-        let local_public = x25519::PublicKey::from(&static_private);
-        let tunn = Arc::new(Mutex::new(Tunn::new(
-            static_private,
-            peer_public,
-            None,
-            None,
-            0,
-            Arc::new(RateLimiter::new(&local_public, HANDSHAKE_RATE_LIMIT)),
-            dataplane_address,
-        )));
-        let (packet_sender, packet_receiver) = mpsc::channel(receive_queue_capacity);
-        let mut driver = SnapTunNgClientDriver::new(
-            tunn.clone(),
-            underlay_socket.clone(),
-            dataplane_address,
-            packet_sender,
-        );
-        let socket_addr = driver.initial_connection().await?;
-        Ok(Self {
-            tunn,
-            underlay_socket,
-            dataplane_address,
-            local_sockaddr: socket_addr,
-            // TODO(uniquefine): This should be refactored to use a more efficient receive queue.
-            // https://github.com/Anapaya/scion/issues/27487
-            receive_queue: tokio::sync::Mutex::new(packet_receiver),
-            driver_task: tokio::spawn(driver.main_loop()),
+        Ok(TunnelGuard {
+            endpoint_state: self.clone(),
+            control_plane: address,
         })
     }
 
-    /// Send a packet to the remote server.
-    #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= payload.len()))]
-    pub async fn send(&self, payload: BytesMut) -> io::Result<()> {
-        let packet: Packet<[u8]> = Packet::from_bytes(payload);
-        let encapsulated_packet = self.tunn.lock().unwrap().handle_outgoing_packet(packet);
-        match encapsulated_packet {
-            Some(wg) => {
-                let bytes = match wg {
-                    WgKind::HandshakeInit(p) => p.into_bytes(),
-                    WgKind::HandshakeResp(p) => p.into_bytes(),
-                    WgKind::CookieReply(p) => p.into_bytes(),
-                    WgKind::Data(p) => p.into_bytes(),
-                };
-                tracing::trace!(dataplane_address=?self.dataplane_address, "sending packet");
-                self.underlay_socket
-                    .send_to(bytes.as_bytes(), self.dataplane_address)
-                    .await?;
-                Ok(())
-            }
-            None => {
-                // None is returned if a handshake is ongoing but not yet complete.
-                // In this case the packet is queued and will be sent when the handshake is
-                // complete.
-                tracing::trace!("handshake ongoing, queueing packet");
-                Ok(())
+    fn remove_tunnel(&self, address: url::Url) {
+        let mut control_planes = self.control_planes.lock().unwrap();
+        if let Occupied(mut entry) = control_planes.entry(address) {
+            entry.get_mut().tunnel_count -= 1;
+            if entry.get().tunnel_count == 0 {
+                entry.remove();
             }
         }
     }
+}
 
-    /// Try to send a packet to the remote server. Returns error of try_send_to.
-    #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= payload.len()))]
-    pub fn try_send(&self, payload: BytesMut) -> io::Result<()> {
-        let packet: Packet<[u8]> = Packet::from_bytes(payload);
-        match self.tunn.lock().unwrap().handle_outgoing_packet(packet) {
-            Some(wg) => {
-                let bytes = match wg {
-                    WgKind::HandshakeInit(p) => p.into_bytes(),
-                    WgKind::HandshakeResp(p) => p.into_bytes(),
-                    WgKind::CookieReply(p) => p.into_bytes(),
-                    WgKind::Data(p) => p.into_bytes(),
-                };
-                tracing::trace!(dataplane_address=?self.dataplane_address, "trying to send packet");
-                self.underlay_socket
-                    .try_send_to(bytes.as_bytes(), self.dataplane_address)?;
-                Ok(())
-            }
-            None => {
-                // None is returned if a handshake is ongoing but not yet complete.
-                // In this case the packet is queued and will be sent when the handshake is
-                // complete.
-                Ok(())
-            }
+/// Snap tunnel endpoint that allows creating new snap tun connections.
+/// It holds one static identity and manages the registration of this identity with all connected
+/// control planes.
+pub struct SnapTunNgEndpoint {
+    state: Arc<SnapTunNgEndpointState>,
+    identity_registration_abort_handle: AbortHandle,
+}
+
+impl Drop for SnapTunNgEndpoint {
+    fn drop(&mut self) {
+        self.identity_registration_abort_handle.abort();
+    }
+}
+
+/// Error when connecting to a SNAP tunnel.
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectSnapTunNgSocketError {
+    /// Error when connecting to the snaptun control plane to register the identity.
+    #[error("error registering identity with control plane: {0}")]
+    SnapTunNgControlPlaneClientError(#[from] CrpcClientError),
+    /// Error when creating the SNAP tunnel connection.
+    #[error("error connecting snap tunnel: {0}")]
+    SnapTunNgConnectionError(#[from] SnapTunnelDriverError),
+}
+
+impl SnapTunNgEndpoint {
+    /// Creates a new SNAP tunnel socket manager.
+    pub fn new(token_source: Arc<dyn TokenSource>, static_private: x25519::StaticSecret) -> Self {
+        let static_public = x25519::PublicKey::from(&static_private);
+        let state = Arc::new(SnapTunNgEndpointState {
+            control_planes: Arc::new(Mutex::new(BTreeMap::new())),
+            static_private,
+            static_public,
+            backoff: ExponentialBackoff::new_from_config(BackoffConfig {
+                minimum_delay_secs: 1.0,
+                maximum_delay_secs: 20.0,
+                factor: 1.2,
+                jitter_secs: 0.1,
+            }),
+            max_attempts: 10,
+        });
+        let state_clone = state.clone();
+        let abort_handle =
+            tokio::spawn(async move { state_clone.identity_registration_loop(token_source).await })
+                .abort_handle();
+        Self {
+            state,
+            identity_registration_abort_handle: abort_handle,
         }
     }
 
-    /// Receive a packet from the remote server.
-    pub async fn recv(&self) -> Result<Bytes, SnapTunNgSocketError> {
-        match self.receive_queue.lock().await.recv().await {
-            Some(packet) => Ok(packet.into()),
-            None => Err(SnapTunNgSocketError::ReceiveQueueClosed),
-        }
-    }
-
-    /// Poll for a packet from the remote server.
-    pub fn poll_recv(
+    /// Connects a new SNAP tunnel. If the endpoints static identity is not already registered with
+    /// the selected snap-tun control plane, it is registered before this method returns.
+    pub async fn connect_tunnel(
         &self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<Bytes, SnapTunNgSocketError>> {
-        let mut receiver = ready!(pin::pin!(self.receive_queue.lock()).poll(cx));
-        match receiver.poll_recv(cx) {
-            std::task::Poll::Ready(Some(packet)) => std::task::Poll::Ready(Ok(packet.into())),
-            std::task::Poll::Ready(None) => {
-                tracing::trace!("receive queue closed, returning error");
-                std::task::Poll::Ready(Err(SnapTunNgSocketError::ReceiveQueueClosed))
-            }
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-
-    /// Get the local socket address. Assigned by the remote server.
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_sockaddr
-    }
-
-    /// Check if the socket is writable.
-    pub async fn writable(&self) -> io::Result<()> {
-        self.underlay_socket.writable().await
+        peer_public: x25519::PublicKey,
+        dataplane_address: SocketAddr,
+        control_plane: url::Url,
+        control_plane_client: Arc<dyn SnapTunNgControlPlaneClient>,
+        underlay_socket: Arc<tokio::net::UdpSocket>,
+        receive_queue_capacity: usize,
+    ) -> Result<SnapTunnel, ConnectSnapTunNgSocketError> {
+        let guard = self
+            .state
+            .clone()
+            .add_tunnel(control_plane, control_plane_client)
+            .await?;
+        Ok(SnapTunnel::new(
+            guard,
+            self.state.static_private.clone(),
+            peer_public,
+            underlay_socket,
+            dataplane_address,
+            receive_queue_capacity,
+        )
+        .await?)
     }
 }

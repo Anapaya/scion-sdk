@@ -17,7 +17,7 @@ use std::{net, sync::Arc};
 
 use scion_proto::address::{Isd, IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
-use scion_sdk_utils::backoff::ExponentialBackoff;
+use snap_tun::client::SnapTunNgEndpoint;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use url::Url;
@@ -43,8 +43,6 @@ pub struct SnapSocketConfig {
     /// Source for SNAP token. If this is None, no SNAP sockets
     /// can be bound.
     pub snap_token_source: Option<Arc<dyn TokenSource>>,
-    /// Backoff for reconnecting a SNAP tunnel.
-    pub reconnect_backoff: ExponentialBackoff,
 }
 
 /// Underlay stack.
@@ -54,11 +52,7 @@ pub struct UnderlayStack {
     /// Resolver for the local IP address for UDP underlay sockets.
     local_ip_resolver: Arc<dyn LocalIpResolver>,
     snap_socket_config: SnapSocketConfig,
-    // TODO(uniquefine): This should be handled by a
-    // global identity registration component.
-    // https://github.com/Anapaya/scion/issues/27486
-    // Generate an register an identity for this socket.
-    snap_static_identity: StaticSecret,
+    snap_tunnel_manager: Option<SnapTunNgEndpoint>,
 }
 
 impl UnderlayStack {
@@ -67,14 +61,19 @@ impl UnderlayStack {
         preferred_underlay: PreferredUnderlay,
         underlay_discovery: Arc<dyn UnderlayDiscovery>,
         local_ip_resolver: Arc<dyn LocalIpResolver>,
-        snap_socket_config: SnapSocketConfig,
+        static_identity: StaticSecret,
+        default_snap_socket_config: SnapSocketConfig,
     ) -> Self {
+        let snap_tunnel_manager = default_snap_socket_config
+            .snap_token_source
+            .as_ref()
+            .map(|token_source| SnapTunNgEndpoint::new(token_source.clone(), static_identity));
         Self {
             preferred_underlay,
             underlay_discovery,
             local_ip_resolver,
-            snap_socket_config,
-            snap_static_identity: StaticSecret::random(),
+            snap_socket_config: default_snap_socket_config,
+            snap_tunnel_manager,
         }
     }
 
@@ -112,11 +111,15 @@ impl UnderlayStack {
         bind_addr: Option<scion_proto::address::SocketAddr>,
         isd_as: IsdAsn,
         cp_url: Url,
-        token_source: Option<Arc<dyn TokenSource>>,
     ) -> Result<snap::SnapUnderlaySocket, ScionSocketBindError> {
-        let token_source = token_source.ok_or(ScionSocketBindError::SnapConnectionError(
-            SnapConnectionError::SnapTokenSourceMissing,
-        ))?;
+        let (Some(token_source), Some(snap_tunnel_manager)) = (
+            self.snap_socket_config.snap_token_source.as_ref(),
+            self.snap_tunnel_manager.as_ref(),
+        ) else {
+            return Err(ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::SnapTokenSourceMissing,
+            ))?;
+        };
 
         let local_addr = match bind_addr {
             Some(addr) => {
@@ -136,8 +139,8 @@ impl UnderlayStack {
             bind_addr,
             cp_url,
             udp_socket,
-            token_source,
-            self.snap_static_identity.clone(),
+            snap_tunnel_manager,
+            token_source.clone(),
             1024,
         )
         .await?;
@@ -211,15 +214,10 @@ impl DynUnderlayStack for UnderlayStack {
                 .unwrap_or(IsdAsn::WILDCARD);
             match self.select_underlay(requested_isd_as) {
                 Some((isd_as, UnderlayInfo::Snap(cp_url))) => {
-                    Ok(Box::new(
-                        self.bind_snap_socket(
-                            bind_addr,
-                            isd_as,
-                            cp_url,
-                            self.snap_socket_config.snap_token_source.clone(),
-                        )
-                        .await?,
-                    ) as Box<dyn UnderlaySocket>)
+                    Ok(
+                        Box::new(self.bind_snap_socket(bind_addr, isd_as, cp_url).await?)
+                            as Box<dyn UnderlaySocket>,
+                    )
                 }
                 Some((isd_as, UnderlayInfo::Udp(_))) => {
                     let (bind_addr, socket) = self.bind_udp_socket(isd_as, bind_addr).await?;
@@ -258,14 +256,7 @@ impl DynUnderlayStack for UnderlayStack {
                     .unwrap_or(IsdAsn::WILDCARD),
             ) {
                 Some((isd_as, UnderlayInfo::Snap(cp_url))) => {
-                    let socket = self
-                        .bind_snap_socket(
-                            bind_addr,
-                            isd_as,
-                            cp_url,
-                            self.snap_socket_config.snap_token_source.clone(),
-                        )
-                        .await?;
+                    let socket = self.bind_snap_socket(bind_addr, isd_as, cp_url).await?;
                     let async_udp_socket = snap::SnapAsyncUdpSocket::new(socket, scmp_handlers);
                     Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
                 }

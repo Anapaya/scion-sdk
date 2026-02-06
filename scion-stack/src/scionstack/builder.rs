@@ -19,8 +19,9 @@ use endhost_api_client::client::CrpcEndhostApiClient;
 // Re-export for consumer
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_reqwest_connect_rpc::token_source::{TokenSource, static_token::StaticTokenSource};
-use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
+use scion_sdk_utils::backoff::ExponentialBackoff;
 use url::Url;
+use x25519_dalek::StaticSecret;
 
 use crate::{
     scionstack::ScionStack,
@@ -32,12 +33,6 @@ use crate::{
 };
 
 const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_secs(600);
-const DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF: BackoffConfig = BackoffConfig {
-    minimum_delay_secs: 0.5,
-    maximum_delay_secs: 10.0,
-    factor: 1.2,
-    jitter_secs: 0.1,
-};
 
 /// Builder for creating a [ScionStack].
 ///
@@ -187,11 +182,9 @@ impl ScionStackBuilder {
             preferred_underlay,
             Arc::new(underlay_discovery),
             local_ip_resolver,
+            snap.static_identity.unwrap_or_else(StaticSecret::random),
             SnapSocketConfig {
                 snap_token_source: snap.snap_token_source.or(auth_token_source),
-                reconnect_backoff: ExponentialBackoff::new_from_config(
-                    snap.tunnel_reconnect_backoff,
-                ),
             },
         );
 
@@ -260,20 +253,12 @@ pub enum PreferredUnderlay {
 }
 
 /// SNAP underlay configuration.
+#[derive(Default)]
 pub struct SnapUnderlayConfig {
     snap_token_source: Option<Arc<dyn TokenSource>>,
     snap_dp_index: usize,
-    tunnel_reconnect_backoff: BackoffConfig,
-}
-
-impl Default for SnapUnderlayConfig {
-    fn default() -> Self {
-        Self {
-            snap_token_source: None,
-            snap_dp_index: 0,
-            tunnel_reconnect_backoff: DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF,
-        }
-    }
+    /// Private key used for snap-tun connections. If unset, a random static identity is generated.
+    static_identity: Option<StaticSecret>,
 }
 
 impl SnapUnderlayConfig {
@@ -309,27 +294,10 @@ impl SnapUnderlayConfigBuilder {
         self
     }
 
-    /// Set the parameters for the exponential backoff configuration for reconnecting a SNAP tunnel.
-    ///
-    /// # Arguments
-    ///
-    /// * `minimum_delay_secs` - The minimum delay in seconds.
-    /// * `maximum_delay_secs` - The maximum delay in seconds.
-    /// * `factor` - The factor to multiply the delay by.
-    /// * `jitter_secs` - The jitter in seconds.
-    pub fn with_tunnel_reconnect_backoff(
-        mut self,
-        minimum_delay_secs: Duration,
-        maximum_delay_secs: Duration,
-        factor: f32,
-        jitter_secs: Duration,
-    ) -> Self {
-        self.0.tunnel_reconnect_backoff = BackoffConfig {
-            minimum_delay_secs: minimum_delay_secs.as_secs_f32(),
-            maximum_delay_secs: maximum_delay_secs.as_secs_f32(),
-            factor,
-            jitter_secs: jitter_secs.as_secs_f32(),
-        };
+    /// Set the static identity to use for snap-tun connections.
+    /// If unset, a random static identity is generated.
+    pub fn with_static_identity(mut self, identity: StaticSecret) -> Self {
+        self.0.static_identity = Some(identity);
         self
     }
 
