@@ -46,13 +46,21 @@ jobs:
         name: Remove unused tools to free up disk space
         run: rm -rf C:/Android/android-sdk
       - name: Cache protoc
-        id: cache-protoc
-        uses: actions/cache@v3
+        id: cache-protoc-windows
+        uses: actions/cache@v4
+        if: runner.os == 'Windows'
+        with:
+          path: ~/.protoc
+          key: ${{ runner.os }}-protoc-${{ env.PROTOC_VERSION }}
+      - name: Cache protoc
+        id: cache-protoc-linux
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
         with:
           path: ~/.protoc
           key: ${{ runner.os }}-protoc-${{ env.PROTOC_VERSION }}
       - name: Install protoc
-        if: steps.cache-protoc.outputs.cache-hit != 'true'
+        if: steps.cache-protoc-linux.outputs.cache-hit != 'true' && steps.cache-protoc-windows.outputs.cache-hit != 'true'
         run: |-
           if [ "$RUNNER_OS" = "Linux" ]; then
               PROTOC_ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
@@ -74,14 +82,14 @@ jobs:
         if: runner.os == 'Windows'
         run: echo "PROTOC=${HOME}/.protoc/bin/protoc.exe" >> $GITHUB_ENV
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
         if: runner.os == 'Linux'
+        uses: actions/cache@v4
         with:
+          key: ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
           path: |-
             ~/.rustup
             ~/.cargo
             ${{ env.workspace }}/target/
-          key: ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
           restore-keys: |-
             ${{ runner.os }}-cargo-shear-1.3.2
             ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
@@ -110,6 +118,7 @@ jobs:
             CARGO_HOME,{{ DEV_DRIVE }}/.cargo
             RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
             CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+            CARGO_BUILD_BUILD_DIR,{{ DEV_DRIVE }}/target
       - name: Check generated protobuf files are up to date
         run: cargo run -p proto-gen -- check
         if: runner.os == 'Linux'
