@@ -50,10 +50,6 @@ pub mod state;
 
 const CONTROL_PLANE_API_TIMEOUT: Duration = Duration::from_secs(30);
 
-// The control plane API rate limit is set to 5 requests per second.
-const CONTROL_PLANE_RATE_LIMIT: u64 = 20;
-const CONTROL_PLANE_RATE_LIMIT_PERIOD: Duration = Duration::from_secs(1);
-
 /// Start the SNAP control plane API server.
 pub async fn start<UD, SL, SR, IR>(
     cancellation_token: CancellationToken,
@@ -117,11 +113,6 @@ where
             }))
             .layer(info_trace_layer())
             .layer(TimeoutLayer::new(CONTROL_PLANE_API_TIMEOUT))
-            .layer(tower::buffer::BufferLayer::new(1024))
-            .layer(tower::limit::RateLimitLayer::new(
-                CONTROL_PLANE_RATE_LIMIT,
-                CONTROL_PLANE_RATE_LIMIT_PERIOD,
-            ))
             .layer(PrometheusMiddlewareLayer::new(metrics))
             .layer(AuthMiddlewareLayer::new(snap_token_decoding_key)),
     );
