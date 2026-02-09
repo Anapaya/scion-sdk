@@ -15,7 +15,7 @@
 
 use scion_proto::path::{Segments, convert::segment::InvalidSegmentError};
 
-use crate::endhost::api_service::v1::{
+use crate::v1::{
     ListSegmentsResponse, ListUnderlaysResponse, Router, Snap, SnapUnderlay, UdpUnderlay,
 };
 

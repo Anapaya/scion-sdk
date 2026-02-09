@@ -18,7 +18,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use axum::{BoxError, Router, error_handling::HandleErrorLayer};
 use endhost_api::routes::nest_endhost_api;
 use endhost_api_models::{
-    PathDiscovery,
+    SegmentsDiscovery,
     underlays::{ScionRouter, Underlays},
 };
 use http::StatusCode;
@@ -63,7 +63,7 @@ pub async fn start<UD, SL, SR, IR>(
 ) -> std::io::Result<()>
 where
     UD: UnderlayDiscovery + 'static + Send + Sync,
-    SL: PathDiscovery + 'static + Send + Sync,
+    SL: SegmentsDiscovery + 'static + Send + Sync,
     SR: SnapDataPlaneResolver + 'static + Send + Sync,
     IR: SnapTunIdentityRegistry + 'static + Send + Sync,
 {

@@ -1,8 +1,21 @@
 syntax = "proto3";
 
-package endhost.api_service.v1;
+package scion.endhost.v1;
 
 import "proto/control_plane/v1/seg.proto";
+
+/// Service for path segments.
+service SegmentsService {
+  /// List available path segments from source to destination ISD-AS.
+  rpc ListSegments(ListSegmentsRequest) returns (ListSegmentsResponse);
+}
+
+/// Service for path segments.
+/// Note: The PathService is deprecated in favor of the SegmentsService.
+service PathService {
+  /// List available path segments from source to destination ISD-AS.
+  rpc ListPaths(ListSegmentsRequest) returns (ListSegmentsResponse);
+}
 
 // List segments request.
 message ListSegmentsRequest {

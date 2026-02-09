@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use axum::{extract::State, response::IntoResponse, routing::post};
-use endhost_api_models::{PathDiscovery, UnderlayDiscovery};
-use endhost_api_protobuf::endhost::api_service::v1::{
+use endhost_api_models::{SegmentsDiscovery, UnderlayDiscovery};
+use endhost_api_protobuf::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
 use scion_proto::{address::IsdAsn, path::SegmentsError};
@@ -28,19 +28,27 @@ pub const ENDHOST_API_V1: &str = "scion.endhost.v1";
 
 /// Underlay service.
 pub const UNDERLAY_SERVICE: &str = "UnderlayService";
+/// Segments service.
+pub const SEGMENTS_SERVICE: &str = "SegmentsService";
+
 /// Path service.
+#[deprecated(note = "Use SEGMENTS_SERVICE instead")]
 pub const PATH_SERVICE: &str = "PathService";
 
 /// List underlays endpoint.
 pub const LIST_UNDERLAYS: &str = "/ListUnderlays";
+/// List segments endpoint.
+pub const LIST_SEGMENTS: &str = "/ListSegments";
+
 /// List paths endpoint.
+#[deprecated(note = "Use LIST_SEGMENTS instead")]
 pub const LIST_PATHS: &str = "/ListPaths";
 
 /// Nests the endhost API routes into the provided `base_router`.
 pub fn nest_endhost_api(
     base_router: axum::Router,
     underlay_service: Arc<dyn UnderlayDiscovery>,
-    path_service: Arc<dyn PathDiscovery>,
+    path_service: Arc<dyn SegmentsDiscovery>,
 ) -> axum::Router {
     let underlay_router = axum::Router::new()
         .route(LIST_UNDERLAYS, post(list_underlays_handler))
@@ -50,10 +58,21 @@ pub fn nest_endhost_api(
         underlay_router,
     );
 
+    // XXX(bunert): deprecated path service
+    #[allow(deprecated)]
     let path_router = axum::Router::new()
         .route(LIST_PATHS, post(list_segments_handler))
+        .with_state(path_service.clone());
+    #[allow(deprecated)]
+    let base_router = base_router.nest(&service_path(ENDHOST_API_V1, PATH_SERVICE), path_router);
+
+    let segment_router = axum::Router::new()
+        .route(LIST_SEGMENTS, post(list_segments_handler))
         .with_state(path_service);
-    base_router.nest(&service_path(ENDHOST_API_V1, PATH_SERVICE), path_router)
+    base_router.nest(
+        &service_path(ENDHOST_API_V1, SEGMENTS_SERVICE),
+        segment_router,
+    )
 }
 
 async fn list_underlays_handler(
@@ -68,7 +87,7 @@ async fn list_underlays_handler(
 }
 
 async fn list_segments_handler(
-    State(path_service): State<Arc<dyn PathDiscovery>>,
+    State(path_service): State<Arc<dyn SegmentsDiscovery>>,
     ConnectRpc(request): ConnectRpc<ListSegmentsRequest>,
 ) -> Result<ConnectRpc<ListSegmentsResponse>, axum::response::Response> {
     let (src, dst) = (

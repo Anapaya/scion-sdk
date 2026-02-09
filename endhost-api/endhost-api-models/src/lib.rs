@@ -28,9 +28,9 @@ pub trait UnderlayDiscovery: Send + Sync {
     fn list_underlays(&self, isd_as: IsdAsn) -> Underlays;
 }
 
-/// Path discovery trait.
+/// Segments discovery trait.
 #[async_trait::async_trait]
-pub trait PathDiscovery: Send + Sync {
+pub trait SegmentsDiscovery: Send + Sync {
     /// List path segments between the given source and destination ISD-ASes.
     async fn list_segments(
         &self,

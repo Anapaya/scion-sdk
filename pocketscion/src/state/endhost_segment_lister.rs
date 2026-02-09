@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use endhost_api_models::PathDiscovery;
+use endhost_api_models::SegmentsDiscovery;
 use scion_proto::{
     address::IsdAsn,
     path::{Segments, SegmentsError, SegmentsPage},
@@ -53,7 +53,7 @@ impl StateEndhostSegmentLister {
 }
 
 #[async_trait]
-impl PathDiscovery for StateEndhostSegmentLister {
+impl SegmentsDiscovery for StateEndhostSegmentLister {
     async fn list_segments(
         &self,
         src: IsdAsn,

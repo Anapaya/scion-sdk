@@ -13,7 +13,7 @@
 // limitations under the License.
 //! Mock segment lister for testing.
 
-use endhost_api_models::PathDiscovery;
+use endhost_api_models::SegmentsDiscovery;
 use scion_proto::{
     address::IsdAsn,
     path::{Segments, SegmentsError, SegmentsPage},
@@ -47,7 +47,7 @@ impl Default for MockSegmentLister {
 }
 
 #[async_trait]
-impl PathDiscovery for MockSegmentLister {
+impl SegmentsDiscovery for MockSegmentLister {
     async fn list_segments(
         &self,
         src: IsdAsn,
