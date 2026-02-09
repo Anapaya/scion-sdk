@@ -82,25 +82,39 @@ impl SnapUnderlaySocket {
         })?;
 
         tracing::debug!(%data_plane.address, "Connecting to dataplane");
+        let snaptun_cp_addr = data_plane.snap_tun_control_address.ok_or(
+            crate::scionstack::ScionSocketBindError::Other(
+                anyhow::anyhow!(
+                    "the snap-tun control address is missing, the snap needs to be updated."
+                )
+                .into_boxed_dyn_error(),
+            ),
+        )?;
+        let mut snaptun_cp_client = CrpcSnapControlClient::new(&snaptun_cp_addr).map_err(|e| {
+            crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::ControlPlaneClientCreationError(e),
+            )
+        })?;
+        snaptun_cp_client.use_token_source(snap_token_source.clone());
 
-        let tunnel = snaptunnel_manager.connect_tunnel(
-            data_plane.snap_static_x25519.ok_or(crate::scionstack::ScionSocketBindError::Other(
-                anyhow::anyhow!(
-                    "data plane did not provide static public key, the snap needs to be updated."
-                )
-                .into_boxed_dyn_error(),
-            ))?,
-            data_plane.address,
-            data_plane.snap_tun_control_address.ok_or(crate::scionstack::ScionSocketBindError::Other(
-                anyhow::anyhow!(
-                    "data plane did not provide snap tun control address, the snap needs to be updated."
-                )
-                .into_boxed_dyn_error(),
-            ))?,
-            Arc::new(snap_cp_client),
-            Arc::new(socket),
-            receive_queue_capacity,
-        ).await.map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
+        let tunnel = snaptunnel_manager
+            .connect_tunnel(
+                data_plane
+                    .snap_static_x25519
+                    .ok_or(crate::scionstack::ScionSocketBindError::Other(
+                    anyhow::anyhow!(
+                        "the snap-tun static public key is missing, the snap needs to be updated."
+                    )
+                    .into_boxed_dyn_error(),
+                ))?,
+                data_plane.address,
+                snaptun_cp_addr,
+                Arc::new(snaptun_cp_client),
+                Arc::new(socket),
+                receive_queue_capacity,
+            )
+            .await
+            .map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
 
         let assigned_addr = tunnel.local_addr();
 
