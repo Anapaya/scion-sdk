@@ -26,7 +26,10 @@ use crate::{
         view::{ScionHeaderView, ScionPathView},
     },
     path::standard::{model::StandardPath, types::PathType},
-    types::address::{IsdAsn, ScionHostAddr, ScionHostAddrType},
+    scion::{
+        address::host_addr::{WireHostAddr, WireHostAddrType},
+        identifier::isd_asn::IsdAsn,
+    },
 };
 
 /// Represents a SCION packet header
@@ -155,8 +158,8 @@ impl CommonHeader {
         buf: &mut [u8],
         header_len_units: u8,
         path_type: PathType,
-        dst_addr_type: ScionHostAddrType,
-        src_addr_type: ScionHostAddrType,
+        dst_addr_type: WireHostAddrType,
+        src_addr_type: WireHostAddrType,
     ) -> usize {
         unsafe {
             use CommonHeaderLayout as CHL;
@@ -187,9 +190,9 @@ pub struct AddressHeader {
     /// Source ISD
     pub src_ia: IsdAsn,
     /// Destination host address
-    pub dst_host_addr: ScionHostAddr,
+    pub dst_host_addr: WireHostAddr,
     /// Source host address
-    pub src_host_addr: ScionHostAddr,
+    pub src_host_addr: WireHostAddr,
 }
 impl AddressHeader {
     /// Constructs an `AddressHeader` from a `ScionHeaderView`
@@ -203,12 +206,12 @@ impl AddressHeader {
     }
 
     /// Returns the destination address type
-    pub fn dst_addr_type(&self) -> ScionHostAddrType {
+    pub fn dst_addr_type(&self) -> WireHostAddrType {
         self.dst_host_addr.addr_type()
     }
 
     /// Returns the source address type
-    pub fn src_addr_type(&self) -> ScionHostAddrType {
+    pub fn src_addr_type(&self) -> WireHostAddrType {
         self.src_host_addr.addr_type()
     }
 }

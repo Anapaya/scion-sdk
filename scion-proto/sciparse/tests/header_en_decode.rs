@@ -340,12 +340,13 @@ fn exec_every_view_function(view: &mut ScionHeaderView) {
 /// Strategies for generating valid SCION headers
 mod valid {
     use sciparse::{
+        address::host_addr::{ServiceAddr, WireHostAddr},
         header::model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
+        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
         path::standard::{
             model::{HopField, InfoField, Segment, StandardPath},
             types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, PathType},
         },
-        types::address::{Asn, Isd, IsdAsn, ScionHostAddr},
     };
 
     use super::*;
@@ -370,9 +371,9 @@ mod valid {
         #[proptest(strategy = "asn()")]
         pub src_as: Asn,
         #[proptest(strategy = "scion_host_addr()")]
-        pub dst_addr: ScionHostAddr,
+        pub dst_addr: WireHostAddr,
         #[proptest(strategy = "scion_host_addr()")]
-        pub src_addr: ScionHostAddr,
+        pub src_addr: WireHostAddr,
 
         // Path
         #[proptest(strategy = "header_path_options()")]
@@ -505,12 +506,12 @@ mod valid {
         (0u64..=0x0000_FFFF_FFFF_FFFFu64).prop_map(Asn::new)
     }
 
-    /// Strategy for generating ScionHostAddr
-    fn scion_host_addr() -> impl Strategy<Value = ScionHostAddr> {
+    /// Strategy for generating WireHostAddr
+    fn scion_host_addr() -> impl Strategy<Value = WireHostAddr> {
         prop_oneof![
-            2 => prop::array::uniform4(prop::num::u8::ANY).prop_map(|bytes| ScionHostAddr::Ipv4(bytes.into())),
-            2 => prop::array::uniform16(prop::num::u8::ANY).prop_map(|bytes| ScionHostAddr::Ipv6(bytes.into())),
-            1 => prop::array::uniform4(prop::num::u8::ANY).prop_map(ScionHostAddr::Service),
+            2 => prop::array::uniform4(prop::num::u8::ANY).prop_map(|bytes| WireHostAddr::V4(bytes.into())),
+            2 => prop::array::uniform16(prop::num::u8::ANY).prop_map(|bytes| WireHostAddr::V6(bytes.into())),
+            1 => prop::num::u16::ANY.prop_map(|val| WireHostAddr::Svc(ServiceAddr(val))),
             1 => ((2u8..=3), vec(prop::num::u8::ANY, 4..=16))
                 .prop_map(|(id, bytes_vec)| {
                     // Take chunks of 4 bytes to keep alignment
@@ -521,7 +522,7 @@ mod valid {
                             bytes.push(b);
                         }
                     }
-                    ScionHostAddr::Unknown { id, bytes }
+                    WireHostAddr::Unknown { id, bytes }
                 }),
         ]
     }
@@ -600,13 +601,13 @@ mod valid {
 mod header_manipulation {
     use proptest::prelude::Arbitrary;
     use sciparse::{
+        address::host_addr::WireHostAddr,
         header::model::{Path, ScionPacketHeader},
         path::standard::{
             layout::StdPathMetaLayout,
             model::HopField,
             types::{HopFieldFlags, HopFieldMac, PathType},
         },
-        types::address::ScionHostAddr,
     };
 
     use super::*;
@@ -719,13 +720,13 @@ mod header_manipulation {
                         };
                     }
                     HeaderModification::InvalidSrcAddrBytes(raw_bytes) => {
-                        header.address.src_host_addr = ScionHostAddr::Unknown {
+                        header.address.src_host_addr = WireHostAddr::Unknown {
                             id: 7,
                             bytes: raw_bytes,
                         };
                     }
                     HeaderModification::InvalidDstAddrBytes(raw_bytes) => {
-                        header.address.dst_host_addr = ScionHostAddr::Unknown {
+                        header.address.dst_host_addr = WireHostAddr::Unknown {
                             id: 7,
                             bytes: raw_bytes,
                         };

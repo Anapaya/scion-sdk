@@ -34,7 +34,10 @@ use crate::{
     },
     header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
     path::standard::{types::PathType, view::StandardPathView},
-    types::address::{Asn, HostAddressSizeError, Isd, ScionHostAddr, ScionHostAddrType},
+    scion::{
+        address::host_addr::{HostAddressSizeError, WireHostAddr, WireHostAddrType},
+        identifier::{asn::Asn, isd::Isd},
+    },
 };
 
 /// A view over the SCION headers
@@ -106,7 +109,7 @@ impl ScionHeaderView {
 
     /// Returns the destination address type
     #[inline]
-    pub fn dst_addr_type(&self) -> ScionHostAddrType {
+    pub fn dst_addr_type(&self) -> WireHostAddrType {
         // SAFETY: buffer size is checked on construction
         unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::DST_ADDR_INFO_RNG) }
             .into()
@@ -114,7 +117,7 @@ impl ScionHeaderView {
 
     /// Returns the source address type
     #[inline]
-    pub fn src_addr_type(&self) -> ScionHostAddrType {
+    pub fn src_addr_type(&self) -> WireHostAddrType {
         // SAFETY: buffer size is checked on construction
         unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::SRC_ADDR_INFO_RNG) }
             .into()
@@ -187,7 +190,7 @@ impl ScionHeaderView {
     /// surpasses the actual buffer size, out-of-bounds accesses can occur on subsequent accesses to
     /// the View.
     #[inline]
-    pub unsafe fn set_dst_addr_type(&mut self, addr_type: ScionHostAddrType) {
+    pub unsafe fn set_dst_addr_type(&mut self, addr_type: WireHostAddrType) {
         let addr_info: u8 = addr_type.into();
 
         // SAFETY: buffer size is checked on construction
@@ -211,7 +214,7 @@ impl ScionHeaderView {
     /// surpasses the actual buffer size, out-of-bounds accesses can occur on subsequent accesses to
     /// the View.
     #[inline]
-    pub unsafe fn set_src_addr_type(&mut self, addr_type: ScionHostAddrType) {
+    pub unsafe fn set_src_addr_type(&mut self, addr_type: WireHostAddrType) {
         let addr_info: u8 = addr_type.into();
 
         // SAFETY: buffer size is checked on construction
@@ -282,7 +285,7 @@ impl ScionHeaderView {
     ///
     /// If the address type and length do not match, an error is returned.
     #[inline]
-    pub fn dst_host_addr(&self) -> Result<ScionHostAddr, HostAddressSizeError> {
+    pub fn dst_host_addr(&self) -> Result<WireHostAddr, HostAddressSizeError> {
         let src_len = self.src_addr_type().size();
         let dst_len = self.dst_addr_type().size();
         let range = AddressHeaderLayout::new(src_len, dst_len)
@@ -292,14 +295,14 @@ impl ScionHeaderView {
         // SAFETY: buffer size is checked on construction
         let raw = unsafe { self.0.get_unchecked(range.aligned_byte_range()) };
 
-        ScionHostAddr::from_parts(self.dst_addr_type(), raw)
+        WireHostAddr::from_parts(self.dst_addr_type(), raw)
     }
 
     /// Attempts to return the destination host address
     ///
     /// If the address type and length do not match, an error is returned.
     #[inline]
-    pub fn src_host_addr(&self) -> Result<ScionHostAddr, HostAddressSizeError> {
+    pub fn src_host_addr(&self) -> Result<WireHostAddr, HostAddressSizeError> {
         let src_len = self.src_addr_type().size();
         let dst_len = self.dst_addr_type().size();
         let range = AddressHeaderLayout::new(src_len, dst_len)
@@ -309,7 +312,7 @@ impl ScionHeaderView {
         // SAFETY: buffer size is checked on construction
         let raw = unsafe { self.0.get_unchecked(range.aligned_byte_range()) };
 
-        ScionHostAddr::from_parts(self.src_addr_type(), raw)
+        WireHostAddr::from_parts(self.src_addr_type(), raw)
     }
 }
 // Address header mut

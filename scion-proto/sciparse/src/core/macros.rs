@@ -12,17 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod debug;
-pub mod encode;
-pub mod layout;
-pub mod view;
+//! Utility macros
 
-pub(crate) mod macros;
-/// Utilities for reading unaligned values from byte buffers
-pub(crate) mod read;
-/// Utilities for writing unaligned values into byte buffers
-pub(crate) mod write;
-
-/// Test utilities
-#[cfg(test)]
-pub(crate) mod test;
+/// Creates a basic From impl,
+/// e.g.
+/// ```ignore
+/// impl_from!(Src, Dst, |v| body);
+/// // expands to
+/// impl From<Src> for Dst {
+///     fn from(v: Src) -> Self {
+///         body
+///     }
+/// }
+/// ```
+macro_rules! impl_from {
+    ($src:ty, $dst:ty, |$v:ident| $body:expr) => {
+        impl From<$src> for $dst {
+            fn from($v: $src) -> Self {
+                $body
+            }
+        }
+    };
+}
+pub(crate) use impl_from;

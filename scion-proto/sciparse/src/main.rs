@@ -19,17 +19,18 @@
 use std::net::Ipv4Addr;
 
 use sciparse::{
+    address::host_addr::WireHostAddr,
     core::{encode::WireEncode, view::View},
     header::{
         layout::ScionHeaderLayout,
         model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
         view::ScionHeaderView,
     },
+    identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
     path::standard::{
         model::{HopField, InfoField, Segment, StandardPath},
         types::{HopFieldFlags, InfoFieldFlags},
     },
-    types::address::{IsdAsn, ScionHostAddr},
 };
 
 fn main() {
@@ -41,10 +42,10 @@ fn main() {
             payload_size: 4,
         },
         address: AddressHeader {
-            dst_ia: IsdAsn::new_from_raw(2, 141),
-            src_ia: IsdAsn::new_from_raw(1, 12),
-            dst_host_addr: ScionHostAddr::Ipv4(Ipv4Addr::new(192, 168, 0, 1)),
-            src_host_addr: ScionHostAddr::Ipv4(Ipv4Addr::new(10, 0, 0, 1)),
+            dst_ia: IsdAsn::new(Isd(2), Asn(141)),
+            src_ia: IsdAsn::new(Isd(1), Asn(12)),
+            dst_host_addr: WireHostAddr::V4(Ipv4Addr::new(192, 168, 0, 1)),
+            src_host_addr: WireHostAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
         },
         path: Path::Standard(StandardPath {
             current_info_field: 0,

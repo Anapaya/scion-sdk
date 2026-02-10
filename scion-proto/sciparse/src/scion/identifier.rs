@@ -12,17 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod debug;
-pub mod encode;
-pub mod layout;
-pub mod view;
+//! Scion identifier primitives.
 
-pub(crate) mod macros;
-/// Utilities for reading unaligned values from byte buffers
-pub(crate) mod read;
-/// Utilities for writing unaligned values into byte buffers
-pub(crate) mod write;
-
-/// Test utilities
-#[cfg(test)]
-pub(crate) mod test;
+pub mod asn;
+pub mod isd;
+pub mod isd_asn;

@@ -264,7 +264,7 @@ pub struct HopField {
     /// Hop field expiration units
     ///
     /// The expiration time of a hop field is determined by multiplying the value in this field
-    /// by [`EXP_TIME_UNIT`](super::types::EXP_TIME_UNIT)
+    /// by [`EXP_TIME_UNIT`](crate::path::standard::types::EXP_TIME_UNIT)
     ///
     /// After this duration has passed since the segment creation time (found in the info
     /// field), the hop field is considered expired and may not be used for forwarding.
