@@ -156,10 +156,10 @@ impl PathFetcher for PathFetcherImpl {
 
         // If there were errors but we still have paths, we still return the paths and only log the
         // fetcher errors.
-        if !errors.is_empty() && paths.is_empty() {
-            return Err(PathFetchError::FetchSegments(
-                errors.into_iter().next().unwrap(),
-            ));
+        if let Some(err) = errors.into_iter().next()
+            && paths.is_empty()
+        {
+            return Err(PathFetchError::FetchSegments(err));
         }
 
         Ok(paths)

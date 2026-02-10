@@ -15,9 +15,13 @@
 
 use std::{net, sync::Arc};
 
-use scion_proto::address::{Isd, IsdAsn, ScionAddr, SocketAddr};
+use ana_gotatun::packet::{Packet, PacketBufPool};
+use scion_proto::{
+    address::{Isd, IsdAsn, ScionAddr, SocketAddr},
+    wire_encoding::WireEncodeVec,
+};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
-use snap_tun::client::SnapTunNgEndpoint;
+use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunNgEndpoint};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use url::Url;
@@ -53,6 +57,7 @@ pub struct UnderlayStack {
     local_ip_resolver: Arc<dyn LocalIpResolver>,
     snap_socket_config: SnapSocketConfig,
     snap_tunnel_manager: Option<SnapTunNgEndpoint>,
+    pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
 }
 
 impl UnderlayStack {
@@ -74,6 +79,7 @@ impl UnderlayStack {
             local_ip_resolver,
             snap_socket_config: default_snap_socket_config,
             snap_tunnel_manager,
+            pool: PacketBufPool::new(64),
         }
     }
 
@@ -142,6 +148,7 @@ impl UnderlayStack {
             snap_tunnel_manager,
             token_source.clone(),
             1024,
+            self.pool.clone(),
         )
         .await?;
         Ok(socket)
@@ -363,4 +370,32 @@ fn bind_udp_underlay_socket(
 
     tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(socket))
         .map_err(|e| ScionSocketBindError::Other(Box::new(e)))
+}
+
+// XXX(dsd): This function exists to avoid unnecessary vec-allocations when
+// dealing with the scion-proto API.
+//
+// # Arguments
+// * `packet`: the packet to be serialized
+// * `temp_buf`: a temporary buffer that is used for internal packet assembly
+// * `target_buf`: the buffer that will contain the final result
+#[inline]
+pub(crate) fn wire_encode<W, const N: usize>(
+    packet: &W,
+    temp_buf: &mut Packet,
+    target_buf: &mut Packet,
+) -> Result<(), W::Error>
+where
+    W: WireEncodeVec<N>,
+{
+    temp_buf.truncate(0);
+    let parts = packet.encode_with(temp_buf.buf_mut())?;
+
+    let mut n = 0;
+    parts.iter().for_each(|x| {
+        target_buf.as_mut()[n..(n + x.len())].copy_from_slice(x);
+        n += x.len();
+    });
+    target_buf.truncate(n);
+    Ok(())
 }

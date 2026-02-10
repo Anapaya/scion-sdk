@@ -325,7 +325,9 @@ impl UnderlaySocket for UdpUnderlaySocket {
 
                 // Drop packets that are not addressed to this socket.
                 let dst = packet.headers.address.destination();
-                if dst.is_none() || dst.unwrap() != self.bind_addr.scion_address() {
+                if let Some(dst) = dst
+                    && dst != self.bind_addr.scion_address()
+                {
                     tracing::debug!(destination = ?dst, assigned_addr = %self.bind_addr.scion_address(), "Packet destination does not match assigned address, skipping");
                     continue;
                 }

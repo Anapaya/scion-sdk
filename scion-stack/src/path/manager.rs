@@ -327,7 +327,11 @@ impl<F: PathFetcher> MultiPathManager<F> {
                     dst,
                     self.weak_ref(),
                     self.0.config,
-                    self.0.issue_manager.lock().unwrap().issues_subscriber(),
+                    self.0
+                        .issue_manager
+                        .lock()
+                        .expect("lock poisoned")
+                        .issues_subscriber(),
                 );
 
                 vacant.insert_entry(managed.manage())
@@ -366,7 +370,7 @@ impl<F: PathFetcher> MultiPathManager<F> {
 
         // Push to issues cache
         {
-            let mut issues_guard = self.0.issue_manager.lock().unwrap();
+            let mut issues_guard = self.0.issue_manager.lock().expect("lock poisoned");
             issues_guard.add_issue(issue, issue_marker.clone());
         }
     }

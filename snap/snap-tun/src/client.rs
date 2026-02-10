@@ -24,7 +24,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use ana_gotatun::x25519::{self, PublicKey};
+use ana_gotatun::{
+    packet::PacketBufPool,
+    x25519::{self, PublicKey},
+};
+
+/// Size of the packet buffer pool used for SNAP tunnels.
+/// This represents the maximum packet size that can be handled.
+pub const PACKET_BUF_POOL_SIZE: usize = 65535;
 use scion_sdk_reqwest_connect_rpc::{client::CrpcClientError, token_source::TokenSource};
 use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
 use tokio::task::{AbortHandle, JoinSet};
@@ -114,7 +121,7 @@ impl SnapTunNgEndpointState {
             let control_planes = self
                 .control_planes
                 .lock()
-                .unwrap()
+                .expect("lock poisoned")
                 .values()
                 .cloned()
                 .collect::<Vec<_>>();
@@ -145,7 +152,7 @@ impl SnapTunNgEndpointState {
         client: Arc<dyn SnapTunNgControlPlaneClient>,
     ) -> Result<TunnelGuard, CrpcClientError> {
         let new = {
-            let mut control_planes = self.control_planes.lock().unwrap();
+            let mut control_planes = self.control_planes.lock().expect("lock poisoned");
             match control_planes.entry(address.clone()) {
                 Occupied(mut entry) => {
                     entry.get_mut().tunnel_count += 1;
@@ -247,6 +254,7 @@ impl SnapTunNgEndpoint {
         control_plane_client: Arc<dyn SnapTunNgControlPlaneClient>,
         underlay_socket: Arc<tokio::net::UdpSocket>,
         receive_queue_capacity: usize,
+        pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     ) -> Result<SnapTunnel, ConnectSnapTunNgSocketError> {
         let guard = self
             .state
@@ -260,6 +268,7 @@ impl SnapTunNgEndpoint {
             underlay_socket,
             dataplane_address,
             receive_queue_capacity,
+            pool,
         )
         .await?)
     }

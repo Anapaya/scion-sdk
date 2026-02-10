@@ -19,26 +19,30 @@ use std::{
     task::{Context, Poll, ready},
 };
 
+use ana_gotatun::packet::PacketBufPool;
 use anyhow::Context as _;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use scion_proto::{
     address::SocketAddr,
     packet::{ByEndpoint, ScionPacketRaw, ScionPacketUdp},
     path::Path,
     scmp::SCMP_PROTOCOL_NUMBER,
-    wire_encoding::{WireDecode as _, WireEncodeVec as _},
+    wire_encoding::WireDecode as _,
 };
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
-use snap_tun::client::{SnapTunNgEndpoint, SnapTunnel};
+use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunNgEndpoint, SnapTunnel};
 use tokio::{net::UdpSocket, task::JoinHandle};
 use url::Url;
 
-use crate::scionstack::{
-    AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError,
-    UnderlaySocket,
-    scmp_handler::ScmpHandler,
-    udp_polling::{UdpPollHelper, UdpPoller},
+use crate::{
+    scionstack::{
+        AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError,
+        UnderlaySocket,
+        scmp_handler::ScmpHandler,
+        udp_polling::{UdpPollHelper, UdpPoller},
+    },
+    underlays::wire_encode,
 };
 
 /// A handle to the background task that runs the SNAP underlay socket task.
@@ -56,6 +60,7 @@ pub(crate) struct SnapUnderlaySocket {
     pub inner: Arc<SnapTunnel>,
     local_addr: SocketAddr,
     _task: Arc<SnapUnderlaySocketTaskHandle>,
+    pub(crate) pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
 }
 
 impl SnapUnderlaySocket {
@@ -66,6 +71,7 @@ impl SnapUnderlaySocket {
         snaptunnel_manager: &'_ SnapTunNgEndpoint,
         snap_token_source: Arc<dyn TokenSource>,
         receive_queue_capacity: usize,
+        pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     ) -> Result<Self, crate::scionstack::ScionSocketBindError> {
         // Establish the initial tunnel.
         let mut snap_cp_client = CrpcSnapControlClient::new(&snap_cp).map_err(|e| {
@@ -97,24 +103,20 @@ impl SnapUnderlaySocket {
         })?;
         snaptun_cp_client.use_token_source(snap_token_source.clone());
 
-        let tunnel = snaptunnel_manager
-            .connect_tunnel(
-                data_plane
-                    .snap_static_x25519
-                    .ok_or(crate::scionstack::ScionSocketBindError::Other(
-                    anyhow::anyhow!(
-                        "the snap-tun static public key is missing, the snap needs to be updated."
-                    )
-                    .into_boxed_dyn_error(),
-                ))?,
-                data_plane.address,
-                snaptun_cp_addr,
-                Arc::new(snaptun_cp_client),
-                Arc::new(socket),
-                receive_queue_capacity,
-            )
-            .await
-            .map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
+        let tunnel = snaptunnel_manager.connect_tunnel(
+            data_plane.snap_static_x25519.ok_or(crate::scionstack::ScionSocketBindError::Other(
+                anyhow::anyhow!(
+                    "data plane did not provide static public key, the snap needs to be updated."
+                )
+                .into_boxed_dyn_error(),
+            ))?,
+            data_plane.address,
+            snaptun_cp_addr,
+            Arc::new(snaptun_cp_client),
+            Arc::new(socket),
+            receive_queue_capacity,
+            pool.clone(),
+        ).await.map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
 
         let assigned_addr = tunnel.local_addr();
 
@@ -138,18 +140,18 @@ impl SnapUnderlaySocket {
             inner: Arc::new(tunnel),
             local_addr: SocketAddr::from_std(bind_addr.isd_asn(), assigned_addr),
             _task: Arc::new(SnapUnderlaySocketTaskHandle(tokio::spawn(async {}))),
+            pool,
         })
     }
 }
 
 impl UnderlaySocket for SnapUnderlaySocket {
     fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError> {
-        let mut bytes_mut = BytesMut::with_capacity(packet.required_capacity());
-        let parts = packet.encode_to_bytes_vec();
-        bytes_mut.extend_from_slice(&parts[0]);
-        bytes_mut.extend_from_slice(&parts[1]);
+        let (mut tmp, mut buf) = (self.pool.get(), self.pool.get());
+        wire_encode(&packet, &mut tmp, &mut buf)
+            .map_err(|_| ScionSocketSendError::InvalidPacket("buffer too small".into()))?;
         self.inner
-            .try_send(bytes_mut)
+            .try_send(buf)
             .map_err(ScionSocketSendError::IoError)
     }
 
@@ -157,13 +159,17 @@ impl UnderlaySocket for SnapUnderlaySocket {
         &'a self,
         packet: scion_proto::packet::ScionPacketRaw,
     ) -> futures::future::BoxFuture<'a, Result<(), crate::scionstack::ScionSocketSendError>> {
-        let mut bytes_mut = BytesMut::with_capacity(packet.required_capacity());
-        let parts = packet.encode_to_bytes_vec();
-        bytes_mut.extend_from_slice(&parts[0]);
-        bytes_mut.extend_from_slice(&parts[1]);
+        let (mut tmp, mut buf) = (self.pool.get(), self.pool.get());
+        if wire_encode(&packet, &mut tmp, &mut buf).is_err() {
+            return Box::pin(async move {
+                Err(ScionSocketSendError::InvalidPacket(
+                    "buffer too small".into(),
+                ))
+            });
+        }
         Box::pin(async move {
             self.inner
-                .send(bytes_mut)
+                .send(buf)
                 .await
                 .map_err(ScionSocketSendError::IoError)
         })
@@ -195,7 +201,9 @@ impl UnderlaySocket for SnapUnderlaySocket {
                 };
 
                 let dst = packet.headers.address.destination();
-                if dst.is_none() || dst.unwrap() != self.local_addr.scion_address() {
+                if let Some(dst) = dst
+                    && dst != self.local_addr.scion_address()
+                {
                     tracing::debug!(destination = ?dst, assigned_addr = %self.local_addr.scion_address(), "Packet destination does not match assigned address, skipping");
                     continue;
                 }
@@ -232,11 +240,12 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
     }
 
     fn try_send(&self, raw_packet: ScionPacketRaw) -> Result<(), std::io::Error> {
-        let mut bytes_mut = BytesMut::with_capacity(raw_packet.required_capacity());
-        let parts = raw_packet.encode_to_bytes_vec();
-        bytes_mut.extend_from_slice(&parts[0]);
-        bytes_mut.extend_from_slice(&parts[1]);
-        self.socket.inner.try_send(bytes_mut)?;
+        let (mut tmp, mut buf) = (self.socket.pool.get(), self.socket.pool.get());
+        if wire_encode(&raw_packet, &mut tmp, &mut buf).is_err() {
+            // This should never happen.
+            return Err(std::io::Error::other("buffer too small"));
+        }
+        self.socket.inner.try_send(buf)?;
         Ok(())
     }
 

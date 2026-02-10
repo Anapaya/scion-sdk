@@ -13,32 +13,26 @@
 // limitations under the License.
 
 use std::{
+    future::Future,
     io,
     net::SocketAddr,
-    pin,
+    pin::Pin,
     sync::{Arc, Mutex},
-    task::ready,
     time::Duration,
 };
 
 use ana_gotatun::{
     noise::{Tunn, TunnResult, errors::WireGuardError, rate_limiter::RateLimiter},
-    packet::{Packet, WgKind},
+    packet::{Packet, PacketBufPool, WgKind},
     x25519::{self},
 };
 use bytes::{Bytes, BytesMut};
-use tokio::{
-    select,
-    sync::mpsc::{self, error::TrySendError},
-    task::JoinHandle,
-    time::Interval,
-};
+use tokio::{select, task::JoinHandle, time::Interval};
 use tracing::instrument;
 use zerocopy::IntoBytes as _;
 
-use super::TunnelGuard;
+use super::{PACKET_BUF_POOL_SIZE, TunnelGuard};
 
-const UDP_DATAGRAM_BUFFER_SIZE: usize = 65535;
 const HANDSHAKE_RATE_LIMIT: u64 = 20;
 
 /// Error when sending or receiving packets on the SNAP tunnel.
@@ -67,8 +61,9 @@ struct SnapTunnelDriver {
     pub underlay_socket: Arc<tokio::net::UdpSocket>,
     pub dataplane_address: SocketAddr,
     pub update_timers_interval: Interval,
-    pub packet_sender: mpsc::Sender<BytesMut>,
+    pub packet_sender: async_channel::Sender<BytesMut>,
     pub local_sockaddr: Option<SocketAddr>,
+    pub pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
 }
 
 impl SnapTunnelDriver {
@@ -76,7 +71,8 @@ impl SnapTunnelDriver {
         tunn: Arc<Mutex<Tunn>>,
         underlay_socket: Arc<tokio::net::UdpSocket>,
         dataplane_address: SocketAddr,
-        packet_sender: mpsc::Sender<BytesMut>,
+        packet_sender: async_channel::Sender<BytesMut>,
+        pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     ) -> Self {
         let update_timers_interval = tokio::time::interval_at(
             tokio::time::Instant::now() + Duration::from_millis(250),
@@ -89,6 +85,7 @@ impl SnapTunnelDriver {
             update_timers_interval,
             packet_sender,
             local_sockaddr: None,
+            pool,
         }
     }
 
@@ -135,7 +132,7 @@ impl SnapTunnelDriver {
     /// the error. This method is called periodically by the main loop to update the timers and
     /// receive packets.
     async fn drive_once(&mut self) -> Result<(), SnapTunnelDriverError> {
-        let mut buf = BytesMut::zeroed(UDP_DATAGRAM_BUFFER_SIZE);
+        let mut buf = self.pool.get();
         select! {
             _ = self.update_timers_interval.tick() => {
                 let p = match self.tunn.lock().unwrap().update_timers() {
@@ -155,7 +152,7 @@ impl SnapTunnelDriver {
                     return Err(SnapTunnelDriverError::SendIoError(e));
                 }
             },
-            recv = self.underlay_socket.recv_from(&mut buf) => {
+            recv = self.underlay_socket.recv_from(buf.as_mut()) => {
                 let (n, sender_addr) = match recv {
                     Ok((n, sender_addr)) => (n, sender_addr),
                     Err(e) => {
@@ -166,8 +163,10 @@ impl SnapTunnelDriver {
                     return Ok(())
                 }
                 buf.truncate(n);
-                let packet: Packet<[u8]> = Packet::from_bytes(buf);
-                let wg = packet.try_into_wg().expect("this needs to be handled");
+                let Ok(wg) = buf.try_into_wg() else {
+                    tracing::debug!("received packet that is not a valid WireGuard packet, ignoring");
+                    return Ok(());
+                };
                 // Process the packet and release the lock before accessing it again
                 let result = self.tunn.lock().unwrap().handle_incoming_packet(wg);
                 let ps = match result {
@@ -189,7 +188,7 @@ impl SnapTunnelDriver {
                         if !buf.is_empty() {
                             match self.packet_sender.try_send(buf) {
                                 Ok(()) => {},
-                                Err(TrySendError::Full(_)) => {
+                                Err(async_channel::TrySendError::Full(_)) => {
                                     tracing::debug!("receive channel is full, dropping packet");
                                 }
                                 Err(_) => {
@@ -228,6 +227,8 @@ pub enum SnapTunnelReceiveError {
     ReceiveQueueClosed,
 }
 
+type RecvFuture = Pin<Box<dyn Future<Output = Result<BytesMut, async_channel::RecvError>> + Send>>;
+
 /// A SNAP tunnel connection.
 pub struct SnapTunnel {
     _guard: TunnelGuard,
@@ -235,7 +236,9 @@ pub struct SnapTunnel {
     underlay_socket: Arc<tokio::net::UdpSocket>,
     dataplane_address: SocketAddr,
     local_sockaddr: SocketAddr,
-    receive_queue: tokio::sync::Mutex<mpsc::Receiver<BytesMut>>,
+    receive_queue: async_channel::Receiver<BytesMut>,
+    /// Stored receive future for poll_recv. Protected by Mutex for interior mutability.
+    recv_future: Mutex<Option<RecvFuture>>,
     /// Tasks that drives the SNAP tunnel.
     /// Cancelled when the socket is dropped.
     driver_task: JoinHandle<()>,
@@ -265,6 +268,7 @@ impl SnapTunnel {
         underlay_socket: Arc<tokio::net::UdpSocket>,
         dataplane_address: SocketAddr,
         receive_queue_capacity: usize,
+        pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     ) -> Result<Self, SnapTunnelDriverError> {
         let local_public = x25519::PublicKey::from(&static_private);
         let tunn = Arc::new(Mutex::new(Tunn::new(
@@ -276,12 +280,13 @@ impl SnapTunnel {
             Arc::new(RateLimiter::new(&local_public, HANDSHAKE_RATE_LIMIT)),
             dataplane_address,
         )));
-        let (packet_sender, packet_receiver) = mpsc::channel(receive_queue_capacity);
+        let (packet_sender, packet_receiver) = async_channel::bounded(receive_queue_capacity);
         let mut driver = SnapTunnelDriver::new(
             tunn.clone(),
             underlay_socket.clone(),
             dataplane_address,
             packet_sender,
+            pool.clone(),
         );
         let socket_addr = driver.initial_connection().await?;
         Ok(Self {
@@ -290,17 +295,15 @@ impl SnapTunnel {
             underlay_socket,
             dataplane_address,
             local_sockaddr: socket_addr,
-            // TODO(uniquefine): This should be refactored to use a more efficient receive queue.
-            // https://github.com/Anapaya/scion/issues/27487
-            receive_queue: tokio::sync::Mutex::new(packet_receiver),
+            receive_queue: packet_receiver,
+            recv_future: Mutex::new(None),
             driver_task: tokio::spawn(driver.main_loop()),
         })
     }
 
     /// Send a packet to the remote server.
-    #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= payload.len()))]
-    pub async fn send(&self, payload: BytesMut) -> io::Result<()> {
-        let packet: Packet<[u8]> = Packet::from_bytes(payload);
+    #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= packet.len()))]
+    pub async fn send(&self, packet: Packet) -> io::Result<()> {
         let encapsulated_packet = self.tunn.lock().unwrap().handle_outgoing_packet(packet);
         match encapsulated_packet {
             Some(wg) => {
@@ -327,9 +330,8 @@ impl SnapTunnel {
     }
 
     /// Try to send a packet to the remote server. Returns error of try_send_to.
-    #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= payload.len()))]
-    pub fn try_send(&self, payload: BytesMut) -> io::Result<()> {
-        let packet: Packet<[u8]> = Packet::from_bytes(payload);
+    #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= packet.len()))]
+    pub fn try_send(&self, packet: Packet) -> io::Result<()> {
         match self.tunn.lock().unwrap().handle_outgoing_packet(packet) {
             Some(wg) => {
                 let bytes = match wg {
@@ -354,9 +356,9 @@ impl SnapTunnel {
 
     /// Receive a packet from the remote server.
     pub async fn recv(&self) -> Result<Bytes, SnapTunnelReceiveError> {
-        match self.receive_queue.lock().await.recv().await {
-            Some(packet) => Ok(packet.into()),
-            None => Err(SnapTunnelReceiveError::ReceiveQueueClosed),
+        match self.receive_queue.recv().await {
+            Ok(packet) => Ok(packet.into()),
+            Err(_) => Err(SnapTunnelReceiveError::ReceiveQueueClosed),
         }
     }
 
@@ -365,11 +367,26 @@ impl SnapTunnel {
         &self,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<Bytes, SnapTunnelReceiveError>> {
-        let mut receiver = ready!(pin::pin!(self.receive_queue.lock()).poll(cx));
-        match receiver.poll_recv(cx) {
-            std::task::Poll::Ready(Some(packet)) => std::task::Poll::Ready(Ok(packet.into())),
-            std::task::Poll::Ready(None) => {
+        let mut fut_guard = self.recv_future.lock().expect("lock poisoned");
+
+        // Create future if it doesn't exist
+        if fut_guard.is_none() {
+            // Clone the receiver (cheap with async-channel) to avoid borrowing self
+            let receiver = self.receive_queue.clone();
+            *fut_guard = Some(Box::pin(async move { receiver.recv().await }));
+        }
+
+        // Poll the stored future
+        let fut = fut_guard.as_mut().expect("future cannot be none");
+        match fut.as_mut().poll(cx) {
+            std::task::Poll::Ready(Ok(packet)) => {
+                // Clear the future so a new one is created on next poll
+                *fut_guard = None;
+                std::task::Poll::Ready(Ok(packet.into()))
+            }
+            std::task::Poll::Ready(Err(_)) => {
                 tracing::trace!("receive queue closed, returning error");
+                *fut_guard = None;
                 std::task::Poll::Ready(Err(SnapTunnelReceiveError::ReceiveQueueClosed))
             }
             std::task::Poll::Pending => std::task::Poll::Pending,
