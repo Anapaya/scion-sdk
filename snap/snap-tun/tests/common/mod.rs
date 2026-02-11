@@ -1,4 +1,4 @@
-// Copyright 2025 Anapaya Systems
+// Copyright 2026 Anapaya Systems
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,13 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! SNAP tunnel library.
 
-pub mod cert_validator;
-pub mod client;
-pub mod metrics;
-pub mod server;
-
-// Public for testing purposes only
-#[doc(hidden)]
-pub mod scion_packet;
+pub mod mocks;
+pub mod server_harness;
+pub mod test_helpers;

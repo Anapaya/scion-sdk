@@ -32,6 +32,9 @@ zerocopy = { workspace = true }
 ed25519-dalek = { workspace = true }
 pem = { workspace = true }
 rcgen = { workspace = true }
+mockall = "0.13"
+tokio-util = { workspace = true }
+test-log = { workspace = true }
 
 [lints]
 workspace = true
