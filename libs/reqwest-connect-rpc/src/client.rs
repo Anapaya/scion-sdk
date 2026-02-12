@@ -69,7 +69,7 @@ impl CrpcClient {
     /// Creates a new [`CrpcClient`] for the given base URL.
     pub fn new(base_url: &url::Url) -> anyhow::Result<Self> {
         let http_client = reqwest::ClientBuilder::new()
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
             .build()
             .context("error creating HTTP client")?;
 
