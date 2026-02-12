@@ -162,7 +162,6 @@ missing_docs = "warn"
 ignored = [
     "foldhash",
     "scion-proto",
-    #todo: remove once ead is in use
     "endhost-api-discovery-api",
     "endhost-api-discovery-client"
 ]

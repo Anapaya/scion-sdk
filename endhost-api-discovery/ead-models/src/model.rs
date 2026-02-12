@@ -33,16 +33,23 @@ impl RpcEndhostApiDiscoveryService {
 pub trait EndhostApiDiscovery: Send + Sync {
     /// Discover available Endhost APIs
     ///
-    /// Returns a list of EndhostApiInfos representing the discovered Endhost APIs.
+    /// Returns a list of EndhostApiFailoverGroups representing the discovered Endhost APIs.
     /// This list is ordered by preference, with the most preferred API first.
     ///
     /// # Parameters
     /// - `public_ip`: The public IP address of the endhost making the discovery request.
-    async fn discover_endhost_api(&self, public_ip: IpAddr) -> Vec<EndhostApiInfo>;
+    async fn discover_endhost_api(&self, public_ip: IpAddr) -> Vec<EndhostApiGroup>;
 }
 
-/// Information about an Endhost API.
-#[derive(Clone, PartialEq, Eq, Hash)]
+/// Unordered group of Endhost APIs the client can failover between.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct EndhostApiGroup {
+    /// The set of endhost APIs.
+    pub apis: Vec<EndhostApiInfo>,
+}
+
+/// Single Endhost API, including its URL and any additional metadata.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct EndhostApiInfo {
     /// URL of the Endhost API.
     pub address: Url,

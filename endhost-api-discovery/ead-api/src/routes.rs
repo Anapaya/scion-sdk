@@ -32,7 +32,7 @@ use scion_sdk_axum_connect_rpc::extractor::ConnectRpc;
 /// - `base_router`: The base axum router to nest the endhost API routes into.
 /// - `discovery_service`: The EndhostApiDiscovery service implementation.
 /// - `client_ip_source`: Client IP extraction strategy, see [axum_client_ip::ClientIp].
-pub fn nest_endhost_api(
+pub fn nest_endhost_discovery_api(
     base_router: axum::Router,
     discovery_service: Arc<dyn EndhostApiDiscovery>,
     client_ip_source: ClientIpSource,
@@ -56,7 +56,7 @@ async fn get_endhost_apis(
     let apis = discovery_service.discover_endhost_api(client_ip).await;
 
     let response = RpcGetEndhostApisResponse {
-        endhost_apis: apis.into_iter().map(|api_info| api_info.into()).collect(),
+        groups: apis.into_iter().map(Into::into).collect(),
     };
 
     ConnectRpc(response)

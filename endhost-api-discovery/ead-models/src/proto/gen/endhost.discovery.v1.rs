@@ -5,12 +5,22 @@ pub struct RpcGetEndhostApisRequest {}
 /// Endhost APIs response message.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RpcGetEndhostApisResponse {
-    /// Set of Endhost APIs.
-    /// These should be used in order, using the first reachable one.
+    /// Set of Endhost APIs groups.
+    /// Should be used in order, using the first reachable one.
+    ///
+    /// After establishing a connection to an API in a group, the client can failover to any other API in the same group if the connection fails.
+    /// Failover between groups requires the client to re-establish connections to snaps and other services using the new API.
     #[prost(message, repeated, tag = "1")]
-    pub endhost_apis: ::prost::alloc::vec::Vec<RpcEndhostApiInfo>,
+    pub groups: ::prost::alloc::vec::Vec<RpcEndhostApiGroup>,
 }
-/// Information about a single Endhost API.
+/// Group of Endhost APIs the client can failover between.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RpcEndhostApiGroup {
+    /// URL of the Endhost API.
+    #[prost(message, repeated, tag = "1")]
+    pub apis: ::prost::alloc::vec::Vec<RpcEndhostApiInfo>,
+}
+/// Single Endhost API.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RpcEndhostApiInfo {
     /// URL of the Endhost API.

@@ -15,12 +15,21 @@ message RpcGetEndhostApisRequest {}
 
 // Endhost APIs response message.
 message RpcGetEndhostApisResponse {
-  // Set of Endhost APIs.
-  // These should be used in order, using the first reachable one.
-  repeated RpcEndhostApiInfo endhost_apis = 1;
+  // Set of Endhost APIs groups.
+  // Should be used in order, using the first reachable one.
+  //
+  // After establishing a connection to an API in a group, the client can failover to any other API in the same group if the connection fails.
+  // Failover between groups requires the client to re-establish connections to snaps and other services using the new API.
+  repeated RpcEndhostApiGroup groups = 1;
 }
 
-// Information about a single Endhost API.
+// Group of Endhost APIs the client can failover between.
+message RpcEndhostApiGroup {
+  // URL of the Endhost API.
+  repeated RpcEndhostApiInfo apis = 1;
+}
+
+// Single Endhost API.
 message RpcEndhostApiInfo {
   // URL of the Endhost API.
   string address = 1;
