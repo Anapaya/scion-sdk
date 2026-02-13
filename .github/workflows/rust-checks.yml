@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@v4
       - if: runner.os == 'Linux'
         name: Remove unused tools to free up disk space
-        run: sudo rm -rf /usr/lib/jvm /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /usr/local/julia* /usr/local/share/chromium /opt/microsoft /opt/google /usr/local/share/powershell
+        run: sudo rm -rf /usr/lib/jvm /usr/share/dotnet /usr/share/swift /usr/local/.ghcup /usr/local/julia* /usr/local/share/chromium /opt/microsoft /opt/google /usr/local/share/powershell /usr/local/lib/android/sdk
       - name: Disk space check
         run: df -h
       - if: runner.os == 'Windows'
