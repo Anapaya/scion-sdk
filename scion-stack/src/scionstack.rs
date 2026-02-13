@@ -213,7 +213,7 @@ use scion_proto::{
     path::Path,
 };
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
-use snap_tun::client::ConnectSnapTunNgSocketError;
+use snap_tun::client::ConnectSnapTunSocketError;
 pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
 
 // Re-export the main types from the modules
@@ -704,7 +704,7 @@ pub enum SnapConnectionError {
     SnapTokenSourceMissing,
     /// Error establishing the SNAP tunnel.
     #[error("error establishing SNAP tunnel: {0}")]
-    TunnelEstablishmentError(#[from] ConnectSnapTunNgSocketError),
+    TunnelEstablishmentError(#[from] ConnectSnapTunSocketError),
     /// Failed to create the SNAP control plane client.
     #[error("failed to create SNAP control plane client: {0}")]
     ControlPlaneClientCreationError(anyhow::Error),

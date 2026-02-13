@@ -31,7 +31,7 @@ use scion_proto::{
 };
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
-use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunNgEndpoint, SnapTunnel};
+use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint, SnapTunnel};
 use tokio::{net::UdpSocket, task::JoinHandle};
 use url::Url;
 
@@ -68,7 +68,7 @@ impl SnapUnderlaySocket {
         bind_addr: SocketAddr,
         snap_cp: Url,
         socket: UdpSocket,
-        snaptunnel_manager: &'_ SnapTunNgEndpoint,
+        snaptunnel_manager: &'_ SnapTunEndpoint,
         snap_token_source: Arc<dyn TokenSource>,
         receive_queue_capacity: usize,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,

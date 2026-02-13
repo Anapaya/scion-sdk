@@ -39,7 +39,7 @@ pub use tunnel::{SnapTunnel, SnapTunnelDriverError, SnapTunnelReceiveError};
 
 /// Trait for a control plane client.
 #[async_trait::async_trait]
-pub trait SnapTunNgControlPlaneClient: Send + Sync {
+pub trait SnapTunControlPlaneClient: Send + Sync {
     /// Register an identity with the control plane.
     async fn register_identity(
         &self,
@@ -73,13 +73,13 @@ pub trait SnapTunNgControlPlaneClient: Send + Sync {
 
 /// Struct to hold information about a snap-tun control plane
 /// and the number of tunnels connected to it.
-struct SnapTunNgControlPlane {
+struct SnapTunControlPlane {
     address: url::Url,
-    client: Arc<dyn SnapTunNgControlPlaneClient>,
+    client: Arc<dyn SnapTunControlPlaneClient>,
     tunnel_count: u64,
 }
 
-impl Clone for SnapTunNgControlPlane {
+impl Clone for SnapTunControlPlane {
     fn clone(&self) -> Self {
         Self {
             address: self.address.clone(),
@@ -89,8 +89,8 @@ impl Clone for SnapTunNgControlPlane {
     }
 }
 
-struct SnapTunNgEndpointState {
-    control_planes: Arc<Mutex<BTreeMap<url::Url, SnapTunNgControlPlane>>>,
+struct SnapTunEndpointState {
+    control_planes: Arc<Mutex<BTreeMap<url::Url, SnapTunControlPlane>>>,
     pub static_private: x25519::StaticSecret,
     pub static_public: x25519::PublicKey,
     pub backoff: ExponentialBackoff,
@@ -101,7 +101,7 @@ struct SnapTunNgEndpointState {
 /// When the tunnel count reaches 0, the control plane is removed from the map
 /// of managed control planes.
 pub(super) struct TunnelGuard {
-    endpoint_state: Arc<SnapTunNgEndpointState>,
+    endpoint_state: Arc<SnapTunEndpointState>,
     control_plane: url::Url,
 }
 
@@ -112,7 +112,7 @@ impl Drop for TunnelGuard {
     }
 }
 
-impl SnapTunNgEndpointState {
+impl SnapTunEndpointState {
     /// Task to register the endpoints identity with all control planes
     async fn identity_registration_loop(&self, token_source: Arc<dyn TokenSource>) {
         let mut watch = token_source.watch();
@@ -149,7 +149,7 @@ impl SnapTunNgEndpointState {
     async fn add_tunnel(
         self: Arc<Self>,
         address: url::Url,
-        client: Arc<dyn SnapTunNgControlPlaneClient>,
+        client: Arc<dyn SnapTunControlPlaneClient>,
     ) -> Result<TunnelGuard, CrpcClientError> {
         let new = {
             let mut control_planes = self.control_planes.lock().expect("lock poisoned");
@@ -159,7 +159,7 @@ impl SnapTunNgEndpointState {
                     false
                 }
                 Vacant(entry) => {
-                    entry.insert(SnapTunNgControlPlane {
+                    entry.insert(SnapTunControlPlane {
                         address: address.clone(),
                         client: client.clone(),
                         tunnel_count: 1,
@@ -196,12 +196,12 @@ impl SnapTunNgEndpointState {
 /// Snap tunnel endpoint that allows creating new snap tun connections.
 /// It holds one static identity and manages the registration of this identity with all connected
 /// control planes.
-pub struct SnapTunNgEndpoint {
-    state: Arc<SnapTunNgEndpointState>,
+pub struct SnapTunEndpoint {
+    state: Arc<SnapTunEndpointState>,
     identity_registration_abort_handle: AbortHandle,
 }
 
-impl Drop for SnapTunNgEndpoint {
+impl Drop for SnapTunEndpoint {
     fn drop(&mut self) {
         self.identity_registration_abort_handle.abort();
     }
@@ -209,20 +209,20 @@ impl Drop for SnapTunNgEndpoint {
 
 /// Error when connecting to a SNAP tunnel.
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectSnapTunNgSocketError {
+pub enum ConnectSnapTunSocketError {
     /// Error when connecting to the snaptun control plane to register the identity.
     #[error("error registering identity with control plane: {0}")]
-    SnapTunNgControlPlaneClientError(#[from] CrpcClientError),
+    SnapTunControlPlaneClientError(#[from] CrpcClientError),
     /// Error when creating the SNAP tunnel connection.
     #[error("error connecting snap tunnel: {0}")]
-    SnapTunNgConnectionError(#[from] SnapTunnelDriverError),
+    SnapTunConnectionError(#[from] SnapTunnelDriverError),
 }
 
-impl SnapTunNgEndpoint {
+impl SnapTunEndpoint {
     /// Creates a new SNAP tunnel socket manager.
     pub fn new(token_source: Arc<dyn TokenSource>, static_private: x25519::StaticSecret) -> Self {
         let static_public = x25519::PublicKey::from(&static_private);
-        let state = Arc::new(SnapTunNgEndpointState {
+        let state = Arc::new(SnapTunEndpointState {
             control_planes: Arc::new(Mutex::new(BTreeMap::new())),
             static_private,
             static_public,
@@ -251,11 +251,11 @@ impl SnapTunNgEndpoint {
         peer_public: x25519::PublicKey,
         dataplane_address: SocketAddr,
         control_plane: url::Url,
-        control_plane_client: Arc<dyn SnapTunNgControlPlaneClient>,
+        control_plane_client: Arc<dyn SnapTunControlPlaneClient>,
         underlay_socket: Arc<tokio::net::UdpSocket>,
         receive_queue_capacity: usize,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
-    ) -> Result<SnapTunnel, ConnectSnapTunNgSocketError> {
+    ) -> Result<SnapTunnel, ConnectSnapTunSocketError> {
         let guard = self
             .state
             .clone()

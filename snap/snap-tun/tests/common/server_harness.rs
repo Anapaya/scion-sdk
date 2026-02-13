@@ -19,16 +19,16 @@ use ana_gotatun::{
     packet::{Packet, WgKind},
 };
 use bytes::BytesMut;
-use snap_tun::server::{SnapTunAuthorization, SnapTunNgServer};
+use snap_tun::server::{SnapTunAuthorization, SnapTunServer};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const UDP_BUFFER_SIZE: usize = 65535;
 
-/// Server harness that drives the SnapTunNgServer state machine
+/// Server harness that drives the SnapTunServer state machine
 /// Uses real UDP socket for client-server communication and channels for tunnel interface
 pub struct ServerHarness<T: SnapTunAuthorization> {
-    server: Arc<tokio::sync::Mutex<SnapTunNgServer<T>>>,
+    server: Arc<tokio::sync::Mutex<SnapTunServer<T>>>,
     /// Real UDP socket for client-server network communication
     network_socket: Arc<tokio::net::UdpSocket>,
     /// Channel to send decrypted packets FROM server TO test
@@ -45,7 +45,7 @@ pub struct ServerHarness<T: SnapTunAuthorization> {
 
 impl<T: SnapTunAuthorization + 'static> ServerHarness<T> {
     /// Create a new server harness (does not start the I/O loop)
-    pub async fn new(server: SnapTunNgServer<T>, bind_addr: SocketAddr) -> std::io::Result<Self> {
+    pub async fn new(server: SnapTunServer<T>, bind_addr: SocketAddr) -> std::io::Result<Self> {
         let network_socket = Arc::new(tokio::net::UdpSocket::bind(bind_addr).await?);
         // Channel for packets FROM server TO test (decrypted)
         // Unbounded channels are acceptable in test infrastructure for simplicity

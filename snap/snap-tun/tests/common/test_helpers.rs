@@ -26,7 +26,7 @@ use scion_proto::{
     wire_encoding::WireEncodeVec,
 };
 use scion_sdk_reqwest_connect_rpc::token_source::mock::MockTokenSource;
-use snap_tun::{client::SnapTunNgEndpoint, server::SnapTunNgServer};
+use snap_tun::{client::SnapTunEndpoint, server::SnapTunServer};
 use tokio::task::JoinHandle;
 
 use super::{
@@ -92,7 +92,7 @@ pub struct TestEnvironment {
     pub mock_authz: Arc<MockAuthorization>,
     pub server_harness: RunningServerHarness,
     pub client_socket: Arc<tokio::net::UdpSocket>,
-    pub endpoint: SnapTunNgEndpoint,
+    pub endpoint: SnapTunEndpoint,
     pub token_source: Arc<MockTokenSource>,
 }
 
@@ -117,7 +117,7 @@ pub async fn setup_test_environment() -> TestEnvironment {
 
     // Create and start server harness
     let rate_limiter = Arc::new(RateLimiter::new(&server_public_key, 100));
-    let server = SnapTunNgServer::new(
+    let server = SnapTunServer::new(
         server_static_secret.clone(),
         rate_limiter,
         mock_authz.clone(),
@@ -149,7 +149,7 @@ pub async fn setup_test_environment() -> TestEnvironment {
 
     // Create endpoint with mock token source
     let token_source = Arc::new(MockTokenSource::new("test-token".to_string()));
-    let endpoint = SnapTunNgEndpoint::new(token_source.clone(), client_static_secret.clone());
+    let endpoint = SnapTunEndpoint::new(token_source.clone(), client_static_secret.clone());
 
     TestEnvironment {
         client_static_secret,

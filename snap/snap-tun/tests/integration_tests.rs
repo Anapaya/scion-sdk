@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Integration tests for the SnapTunNg library.
+//! Integration tests for the SnapTun library.
 
 mod common;
 
@@ -30,8 +30,8 @@ use common::{
     test_helpers::{build_test_scion_packet, setup_test_environment},
 };
 use snap_tun::{
-    client::{PACKET_BUF_POOL_SIZE, SnapTunNgEndpoint},
-    server::SnapTunNgServer,
+    client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint},
+    server::SnapTunServer,
 };
 
 #[tokio::test]
@@ -127,7 +127,7 @@ async fn test_handshake_timeout_unregistered_identity() {
 
     // Create and start server harness
     let rate_limiter = Arc::new(RateLimiter::new(&server_static_identity, 100));
-    let server = SnapTunNgServer::new(server_static_secret, rate_limiter, mock_authz);
+    let server = SnapTunServer::new(server_static_secret, rate_limiter, mock_authz);
 
     let server_harness = Arc::new(
         ServerHarness::new(server, "127.0.0.1:0".parse().unwrap())
@@ -147,7 +147,7 @@ async fn test_handshake_timeout_unregistered_identity() {
             "test-token".to_string(),
         ),
     );
-    let endpoint = SnapTunNgEndpoint::new(token_source, client_static_secret);
+    let endpoint = SnapTunEndpoint::new(token_source, client_static_secret);
 
     // Create client socket
     let client_socket = Arc::new(

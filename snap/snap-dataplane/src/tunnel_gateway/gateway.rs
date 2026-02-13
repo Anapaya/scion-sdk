@@ -33,7 +33,7 @@ use scion_proto::{
     scmp::{ParameterProblemCode, ScmpMessage, ScmpParameterProblem},
     wire_encoding::WireEncodeVec,
 };
-use snap_tun::server::{SnapTunAuthorization, SnapTunNgServer};
+use snap_tun::server::{SnapTunAuthorization, SnapTunServer};
 use tokio::{net::UdpSocket, sync::mpsc::Receiver, time::interval};
 use tokio_util::sync::CancellationToken;
 
@@ -97,7 +97,7 @@ where
         let pubkey = x25519::PublicKey::from(&self.static_server_secret);
         let rate_limiter = Arc::new(RateLimiter::new(&pubkey, PACKET_PER_SEC_LIMIT));
         let mut snaptun_srv =
-            SnapTunNgServer::new(self.static_server_secret, rate_limiter, self.authz);
+            SnapTunServer::new(self.static_server_secret, rate_limiter, self.authz);
         let mut timer = interval(Duration::from_millis(250));
         let socket = self.socket;
         let local_addr = HostAddr::from(

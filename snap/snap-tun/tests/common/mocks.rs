@@ -21,14 +21,14 @@ use std::{
 use ana_gotatun::x25519::PublicKey;
 use mockall::mock;
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
-use snap_tun::{client::SnapTunNgControlPlaneClient, server::SnapTunAuthorization};
+use snap_tun::{client::SnapTunControlPlaneClient, server::SnapTunAuthorization};
 
-// Use mockall to generate mock for SnapTunNgControlPlaneClient
+// Use mockall to generate mock for SnapTunControlPlaneClient
 mock! {
     pub ControlPlaneClient {}
 
     #[async_trait::async_trait]
-    impl SnapTunNgControlPlaneClient for ControlPlaneClient {
+    impl SnapTunControlPlaneClient for ControlPlaneClient {
         async fn register_identity(
             &self,
             identity: PublicKey,

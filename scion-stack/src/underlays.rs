@@ -21,7 +21,7 @@ use scion_proto::{
     wire_encoding::WireEncodeVec,
 };
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
-use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunNgEndpoint};
+use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use url::Url;
@@ -56,7 +56,7 @@ pub struct UnderlayStack {
     /// Resolver for the local IP address for UDP underlay sockets.
     local_ip_resolver: Arc<dyn LocalIpResolver>,
     snap_socket_config: SnapSocketConfig,
-    snap_tunnel_manager: Option<SnapTunNgEndpoint>,
+    snap_tunnel_manager: Option<SnapTunEndpoint>,
     pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
 }
 
@@ -72,7 +72,7 @@ impl UnderlayStack {
         let snap_tunnel_manager = default_snap_socket_config
             .snap_token_source
             .as_ref()
-            .map(|token_source| SnapTunNgEndpoint::new(token_source.clone(), static_identity));
+            .map(|token_source| SnapTunEndpoint::new(token_source.clone(), static_identity));
         Self {
             preferred_underlay,
             underlay_discovery,
