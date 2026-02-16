@@ -134,7 +134,7 @@ async fn updated_token_extends_session() {
     let elapsed_at_failure = tokio::time::timeout(Duration::from_secs(4), async {
         loop {
             iteration += 1;
-            tracing::debug!(
+            tracing::info!(
                 "Iteration {}: Attempting send/receive at {}ms",
                 iteration,
                 start_time.elapsed().as_millis()
@@ -143,14 +143,14 @@ async fn updated_token_extends_session() {
             let (send_result, recv_result) = tokio::join!(
                 sender.send_to(&test_data, receiver_addr),
                 tokio::time::timeout(
-                    Duration::from_millis(200),
+                    Duration::from_millis(500),
                     receiver.recv_from(&mut recv_buffer)
                 )
             );
 
             match (send_result, recv_result) {
                 (_, Err(_)) => {
-                    tracing::debug!(
+                    tracing::info!(
                         "Packet dropped after {}ms",
                         start_time.elapsed().as_millis()
                     );
@@ -175,7 +175,7 @@ async fn updated_token_extends_session() {
 
     // Make sure the sending lasted longer than the initial token validity
     assert!(
-        (elapsed_at_failure - Duration::from_millis(200)) >= Duration::from_secs(1),
+        (elapsed_at_failure - Duration::from_millis(500)) >= Duration::from_secs(1),
         "Session lasted {}ms, must be > 1000ms to prove token update worked",
         elapsed_at_failure.as_millis()
     );

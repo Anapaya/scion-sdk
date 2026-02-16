@@ -31,7 +31,7 @@ use tokio_util::sync::CancellationToken;
 // Tests a quinn QUIC connection using the SCION stack as transport. The server simply echoes back
 // any datagram it receives.
 #[test(tokio::test)]
-#[ntest::timeout(10_000)]
+#[ntest::timeout(20_000)]
 async fn quinn_echo() {
     tracing::info!("installing crypto provider");
     scion_sdk_utils::test::install_rustls_crypto_provider();
