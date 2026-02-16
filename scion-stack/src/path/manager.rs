@@ -62,7 +62,7 @@ use std::{
 };
 
 use scc::HashIndex;
-use scion_proto::{address::IsdAsn, path::Path, scmp::ScmpErrorMessage};
+use scion_proto::{address::IsdAsn, packet::ByEndpoint, path::Path, scmp::ScmpErrorMessage};
 use scion_sdk_utils::backoff::BackoffConfig;
 use tokio::sync::broadcast::{self};
 
@@ -248,6 +248,13 @@ impl<F: PathFetcher> MultiPathManager<F> {
         dst: IsdAsn,
         now: SystemTime,
     ) -> Result<Path, Arc<PathFetchError>> {
+        if src == dst {
+            return Ok(Path::empty(ByEndpoint {
+                source: src,
+                destination: dst,
+            }));
+        }
+
         let try_path = self
             .0
             .managed_paths

@@ -32,7 +32,7 @@ use thiserror::Error;
 /// The policies that are currently enforced are:
 /// - The packet (SCION common header, address header, data plane path) can be decoded correctly.
 /// - The SCION source address is set.
-/// - The data plane path is a standard path (not empty).
+/// - The data plane path is a standard path.
 /// - The SCION source address matches the expected source socket address (IP part only).
 pub fn inbound_datagram_check(
     mut datagram: &[u8],
@@ -75,10 +75,11 @@ pub fn inbound_datagram_check(
         Err(err) => return Err(PacketPolicyError::InvalidPath(err, path_offset)),
     };
 
-    // Check if the data plane path is a standard path (not empty).
+    // Check if the data plane path is supported
     match &dp_path {
-        scion_proto::path::DataPlanePath::Standard(_path) => {}
-        // Only standard paths are allowed (first hop required).
+        scion_proto::path::DataPlanePath::Standard(_)
+        | scion_proto::path::DataPlanePath::EmptyPath => {}
+        // Disallow unsupported path types
         _ => return Err(PacketPolicyError::InvalidPathType(common_header.path_type)),
     }
 
@@ -194,18 +195,6 @@ mod tests {
         assert!(matches!(
             res,
             Err(PacketPolicyError::InvalidCommonHeader(_))
-        ));
-    }
-
-    #[test]
-    fn inbound_datagram_empty_path_rejected() {
-        let source_addrs = example_source_addrs();
-        let packet = get_valid_packet(source_addrs[0], DataPlanePath::EmptyPath);
-
-        let res = inbound_datagram_check(&packet, source_addrs[0].local_address());
-        assert!(matches!(
-            res,
-            Err(PacketPolicyError::InvalidPathType(PathType::Empty))
         ));
     }
 
