@@ -15,6 +15,7 @@
 
 pub mod path;
 pub mod quic;
+pub mod resolver;
 pub mod scionstack;
 pub mod types;
 pub mod underlays;

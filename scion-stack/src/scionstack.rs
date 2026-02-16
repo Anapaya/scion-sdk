@@ -108,6 +108,23 @@
 //! # }
 //! ```
 //!
+//! ### Resolving SCION TXT records
+//!
+//! ```
+//! use scion_stack::resolver::{ScionDnsResolver, txt::ScionTxtDnsResolver};
+//!
+//! # async fn resolve_example() -> Result<(), Box<dyn std::error::Error>> {
+//! let resolver = ScionTxtDnsResolver::new()?;
+//! let addresses = resolver.resolve("example.com").await?;
+//!
+//! for address in addresses {
+//!     println!("Resolved: {}", address);
+//! }
+//!
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Advanced Usage
 //!
 //! ### Custom path selection
