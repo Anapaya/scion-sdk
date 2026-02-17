@@ -42,12 +42,13 @@ use crate::{
     api::admin,
     authorization_server,
     dto::{self},
-    endhost_api::PsEndhostApi,
+    endhost_api::{EndhostApiId, PsEndhostApi},
     io_config::{IoConfig, SharedPocketScionIoConfig},
     management_api,
     network::local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
     state::{
-        SharedPocketScionState, SystemState,
+        RouterId, SharedPocketScionState, SystemState,
+        endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryService},
         endhost_segment_lister::StateEndhostSegmentLister,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
         snap::{SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL, SnapId},
@@ -275,6 +276,16 @@ impl PocketScionRuntimeBuilder {
             );
         }
 
+        // Start Endhost Discovery APIs
+        for (id, _) in pstate.endhost_api_discovery_apis() {
+            let pstate = pstate.clone();
+            let io_config = io_config.clone();
+            EndhostApiDiscoveryService::start(id, pstate, io_config)
+                .await
+                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        }
+
+        // Start router sockets
         for sock_id in pstate.router_ids() {
             let udp_socket = {
                 let bind_addr = match io_config.router_socket_addr(sock_id) {
@@ -350,6 +361,8 @@ impl PocketScionRuntimeBuilder {
 
         Ok(PocketScionRuntime {
             handle: InProcess::new(task_set),
+            state: pstate,
+            io_config,
             client,
         })
     }
@@ -364,9 +377,52 @@ impl Default for PocketScionRuntimeBuilder {
 /// In-memory PocketSCION runtime.
 pub struct PocketScionRuntime {
     handle: InProcess,
+    // TODO(ake): all api functions should be replaced with direct function calls and the client
+    // should be removed.
+    state: SharedPocketScionState,
+    io_config: SharedPocketScionIoConfig,
     // Eventually, the in-memory representation should use direct function calls
     // and not go through the http-interface.
     client: admin::client::ApiClient,
+}
+
+impl PocketScionRuntime {
+    /// Returns the socket address of given endhost api, if it exists.
+    pub fn endhost_api_addr(&self, id: EndhostApiId) -> Option<SocketAddr> {
+        self.state
+            .endhost_api(id)
+            .and_then(|_| self.io_config.endhost_api_addr(id))
+    }
+
+    /// Returns the socket address of given endhost api discovery api, if it exists.
+    pub fn endhost_api_discovery_addr(&self, id: EndhostApiDiscoveryApiId) -> Option<SocketAddr> {
+        self.state
+            .endhost_api_discovery_api(id)
+            .and_then(|_| self.io_config.endhost_api_discovery_api_addr(id))
+    }
+
+    /// Returns the socket address of the control plane API of the snap with the given id, if it
+    /// exists.
+    pub fn snap_control_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
+        self.state
+            .snap(snap_id)
+            .and_then(|_| self.io_config.snap_control_addr(snap_id))
+    }
+
+    /// Returns the socket address of the data plane API of the snap with the given id, if it
+    /// exists.
+    pub fn snap_data_plane_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
+        self.state
+            .snap(snap_id)
+            .and_then(|_| self.io_config.snap_data_plane_addr(snap_id))
+    }
+
+    /// Returns the socket address of the router with the given id, if it exists.
+    pub fn router_socket_addr(&self, router_id: RouterId) -> Option<SocketAddr> {
+        self.state
+            .router(router_id)
+            .and_then(|_| self.io_config.router_socket_addr(router_id))
+    }
 }
 
 const MAX_ATTEMPTS: i32 = 5;

@@ -50,9 +50,14 @@ use crate::{
             topology::{FastTopologyLookup, ScionTopology},
         },
     },
-    state::snap::{SnapId, SnapState},
+    state::{
+        endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryState},
+        snap::{SnapId, SnapState},
+    },
+    util::{map_btree, map_btree_fallible},
 };
 
+pub mod endhost_api_discovery;
 pub mod endhost_segment_lister;
 pub mod simulation_dispatcher;
 pub mod snap;
@@ -306,6 +311,7 @@ pub struct SystemState {
     auth_server: Option<AuthServerState>,
     routers: BTreeMap<RouterId, RouterState>,
     endhost_apis: BTreeMap<EndhostApiId, EndhostApiState>,
+    endhost_api_discovery_api: BTreeMap<EndhostApiDiscoveryApiId, EndhostApiDiscoveryState>,
     topology: Option<ScionTopology>,
     topology_segments: Option<SegmentRegistry>,
     sim_receivers: NetworkReceiverRegistry,
@@ -326,6 +332,7 @@ impl SystemState {
             topology_segments: Default::default(),
             sim_receivers: Default::default(),
             endhost_apis: Default::default(),
+            endhost_api_discovery_api: Default::default(),
         }
     }
 
@@ -376,6 +383,11 @@ impl From<&SystemState> for SystemStateDto {
                 .clone()
                 .map(|topology| topology.into()),
             endhost_apis: system_state.endhost_apis.clone(),
+            endhost_api_discovery_api: system_state
+                .endhost_api_discovery_api
+                .iter()
+                .map(|(id, discovery_state)| (*id, discovery_state.clone().into()))
+                .collect(),
         }
     }
 }
@@ -397,16 +409,7 @@ impl TryFrom<SystemStateDto> for SystemState {
                 .transpose()?
                 .unwrap_or(DEFAULT_POCKET_SCION_ROOT_SECRET),
         );
-        let snaps = dto
-            .snaps
-            .into_iter()
-            .map(|(snap_id, snap_state)| {
-                Ok((
-                    snap_id,
-                    snap_state.try_into().context("invalid SNAP state")?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
+
         let auth_server = match dto.auth_server_state {
             Some(auth_server_state) => {
                 Some(
@@ -417,19 +420,9 @@ impl TryFrom<SystemStateDto> for SystemState {
             }
             None => None,
         };
+
         let snap_token_public_pem = Pem::from_str(&dto.snap_token_public_key)
             .context("invalid PEM format for SNAP token public key")?;
-
-        let router_sockets = dto
-            .routers
-            .into_iter()
-            .map(|(router_socket_id, router_state)| {
-                Ok((
-                    router_socket_id,
-                    router_state.try_into().context("invalid router state")?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
 
         let topology = dto
             .topology
@@ -449,12 +442,15 @@ impl TryFrom<SystemStateDto> for SystemState {
             snaptun_keepalive_interval: dto.snaptun_keepalive_interval,
             auth_server,
             snap_token_public_pem,
-            snaps,
-            routers: router_sockets,
+            snaps: map_btree_fallible(dto.snaps, TryInto::try_into)
+                .context("invalid SNAP states")?,
+            routers: map_btree_fallible(dto.routers, TryInto::try_into)
+                .context("invalid router states")?,
             topology,
             topology_segments,
             sim_receivers,
             endhost_apis: dto.endhost_apis,
+            endhost_api_discovery_api: map_btree(dto.endhost_api_discovery_api, Into::into),
         })
     }
 }

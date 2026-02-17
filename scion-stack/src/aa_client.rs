@@ -1,4 +1,4 @@
-// Copyright 2025 Anapaya Systems
+// Copyright 2026 Anapaya Systems
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,13 +11,18 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! SCION stack library.
 
-pub mod aa_client;
-pub mod ea_source;
-pub mod path;
-pub mod quic;
-pub mod resolver;
-pub mod scionstack;
-pub mod types;
-pub mod underlays;
+//! Stub for the AA client
+
+use url::Url;
+
+/// STUB for the AA client
+pub struct AAClient;
+
+impl AAClient {
+    /// Gets the Endhost API discovery APIs from the AA.
+    pub async fn get_endhost_api_discovery_apis(&self) -> anyhow::Result<Vec<Url>> {
+        // TODO: Implement AA-based Endhost API discovery.
+        unimplemented!()
+    }
+}

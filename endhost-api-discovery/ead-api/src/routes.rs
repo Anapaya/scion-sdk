@@ -53,7 +53,7 @@ async fn get_endhost_apis(
     ClientIp(client_ip): ClientIp,
     ConnectRpc(_): ConnectRpc<RpcGetEndhostApisRequest>,
 ) -> ConnectRpc<RpcGetEndhostApisResponse> {
-    let apis = discovery_service.discover_endhost_api(client_ip).await;
+    let apis = discovery_service.discover_endhost_apis(client_ip).await;
 
     let response = RpcGetEndhostApisResponse {
         groups: apis.into_iter().map(Into::into).collect(),

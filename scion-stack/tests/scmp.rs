@@ -76,7 +76,8 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
 
     //
     // Setup client
-    let client_stack = ScionStackBuilder::new(snap_cp_addr)
+    let client_stack = ScionStackBuilder::new()
+        .with_endhost_api(snap_cp_addr)
         .with_auth_token(dummy_snap_token())
         .build()
         .await

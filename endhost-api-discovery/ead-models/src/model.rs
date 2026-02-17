@@ -38,7 +38,7 @@ pub trait EndhostApiDiscovery: Send + Sync {
     ///
     /// # Parameters
     /// - `public_ip`: The public IP address of the endhost making the discovery request.
-    async fn discover_endhost_api(&self, public_ip: IpAddr) -> Vec<EndhostApiGroup>;
+    async fn discover_endhost_apis(&self, public_ip: IpAddr) -> Vec<EndhostApiGroup>;
 }
 
 /// Unordered group of Endhost APIs the client can failover between.

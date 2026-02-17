@@ -16,7 +16,6 @@
 use std::{borrow::Cow, net, sync::Arc, time::Duration};
 
 use endhost_api_client::client::CrpcEndhostApiClient;
-// Re-export for consumer
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_reqwest_connect_rpc::token_source::{TokenSource, static_token::StaticTokenSource};
 use scion_sdk_utils::backoff::ExponentialBackoff;
@@ -24,6 +23,9 @@ use url::Url;
 use x25519_dalek::StaticSecret;
 
 use crate::{
+    ea_source::{
+        EndhostApiSource, EndhostApiSourceError, StaticEndhostApiDiscovery, StaticEndhostApis,
+    },
     scionstack::ScionStack,
     underlays::{
         SnapSocketConfig, UnderlayStack,
@@ -45,7 +47,8 @@ const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_se
 /// async fn setup_scion_stack() {
 ///     let control_plane_url: Url = "http://127.0.0.1:1234".parse().unwrap();
 ///
-///     let scion_stack = ScionStackBuilder::new(control_plane_url)
+///     let scion_stack = ScionStackBuilder::new()
+///         .with_endhost_api(control_plane_url)
 ///         .with_auth_token("snap_token".to_string())
 ///         .build()
 ///         .await
@@ -53,9 +56,9 @@ const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_se
 /// }
 /// ```
 pub struct ScionStackBuilder {
-    endhost_api_url: Url,
     endhost_api_token_source: Option<Arc<dyn TokenSource>>,
     auth_token_source: Option<Arc<dyn TokenSource>>,
+    endhost_api_source: Arc<dyn EndhostApiSource>,
     preferred_underlay: PreferredUnderlay,
     snap: SnapUnderlayConfig,
     udp: UdpUnderlayConfig,
@@ -66,11 +69,11 @@ impl ScionStackBuilder {
     ///
     /// The stack uses the the endhost API to discover the available data planes.
     /// By default, udp dataplanes are preferred over snap dataplanes.
-    pub fn new(endhost_api_url: Url) -> Self {
+    pub fn new() -> Self {
         Self {
-            endhost_api_url,
             endhost_api_token_source: None,
             auth_token_source: None,
+            endhost_api_source: Arc::new(StaticEndhostApiDiscovery::global()),
             preferred_underlay: PreferredUnderlay::Udp,
             snap: SnapUnderlayConfig::default(),
             udp: UdpUnderlayConfig::default(),
@@ -86,6 +89,26 @@ impl ScionStackBuilder {
     /// When discovering data planes, prefer UDP data planes if available.
     pub fn with_prefer_udp(mut self) -> Self {
         self.preferred_underlay = PreferredUnderlay::Udp;
+        self
+    }
+
+    /// Set a static endhost API
+    ///
+    /// Replaces existing endhost API source.
+    ///
+    /// See [Self::with_endhost_api_discovery_source] for more flexible configuration
+    pub fn with_endhost_api(mut self, endhost_api_url: Url) -> Self {
+        let source = StaticEndhostApis::new().add_group(vec![endhost_api_url]);
+        self.endhost_api_source = Arc::new(source);
+
+        self
+    }
+
+    /// Sets how the client will find its endhost APIs.
+    ///
+    /// If none is set, the stack will fall back to using the global discovery API.
+    pub fn with_endhost_api_discovery_source(mut self, source: impl EndhostApiSource) -> Self {
+        self.endhost_api_source = Arc::new(source);
         self
     }
 
@@ -136,20 +159,42 @@ impl ScionStackBuilder {
     /// A new SCION stack.
     pub async fn build(self) -> Result<ScionStack, BuildScionStackError> {
         let ScionStackBuilder {
-            endhost_api_url,
             endhost_api_token_source,
             auth_token_source,
+            endhost_api_source,
             preferred_underlay,
             snap,
             udp,
         } = self;
 
+        let mut endhost_apis = endhost_api_source
+            .endhost_apis()
+            .await?
+            .into_iter()
+            .filter(|group| !group.apis.is_empty());
+
+        let api_group = endhost_apis.next().ok_or(EndhostApiSourceError {
+            error: anyhow::anyhow!("Endhost API discovery returned empty list"),
+            // Likely not transient, since it indicates a misconfiguration on client or server side.
+            transient: false,
+        })?;
+
+        // TODO: Failover between apis, should be implemented in the CRPC client.
+        let endhost_api_url = api_group
+            .apis
+            .first()
+            .expect("API group with no APIs should have been filtered out")
+            .address
+            .clone();
+
         let endhost_api_client = {
             let mut client = CrpcEndhostApiClient::new(&endhost_api_url)
                 .map_err(BuildScionStackError::EndhostApiClientSetupError)?;
+
             if let Some(token_source) = endhost_api_token_source.or(auth_token_source.clone()) {
                 client.use_token_source(token_source);
             }
+
             Arc::new(client)
         };
 
@@ -195,6 +240,12 @@ impl ScionStackBuilder {
     }
 }
 
+impl Default for ScionStackBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Build SCION stack errors.
 #[derive(thiserror::Error, Debug)]
 pub enum BuildScionStackError {
@@ -206,6 +257,9 @@ pub enum BuildScionStackError {
     /// This error is only returned if the underlay is not statically configured.
     #[error("underlay discovery request error: {0:#}")]
     UnderlayDiscoveryError(CrpcClientError),
+    /// Failed to find a usable endhost API.
+    #[error("endhost api source error: {0:#}")]
+    EndhostApiSourceError(#[from] EndhostApiSourceError),
     /// Error setting up the endhost API client.
     #[error("endhost API client setup error: {0:#}")]
     EndhostApiClientSetupError(anyhow::Error),

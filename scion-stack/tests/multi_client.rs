@@ -33,14 +33,16 @@ async fn multi_client() {
 
     // stack1
     let ia132_eh_api = ps_handle.endhost_api(IA132).await.unwrap();
-    let stack1 = ScionStackBuilder::new(ia132_eh_api.clone())
+    let stack1 = ScionStackBuilder::new()
+        .with_endhost_api(ia132_eh_api.clone())
         .with_auth_token(seeded_dummy_snap_token("client1".to_string()))
         .build()
         .await
         .unwrap();
 
     // stack2
-    let stack2 = ScionStackBuilder::new(ia132_eh_api.clone())
+    let stack2 = ScionStackBuilder::new()
+        .with_endhost_api(ia132_eh_api.clone())
         .with_auth_token(seeded_dummy_snap_token("client2".to_string()))
         .build()
         .await
@@ -48,7 +50,8 @@ async fn multi_client() {
 
     // snap2
     let ia212_eh_api = ps_handle.endhost_api(IA212).await.unwrap();
-    let server_stack = ScionStackBuilder::new(ia212_eh_api)
+    let server_stack = ScionStackBuilder::new()
+        .with_endhost_api(ia212_eh_api)
         .with_auth_token(dummy_snap_token())
         .build()
         .await

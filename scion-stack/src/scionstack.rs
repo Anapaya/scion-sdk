@@ -30,8 +30,7 @@
 //! # async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! let scion_stack = builder.build().await?;
 //! let socket = scion_stack.bind(None).await?;
@@ -58,8 +57,7 @@
 //! # async fn connected_socket_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! // Parse destination address
 //! let destination: SocketAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
@@ -85,8 +83,7 @@
 //! # async fn basic_socket_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! // Parse addresses
 //! let bind_addr: SocketAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
@@ -183,8 +180,9 @@
 //! # async fn custom_pather_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new()
+//!     .with_endhost_api(control_plane_addr)
+//!     .with_auth_token("SNAP token".to_string());
 //!
 //! // Parse addresses
 //! let bind_addr: SocketAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;

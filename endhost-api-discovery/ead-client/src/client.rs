@@ -32,7 +32,7 @@ use scion_sdk_reqwest_connect_rpc::{
 #[async_trait::async_trait]
 pub trait EndhostApiDiscoveryClient: Send + Sync {
     /// Lists the available endhost APIs
-    async fn discover_endhost_api(&self) -> Result<Vec<EndhostApiGroup>, CrpcClientError>;
+    async fn discover_endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, CrpcClientError>;
 }
 
 /// Connect RPC endhost API discovery client.
@@ -72,7 +72,7 @@ impl CrpcEndhostApiDiscoveryClient {
 
 #[async_trait::async_trait]
 impl EndhostApiDiscoveryClient for CrpcEndhostApiDiscoveryClient {
-    async fn discover_endhost_api(&self) -> Result<Vec<EndhostApiGroup>, CrpcClientError> {
+    async fn discover_endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, CrpcClientError> {
         let res = self
             .client
             .unary_request::<RpcGetEndhostApisRequest, RpcGetEndhostApisResponse>(

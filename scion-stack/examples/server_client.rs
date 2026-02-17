@@ -153,13 +153,13 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let (server_task, server_address, server_certificate) = async {
         // Create our SCION network stack - using the SNAP for the server as the Underlay
-        let server_network_stack =
-            ScionStackBuilder::new(cfg.get_snap_control_plane_host(&cfg.server.use_snap)?)
-                .with_auth_token(dummy_snap_token())
-                .build()
-                .in_current_span()
-                .await
-                .context("error building server SCION stack")?;
+        let server_network_stack = ScionStackBuilder::new()
+            .with_endhost_api(cfg.get_snap_control_plane_host(&cfg.server.use_snap)?)
+            .with_auth_token(dummy_snap_token())
+            .build()
+            .in_current_span()
+            .await
+            .context("error building server SCION stack")?;
 
         // Generate simple QUICK server config
         let (server_certificate, server_config) =
@@ -200,13 +200,13 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let client_task = async {
         // Create the SCION network stack - using the SNAP for the client as the underlay
-        let client_network_stack =
-            ScionStackBuilder::new(cfg.get_snap_control_plane_host(&cfg.client.use_snap)?)
-                .with_auth_token(dummy_snap_token())
-                .build()
-                .in_current_span()
-                .await
-                .context("error building client SCION stack")?;
+        let client_network_stack = ScionStackBuilder::new()
+            .with_endhost_api(cfg.get_snap_control_plane_host(&cfg.client.use_snap)?)
+            .with_auth_token(dummy_snap_token())
+            .build()
+            .in_current_span()
+            .await
+            .context("error building client SCION stack")?;
 
         let addr = client_network_stack.bind(None).await?.local_addr();
         tracing::info!("Client address: {}", addr);

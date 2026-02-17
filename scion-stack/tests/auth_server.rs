@@ -77,7 +77,8 @@ async fn with_auth_server() {
         .expect("get snap")
         .control_plane_api
         .clone();
-    let _client_stack = ScionStackBuilder::new(snap_cp_addr)
+    let _client_stack = ScionStackBuilder::new()
+        .with_endhost_api(snap_cp_addr)
         .with_auth_token(snap_token_resp.access_token)
         .build()
         .await

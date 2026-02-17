@@ -1,4 +1,4 @@
-// Copyright 2025 Anapaya Systems
+// Copyright 2026 Anapaya Systems
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,89 +12,70 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Simple end-to-end test for PocketScion utilizing a topology
+//! Simple end-to-end test with PocketScion checking Endhost API discovery
 
-use std::{str::FromStr, time::SystemTime};
+use std::{net::SocketAddr, str::FromStr, time::SystemTime};
 
 use anyhow::{Context, Ok};
 use ntest::timeout;
 use pocketscion::{
-    network::scion::topology::{ScionAs, ScionTopology},
-    runtime::PocketScionRuntimeBuilder,
+    network::scion::util::test_helper::test_topology, runtime::PocketScionRuntimeBuilder,
     state::SharedPocketScionState,
 };
 use scion_proto::address::IsdAsn;
-use scion_stack::scionstack::ScionStackBuilder;
+use scion_stack::{ea_source::StaticEndhostApiDiscovery, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
+use url::Url;
 
 #[tokio::test]
 #[timeout(10_000)]
-async fn should_send_receive_with_topology() -> anyhow::Result<()> {
-    let server_ia = IsdAsn::from_str("1-3")?;
-    let client_ia = IsdAsn::from_str("2-3")?;
+async fn should_successfully_connect_with_endhost_api_discovery() -> anyhow::Result<()> {
+    let server_ia = IsdAsn::from_str("1-1")?;
+    let client_ia = IsdAsn::from_str("2-1")?;
 
     const MESSAGE_LEN: usize = 64;
 
     let mut state = SharedPocketScionState::new(SystemTime::now());
 
-    //
-    // Setup minimal topology
-    let mut topo = ScionTopology::new();
-    topo.add_as(ScionAs::new_core("1-1".parse()?))?
-        .add_as(ScionAs::new_core("1-2".parse()?))?
-        .add_as(ScionAs::new("1-3".parse()?))?
-        .add_as(ScionAs::new_core("2-1".parse()?))?
-        .add_as(ScionAs::new("2-2".parse()?))?
-        .add_as(ScionAs::new("2-3".parse()?))?
-        .add_link("1-1#1 core 1-2#2".parse()?)?
-        .add_link("1-2#1 down_to 1-3#1".parse()?)?
-        .add_link("1-1#2 down_to 1-3#2".parse()?)?
-        .add_link("1-1#3 core 2-1#1".parse()?)?
-        .add_link("2-1#2 down_to 2-2#1".parse()?)?
-        .add_link("2-2#2 down_to 2-3#1".parse()?)?;
-
+    let topo = test_topology().expect("creating test topology");
     state.set_topology(topo);
 
-    //
     // Setup snaps
-    let (server_snap_id, client_snap_id) = {
-        let server_snap_id = state.add_snap(server_ia)?;
-        let client_snap_id = state.add_snap(client_ia)?;
+    state.add_snap(server_ia)?;
+    state.add_snap(client_ia)?;
 
-        (server_snap_id, client_snap_id)
-    };
+    // Add Endhost APIs
+    state.add_endhost_api(vec![server_ia]);
+    state.add_endhost_api(vec![client_ia]);
 
-    //
+    // Setup Discovery API
+    let endhost_api_discovery_id = state.add_endhost_api_discovery_api();
+
     // Start PocketScion
-    let ps_rt = PocketScionRuntimeBuilder::new()
+    let ps = PocketScionRuntimeBuilder::new()
         .with_system_state(state.into_state())
         .start()
         .await
         .context("starting runtime")?;
 
-    let ps_api = ps_rt.api_client();
+    let ead_addr = ps
+        .endhost_api_discovery_addr(endhost_api_discovery_id)
+        .context("getting endhost api discovery address")?;
 
-    //
-    // Get the Assigned addresses for the snaps
-    let all_snaps = ps_api.get_snaps().await.context("getting snaps")?;
-    let client_control_plane_addr = all_snaps
-        .snaps
-        .get(&client_snap_id)
-        .context("client snap not found")?
-        .control_plane_api
-        .clone();
+    let url = match ead_addr {
+        SocketAddr::V4(addr) => {
+            Url::parse(&format!("http://{}", addr))
+                .expect("It is safe to format a SocketAddr as a URL")
+        }
+        SocketAddr::V6(addr) => {
+            Url::parse(&format!("http://[{}]:{}", addr.ip(), addr.port()))
+                .expect("It is safe to format a SocketAddr as a URL")
+        }
+    };
 
-    let server_control_plane_addr = all_snaps
-        .snaps
-        .get(&server_snap_id)
-        .context("server snap not found")?
-        .control_plane_api
-        .clone();
-
-    //
     // Setup server
     let server_stack = ScionStackBuilder::new()
-        .with_endhost_api(server_control_plane_addr)
+        .with_endhost_api_discovery_source(StaticEndhostApiDiscovery::new(vec![url.clone()]))
         .with_auth_token(dummy_snap_token())
         .build()
         .await?;
@@ -102,17 +83,15 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
     let server_socket = server_stack.bind(None).await?;
     let server_addr = server_socket.local_addr();
 
-    //
     // Setup client
     let client_stack = ScionStackBuilder::new()
-        .with_endhost_api(client_control_plane_addr)
+        .with_endhost_api_discovery_source(StaticEndhostApiDiscovery::new(vec![url]))
         .with_auth_token(dummy_snap_token())
         .build()
         .await?;
 
     let client_socket = client_stack.bind(None).await?;
 
-    //
     // Actual Test
     let mut recv_buf = [0u8; MESSAGE_LEN];
 
@@ -120,7 +99,7 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
     client_socket
         .send_to(&random_message, server_addr)
         .await
-        .context("error client sending essage")?;
+        .context("error client sending message")?;
 
     let (_, client_addr) = server_socket
         .recv_from(&mut recv_buf)

@@ -120,6 +120,11 @@ impl SharedPocketScionState {
         Ok(snap_id)
     }
 
+    /// Returns the state of the SNAP with the given id, if it exists.
+    pub fn snap(&self, id: SnapId) -> Option<SnapState> {
+        self.system_state.read().unwrap().snaps.get(&id).cloned()
+    }
+
     /// Returns a map of all Snaps
     pub fn snaps(&self) -> BTreeMap<SnapId, SnapState> {
         let sstate = self.system_state.read().unwrap();

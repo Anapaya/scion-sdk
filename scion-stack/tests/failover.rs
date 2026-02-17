@@ -34,13 +34,15 @@ use tracing::info;
 async fn should_failover_on_link_error() {
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -236,13 +238,15 @@ async fn should_quic_failover_on_link_error() {
         .await
         .unwrap();
 
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await

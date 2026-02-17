@@ -33,7 +33,11 @@ use utoipa::ToSchema;
 use crate::{
     endhost_api::{EndhostApiId, EndhostApiState},
     network::scion::topology::dto::ScionTopologyDto,
-    state::{DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL, RouterId, snap::SnapId},
+    state::{
+        DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL, RouterId,
+        endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryStateDto},
+        snap::SnapId,
+    },
 };
 
 /// The pocket SCION system state.
@@ -57,6 +61,8 @@ pub struct SystemStateDto {
     pub routers: BTreeMap<RouterId, RouterStateDto>,
     /// The list of Endhost APIs
     pub endhost_apis: BTreeMap<EndhostApiId, EndhostApiState>,
+    /// Endhost API discovery state
+    pub endhost_api_discovery_api: BTreeMap<EndhostApiDiscoveryApiId, EndhostApiDiscoveryStateDto>,
     /// Scion Topology used for routing
     #[schema(nullable = false)]
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -112,6 +118,8 @@ pub struct IoConfigDto {
     pub router_sockets: BTreeMap<RouterId, String>,
     /// Listening Sockets for Endhost APIs
     pub endhost_apis: BTreeMap<EndhostApiId, String>,
+    /// Listening Sockets for Endhost API discovery APIs
+    pub endhost_discovery_apis: BTreeMap<EndhostApiDiscoveryApiId, String>,
 }
 
 /// The I/O configuration of the Auth server.

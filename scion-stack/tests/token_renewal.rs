@@ -33,14 +33,16 @@ async fn token_expiry_causes_send_failure() {
     let start_time = std::time::Instant::now();
     let mock_token_source = MockTokenSource::new(dummy_snap_token_with_validity(1));
 
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token_source(mock_token_source)
         .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -105,14 +107,16 @@ async fn updated_token_extends_session() {
     let start_time = std::time::Instant::now();
     let mock_token_source = MockTokenSource::new(dummy_snap_token_with_validity(1));
 
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token_source(mock_token_source.clone())
         .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await

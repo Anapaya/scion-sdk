@@ -138,6 +138,9 @@ components:
         token_exchanger:
           $ref: '#/components/schemas/TokenExchangerStateDto'
           description: The token exchange state.
+    EndhostApiDiscoveryStateDto:
+      description: Serialized state for EndhostApiDiscoveryState
+      default: null
     EndhostApiId:
       type: integer
       description: Endhost API instance identifier.
@@ -212,6 +215,7 @@ components:
       - snaps
       - router_sockets
       - endhost_apis
+      - endhost_discovery_apis
       properties:
         auth_server:
           $ref: '#/components/schemas/IoAuthServerConfigDto'
@@ -224,6 +228,15 @@ components:
           propertyNames:
             type: integer
             description: Endhost API instance identifier.
+            minimum: 0
+        endhost_discovery_apis:
+          type: object
+          description: Listening Sockets for Endhost API discovery APIs
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: integer
+            description: Endhost Discovery API instance identifier.
             minimum: 0
         router_sockets:
           type: object
@@ -436,10 +449,20 @@ components:
       - snaps
       - routers
       - endhost_apis
+      - endhost_api_discovery_api
       properties:
         auth_server_state:
           $ref: '#/components/schemas/AuthServerStateDto'
           description: Test authentication server.
+        endhost_api_discovery_api:
+          type: object
+          description: Endhost API discovery state
+          additionalProperties:
+            $ref: '#/components/schemas/EndhostApiDiscoveryStateDto'
+          propertyNames:
+            type: integer
+            description: Endhost Discovery API instance identifier.
+            minimum: 0
         endhost_apis:
           type: object
           description: The list of Endhost APIs

@@ -26,6 +26,10 @@ snap-tokens = { workspace = true }
 endhost-api = { workspace = true }
 endhost-api-models = { workspace = true }
 
+endhost-api-discovery-api = { workspace = true }
+endhost-api-discovery-models = { workspace = true }
+
+
 # General Dependencies
 async-trait = { workspace = true }
 axum = { workspace = true }

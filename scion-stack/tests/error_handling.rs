@@ -31,7 +31,8 @@ use test_log::test;
 async fn endhost_api_unreachable_should_error() {
     let unreachable_addr = "127.0.0.1:1";
 
-    let result = ScionStackBuilder::new(format!("http://{unreachable_addr}").parse().unwrap())
+    let result = ScionStackBuilder::new()
+        .with_endhost_api(format!("http://{unreachable_addr}").parse().unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await;
@@ -52,7 +53,8 @@ async fn endhost_api_unreachable_should_error() {
 async fn test_invalid_snap_token() {
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
-    let result = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let result = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token("invalid token".to_string())
         .build()
         .await
@@ -76,7 +78,8 @@ async fn test_invalid_snap_token() {
 async fn test_bind_service_address_fails_impl(underlay: UnderlayType) {
     let ps_handle = two_path_topology(underlay).await;
 
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await

@@ -43,7 +43,8 @@ async fn quinn_echo() {
 
     // client stack
     let ia132_eh_api = ps_handle.endhost_api(IA132).await.unwrap();
-    let client_stack = ScionStackBuilder::new(ia132_eh_api)
+    let client_stack = ScionStackBuilder::new()
+        .with_endhost_api(ia132_eh_api)
         .with_auth_token(token_c1)
         .build()
         .await
@@ -51,7 +52,8 @@ async fn quinn_echo() {
 
     // server stack
     let ia212_eh_api = ps_handle.endhost_api(IA212).await.unwrap();
-    let server_stack = ScionStackBuilder::new(ia212_eh_api)
+    let server_stack = ScionStackBuilder::new()
+        .with_endhost_api(ia212_eh_api)
         .with_auth_token(token_s)
         .build()
         .await
