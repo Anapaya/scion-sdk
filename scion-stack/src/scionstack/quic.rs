@@ -25,10 +25,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anapaya_quinn::{AsyncUdpSocket, udp::RecvMeta};
 use bytes::BufMut as _;
 use chrono::Utc;
 use foldhash::fast::FixedState;
-use quinn::{AsyncUdpSocket, udp::RecvMeta};
 use scion_proto::{
     address::SocketAddr,
     packet::{ByEndpoint, ScionPacketUdp},
@@ -43,14 +43,14 @@ use crate::{
 /// Log at most 1 IO error every 3 seconds.
 const IO_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(3);
 
-/// A wrapper around a quinn::Endpoint that translates between SCION and ip:port addresses.
+/// A wrapper around a anapaya_quinn::Endpoint that translates between SCION and ip:port addresses.
 ///
-/// This is necessary because quinn expects a std::net::SocketAddr, but SCION uses
+/// This is necessary because anapaya_quinn expects a std::net::SocketAddr, but SCION uses
 /// scion_proto::address::SocketAddr.
 ///
 /// Addresses are mapped by the provided ScionAsyncUdpSocket.
 pub struct Endpoint {
-    inner: quinn::Endpoint,
+    inner: anapaya_quinn::Endpoint,
     path_prefetcher: Arc<dyn PathPrefetcher + Send + Sync>,
     address_translator: Arc<AddressTranslator>,
     local_scion_addr: scion_proto::address::SocketAddr,
@@ -59,16 +59,16 @@ pub struct Endpoint {
 impl Endpoint {
     /// Creates a new endpoint.
     pub fn new_with_abstract_socket(
-        config: quinn::EndpointConfig,
-        server_config: Option<quinn::ServerConfig>,
-        socket: Arc<dyn quinn::AsyncUdpSocket>,
+        config: anapaya_quinn::EndpointConfig,
+        server_config: Option<anapaya_quinn::ServerConfig>,
+        socket: Arc<dyn anapaya_quinn::AsyncUdpSocket>,
         local_scion_addr: scion_proto::address::SocketAddr,
-        runtime: Arc<dyn quinn::Runtime>,
+        runtime: Arc<dyn anapaya_quinn::Runtime>,
         pather: Arc<dyn PathPrefetcher + Send + Sync>,
         address_translator: Arc<AddressTranslator>,
     ) -> std::io::Result<Self> {
         Ok(Self {
-            inner: quinn::Endpoint::new_with_abstract_socket(
+            inner: anapaya_quinn::Endpoint::new_with_abstract_socket(
                 config,
                 server_config,
                 socket,
@@ -85,7 +85,7 @@ impl Endpoint {
         &self,
         addr: scion_proto::address::SocketAddr,
         server_name: &str,
-    ) -> Result<quinn::Connecting, quinn::ConnectError> {
+    ) -> Result<anapaya_quinn::Connecting, anapaya_quinn::ConnectError> {
         let mapped_addr = self
             .address_translator
             .register_scion_address(addr.scion_address());
@@ -102,7 +102,7 @@ impl Endpoint {
     }
 
     /// Accepts a new incoming connection.
-    pub async fn accept(&self) -> Result<Option<ScionQuinnConn>, quinn::ConnectionError> {
+    pub async fn accept(&self) -> Result<Option<ScionQuinnConn>, anapaya_quinn::ConnectionError> {
         let incoming = self.inner.accept().await;
         if let Some(incoming) = incoming {
             let remote_socket_addr = incoming.remote_address();
@@ -135,7 +135,7 @@ impl Endpoint {
     }
 
     /// Set the default QUIC client configuration.
-    pub fn set_default_client_config(&mut self, config: quinn::ClientConfig) {
+    pub fn set_default_client_config(&mut self, config: anapaya_quinn::ClientConfig) {
         self.inner.set_default_client_config(config);
     }
 
@@ -227,7 +227,7 @@ impl Default for AddressTranslator {
     }
 }
 
-/// A path-aware UDP socket that implements the [quinn::AsyncUdpSocket] trait.
+/// A path-aware UDP socket that implements the [anapaya_quinn::AsyncUdpSocket] trait.
 ///
 /// The socket translates the SCION addresses of incoming packets to IP addresses that
 /// are used by quinn.
@@ -273,7 +273,7 @@ impl std::fmt::Debug for ScionAsyncUdpSocket {
     }
 }
 
-/// A wrapper that implements quinn::UdpPoller by delegating to scionstack::UdpPoller
+/// A wrapper that implements anapaya_quinn::UdpPoller by delegating to scionstack::UdpPoller
 /// This allows scionstack to remain decoupled from the quinn crate
 struct QuinnUdpPollerWrapper(Pin<Box<dyn UdpPoller>>);
 
@@ -289,7 +289,7 @@ impl QuinnUdpPollerWrapper {
     }
 }
 
-impl quinn::UdpPoller for QuinnUdpPollerWrapper {
+impl anapaya_quinn::UdpPoller for QuinnUdpPollerWrapper {
     fn poll_writable(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context,
@@ -299,14 +299,14 @@ impl quinn::UdpPoller for QuinnUdpPollerWrapper {
 }
 
 impl AsyncUdpSocket for ScionAsyncUdpSocket {
-    fn create_io_poller(self: Arc<Self>) -> std::pin::Pin<Box<dyn quinn::UdpPoller>> {
+    fn create_io_poller(self: Arc<Self>) -> std::pin::Pin<Box<dyn anapaya_quinn::UdpPoller>> {
         let socket = self.socket.clone();
         let inner_poller = socket.create_io_poller();
         let wrapper = QuinnUdpPollerWrapper::new(inner_poller);
         Box::pin(wrapper)
     }
 
-    fn try_send(&self, transmit: &quinn::udp::Transmit) -> std::io::Result<()> {
+    fn try_send(&self, transmit: &anapaya_quinn::udp::Transmit) -> std::io::Result<()> {
         let buf = bytes::Bytes::copy_from_slice(transmit.contents);
         let remote_scion_addr = SocketAddr::new(
             self.address_translator
@@ -357,7 +357,7 @@ impl AsyncUdpSocket for ScionAsyncUdpSocket {
         &self,
         cx: &mut std::task::Context,
         bufs: &mut [std::io::IoSliceMut<'_>],
-        meta: &mut [quinn::udp::RecvMeta],
+        meta: &mut [anapaya_quinn::udp::RecvMeta],
     ) -> std::task::Poll<std::io::Result<usize>> {
         match ready!(self.socket.poll_recv_from_with_path(cx)) {
             Ok((remote, bytes, path)) => {

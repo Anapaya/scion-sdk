@@ -19,9 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use bytes::BytesMut;
 use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
-use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use rustls::ClientConfig;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
@@ -71,8 +71,9 @@ async fn quinn_echo() {
         .with_root_certificates(roots)
         .with_no_client_auth();
 
-    let client_config =
-        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto).unwrap()));
+    let client_config = anapaya_quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(client_crypto).unwrap(),
+    ));
 
     // Create a client endpoint.
     let mut client_endpoint = client_stack

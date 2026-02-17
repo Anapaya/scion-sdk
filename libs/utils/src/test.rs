@@ -15,12 +15,12 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ed25519_dalek::pkcs8::EncodePrivateKey;
-use quinn::{
+use anapaya_quinn::{
     TransportConfig,
     crypto::rustls::QuicServerConfig,
     rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer},
 };
+use ed25519_dalek::pkcs8::EncodePrivateKey;
 use rustls::{crypto::CryptoProvider, pki_types::PrivateKeyDer};
 
 /// Generate a self-signed certificate with keys derived deterministically from
@@ -33,7 +33,7 @@ pub fn generate_cert(
     seed: [u8; 32],
     subject_alt_names: Vec<String>,
     alpn_protocols: Vec<Vec<u8>>,
-) -> (CertificateDer<'static>, quinn::ServerConfig) {
+) -> (CertificateDer<'static>, anapaya_quinn::ServerConfig) {
     let dalek_keypair = ed25519_dalek::SigningKey::from_bytes(&seed);
 
     let kp = ed25519_dalek::pkcs8::KeypairBytes {
@@ -60,7 +60,7 @@ pub fn generate_cert(
         .with_single_cert(vec![cert_der.clone()], PrivateKeyDer::Pkcs8(priv_key))
         .unwrap();
     tls_config.alpn_protocols = alpn_protocols;
-    let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
+    let mut server_config = anapaya_quinn::ServerConfig::with_crypto(Arc::new(
         QuicServerConfig::try_from(tls_config).expect("is valid config"),
     ));
     let mut transport_config = TransportConfig::default();

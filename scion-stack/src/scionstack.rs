@@ -477,9 +477,9 @@ impl ScionStack {
     pub async fn quic_endpoint(
         &self,
         bind_addr: Option<SocketAddr>,
-        config: quinn::EndpointConfig,
-        server_config: Option<quinn::ServerConfig>,
-        runtime: Option<Arc<dyn quinn::Runtime>>,
+        config: anapaya_quinn::EndpointConfig,
+        server_config: Option<anapaya_quinn::ServerConfig>,
+        runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
     ) -> anyhow::Result<Endpoint> {
         self.quic_endpoint_with_config(
             bind_addr,
@@ -508,9 +508,9 @@ impl ScionStack {
     pub async fn quic_endpoint_with_config(
         &self,
         bind_addr: Option<SocketAddr>,
-        config: quinn::EndpointConfig,
-        server_config: Option<quinn::ServerConfig>,
-        runtime: Option<Arc<dyn quinn::Runtime>>,
+        config: anapaya_quinn::EndpointConfig,
+        server_config: Option<anapaya_quinn::ServerConfig>,
+        runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
         socket_config: SocketConfig,
     ) -> anyhow::Result<Endpoint> {
         let scmp_handlers: Vec<Box<dyn ScmpHandler>> = vec![Box::new(ScmpErrorHandler::new(
@@ -556,7 +556,7 @@ impl ScionStack {
 
         let runtime = match runtime {
             Some(runtime) => runtime,
-            None => quinn::default_runtime().context("No runtime found")?,
+            None => anapaya_quinn::default_runtime().context("No runtime found")?,
         };
 
         Ok(Endpoint::new_with_abstract_socket(
@@ -890,7 +890,7 @@ pub(crate) trait UnderlaySocket: 'static + Send + Sync {
 }
 
 /// A trait that defines an asynchronous path unaware UDP socket.
-/// This can be used to implement the [quinn::AsyncUdpSocket] trait.
+/// This can be used to implement the [anapaya_quinn::AsyncUdpSocket] trait.
 pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn udp_polling::UdpPoller>>;
     /// Try to send a raw SCION UDP packet. Path resolution and packet encoding is

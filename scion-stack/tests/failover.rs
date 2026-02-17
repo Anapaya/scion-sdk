@@ -15,10 +15,10 @@
 
 use std::{sync::Arc, time::Duration};
 
+use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use anyhow::Context as _;
 use bytes::Bytes;
 use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::two_path_topology};
-use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use rustls::ClientConfig;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
@@ -156,7 +156,7 @@ async fn should_failover_on_link_error() {
 /// Sends data from client to server and server to client concurrently, then receives on both
 /// sides concurrently.
 async fn verify_quic_bidirectional_communication(
-    client_conn: &quinn::Connection,
+    client_conn: &anapaya_quinn::Connection,
     server_conn: &scion_stack::quic::ScionQuinnConn,
     test_data: Bytes,
     timeout_duration: Duration,
@@ -267,8 +267,9 @@ async fn should_quic_failover_on_link_error() {
         .with_root_certificates(roots)
         .with_no_client_auth();
 
-    let client_config =
-        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto).unwrap()));
+    let client_config = anapaya_quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(client_crypto).unwrap(),
+    ));
 
     let mut client_endpoint = sender_stack
         .quic_endpoint(None, EndpointConfig::default(), None, None)

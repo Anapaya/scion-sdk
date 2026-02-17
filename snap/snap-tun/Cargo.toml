@@ -16,7 +16,7 @@ async-trait = { workspace = true }
 bitfield-struct = { workspace = true }
 bytes = { workspace = true }
 prometheus = { workspace = true }
-quinn = { workspace = true }
+anapaya-quinn = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-utils = { workspace = true }

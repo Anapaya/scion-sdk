@@ -25,21 +25,21 @@ pub trait QuinnConn: Clone + Send + Sync {
     /// The type used to represent the remote socket address.
     type SockAddrType: std::fmt::Debug;
     /// Opens a new bidirectional stream.
-    fn open_bi(&self) -> quinn::OpenBi<'_>;
+    fn open_bi(&self) -> anapaya_quinn::OpenBi<'_>;
     /// Accepts a new incoming bidirectional stream.
-    fn accept_bi(&self) -> quinn::AcceptBi<'_>;
+    fn accept_bi(&self) -> anapaya_quinn::AcceptBi<'_>;
     /// Reads a datagram, if one is available.
-    fn read_datagram(&self) -> quinn::ReadDatagram<'_>;
+    fn read_datagram(&self) -> anapaya_quinn::ReadDatagram<'_>;
     /// Sends a datagram.
-    fn send_datagram(&self, data: Bytes) -> Result<(), quinn::SendDatagramError>;
+    fn send_datagram(&self, data: Bytes) -> Result<(), anapaya_quinn::SendDatagramError>;
     /// Sends a datagram and wait for it to be sent.
-    fn send_datagram_wait(&self, data: Bytes) -> quinn::SendDatagram<'_>;
+    fn send_datagram_wait(&self, data: Bytes) -> anapaya_quinn::SendDatagram<'_>;
     /// Waits for the connection to be closed.
-    fn closed(&self) -> impl Future<Output = quinn::ConnectionError> + Send;
+    fn closed(&self) -> impl Future<Output = anapaya_quinn::ConnectionError> + Send;
     /// Returns the reason why the connection was closed, if it was closed.
-    fn close_reason(&self) -> Option<quinn::ConnectionError>;
+    fn close_reason(&self) -> Option<anapaya_quinn::ConnectionError>;
     /// Closes the connection with the given error code and reason.
-    fn close(&self, error_code: quinn::VarInt, reason: &[u8]);
+    fn close(&self, error_code: anapaya_quinn::VarInt, reason: &[u8]);
     /// Returns the maximum datagram size that can be sent on this connection.
     fn max_datagram_size(&self) -> Option<usize>;
     /// Returns the amount of buffer space available for sending datagrams.
@@ -51,13 +51,13 @@ pub trait QuinnConn: Clone + Send + Sync {
     /// Returns a stable connection identifier.
     fn stable_id(&self) -> usize;
     /// Returns connection statistics.
-    fn stats(&self) -> quinn::ConnectionStats;
+    fn stats(&self) -> anapaya_quinn::ConnectionStats;
 }
 
 /// SCION quinn connection.
 #[derive(Clone)]
 pub struct ScionQuinnConn {
-    pub(crate) inner: quinn::Connection,
+    pub(crate) inner: anapaya_quinn::Connection,
     /// The local SCION address of the connection.
     pub(crate) local_addr: Option<scion_proto::address::ScionAddr>,
     /// The remote SCION socket address of the connection.
@@ -69,35 +69,35 @@ impl QuinnConn for ScionQuinnConn {
 
     type SockAddrType = scion_proto::address::SocketAddr;
 
-    fn open_bi(&self) -> quinn::OpenBi<'_> {
+    fn open_bi(&self) -> anapaya_quinn::OpenBi<'_> {
         self.inner.open_bi()
     }
 
-    fn accept_bi(&self) -> quinn::AcceptBi<'_> {
+    fn accept_bi(&self) -> anapaya_quinn::AcceptBi<'_> {
         self.inner.accept_bi()
     }
 
-    fn read_datagram(&self) -> quinn::ReadDatagram<'_> {
+    fn read_datagram(&self) -> anapaya_quinn::ReadDatagram<'_> {
         self.inner.read_datagram()
     }
 
-    fn send_datagram(&self, data: Bytes) -> Result<(), quinn::SendDatagramError> {
+    fn send_datagram(&self, data: Bytes) -> Result<(), anapaya_quinn::SendDatagramError> {
         self.inner.send_datagram(data)
     }
 
-    fn send_datagram_wait(&self, data: Bytes) -> quinn::SendDatagram<'_> {
+    fn send_datagram_wait(&self, data: Bytes) -> anapaya_quinn::SendDatagram<'_> {
         self.inner.send_datagram_wait(data)
     }
 
-    async fn closed(&self) -> quinn::ConnectionError {
+    async fn closed(&self) -> anapaya_quinn::ConnectionError {
         self.inner.closed().await
     }
 
-    fn close_reason(&self) -> Option<quinn::ConnectionError> {
+    fn close_reason(&self) -> Option<anapaya_quinn::ConnectionError> {
         self.inner.close_reason()
     }
 
-    fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
+    fn close(&self, error_code: anapaya_quinn::VarInt, reason: &[u8]) {
         self.inner.close(error_code, reason)
     }
 
@@ -120,45 +120,45 @@ impl QuinnConn for ScionQuinnConn {
     fn stable_id(&self) -> usize {
         self.inner.stable_id()
     }
-    fn stats(&self) -> quinn::ConnectionStats {
+    fn stats(&self) -> anapaya_quinn::ConnectionStats {
         self.inner.stats()
     }
 }
 
-impl QuinnConn for quinn::Connection {
+impl QuinnConn for anapaya_quinn::Connection {
     type AddrType = std::net::IpAddr;
 
     type SockAddrType = std::net::SocketAddr;
 
-    fn open_bi(&self) -> quinn::OpenBi<'_> {
+    fn open_bi(&self) -> anapaya_quinn::OpenBi<'_> {
         self.open_bi()
     }
 
-    fn accept_bi(&self) -> quinn::AcceptBi<'_> {
+    fn accept_bi(&self) -> anapaya_quinn::AcceptBi<'_> {
         self.accept_bi()
     }
 
-    fn read_datagram(&self) -> quinn::ReadDatagram<'_> {
+    fn read_datagram(&self) -> anapaya_quinn::ReadDatagram<'_> {
         self.read_datagram()
     }
 
-    fn send_datagram(&self, data: Bytes) -> Result<(), quinn::SendDatagramError> {
+    fn send_datagram(&self, data: Bytes) -> Result<(), anapaya_quinn::SendDatagramError> {
         self.send_datagram(data)
     }
 
-    fn send_datagram_wait(&self, data: Bytes) -> quinn::SendDatagram<'_> {
+    fn send_datagram_wait(&self, data: Bytes) -> anapaya_quinn::SendDatagram<'_> {
         self.send_datagram_wait(data)
     }
 
-    fn closed(&self) -> impl Future<Output = quinn::ConnectionError> + Send {
+    fn closed(&self) -> impl Future<Output = anapaya_quinn::ConnectionError> + Send {
         self.closed()
     }
 
-    fn close_reason(&self) -> Option<quinn::ConnectionError> {
+    fn close_reason(&self) -> Option<anapaya_quinn::ConnectionError> {
         self.close_reason()
     }
 
-    fn close(&self, error_code: quinn::VarInt, reason: &[u8]) {
+    fn close(&self, error_code: anapaya_quinn::VarInt, reason: &[u8]) {
         self.close(error_code, reason);
     }
 
@@ -181,7 +181,7 @@ impl QuinnConn for quinn::Connection {
     fn stable_id(&self) -> usize {
         self.stable_id()
     }
-    fn stats(&self) -> quinn::ConnectionStats {
+    fn stats(&self) -> anapaya_quinn::ConnectionStats {
         self.stats()
     }
 }

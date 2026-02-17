@@ -101,10 +101,10 @@ async fn test_quic_endpoint_creation_udp() {
 #[test(tokio::test)]
 #[ntest::timeout(5_000)]
 async fn test_bind_two_endpoints_socket_already_in_use() {
-    let first_endpoint = quinn::Endpoint::client(("0.0.0.0:0").parse().unwrap()).unwrap();
+    let first_endpoint = anapaya_quinn::Endpoint::client(("0.0.0.0:0").parse().unwrap()).unwrap();
     let local_addr = first_endpoint.local_addr().unwrap();
     info!("Local address: {local_addr:?}");
-    let second_endpoint = quinn::Endpoint::client(local_addr);
+    let second_endpoint = anapaya_quinn::Endpoint::client(local_addr);
     assert!(
         second_endpoint.is_err(),
         "expected error but got {second_endpoint:?}"
@@ -222,7 +222,7 @@ async fn test_quic_endpoint_creation_impl(ps_handle: PocketScionHandle) {
         .expect("build SCION stack");
 
     let endpoint = stack
-        .quic_endpoint(None, quinn::EndpointConfig::default(), None, None)
+        .quic_endpoint(None, anapaya_quinn::EndpointConfig::default(), None, None)
         .await;
 
     assert!(endpoint.is_ok());

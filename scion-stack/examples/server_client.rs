@@ -44,6 +44,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig, rustls::RootCertStore};
 use anyhow::Context;
 use bytes::Bytes;
 use derive_more::Deref;
@@ -53,7 +54,6 @@ use pocketscion::{
     runtime::{PocketScionRuntime, PocketScionRuntimeBuilder},
     state::SharedPocketScionState,
 };
-use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig, rustls::RootCertStore};
 use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
 use scion_sdk_utils::test::install_rustls_crypto_provider;
 use scion_stack::{
@@ -224,12 +224,13 @@ async fn main() -> Result<(), anyhow::Error> {
             .add(server_certificate)
             .context("error adding server certificate to root store")?;
 
-        let client_crypto = quinn::rustls::ClientConfig::builder()
+        let client_crypto = anapaya_quinn::rustls::ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
 
-        let client_config =
-            quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto).unwrap()));
+        let client_config = anapaya_quinn::ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(client_crypto).unwrap(),
+        ));
 
         client_socket.set_default_client_config(client_config);
 
@@ -240,7 +241,7 @@ async fn main() -> Result<(), anyhow::Error> {
         );
 
         // Connect to the server
-        let connected_client_socket: quinn::Connection = client_socket
+        let connected_client_socket: anapaya_quinn::Connection = client_socket
             .connect(server_address, "localhost")
             .context("error creating QUIC configuration")?
             .in_current_span()
@@ -363,7 +364,7 @@ async fn server_loop(server_quick_endpoint: scion_stack::scionstack::quic::Endpo
     }
 }
 
-async fn client_loop(conn: quinn::Connection, stats: Stats) {
+async fn client_loop(conn: anapaya_quinn::Connection, stats: Stats) {
     tracing::info!("Opening bidirectional stream to server...");
 
     loop {

@@ -98,7 +98,7 @@ prost-build = "0.14"
 prost-types = "0.14"
 # We maintain our own fork of quinn. If you want to update the dependency,
 # follow the instructions in the documentation.
-quinn = { version = "0.11.9-ana.0", package = "anapaya-quinn" }
+anapaya-quinn = { version = "0.11.9-ana.0" }
 rand = "0.9"
 # rand_core = "0.9"
 rand_chacha = { version = "0.9", features = ["serde"] }
