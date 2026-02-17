@@ -85,7 +85,7 @@ impl WireEncode for ScionPacketHeader {
         unsafe {
             use CommonHeaderLayout as CHL;
             // Encode common header
-            self.common.encode(
+            self.common.encode_unchecked(
                 buf,
                 self.size_units(),
                 self.path.path_type(),
@@ -152,8 +152,12 @@ impl CommonHeader {
     }
 
     const VERSION: u8 = 0;
+    /// TODO(uniquefine): write a safe version of this function.
     /// Encodes the `CommonHeader` into the provided buffer
-    pub fn encode(
+    /// # Safety
+    /// - The implementation may use unchecked indexing operations and relies on the caller to
+    ///   provide a sufficiently large buffer (at least `CommonHeaderLayout::SIZE_BYTES` bytes).
+    pub unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
         header_len_units: u8,

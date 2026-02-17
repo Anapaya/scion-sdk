@@ -20,7 +20,7 @@ use crate::{
     core::{
         debug::Annotations,
         layout::{BitRange, Layout, LayoutParseError, macros::gen_bitrange_const},
-        view::View,
+        view::{View, ViewConversionError},
     },
     path::standard::view::StandardPathView,
 };
@@ -77,6 +77,12 @@ impl Layout for StdPathLayout {
     #[inline]
     fn size_bytes(&self) -> usize {
         self.meta.size_bytes() + self.data.size_bytes()
+    }
+}
+impl TryFrom<&[u8]> for StdPathLayout {
+    type Error = ViewConversionError;
+    fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
+        Self::from_slice(buf).map_err(ViewConversionError::from)
     }
 }
 

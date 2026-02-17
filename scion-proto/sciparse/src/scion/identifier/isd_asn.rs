@@ -21,7 +21,7 @@ use std::{
 };
 
 use crate::{
-    core::macros::impl_from,
+    core::{macros::impl_from, read::FromUnalignedRead, write::IntoUnalignedWrite},
     scion::{
         address::AddressParseError,
         identifier::{asn::Asn, isd::Isd},
@@ -138,7 +138,16 @@ impl TryFrom<String> for IsdAsn {
 impl_from!(IsdAsn, String, |v| v.to_string());
 impl_from!(IsdAsn, u64, |v| v.to_u64());
 impl_from!(u64, IsdAsn, |v| IsdAsn::from_u64(v));
-
+impl FromUnalignedRead for IsdAsn {
+    fn from_unaligned_read(v: u128) -> Self {
+        IsdAsn::from_u64(u64::from_unaligned_read(v))
+    }
+}
+impl IntoUnalignedWrite for IsdAsn {
+    fn into_write_value(v: IsdAsn) -> u128 {
+        v.to_u64() as u128
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -35,3 +35,14 @@ macro_rules! impl_from {
     };
 }
 pub(crate) use impl_from;
+
+macro_rules! impl_from_ref {
+    ($src:ty, $dst:ty, |$v:ident| $body:expr) => {
+        impl<'a> From<&'a $src> for $dst {
+            fn from($v: &'a $src) -> Self {
+                $body
+            }
+        }
+    };
+}
+pub(crate) use impl_from_ref;

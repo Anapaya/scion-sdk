@@ -20,7 +20,10 @@ use std::{
     str::FromStr,
 };
 
-use crate::{core::macros::impl_from, scion::address::AddressParseError};
+use crate::{
+    core::{macros::impl_from, read::FromUnalignedRead},
+    scion::address::AddressParseError,
+};
 
 /// A 16-bit identifier of a SCION Isolation Domain.
 ///
@@ -85,6 +88,11 @@ impl FromStr for Isd {
 }
 impl_from!(u16, Isd, |v| Isd::new(v));
 impl_from!(Isd, u16, |v| v.to_u16());
+impl FromUnalignedRead for Isd {
+    fn from_unaligned_read(v: u128) -> Self {
+        Isd::new(u16::from_unaligned_read(v))
+    }
+}
 
 #[cfg(test)]
 mod tests {

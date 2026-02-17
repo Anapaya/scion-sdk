@@ -14,6 +14,19 @@
 
 //! SCMP (SCION Control Message Protocol) payload views, layouts, and models.
 
+/// Encoding support for SCMP models.
+pub mod encode;
+/// Layout definitions for SCMP messages (bit ranges and sizes).
 pub mod layout;
 pub mod model;
+/// Types and enums used by SCMP messages (e.g. codes and message types).
+pub mod types;
+/// Zero-copy views over SCMP messages and headers.
 pub mod view;
+
+/// SCION protocol number for SCMP.
+///
+/// See the [IETF SCION-dataplane RFC draft][rfc] for possible values.
+///
+///[rfc]: https://www.ietf.org/archive/id/draft-dekater-scion-dataplane-00.html#protnum
+pub const SCMP_PROTOCOL_NUMBER: u8 = 202;

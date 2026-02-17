@@ -20,6 +20,8 @@
 //! 3. Brute force fuzzing must not panic during parsing or view manipulation
 //! 4. No invalid header must panic during encoding
 
+mod scmp_en_decode;
+
 use std::panic::catch_unwind;
 
 use proptest::{

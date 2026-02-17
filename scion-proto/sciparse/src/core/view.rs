@@ -186,6 +186,21 @@ impl From<LayoutParseError> for ViewConversionError {
 }
 
 pub(crate) mod macros {
+    /// Macro to generate unaligned field read and writers
+    ///
+    /// - $name: name of the generated function
+    /// - $bit_range: bit range of the field
+    /// - $repr: representation type of the field
+    ///
+    /// Repr can be any integer from u8 to u64, u128 can only be read if it is aligned.
+    macro_rules! gen_field_read_and_write {
+        ($get_name:ident, $set_name:ident, $bit_range:expr, $repr:ty) => {
+            gen_field_read!($get_name, $bit_range, $repr);
+            gen_field_write!($set_name, $bit_range, $repr);
+        };
+    }
+    pub(crate) use gen_field_read_and_write;
+
     /// Macro to generate unaligned field readers - expects self to be a wrapper around [u8]
     ///
     /// - $name: name of the generated function
@@ -247,4 +262,35 @@ pub(crate) mod macros {
         };
     }
     pub(crate) use gen_unsafe_field_write;
+
+    macro_rules! gen_view_impl {
+        ($name:ident, $layout:ident) => {
+            impl View for $name {
+                fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
+                    let layout = $layout::try_from(buf)?;
+                    Ok(layout.size_bytes())
+                }
+
+                fn as_bytes(&self) -> &[u8] {
+                    &self.0
+                }
+
+                unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
+                    // SAFETY: see View trait documentation
+                    unsafe { std::mem::transmute(buf) }
+                }
+
+                unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
+                    // SAFETY: see View trait documentation
+                    unsafe { std::mem::transmute(buf) }
+                }
+
+                unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
+                    // SAFETY: see View trait documentation
+                    unsafe { std::mem::transmute(buf) }
+                }
+            }
+        };
+    }
+    pub(crate) use gen_view_impl;
 }

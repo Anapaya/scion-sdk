@@ -15,4 +15,5 @@
 //! SCION types and utilities
 
 pub mod address;
+pub mod checksum;
 pub mod identifier;

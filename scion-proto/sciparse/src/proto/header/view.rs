@@ -20,7 +20,7 @@
 // construction buffer without checks. Need to check that no view would ever try to go beyond
 // that size first.
 
-use std::{fmt::Debug, mem::transmute};
+use std::fmt::Debug;
 
 use crate::{
     core::{
@@ -28,7 +28,7 @@ use crate::{
         read::unchecked_bit_range_be_read,
         view::{
             View, ViewConversionError,
-            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write},
+            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write, gen_view_impl},
         },
         write::unchecked_bit_range_be_write,
     },
@@ -45,41 +45,8 @@ use crate::{
 /// Combines CommonHeader, AddressHeader and PathHeader
 #[repr(transparent)]
 pub struct ScionHeaderView([u8]);
-impl View for ScionHeaderView {
-    #[inline]
-    fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
-        let layout = ScionHeaderLayout::from_slice(buf)?;
+gen_view_impl!(ScionHeaderView, ScionHeaderLayout);
 
-        // Layout validation already ensures that the buffer is large enough
-        // this is just a sanity check
-        debug_assert!(buf.len() >= layout.size_bytes());
-
-        Ok(layout.size_bytes())
-    }
-
-    #[inline]
-    unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
-        // SAFETY: See View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
-        // SAFETY: See View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
-        // SAFETY: See View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
 // Common header
 impl ScionHeaderView {
     // Field readers

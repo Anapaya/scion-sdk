@@ -20,7 +20,10 @@ use std::{
     str::FromStr,
 };
 
-use crate::{core::macros::impl_from, scion::address::AddressParseError};
+use crate::{
+    core::{macros::impl_from, read::FromUnalignedRead},
+    scion::address::AddressParseError,
+};
 
 /// A 48-bit SCION autonomous system (AS) number.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -140,6 +143,11 @@ impl TryFrom<u64> for Asn {
     }
 }
 impl_from!(Asn, u64, |v| v.to_u64());
+impl FromUnalignedRead for Asn {
+    fn from_unaligned_read(v: u128) -> Self {
+        Asn::new(u64::from_unaligned_read(v))
+    }
+}
 
 #[cfg(test)]
 mod tests {

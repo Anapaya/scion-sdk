@@ -24,7 +24,7 @@ use crate::{
         read::unchecked_bit_range_be_read,
         view::{
             View, ViewConversionError,
-            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write},
+            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write, gen_view_impl},
         },
         write::unchecked_bit_range_be_write,
     },
@@ -39,41 +39,8 @@ use crate::{
 /// A view over a standard SCION path, including meta header and data
 #[repr(transparent)]
 pub struct StandardPathView([u8]);
-impl View for StandardPathView {
-    #[inline]
-    fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
-        let layout = StdPathLayout::from_slice(buf).map_err(ViewConversionError::from)?;
+gen_view_impl!(StandardPathView, StdPathLayout);
 
-        // Layout validation should already ensure that the buffer is large enough
-        // this is just a sanity check
-        debug_assert!(buf.len() >= layout.size_bytes());
-
-        Ok(layout.size_bytes())
-    }
-
-    #[inline]
-    unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
-        // SAFETY: see View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
-        // SAFETY: see View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
-        // SAFETY: see View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
 // Meta header
 impl StandardPathView {
     gen_field_read!(curr_info_field, StdPathMetaLayout::CURR_INFO_FIELD_RNG, u8);

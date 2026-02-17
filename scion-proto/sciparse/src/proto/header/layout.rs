@@ -21,7 +21,7 @@ use crate::{
         debug::Annotations,
         encode::WireEncode,
         layout::{BitRange, Layout, LayoutParseError, macros::gen_bitrange_const},
-        view::View,
+        view::{View, ViewConversionError},
     },
     header::{
         model::{Path, ScionPacketHeader},
@@ -267,6 +267,12 @@ impl Layout for ScionHeaderLayout {
     #[inline]
     fn size_bytes(&self) -> usize {
         self.header_len
+    }
+}
+impl TryFrom<&[u8]> for ScionHeaderLayout {
+    type Error = ViewConversionError;
+    fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
+        Self::from_slice(buf).map_err(ViewConversionError::from)
     }
 }
 
