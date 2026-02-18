@@ -15,7 +15,6 @@
 //! HTTP/3 client over SCION transport.
 
 pub mod driver;
-pub mod request;
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -25,10 +24,13 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::{
-    client::{QuicConfig, QuicConnection, QuicConnectionError},
-    h3::client::{
-        driver::{H3Connection, H3Driver, H3Reply},
+    h3::{
+        client::driver::{H3Connection, H3Driver, H3Reply},
         request::{H3Request, H3Response},
+    },
+    quic::{
+        client::{QuicConnection, QuicConnectionError},
+        config::QuicConfig,
     },
 };
 
@@ -39,6 +41,7 @@ pub struct H3Client {
     remote: SocketAddr,
     server_name: Option<String>,
     socket: Arc<UdpScionSocket>,
+    config: QuicConfig,
 
     // H3 connection if established
     connection: Arc<Mutex<Option<H3Connection>>>,
@@ -71,11 +74,22 @@ impl H3Client {
         socket: Arc<UdpScionSocket>,
         server_name: Option<String>,
     ) -> Result<Self, H3ConnectionError> {
+        Self::with_config(remote, socket, server_name, QuicConfig::default()).await
+    }
+
+    /// Creates a new HTTP/3 client with custom configuration.
+    pub async fn with_config(
+        remote: SocketAddr,
+        socket: Arc<UdpScionSocket>,
+        server_name: Option<String>,
+        config: QuicConfig,
+    ) -> Result<Self, H3ConnectionError> {
         let client = Self {
             remote,
             server_name,
             socket,
             connection: Arc::new(Mutex::new(None)),
+            config,
         };
 
         client.get_connection().await?;
@@ -153,9 +167,7 @@ impl H3Client {
 
     /// Establishes a new HTTP/3 connection.
     async fn establish_connection(&self) -> Result<H3Connection, H3ConnectionError> {
-        let config = QuicConfig::default()
-            .to_quiche_config()
-            .expect("default config is valid");
+        let config = self.config.to_quiche_config()?;
         let conn = QuicConnection::new(
             self.server_name.clone(),
             self.remote,
@@ -177,6 +189,9 @@ impl H3Client {
 /// HTTP/3 connection error.
 #[derive(Debug, Error)]
 pub enum H3ConnectionError {
+    /// Invalid conifguration.
+    #[error("invalid configuration: {0}")]
+    InvalidConfig(#[from] squiche::Error),
     /// QUIC connection error.
     #[error("QUIC connection error: {0}")]
     QuicConnectionError(#[from] QuicConnectionError),

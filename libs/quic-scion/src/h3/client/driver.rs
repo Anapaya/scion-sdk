@@ -14,19 +14,17 @@
 
 //! HTTP/3 driver for H3 requests and events.
 
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use squiche::h3::NameValue;
 use thiserror::Error;
 use tokio::sync::{Mutex, oneshot};
 
 use crate::{
-    client::QuicConnection,
-    h3::client::request::{H3Request, H3Response},
+    UDP_PACKET_BUFFER_SIZE,
+    h3::request::{H3Request, H3Response},
+    quic::client::QuicConnection,
 };
-
-/// UDP packet buffer size.
-const UDP_PACKET_BUFFER_SIZE: usize = 65535;
 
 /// Maximum body buffer size.
 const MAX_BODY_BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16 MB
@@ -103,7 +101,7 @@ impl H3Connection {
                 .map_err(H3SendRequestError::SendRequestError)?
         };
 
-        tracing::trace!(
+        tracing::info!(
             stream_id,
             method = %request.method,
             path = %request.path,
@@ -129,6 +127,8 @@ impl H3Connection {
             }
         }
 
+        self.quic_conn.tx_notifier.notify_one();
+
         let (tx, rx) = oneshot::channel();
         let mut state = self.state.lock().await;
         state.pending_requests.insert(
@@ -146,15 +146,9 @@ impl H3Connection {
 }
 
 /// The HTTP/3 driver handling h3 events and dispatching replies back to the requester.
-#[derive(Clone)]
-pub struct H3Driver(H3Connection);
-
-impl Deref for H3Driver {
-    type Target = H3Connection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub struct H3Driver {
+    h3_conn: H3Connection,
+    buffer: Vec<u8>,
 }
 
 impl H3Driver {
@@ -172,32 +166,47 @@ impl H3Driver {
             pending_requests: HashMap::new(),
         }));
 
-        let h3_connection = H3Connection {
+        let h3_conn = H3Connection {
             state: state.clone(),
             quic_conn,
         };
 
-        Ok(Self(h3_connection))
+        Ok(Self {
+            h3_conn,
+            buffer: vec![0u8; UDP_PACKET_BUFFER_SIZE],
+        })
     }
 
     /// Returns the underlying H3Connection.
     pub fn h3_connection(&self) -> H3Connection {
-        self.0.clone()
+        self.h3_conn.clone()
     }
 
     /// Run the event handler loop.
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         loop {
-            tokio::select! {
-                // Received QUIC packet, try polling H3 events
-                _ = self.quic_conn.waiter.notified() => {
-                    self.handle_h3_events().await;
+            'poll_loop: loop {
+                let res = {
+                    let mut conn = self.h3_conn.quic_conn.conn.lock().await;
+                    let mut state = self.h3_conn.state.lock().await;
+                    state.h3_conn.poll(&mut conn)
+                };
+
+                match res {
+                    Ok((stream_id, event)) => {
+                        tracing::trace!(?stream_id, ?event, "Received H3 event");
+                        self.handle_h3_event(stream_id, event).await;
+                    }
+                    Err(squiche::h3::Error::Done) => break,
+                    Err(err) => {
+                        tracing::warn!(?err, "Failed to poll H3 events");
+                        break 'poll_loop;
+                    }
                 }
             }
-
             // Check if the underlying QUIC connection is closed
             {
-                let conn = self.0.quic_conn.conn.lock().await;
+                let conn = self.h3_conn.quic_conn.conn.lock().await;
                 if conn.is_closed() {
                     tracing::warn!(stats=?conn.stats(),"Connection closed, shutting down H3 driver");
                     break;
@@ -205,38 +214,16 @@ impl H3Driver {
             }
         }
 
-        let mut state = self.state.lock().await;
+        let mut state = self.h3_conn.state.lock().await;
         for (_, pending) in state.pending_requests.drain() {
             let _ = pending.response_tx.send(H3Reply::ConnectionClosed);
         }
     }
 
-    async fn handle_h3_events(&self) {
-        loop {
-            let res = {
-                let mut conn = self.quic_conn.conn.lock().await;
-                let mut state = self.state.lock().await;
-                state.h3_conn.poll(&mut conn)
-            };
-
-            match res {
-                Ok((stream_id, event)) => {
-                    tracing::trace!(?stream_id, ?event, "Received H3 event");
-                    self.handle_h3_event(stream_id, event).await;
-                }
-                Err(squiche::h3::Error::Done) => break,
-                Err(err) => {
-                    tracing::warn!(?err, "Failed to poll H3 events");
-                    break;
-                }
-            }
-        }
-    }
-
-    async fn handle_h3_event(&self, stream_id: u64, event: squiche::h3::Event) {
+    async fn handle_h3_event(&mut self, stream_id: u64, event: squiche::h3::Event) {
         match event {
             squiche::h3::Event::Headers { list, .. } => {
-                let mut state = self.state.lock().await;
+                let mut state = self.h3_conn.state.lock().await;
                 if let Some(pending) = state.pending_requests.get_mut(&stream_id) {
                     for header in &list {
                         let name = String::from_utf8_lossy(header.name()).to_string();
@@ -251,18 +238,17 @@ impl H3Driver {
                 }
             }
             squiche::h3::Event::Data => {
-                let mut state = self.state.lock().await;
+                let mut state = self.h3_conn.state.lock().await;
                 let H3State {
                     ref mut h3_conn,
                     ref mut pending_requests,
                 } = *state;
 
                 if let Some(pending) = pending_requests.get_mut(&stream_id) {
-                    let mut buf = [0u8; UDP_PACKET_BUFFER_SIZE];
                     loop {
                         let res = {
-                            let mut conn = self.quic_conn.conn.lock().await;
-                            h3_conn.recv_body(&mut conn, stream_id, &mut buf)
+                            let mut conn = self.h3_conn.quic_conn.conn.lock().await;
+                            h3_conn.recv_body(&mut conn, stream_id, &mut self.buffer)
                         };
 
                         match res {
@@ -276,7 +262,7 @@ impl H3Driver {
                                 }
                                 // XXX(bunert): This forces the entire body to be buffered in
                                 // memory. For large responses we need a streaming body interface.
-                                pending.body.extend_from_slice(&buf[..len]);
+                                pending.body.extend_from_slice(&self.buffer[..len]);
                             }
                             Err(squiche::h3::Error::Done) => break,
                             Err(err) => {
@@ -288,7 +274,7 @@ impl H3Driver {
                 }
             }
             squiche::h3::Event::Finished => {
-                let mut state = self.state.lock().await;
+                let mut state = self.h3_conn.state.lock().await;
                 if let Some(pending) = state.pending_requests.remove(&stream_id) {
                     let response = H3Response {
                         status: pending
@@ -304,7 +290,7 @@ impl H3Driver {
                 }
             }
             squiche::h3::Event::Reset(error_code) => {
-                let mut state = self.state.lock().await;
+                let mut state = self.h3_conn.state.lock().await;
                 if let Some(pending) = state.pending_requests.remove(&stream_id)
                     && let Err(err) = pending
                         .response_tx

@@ -14,172 +14,29 @@
 
 //! QUIC client module for establishing connections over SCION transport.
 
-use std::{sync::Arc, time::Duration};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use ring::{
     error::Unspecified,
     rand::{SecureRandom, SystemRandom},
 };
 use scion_proto::address::{IsdAsn, SocketAddr};
-use scion_stack::scionstack::UdpScionSocket;
+use scion_stack::scionstack::{ScionSocketSendError, UdpScionSocket};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-// ============================================================================
-// Configuration
-// ============================================================================
-
-/// Default handshake timeout.
-const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Default idle timeout for connections.
-const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Default max UDP payload size.
-const DEFAULT_MAX_UDP_PAYLOAD_SIZE: usize = 1200;
-
-/// UDP packet buffer size.
-const UDP_PACKET_BUFFER_SIZE: usize = 65535;
-
-/// QUIC client configuration.
-#[derive(Debug, Clone)]
-pub struct QuicConfig {
-    /// Timeout for QUIC handshake completion.
-    pub handshake_timeout: Duration,
-    /// Idle timeout for connections.
-    pub idle_timeout: Duration,
-    /// Maximum UDP payload size.
-    pub max_udp_payload_size: usize,
-    /// Application protocols to advertise (ALPN).
-    pub application_protos: Vec<Vec<u8>>,
-    /// Whether to verify the server certificate.
-    pub verify_peer: bool,
-    /// Optional path to CA certificates file.
-    pub ca_certs_path: Option<String>,
-    /// Initial max data.
-    pub initial_max_data: u64,
-    /// Initial max stream data for bidirectional local streams.
-    pub initial_max_stream_data_bidi_local: u64,
-    /// Initial max stream data for bidirectional remote streams.
-    pub initial_max_stream_data_bidi_remote: u64,
-    /// Initial max stream data for unidirectional streams.
-    pub initial_max_stream_data_uni: u64,
-    /// Initial max bidirectional streams.
-    pub initial_max_streams_bidi: u64,
-    /// Initial max unidirectional streams.
-    pub initial_max_streams_uni: u64,
-}
-
-impl Default for QuicConfig {
-    fn default() -> Self {
-        Self {
-            handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
-            idle_timeout: DEFAULT_IDLE_TIMEOUT,
-            max_udp_payload_size: DEFAULT_MAX_UDP_PAYLOAD_SIZE,
-            application_protos: vec![b"h3".to_vec()],
-            verify_peer: true,
-            ca_certs_path: None,
-            initial_max_data: 10_000_000,
-            initial_max_stream_data_bidi_local: 1_000_000,
-            initial_max_stream_data_bidi_remote: 1_000_000,
-            initial_max_stream_data_uni: 1_000_000,
-            initial_max_streams_bidi: 100,
-            initial_max_streams_uni: 100,
-        }
-    }
-}
-
-impl QuicConfig {
-    /// Creates a new configuration builder.
-    pub fn builder() -> QuicConfigBuilder {
-        QuicConfigBuilder::default()
-    }
-
-    /// Creates a squiche::Config from this configuration.
-    pub fn to_quiche_config(&self) -> Result<squiche::Config, squiche::Error> {
-        let mut config = squiche::Config::new(squiche::SCION_PROTOCOL_VERSION)?;
-
-        config.set_application_protos(
-            &self
-                .application_protos
-                .iter()
-                .map(|p| p.as_slice())
-                .collect::<Vec<_>>(),
-        )?;
-
-        config.set_max_idle_timeout(self.idle_timeout.as_millis() as u64);
-        config.set_max_recv_udp_payload_size(self.max_udp_payload_size);
-        config.set_max_send_udp_payload_size(self.max_udp_payload_size);
-        config.set_initial_max_data(self.initial_max_data);
-        config.set_initial_max_stream_data_bidi_local(self.initial_max_stream_data_bidi_local);
-        config.set_initial_max_stream_data_bidi_remote(self.initial_max_stream_data_bidi_remote);
-        config.set_initial_max_stream_data_uni(self.initial_max_stream_data_uni);
-        config.set_initial_max_streams_bidi(self.initial_max_streams_bidi);
-        config.set_initial_max_streams_uni(self.initial_max_streams_uni);
-        config.set_disable_active_migration(true);
-
-        config.verify_peer(self.verify_peer);
-
-        Ok(config)
-    }
-}
-
-/// Builder for [`QuicConfig`].
-#[derive(Debug, Default)]
-pub struct QuicConfigBuilder {
-    config: QuicConfig,
-}
-
-impl QuicConfigBuilder {
-    /// Sets the handshake timeout.
-    pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
-        self.config.handshake_timeout = timeout;
-        self
-    }
-
-    /// Sets the idle timeout.
-    pub fn idle_timeout(mut self, timeout: Duration) -> Self {
-        self.config.idle_timeout = timeout;
-        self
-    }
-
-    /// Sets the maximum UDP payload size.
-    pub fn max_udp_payload_size(mut self, size: usize) -> Self {
-        self.config.max_udp_payload_size = size;
-        self
-    }
-
-    /// Sets the application protocols (ALPN).
-    pub fn application_protos(mut self, protos: Vec<Vec<u8>>) -> Self {
-        self.config.application_protos = protos;
-        self
-    }
-
-    /// Sets whether to verify the peer's certificate.
-    pub fn verify_peer(mut self, verify: bool) -> Self {
-        self.config.verify_peer = verify;
-        self
-    }
-
-    /// Sets the path to CA certificates file for verification.
-    pub fn ca_certs_path(mut self, path: impl Into<String>) -> Self {
-        self.config.ca_certs_path = Some(path.into());
-        self
-    }
-
-    /// Builds the configuration.
-    pub fn build(self) -> QuicConfig {
-        self.config
-    }
-}
+use crate::{
+    DEFAULT_MAX_UDP_PAYLOAD_SIZE,
+    buf_factory::{BufFactory, PooledBuf},
+};
 
 /// A QUIC connection over SCION.
 #[derive(Clone)]
 pub struct QuicConnection {
     /// The underlying squiche connection.
     pub conn: Arc<Mutex<squiche::Connection>>,
-    /// Waiter for connection events.
-    pub waiter: Arc<tokio::sync::Notify>,
+    /// Waker for connection events.
+    pub tx_notifier: Arc<tokio::sync::Notify>,
 }
 
 /// QUIC connection error.
@@ -217,8 +74,7 @@ impl QuicConnection {
             .local_address()
             .ok_or(QuicConnectionError::InvalidRemoteAddress)?;
 
-        let notifier = Arc::new(tokio::sync::Notify::new());
-        let waiter = notifier.clone();
+        let quic_tx_notifier = Arc::new(tokio::sync::Notify::new());
 
         let conn = squiche::connect(
             server_name.as_deref(),
@@ -230,18 +86,71 @@ impl QuicConnection {
 
         let conn = Arc::new(tokio::sync::Mutex::new(conn));
 
-        let driver =
-            QuicConnectionDriver::new(conn.clone(), socket.clone(), remote.isd_asn(), notifier)
-                .await;
+        let driver = QuicConnectionDriver::new(
+            conn.clone(),
+            socket.clone(),
+            remote.isd_asn(),
+            quic_tx_notifier.clone(),
+        )
+        .await;
         tokio::spawn(driver.run());
 
         while !conn.lock().await.is_established() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::task::yield_now().await;
         }
 
         tracing::info!("QUIC connection established to {}", remote);
 
-        Ok(Self { conn, waiter })
+        Ok(Self {
+            conn,
+            tx_notifier: quic_tx_notifier,
+        })
+    }
+
+    /// Sends data on a stream.
+    pub async fn stream_send(
+        &self,
+        stream_id: u64,
+        data: &[u8],
+        fin: bool,
+    ) -> Result<(), squiche::Error> {
+        let mut conn = self.conn.lock().await;
+        conn.stream_send(stream_id, data, fin)?;
+
+        // Notify the QuicConnectionDriver that there is data to send. Otherwise this can lead to a
+        // delay until the QUIC connection timer fires.
+        self.tx_notifier.notify_one();
+        Ok(())
+    }
+
+    /// Receives data from a stream.
+    pub async fn stream_recv(
+        &self,
+        stream_id: u64,
+        buf: &mut [u8],
+    ) -> Result<(usize, bool), squiche::Error> {
+        loop {
+            let mut conn = self.conn.lock().await;
+
+            match conn.stream_recv(stream_id, buf) {
+                Ok(v) => return Ok(v),
+                Err(squiche::Error::Done) => {}
+                Err(e) => return Err(e),
+            };
+        }
+    }
+
+    /// Returns a list of streams that have data to be read.
+    pub async fn readable_streams(&self) -> Vec<u64> {
+        let conn = self.conn.lock().await;
+        conn.readable().collect()
+    }
+
+    /// Waits until the connection is established.
+    pub async fn wait_established(&self) {
+        while !self.conn.lock().await.is_established() {
+            tokio::task::yield_now().await;
+        }
     }
 }
 
@@ -251,7 +160,10 @@ pub struct QuicConnectionDriver {
     conn: Arc<tokio::sync::Mutex<squiche::Connection>>,
     socket: Arc<UdpScionSocket>,
     remote_isd_as: IsdAsn,
-    notifier: Arc<tokio::sync::Notify>,
+    /// Notifier to hint that there are new packets to send on the socket.
+    quic_tx_notifier: Arc<tokio::sync::Notify>,
+    /// Buffer pool for incoming packets.
+    incoming_buf: PooledBuf,
 }
 
 impl QuicConnectionDriver {
@@ -260,27 +172,34 @@ impl QuicConnectionDriver {
         conn: Arc<Mutex<squiche::Connection>>,
         socket: Arc<UdpScionSocket>,
         remote_isd_as: IsdAsn,
-        notifier: Arc<tokio::sync::Notify>,
+        quic_tx_notifier: Arc<tokio::sync::Notify>,
     ) -> Self {
         Self {
             conn,
             socket,
             remote_isd_as,
-            notifier,
+            quic_tx_notifier,
+            incoming_buf: BufFactory::get_max_buf(),
         }
     }
 
     /// Runs the QUIC connection driver event loop.
-    pub async fn run(self) {
-        tracing::info!("QuicConnectionDriver started");
-
-        let mut recv_buffer = [0; UDP_PACKET_BUFFER_SIZE];
+    pub async fn run(mut self) {
+        tracing::debug!("QUIC connection driver started");
 
         let mut send_buffer = [0; DEFAULT_MAX_UDP_PAYLOAD_SIZE];
 
         // Bookkeeping variables for the next packet to send.
         let mut send_size;
         let mut target_address;
+        // Option to store the pending send future. This ensures cancel safety in the select! loop.
+        //
+        // XXX(bunert): Once the UdpScionSocket::send_to is cancel safe, remove this and have the
+        // send future directly in the select! branch.
+        #[allow(clippy::type_complexity)]
+        let mut pending_send: Option<
+            Pin<Box<dyn Future<Output = Result<(), ScionSocketSendError>> + Send>>,
+        > = None;
 
         // Send initial packet
         {
@@ -318,11 +237,14 @@ impl QuicConnectionDriver {
                 .timeout()
                 .unwrap_or(Duration::from_secs(60));
 
-            // I/O future to send packets on the socket
-            let send = async {
+            // Prepare the send future if there is data to send and no pending send.
+            if pending_send.is_none() && send_size > 0 {
                 let dst = SocketAddr::from_std(self.remote_isd_as, target_address);
-                self.socket.send_to(&send_buffer[..send_size], dst).await
-            };
+                let socket = self.socket.clone();
+                pending_send = Some(Box::pin(async move {
+                    socket.send_to(&send_buffer[..send_size], dst).await
+                }));
+            }
 
             tokio::select! {
                 biased;
@@ -334,9 +256,10 @@ impl QuicConnectionDriver {
                     conn.on_timeout();
                 }
 
+                _ = self.quic_tx_notifier.notified() => {}
 
                 // Receive packets on the socket.
-                res = self.socket.recv_from(&mut recv_buffer) => {
+                res = self.socket.recv_from(&mut self.incoming_buf) => {
                     let (len, src) = match res {
                         Ok(res) => res,
                         Err(err) => {
@@ -345,33 +268,39 @@ impl QuicConnectionDriver {
                         }
                     };
 
+                    let mut body = std::mem::replace(
+                        &mut self.incoming_buf,
+                        BufFactory::get_max_buf(),
+                    );
+                    body.truncate(len);
+
                     if let (Some(from), Some(to)) = (src.local_address(), self.socket.local_addr().local_address()) {
                         let recv_info = squiche::RecvInfo { from, to };
                         let mut conn = self.conn.lock().await;
-                        if let Err(err) = conn.recv(&mut recv_buffer[..len], recv_info) {
+                        if let Err(err) = conn.recv(&mut body, recv_info) {
                             tracing::warn!(
                                 ?err,
                                 "failed to dispatch packet from transport to QUIC connection"
                             );
                             return
                         }
-
-                        // Notify waiter about potential new data on the QUIC connection.
-                        self.notifier.notify_waiters();
                     } else {
                         tracing::warn!(?src, "packet with invalid addresses ignored");
                     }
                 }
 
                 // Send packets on the socket.
-                res = send, if send_size >0 => {
+                res = async {
+                    if let Some(fut) = pending_send.as_mut() {
+                        fut.await
+                    } else {
+                        std::future::pending().await
+                    }
+                }, if pending_send.is_some() => {
+                    pending_send = None;
                     match res {
-                        Ok(()) => {
-                            send_size = 0;
-                        },
-                        Err(err) => {
-                            tracing::info!(?err, "Error sending packet");
-                        }
+                        Ok(()) => send_size = 0,
+                        Err(err) => tracing::warn!(?err, "Failed to send on the underlying socket"),
                     }
                 }
             }

@@ -15,3 +15,5 @@
 //! HTTP/3 over SCION transport.
 
 pub mod client;
+pub mod request;
+pub mod server;
