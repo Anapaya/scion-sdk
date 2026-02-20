@@ -327,9 +327,14 @@ impl ScionStack {
         if !socket_config.disable_endhost_api_segment_fetcher {
             let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
                 Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
-            socket_config.segment_fetchers.push(connect_rpc_fetcher);
+            socket_config
+                .segment_fetchers
+                .push(("Endhost API".into(), connect_rpc_fetcher));
         }
-        let fetcher = PathFetcherImpl::new(socket_config.segment_fetchers);
+        let fetcher = PathFetcherImpl::new(
+            socket_config.segment_fetchers,
+            socket_config.segment_fetcher_timeout,
+        );
 
         // Use default scorers if none are configured.
         if socket_config.path_strategy.scoring.is_empty() {
@@ -525,9 +530,10 @@ impl ScionStack {
             if !socket_config.disable_endhost_api_segment_fetcher {
                 let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
                     Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
-                segment_fetchers.push(connect_rpc_fetcher);
+                segment_fetchers.push(("Endhost API".into(), connect_rpc_fetcher));
             }
-            let fetcher = PathFetcherImpl::new(segment_fetchers);
+            let fetcher =
+                PathFetcherImpl::new(segment_fetchers, socket_config.segment_fetcher_timeout);
 
             // Use default scorers if none are configured.
             let mut strategy = socket_config.path_strategy;
@@ -579,9 +585,13 @@ impl ScionStack {
 
     /// Creates a path manager with default configuration.
     pub fn create_path_manager(&self) -> MultiPathManager<PathFetcherImpl> {
-        let fetcher = PathFetcherImpl::new(vec![Box::new(EndhostApiSegmentFetcher::new(
-            self.client.clone(),
-        ))]);
+        let fetcher = PathFetcherImpl::new(
+            vec![(
+                "Endhost API".into(),
+                Box::new(EndhostApiSegmentFetcher::new(self.client.clone())),
+            )],
+            DEFAULT_SEGMENT_FETCHER_TIMEOUT,
+        );
         let mut strategy = PathStrategy::default();
 
         strategy.scoring.use_default_scorers();
@@ -594,13 +604,23 @@ impl ScionStack {
 /// Default timeout for creating a connected socket
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Default timeout for segment fetchers to avoid waiting indefinitely for slow or unresponsive
+/// fetchers.
+pub const DEFAULT_SEGMENT_FETCHER_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Configuration for a path aware socket.
-#[derive(Default)]
 pub struct SocketConfig {
-    pub(crate) segment_fetchers: Vec<Box<dyn SegmentFetcher>>,
+    pub(crate) segment_fetchers: Vec<(String, Box<dyn SegmentFetcher>)>,
+    pub(crate) segment_fetcher_timeout: Duration,
     pub(crate) disable_endhost_api_segment_fetcher: bool,
     pub(crate) path_strategy: PathStrategy,
     pub(crate) connect_timeout: Duration,
+}
+
+impl Default for SocketConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SocketConfig {
@@ -608,6 +628,7 @@ impl SocketConfig {
     pub fn new() -> Self {
         Self {
             segment_fetchers: Vec::new(),
+            segment_fetcher_timeout: DEFAULT_SEGMENT_FETCHER_TIMEOUT,
             disable_endhost_api_segment_fetcher: false,
             path_strategy: Default::default(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
@@ -652,14 +673,24 @@ impl SocketConfig {
     ///
     /// By default, only path segments retrieved via the endhost API are used. Adding additional
     /// segment fetchers enables to build paths from different segment sources.
-    pub fn with_segment_fetcher(mut self, fetcher: Box<dyn SegmentFetcher>) -> Self {
-        self.segment_fetchers.push(fetcher);
+    pub fn with_segment_fetcher(mut self, name: String, fetcher: Box<dyn SegmentFetcher>) -> Self {
+        self.segment_fetchers.push((name, fetcher));
         self
     }
 
     /// Disable fetching path segments from the endhost API.
     pub fn disable_endhost_api_segment_fetcher(mut self) -> Self {
         self.disable_endhost_api_segment_fetcher = true;
+        self
+    }
+
+    /// Sets the segment fetcher timeout. The timeout prevents waiting indefinitely for slow or
+    /// unresponsive segment fetchers. If a fetcher does not respond within the timeout, it will be
+    /// skipped for the current path lookup.
+    ///
+    /// Defaults to [DEFAULT_SEGMENT_FETCHER_TIMEOUT].
+    pub fn with_segment_fetcher_timeout(mut self, timeout: Duration) -> Self {
+        self.segment_fetcher_timeout = timeout;
         self
     }
 }

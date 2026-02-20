@@ -92,13 +92,22 @@ pub mod traits {
 
 /// Path fetcher.
 pub struct PathFetcherImpl {
-    segment_fetchers: Vec<Box<dyn SegmentFetcher>>,
+    segment_fetchers: Vec<(String, Box<dyn SegmentFetcher>)>,
+    // Timeout for each segment fetcher to avoid waiting indefinitely for slow or unresponsive
+    // fetchers.
+    timeout: std::time::Duration,
 }
 
 impl PathFetcherImpl {
     /// Creates a new path fetcher.
-    pub fn new(segment_fetchers: Vec<Box<dyn SegmentFetcher>>) -> Self {
-        Self { segment_fetchers }
+    pub fn new(
+        segment_fetchers: Vec<(String, Box<dyn SegmentFetcher>)>,
+        timeout: std::time::Duration,
+    ) -> Self {
+        Self {
+            segment_fetchers,
+            timeout,
+        }
     }
 }
 
@@ -107,11 +116,13 @@ impl PathFetcher for PathFetcherImpl {
         let mut all_core_segments = Vec::new();
         let mut all_non_core_segments = Vec::new();
 
-        // Fetch segments from all fetchers concurrently
+        // Fetch segments from all fetchers concurrently.
         let fetch_tasks: Vec<_> = self
             .segment_fetchers
             .iter()
-            .map(|fetcher| fetcher.fetch_segments(src, dst))
+            .map(|(_, fetcher)| {
+                tokio::time::timeout(self.timeout, fetcher.fetch_segments(src, dst))
+            })
             .collect();
 
         let results = futures::future::join_all(fetch_tasks).await;
@@ -120,33 +131,41 @@ impl PathFetcher for PathFetcherImpl {
         let mut errors = Vec::new();
 
         for (i, result) in results.into_iter().enumerate() {
+            let fetcher_name = &self.segment_fetchers[i].0;
             match result {
-                Ok(Segments {
-                    core_segments,
-                    non_core_segments,
-                }) => {
-                    tracing::trace!(
-                        fetcher_index = i,
-                        n_core_segments = core_segments.len(),
-                        n_non_core_segments = non_core_segments.len(),
-                        %src,
-                        %dst,
-                        "Segment fetcher succeeded"
-                    );
-                    all_core_segments.extend(core_segments);
-                    all_non_core_segments.extend(non_core_segments);
+                Ok(res) => {
+                    match res {
+                        Ok(segments) => {
+                            tracing::info!(
+                                name = %fetcher_name,
+                                n_core_segments = segments.core_segments.len(),
+                                n_non_core_segments = segments.non_core_segments.len(),
+                                %src,
+                                %dst,
+                                "Segment fetcher succeeded"
+                            );
+                            all_core_segments.extend(segments.core_segments);
+                            all_non_core_segments.extend(segments.non_core_segments);
+                        }
+                        Err(e) => {
+                            errors.push((fetcher_name.clone(), e));
+                        }
+                    }
                 }
                 Err(e) => {
-                    errors.push(e);
+                    errors.push((
+                        fetcher_name.clone(),
+                        Box::new(e) as Box<dyn std::error::Error + Send + Sync>,
+                    ));
                 }
             }
         }
 
         let paths = path::combinator::combine(src, dst, all_core_segments, all_non_core_segments);
 
-        for (i, error) in errors.iter().enumerate() {
+        for (fetcher_name, error) in errors.iter() {
             tracing::warn!(
-                error_index = i,
+                name = %fetcher_name,
                 %error,
                 %src,
                 %dst,
@@ -156,7 +175,7 @@ impl PathFetcher for PathFetcherImpl {
 
         // If there were errors but we still have paths, we still return the paths and only log the
         // fetcher errors.
-        if let Some(err) = errors.into_iter().next()
+        if let Some((_name, err)) = errors.into_iter().next()
             && paths.is_empty()
         {
             return Err(PathFetchError::FetchSegments(err));
