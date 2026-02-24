@@ -18,6 +18,7 @@ use std::{
     str::FromStr,
 };
 
+use sciparse::identifier::asn::Asn as SciparseAsn;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -134,11 +135,23 @@ impl TryFrom<u64> for Asn {
     type Error = AddressParseError;
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
-        if value > Asn::MAX.to_u64() {
-            Err(AddressKind::Asn.into())
+        if value <= Self::MAX.0 {
+            Ok(Asn::new(value))
         } else {
-            Ok(Asn(value))
+            Err(AddressKind::Asn.into())
         }
+    }
+}
+
+impl From<SciparseAsn> for Asn {
+    fn from(value: SciparseAsn) -> Self {
+        Asn::new(value.to_u64())
+    }
+}
+
+impl From<Asn> for SciparseAsn {
+    fn from(value: Asn) -> Self {
+        SciparseAsn::new(value.to_u64())
     }
 }
 

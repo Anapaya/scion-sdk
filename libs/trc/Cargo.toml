@@ -11,7 +11,7 @@ keywords = ["SCION", "networking"]
 [dependencies]
 cms = { workspace = true }
 der = { workspace = true, features = ["pem", "derive"] }
-scion-proto = { workspace = true }
+sciparse = { workspace = true }
 thiserror = { workspace = true }
 x509-cert = { workspace = true }
 

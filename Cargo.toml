@@ -48,6 +48,7 @@ pocketscion = { path = "pocketscion", version = "0.4.0" }
 
 scion-proto = { path = "scion-proto/scion-proto", version = "0.4.0" }
 scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.4.0" }
+sciparse = { path = "scion-proto/sciparse" }
 
 snap-control = { path = "snap/snap-control", version = "0.4.0" }
 snap-dataplane = { path = "snap/snap-dataplane", version = "0.4.0" }

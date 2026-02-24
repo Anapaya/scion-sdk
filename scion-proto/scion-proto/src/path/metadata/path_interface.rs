@@ -56,7 +56,7 @@ impl FromStr for PathInterface {
             .split_once('#')
             .ok_or(PathInterfaceParseError::Delimiter)?;
         Ok(PathInterface {
-            isd_asn: IsdAsn::try_from(isd_asn.to_string())?,
+            isd_asn: IsdAsn::from_str(isd_asn)?,
             id: id.parse()?,
         })
     }

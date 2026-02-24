@@ -3660,6 +3660,7 @@ dependencies = [
  "rand",
  "rand_xorshift",
  "scion-protobuf",
+ "sciparse",
  "serde",
  "serde_yaml_ng",
  "sha2",
@@ -3799,7 +3800,7 @@ version = "0.4.0"
 dependencies = [
  "cms",
  "der",
- "scion-proto",
+ "sciparse",
  "thiserror 2.0.18",
  "x509-cert",
 ]
