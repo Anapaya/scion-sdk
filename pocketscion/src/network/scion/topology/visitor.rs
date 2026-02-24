@@ -41,7 +41,12 @@ pub trait TopologyLinkVisitor: Clone {
     ///
     /// Visitor already stops following links that have been visited before.
     #[expect(unused_variables)]
-    fn should_follow_link(&self, current_as: &ScionAs, next_link: &ScionLink) -> bool {
+    fn should_follow_link(
+        &self,
+        current_as: &ScionAs,
+        next_link: &ScionLink,
+        next_as: &ScionAs,
+    ) -> bool {
         // Default implementation follows all links
         true
     }
@@ -73,7 +78,8 @@ pub fn walk_all_links<'topo, Visitor: TopologyLinkVisitor>(
         visited: &mut HashSet<IsdAsn>,
         topo_lookup: &FastTopologyLookup<'topo>,
     ) -> Vec<VisitorRec::Output> {
-        if !visited.insert(current_as.isd_as) {
+        let current_as_id = current_as.isd_as();
+        if !visited.insert(current_as_id) {
             return vec![]; // If we have already visited this AS, skip.
         }
 
@@ -83,40 +89,35 @@ pub fn walk_all_links<'topo, Visitor: TopologyLinkVisitor>(
         let empty_vec = Vec::new();
         let links = topo_lookup
             .as_to_link_map
-            .get(&current_as.isd_as)
+            .get(&current_as_id)
             .unwrap_or(&empty_vec);
 
         let mut result = Vec::new();
-        for next_link in links {
+        for link in links {
             // Skip the link we just came from
-            if Some(*next_link) == used_link {
+            if Some(*link) == used_link {
                 continue;
             }
 
-            if visitor.should_follow_link(current_as, next_link) {
-                let Some(next_interface) = next_link.get_peer(&current_as.isd_as) else {
-                    debug_assert!(false, "Link {next_link} has no peer for AS {current_as:?}");
-                    continue; // Unless the topo is malformed, this should never happen.
-                };
+            let Some(next_interface) = link.get_peer(&current_as_id) else {
+                debug_assert!(false, "Link {link} has no peer for AS {current_as:?}");
+                continue; // Unless the topo is malformed, this should never happen.
+            };
 
-                let Some(next_as) = topo_lookup.topology.as_map.get(&next_interface.isd_as) else {
-                    debug_assert!(false, "Missing as in topology: {next_interface:?}");
-                    continue; // Unless topo is malformed, this should never happen.
-                };
+            let Some(next_as) = topo_lookup.topology.as_map.get(&next_interface.isd_as) else {
+                debug_assert!(false, "Missing as in topology: {next_interface:?}");
+                continue; // Unless topo is malformed, this should never happen.
+            };
 
-                let results = visit_recurse(
-                    next_as,
-                    Some(next_link),
-                    visitor.clone(),
-                    visited,
-                    topo_lookup,
-                );
+            if visitor.should_follow_link(current_as, link, next_as) {
+                let results =
+                    visit_recurse(next_as, Some(link), visitor.clone(), visited, topo_lookup);
 
                 result.extend(results.into_iter());
             }
         }
 
-        visited.remove(&current_as.isd_as);
+        visited.remove(&current_as_id);
 
         // If no child had any output, no links are left to follow.
         let final_link = result.is_empty();

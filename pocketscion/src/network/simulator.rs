@@ -18,7 +18,10 @@ use scion_proto::{address::IsdAsn, packet::ScionPacketRaw, scmp::ScmpErrorMessag
 use tracing::info_span;
 
 use crate::network::{
-    local::{receiver_registry::NetworkReceiverRegistry, simulator::LocalNetworkSimulation},
+    local::{
+        external_as_registry::ExternalAsRegistry, receiver_registry::NetworkReceiverRegistry,
+        simulator::LocalNetworkSimulation,
+    },
     scion::{
         routing::{LocalAsRoutingAction, ScionNetworkTime, spec::SpecRoutingLogic},
         simulator::{ScionNetworkSim, ScionNetworkSimOutput},
@@ -33,6 +36,8 @@ use crate::network::{
 pub struct NetworkSimulator<'input> {
     /// Network Targets to dispatch packets to
     network_receivers: &'input NetworkReceiverRegistry,
+    /// Registry of external ASes, needed for forwarding to external ASes
+    external_ases: &'input ExternalAsRegistry,
     /// Topology to simulate, if none routing just works
     topology: Option<&'input ScionTopology>,
 }
@@ -41,10 +46,12 @@ impl NetworkSimulator<'_> {
     /// Creates a new PocketSCION network simulator.
     pub fn new<'input>(
         lan_ip_targets: &'input NetworkReceiverRegistry,
+        external_ases: &'input ExternalAsRegistry,
         topology: Option<&'input ScionTopology>,
     ) -> NetworkSimulator<'input> {
         NetworkSimulator {
             network_receivers: lan_ip_targets,
+            external_ases,
             topology,
         }
     }
@@ -54,7 +61,21 @@ impl NetworkSimulator<'_> {
     /// Best effort dispatch of a packet.
     ///
     /// Simulates Routing and AS internal dispatching.
-    pub fn dispatch(&self, local_as: IsdAsn, now: ScionNetworkTime, mut packet: ScionPacketRaw) {
+    ///
+    /// ## Parameters
+    /// - `local_as`: AS where the packet is being processed, used for routing decisions.
+    /// - `local_interface`: Interface where the packet is being processed. 0 means packet
+    ///   originated in the AS.
+    /// - `now`: Current network time, used for routing decisions
+    /// - `packet`: Packet to dispatch, will be modified by the simulation (e.g. for path
+    ///   processing)
+    pub fn dispatch(
+        &self,
+        local_as: IsdAsn,
+        local_interface: u16,
+        now: ScionNetworkTime,
+        mut packet: ScionPacketRaw,
+    ) {
         let fallible = || {
             let _s = info_span!("net-sim", local = %local_as).entered();
 
@@ -67,6 +88,7 @@ impl NetworkSimulator<'_> {
                         &mut packet,
                         now,
                         local_as,
+                        local_interface,
                     )
                     .context("error simulating packet traversal")?
                 }
@@ -94,11 +116,12 @@ impl NetworkSimulator<'_> {
                 routing_output.at_as,
                 routing_output.at_ingress_interface,
                 self.network_receivers,
+                self.external_ases,
             )
             .handle_local_routing_action(routing_output.action, packet)
             .context("local simulation failed")?
             {
-                self.dispatch(routing_output.at_as, now, reply.into());
+                self.dispatch(routing_output.at_as, 0, now, reply.into());
             };
 
             anyhow::Ok(())
@@ -123,8 +146,13 @@ impl NetworkSimulator<'_> {
         local_router_if: u16,
         packet: ScionPacketRaw,
     ) -> Result<(), ScmpErrorMessage> {
-        LocalNetworkSimulation::new(local_as, local_router_if, self.network_receivers)
-            .dispatch(packet)
+        LocalNetworkSimulation::new(
+            local_as,
+            local_router_if,
+            self.network_receivers,
+            self.external_ases,
+        )
+        .dispatch(packet)
     }
 }
 
@@ -226,8 +254,9 @@ mod test {
             let topology = test.ctx.build_topology();
 
             println!("{}", topology.format_mermaid());
-            NetworkSimulator::new(&test.targets, Some(&topology)).dispatch(
+            NetworkSimulator::new(&test.targets, &Default::default(), Some(&topology)).dispatch(
                 test.src.isd_asn(),
+                0,
                 ScionNetworkTime(test.ctx.timestamp),
                 test.ctx
                     .scion_packet_scmp(ScmpMessage::EchoRequest(ScmpEchoRequest::new(
@@ -294,10 +323,12 @@ mod test {
                 None,
             );
             let topology = test.ctx.build_topology();
-            let sim = NetworkSimulator::new(&test.targets, Some(&topology));
+            let ext_as_registry = ExternalAsRegistry::new();
+            let sim = NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology));
 
             sim.dispatch(
                 test.src.isd_asn(),
+                0,
                 ScionNetworkTime(test.ctx.timestamp),
                 test.packet.clone(),
             );
@@ -318,10 +349,12 @@ mod test {
                 0,
                 None,
             );
-            let sim = NetworkSimulator::new(&test.targets, None);
+            let ext_as_registry = ExternalAsRegistry::new();
+            let sim = NetworkSimulator::new(&test.targets, &ext_as_registry, None);
 
             sim.dispatch(
                 test.src.isd_asn(),
+                0,
                 ScionNetworkTime(test.ctx.timestamp),
                 test.packet.clone(),
             );
@@ -344,8 +377,10 @@ mod test {
             );
 
             let topology = test.ctx.build_topology();
-            NetworkSimulator::new(&test.targets, Some(&topology)).dispatch(
+            let ext_as_registry = ExternalAsRegistry::new();
+            NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology)).dispatch(
                 test.src.isd_asn(),
+                0,
                 ScionNetworkTime(test.ctx.timestamp),
                 test.packet.clone(),
             );
@@ -387,8 +422,10 @@ mod test {
                 0,
                 Some("1-99,1.2.3.4".parse().unwrap()), // Invalid destination IP
             );
-            NetworkSimulator::new(&test.targets, None).dispatch(
+            let ext_as_registry = ExternalAsRegistry::new();
+            NetworkSimulator::new(&test.targets, &ext_as_registry, None).dispatch(
                 test.src.isd_asn(),
+                0,
                 ScionNetworkTime(test.ctx.timestamp),
                 test.packet.clone(),
             );
@@ -429,8 +466,10 @@ mod test {
             let test = setup(test, 1234567, None); // Packet TTL expired - fails directly
 
             let topology = test.ctx.build_topology();
-            NetworkSimulator::new(&test.targets, Some(&topology)).dispatch(
+            let ext_as_registry = ExternalAsRegistry::new();
+            NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology)).dispatch(
                 test.src.isd_asn(),
+                0,
                 ScionNetworkTime(test.ctx.timestamp),
                 test.packet.clone(),
             );
@@ -453,8 +492,10 @@ mod test {
             let test = setup(test, 1234567, None);
 
             let topology = test.ctx.build_topology();
-            NetworkSimulator::new(&test.targets, Some(&topology)).dispatch(
+            let ext_as_registry = ExternalAsRegistry::new();
+            NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology)).dispatch(
                 test.src.isd_asn(),
+                0,
                 ScionNetworkTime(test.ctx.timestamp),
                 test.packet.clone(),
             );

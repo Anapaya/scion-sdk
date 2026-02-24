@@ -36,6 +36,7 @@ use crate::{
     state::{
         DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL, RouterId,
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryStateDto},
+        external_as::ExternalAsStateDto,
         snap::SnapId,
     },
 };
@@ -67,6 +68,8 @@ pub struct SystemStateDto {
     #[schema(nullable = false)]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub topology: Option<ScionTopologyDto>,
+    /// The list of external ASes, keyed by ISD-AS.
+    pub external_ases: BTreeMap<IsdAsn, ExternalAsStateDto>,
 }
 
 fn default_snaptun_keepalive_interval() -> Duration {
@@ -120,6 +123,8 @@ pub struct IoConfigDto {
     pub endhost_apis: BTreeMap<EndhostApiId, String>,
     /// Listening Sockets for Endhost API discovery APIs
     pub endhost_discovery_apis: BTreeMap<EndhostApiDiscoveryApiId, String>,
+    /// Listening Sockets for External ASes, keyed by (ISD-AS, interface ID)
+    pub external_ases: BTreeMap<(IsdAsn, u16), String>,
 }
 
 /// The I/O configuration of the Auth server.

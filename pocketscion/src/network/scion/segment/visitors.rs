@@ -49,9 +49,14 @@ impl TopologyLinkVisitor for CoreSegmentCollector {
         self.links.finalize().ok()
     }
 
-    // Only follow core AS links
-    fn should_follow_link(&self, _current_as: &ScionAs, next_link: &ScionLink) -> bool {
-        next_link.link_type == ScionLinkType::Core
+    // Only follow core AS links that are not external.
+    fn should_follow_link(
+        &self,
+        _current_as: &ScionAs,
+        next_link: &ScionLink,
+        next_as: &ScionAs,
+    ) -> bool {
+        !next_as.is_external() && next_link.link_type == ScionLinkType::Core
     }
 }
 
@@ -80,15 +85,28 @@ impl TopologyLinkVisitor for DownSegmentCollector {
         self.links.finalize().ok()
     }
 
-    fn should_follow_link(&self, current_as: &ScionAs, next_link: &ScionLink) -> bool {
-        let link_type = next_link.get_link_type(&current_as.isd_as);
+    /// Should only follow parent links, as these are the only links that can be part of a down
+    /// segment.
+    ///
+    /// If a link goes to a external AS, we do not follow it.
+    fn should_follow_link(
+        &self,
+        current_as: &ScionAs,
+        next_link: &ScionLink,
+        next_as: &ScionAs,
+    ) -> bool {
+        let link_type = next_link.get_link_type(&current_as.isd_as());
+
+        if next_as.is_external() {
+            return false;
+        }
 
         match link_type {
             Some(ScionLinkType::Parent) => true,
             None => {
                 tracing::warn!(
                     link_id = %next_link.id,
-                    isd_as = %current_as.isd_as,
+                    isd_as = %current_as.isd_as(),
                     "Link type for link in AS is none, this should not happen"
                 );
 
@@ -126,8 +144,8 @@ impl DirectedLinks {
         is_construction_dir: bool,
     ) -> anyhow::Result<()> {
         let hop = match is_construction_dir {
-            true => used_link.get_directed_to(&to_as.isd_as),
-            false => used_link.get_directed_from(&to_as.isd_as),
+            true => used_link.get_directed_to(&to_as.isd_as()),
+            false => used_link.get_directed_from(&to_as.isd_as()),
         };
 
         let hop = hop.context("error getting directed link from hop AS")?;

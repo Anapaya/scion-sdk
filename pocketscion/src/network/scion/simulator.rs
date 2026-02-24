@@ -39,14 +39,29 @@ impl ScionNetworkSim {
     ///
     /// Returns a [ScionNetworkSimOutput] indicating the next step for the packet.
     /// Unexpected errors will be returned as an [anyhow::Error].
+    ///
+    /// ## Parameters
+    /// - `topology`: The topology to simulate the traversal on
+    /// - `scion_packet`: The packet to simulate the traversal for. This packet will be modified
+    ///   during the simulation, so it must be mutable.
+    /// - `now`: The current network time
+    /// - `ingress_as`: The AS the packet is processed at
+    /// - `ingress_interface`: The interface the packet is being processed at, 0 means the packet
+    ///   entered from inside the AS, otherwise it entered from a link to another AS
     pub fn simulate_traversal<RoutingImpl: RoutingLogic>(
         topology: &ScionTopology,
         scion_packet: &mut ScionPacketRaw,
         now: ScionNetworkTime,
         ingress_asn: IsdAsn,
+        ingress_interface: u16,
     ) -> anyhow::Result<ScionNetworkSimOutput> {
-        let iter =
-            ScionNetworkSimIter::<RoutingImpl>::new(topology, scion_packet, now, ingress_asn)?;
+        let iter = ScionNetworkSimIter::<RoutingImpl>::new(
+            topology,
+            scion_packet,
+            now,
+            ingress_asn,
+            ingress_interface,
+        )?;
         let iter_result = iter
             .last()
             .context("traversal of topology returned none")??;
@@ -69,13 +84,23 @@ impl ScionNetworkSim {
     }
 
     /// Returns an iterator over the traversal steps of a SCION packet through the topology.
+    ///
+    /// ## Parameters
+    /// - `topology`: The topology to simulate the traversal on
+    /// - `scion_packet`: The packet to simulate the traversal for. This packet will be modified
+    ///   during the simulation, so it must be mutable.
+    /// - `now`: The current network time
+    /// - `ingress_as`: The AS where the packet enters the network
+    /// - `ingress_interface`: The interface ID where the packet enters the AS if 0 the packet
+    ///   entered from inside the AS, otherwise it entered from a link to another AS
     pub fn iter<'input, AsRoutingImpl: RoutingLogic>(
         topology: &'input ScionTopology,
         scion_packet: &'input mut ScionPacketRaw,
         now: ScionNetworkTime,
         ingress_asn: IsdAsn,
+        ingress_interface: u16,
     ) -> anyhow::Result<ScionNetworkSimIter<'input, AsRoutingImpl>> {
-        ScionNetworkSimIter::new(topology, scion_packet, now, ingress_asn)
+        ScionNetworkSimIter::new(topology, scion_packet, now, ingress_asn, ingress_interface)
     }
 }
 
@@ -87,6 +112,8 @@ pub struct ScionNetworkSimIter<'input, AsRoutingImpl: RoutingLogic> {
 
     current_as: IsdAsn,
     current_ingress_interface_id: u16,
+    /// The forwarding key of the current AS, if it exists. This is needed for the RoutingLogic to
+    /// make
     current_forwarding_key: ForwardingKey,
 
     finished: bool,
@@ -95,17 +122,37 @@ pub struct ScionNetworkSimIter<'input, AsRoutingImpl: RoutingLogic> {
 }
 
 impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingImpl> {
+    /// Creates a new ScionNetworkSimIter starting at the given ingress AS and interface
+    ///
+    /// ## Parameters
+    /// - `topology`: The topology to simulate the traversal on
+    /// - `scion_packet`: The packet to simulate the traversal for. This packet will be modified
+    ///   during the simulation, so it must be mutable.
+    /// - `now`: The current network time
+    /// - `ingress_as`: The AS the packet is processed at
+    /// - `ingress_interface`: The interface the packet is being processed at, 0 means the packet
+    ///   entered from inside the AS.
     fn new(
         topology: &'input ScionTopology,
         scion_packet: &'input mut ScionPacketRaw,
         now: ScionNetworkTime,
         ingress_as: IsdAsn,
+        ingress_interface: u16,
     ) -> anyhow::Result<Self> {
-        let current_forwarding_key = topology
+        let current_as = topology
             .as_map
             .get(&ingress_as)
-            .with_context(|| format!("AS {ingress_as} does not exist in the topology"))?
-            .forwarding_key
+            .with_context(|| format!("AS {ingress_as} does not exist in the topology"))?;
+
+        if current_as.is_external() {
+            return Err(anyhow::anyhow!(
+                "ingress AS {ingress_as} is an external AS, cannot simulate traversal starting from an external AS"
+            ));
+        }
+
+        let current_forwarding_key = current_as
+            .forwarding_key()
+            .expect("Simulated ASes always have a forwarding key")
             .into();
 
         Ok(Self {
@@ -113,7 +160,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
             scion_packet,
             now,
             current_as: ingress_as,
-            current_ingress_interface_id: 0,
+            current_ingress_interface_id: ingress_interface,
             current_forwarding_key,
             finished: false,
             _phantom: std::marker::PhantomData,
@@ -170,15 +217,20 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
 
         let processing_result: AsRoutingAction = processing_result.into();
 
-        if let AsRoutingAction::ForwardNextHop { link_interface_id } = processing_result {
-            // If the decision is to forward, prepare current variables for the next iteration
+        // If the decision is to forward to the next hop, we need to prepare the current variables
+        // for the next iteration by looking up the next AS and interface based on the
+        // egress interface ID
+        if let AsRoutingAction::ForwardNextHop {
+            egress_interface_id,
+        } = processing_result
+        {
             let uplink = self
                 .topology
-                .scion_link(&self.current_as, link_interface_id)
+                .scion_link(&self.current_as, egress_interface_id)
                 .with_context(|| {
                     format!(
                         "no link for {}#{} to AS does not exist in the topology",
-                        self.current_as, link_interface_id
+                        self.current_as, egress_interface_id
                     )
                 })?;
 
@@ -186,20 +238,42 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
                 format!("link {uplink:?} does not contain AS {}", self.current_as)
             })?;
 
-            self.current_as = link_partner.isd_as;
-            self.current_ingress_interface_id = link_partner.if_id;
-            self.current_forwarding_key = self
+            let partner_as = self
                 .topology
                 .as_map
-                .get(&self.current_as)
+                .get(&link_partner.isd_as)
                 .with_context(|| {
                     format!(
                         "AS {} does not exist in the topology even though a link to it exists",
                         self.current_as
                     )
-                })?
-                .forwarding_key
-                .into();
+                })?;
+
+            // If the next AS is external, we cannot continue the simulation and have to return a
+            // final result with a ForwardExternal action
+            if partner_as.is_external() {
+                self.finished = true; // Mark the simulation as finished as we cannot continue to simulate external ASes
+
+                return Ok(Some(ScionNetworkSimIterOutput {
+                    at_as: self.current_as,
+                    at_ingress_interface: self.current_ingress_interface_id,
+                    action: AsRoutingAction::Local(LocalAsRoutingAction::ForwardExternal {
+                        sim_egress_interface_id: egress_interface_id,
+                        extern_ingress_interface_id: link_partner.if_id,
+                        external_as: partner_as.isd_as(),
+                    }),
+                    finished: self.finished,
+                }));
+            } else {
+                // If the next AS is internal, we can continue the simulation by updating the
+                // current AS and
+                self.current_as = link_partner.isd_as;
+                self.current_ingress_interface_id = link_partner.if_id;
+                self.current_forwarding_key = partner_as
+                    .forwarding_key()
+                    .expect("simulated ASes always have a forwarding key")
+                    .into()
+            }
         } else {
             // If the decision is not to forward to the next hop, we can finalize the iteration
             self.finished = true;
@@ -299,6 +373,7 @@ mod tests {
             &mut packet,
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
+            0,
         )
         .expect("should not fail to route");
 
@@ -364,6 +439,7 @@ mod tests {
             &mut packet,
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
+            0,
         )
         .expect("should not fail to simulate");
 
@@ -411,8 +487,8 @@ mod tests {
             .add_link("1-3#5 up_to 1-4#6".parse().unwrap())
             .unwrap();
 
-        let src_addr = ScionAddr::V4(ScionAddrV4::new(as1.isd_as, Ipv4Addr::new(1, 1, 1, 1)));
-        let dst_addr = ScionAddr::V4(ScionAddrV4::new(as4.isd_as, Ipv4Addr::new(2, 2, 2, 2)));
+        let src_addr = ScionAddr::V4(ScionAddrV4::new(as1.isd_as(), Ipv4Addr::new(1, 1, 1, 1)));
+        let dst_addr = ScionAddr::V4(ScionAddrV4::new(as4.isd_as(), Ipv4Addr::new(2, 2, 2, 2)));
         let mut packet = raw_scion_packet(src_addr, dst_addr, &Bytes::from_static(b"Test Payload"));
 
         let mut iter = ScionNetworkSim::iter::<MockScionPacketProcessor>(
@@ -420,6 +496,7 @@ mod tests {
             &mut packet,
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
+            0,
         )
         .expect("should not fail to route");
 
@@ -428,32 +505,32 @@ mod tests {
             0,
             src_addr.isd_asn(),
             AsRoutingAction::ForwardNextHop {
-                link_interface_id: 1,
+                egress_interface_id: 1,
             },
             false,
         );
         check_step(
             &mut iter,
             2,
-            as2.isd_as,
+            as2.isd_as(),
             AsRoutingAction::ForwardNextHop {
-                link_interface_id: 3,
+                egress_interface_id: 3,
             },
             false,
         );
         check_step(
             &mut iter,
             4,
-            as3.isd_as,
+            as3.isd_as(),
             AsRoutingAction::ForwardNextHop {
-                link_interface_id: 5,
+                egress_interface_id: 5,
             },
             false,
         );
         check_step(
             &mut iter,
             6,
-            as4.isd_as,
+            as4.isd_as(),
             AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal {
                 target_address: dst_addr,
             }),
@@ -541,8 +618,8 @@ mod tests {
                 // For testing, we just return a decision to forward to the next hop
                 // This is a mock implementation and should be replaced with actual logic
                 Ok(AsRoutingAction::ForwardNextHop {
-                    link_interface_id: ingress_interface_id + 1, /* Just incrementing for the
-                                                                  * sake of example */
+                    egress_interface_id: ingress_interface_id + 1, /* Just incrementing for the
+                                                                    * sake of example */
                 })
             }
         }

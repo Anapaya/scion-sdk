@@ -192,6 +192,37 @@ components:
             type: integer
             description: Endhost API instance identifier.
             minimum: 0
+    ExternalAsInterfaceDto:
+      type: object
+      description: Serialized state for ExternalAsInterfaceState
+      required:
+      - interface_id
+      - target_addr
+      properties:
+        interface_id:
+          type: integer
+          format: int32
+          description: ID of the interface described
+          minimum: 0
+        target_addr:
+          type: string
+          description: |-
+            Address to where this interface connects, used for sending packets to the External AS and
+            validating received packets
+    ExternalAsStateDto:
+      type: object
+      description: Serialized state for ExternalAsState
+      required:
+      - interfaces
+      properties:
+        interfaces:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ExternalAsInterfaceDto'
+          propertyNames:
+            type: integer
+            format: int32
+            minimum: 0
     FakeIdpDto:
       type: object
       description: The fake identity provider configuration for testing.
@@ -216,6 +247,7 @@ components:
       - router_sockets
       - endhost_apis
       - endhost_discovery_apis
+      - external_ases
       properties:
         auth_server:
           $ref: '#/components/schemas/IoAuthServerConfigDto'
@@ -238,6 +270,35 @@ components:
             type: integer
             description: Endhost Discovery API instance identifier.
             minimum: 0
+        external_ases:
+          type: object
+          description: Listening Sockets for External ASes, keyed by (ISD-AS, interface ID)
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: array
+            items: false
+            prefixItems:
+            - type: string
+              description: |-
+                The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
+
+                # Examples
+
+                ```
+                # use scion_proto::address::IsdAsn;
+                #
+                # fn main() -> Result<(), Box<dyn std::error::Error>> {
+                assert_eq!(IsdAsn(0x1_ff00_0000_0110), "1-ff00:0:110".parse()?);
+                # Ok(())
+                # }
+                ```
+              examples:
+              - 1-ff00:0:110
+              pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
+            - type: integer
+              format: int32
+              minimum: 0
         router_sockets:
           type: object
           description: The list of SCION router sockets.
@@ -367,23 +428,54 @@ components:
             description: The router identifier.
             minimum: 0
     ScionAsDto:
-      type: object
+      oneOf:
+      - type: object
+        description: |-
+          AS that is simulated by PocketSCION. Packets to and from this AS will be handled by the
+          simulator.
+        required:
+        - isd_asn
+        - is_core_as
+        - forwarding_key
+        - type
+        properties:
+          forwarding_key:
+            type: array
+            items:
+              type: integer
+              format: int32
+              minimum: 0
+            description: Forwarding key of the AS, encoded as base64
+          is_core_as:
+            type: boolean
+            description: Whether this AS is a core AS
+          isd_asn:
+            $ref: '#/components/schemas/IsdAsn'
+            description: ISD-AS number of the AS
+          type:
+            type: string
+            enum:
+            - simulated
+      - type: object
+        description: |-
+          AS that is not simulated by PocketSCION, but is still part of the topology. Packets to and
+          from this AS will be handled by an external implementation.
+        required:
+        - isd_asn
+        - is_core_as
+        - type
+        properties:
+          is_core_as:
+            type: boolean
+            description: Whether this AS is a core AS
+          isd_asn:
+            $ref: '#/components/schemas/IsdAsn'
+            description: ISD-AS number of the AS
+          type:
+            type: string
+            enum:
+            - external
       description: Human readable Pocket SCION AS
-      required:
-      - isd_asn
-      - is_core_as
-      - forwarding_key
-      properties:
-        forwarding_key:
-          type: array
-          items:
-            type: integer
-            format: int32
-            minimum: 0
-        is_core_as:
-          type: boolean
-        isd_asn:
-          $ref: '#/components/schemas/IsdAsn'
     ScionTopologyDto:
       type: object
       description: Human readable ScionTopology
@@ -450,6 +542,7 @@ components:
       - routers
       - endhost_apis
       - endhost_api_discovery_api
+      - external_ases
       properties:
         auth_server_state:
           $ref: '#/components/schemas/AuthServerStateDto'
@@ -472,6 +565,29 @@ components:
             type: integer
             description: Endhost API instance identifier.
             minimum: 0
+        external_ases:
+          type: object
+          description: The list of external ASes, keyed by ISD-AS.
+          additionalProperties:
+            $ref: '#/components/schemas/ExternalAsStateDto'
+          propertyNames:
+            type: string
+            description: |-
+              The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
+
+              # Examples
+
+              ```
+              # use scion_proto::address::IsdAsn;
+              #
+              # fn main() -> Result<(), Box<dyn std::error::Error>> {
+              assert_eq!(IsdAsn(0x1_ff00_0000_0110), "1-ff00:0:110".parse()?);
+              # Ok(())
+              # }
+              ```
+            examples:
+            - 1-ff00:0:110
+            pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
         root_secret:
           type:
           - string

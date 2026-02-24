@@ -45,7 +45,7 @@ impl ScionTopology {
     ///
     /// Validates that the AS does not already exist.
     pub fn add_as(&mut self, scion_as: ScionAs) -> anyhow::Result<&mut Self> {
-        match self.as_map.entry(scion_as.isd_as) {
+        match self.as_map.entry(scion_as.isd_as()) {
             Entry::Occupied(occupied_entry) => {
                 bail!("AS '{}' already exists", occupied_entry.key())
             }
@@ -83,7 +83,7 @@ impl ScionTopology {
             }
 
             // Validate Link Type usage
-            let same_isd_link = lower_as.isd_as.isd() == higher_as.isd_as.isd();
+            let same_isd_link = lower_as.isd_as().isd() == higher_as.isd_as().isd();
             match same_isd_link {
                 true => {
                     // | From AS  | To AS     | Allowed Link Type     |
@@ -92,7 +92,7 @@ impl ScionTopology {
                     // | Core     | Non-Core  | `Parent`, `Peer`      |
                     // | Non-Core | Core      | `Child`, `Peer`       |
                     // | Non-Core | Non-Core  | all Except `Core`     |
-                    match (lower_as.core, higher_as.core, new_link.link_type) {
+                    match (lower_as.is_core(), higher_as.is_core(), new_link.link_type) {
                         //(FromAS, ToAS, LinkType)
                         (true, true, ScionLinkType::Core | ScionLinkType::Peer) => {}
                         (true, false, ScionLinkType::Parent | ScionLinkType::Peer) => {}
@@ -108,8 +108,8 @@ impl ScionTopology {
 
                             bail!(
                                 "{left} '{}' and {right} '{}' can not be linked with '{link}'",
-                                lower_as.isd_as,
-                                higher_as.isd_as,
+                                lower_as.isd_as(),
+                                higher_as.isd_as(),
                             );
                         }
                     }
@@ -121,7 +121,7 @@ impl ScionTopology {
                     // | Core     | Non-Core  | `Peer`                |
                     // | Non-Core | Core      | `Peer`                |
                     // | Non-Core | Non-Core  | `Peer`                |
-                    match (lower_as.core, higher_as.core, new_link.link_type) {
+                    match (lower_as.is_core(), higher_as.is_core(), new_link.link_type) {
                         //(FromAS, ToAS, LinkType)
                         (true, true, ScionLinkType::Core | ScionLinkType::Peer) => {}
                         (_, _, ScionLinkType::Peer) => {}
@@ -131,8 +131,8 @@ impl ScionTopology {
 
                             bail!(
                                 "{left} '{}' and {right} '{}' can not be linked across ISDs with '{link}'",
-                                lower_as.isd_as,
-                                higher_as.isd_as,
+                                lower_as.isd_as(),
+                                higher_as.isd_as(),
                             );
                         }
                     }
@@ -180,8 +180,8 @@ impl ScionTopology {
                         // If it is the same link
                         bail!(
                             "Another between '{}' and '{}' already exists and using a different type: '{}'",
-                            lower_as.isd_as,
-                            higher_as.isd_as,
+                            lower_as.isd_as(),
+                            higher_as.isd_as(),
                             existing_link.link_type
                         );
                     }
@@ -245,12 +245,15 @@ impl ScionTopology {
 
         // Group ASes by ISD
         for scion_as in self.as_map.values() {
-            let isd = scion_as.isd_as.isd();
+            let isd = scion_as.isd_as().isd();
 
-            isd_maps.entry(isd).or_default().push(scion_as.isd_as);
+            isd_maps.entry(isd).or_default().push(scion_as.isd_as());
 
-            if scion_as.core {
-                isd_core_maps.entry(isd).or_default().push(scion_as.isd_as);
+            if scion_as.is_core() {
+                isd_core_maps
+                    .entry(isd)
+                    .or_default()
+                    .push(scion_as.isd_as());
             };
         }
 
@@ -300,19 +303,30 @@ impl ScionTopology {
 
 /// Representation of a SCION Autonomous System (AS).
 #[derive(Hash, Copy, Eq, PartialEq, Debug, Clone)]
-pub struct ScionAs {
-    /// The ISD-AS number of the SCION AS.
-    pub isd_as: IsdAsn,
-    /// Whether the AS is a core AS.
-    pub core: bool,
-    /// Forwarding key for the AS - if not defined, falls back to all 0
-    pub forwarding_key: [u8; 16],
+pub enum ScionAs {
+    /// Representation of a simulated AS, which can be linked to other simulated ASes and external
+    /// ASes.
+    Simulated {
+        /// The ISD-AS number of the SCION AS.
+        isd_as: IsdAsn,
+        /// Whether the AS is a core AS.
+        core: bool,
+        /// Forwarding key for the AS - if not defined, falls back to all 0
+        forwarding_key: [u8; 16],
+    },
+    /// Representation of an external AS, external ASes are not simulated
+    External {
+        /// The ISD-AS number of the SCION AS.
+        isd_as: IsdAsn,
+        /// Whether the AS is a core AS.
+        core: bool,
+    },
 }
 
 impl ScionAs {
     /// Creates a new core SCION AS.
     pub fn new_core(isd_as: IsdAsn) -> Self {
-        Self {
+        Self::Simulated {
             isd_as,
             core: true,
             forwarding_key: Self::default_forwarding_key(isd_as),
@@ -321,16 +335,36 @@ impl ScionAs {
 
     /// Creates a new non-core SCION AS.
     pub fn new(isd_as: IsdAsn) -> Self {
-        Self {
+        Self::Simulated {
             isd_as,
             core: false,
             forwarding_key: Self::default_forwarding_key(isd_as),
         }
     }
 
+    /// Creates a new SCION AS outside of the simulation.
+    pub fn new_external(isd_as: IsdAsn) -> Self {
+        Self::External {
+            isd_as,
+            core: false,
+        }
+    }
+
+    /// Creates a new core SCION AS outside of the simulation.
+    pub fn new_external_core(isd_as: IsdAsn) -> Self {
+        Self::External { isd_as, core: true }
+    }
+
     /// Sets a custom forwarding key for the AS.
+    ///
+    /// If this AS is an external AS, this is a no-op.
     pub fn with_forwarding_key(mut self, forwarding_key: [u8; 16]) -> Self {
-        self.forwarding_key = forwarding_key;
+        match &mut self {
+            ScionAs::Simulated {
+                forwarding_key: fk, ..
+            } => *fk = forwarding_key,
+            ScionAs::External { .. } => {}
+        }
         self
     }
 
@@ -339,6 +373,37 @@ impl ScionAs {
         let mut forwarding_key = [0; 16];
         forwarding_key[..8].copy_from_slice(&isd_as.0.to_be_bytes());
         forwarding_key
+    }
+}
+
+impl ScionAs {
+    /// Returns the ISD-AS number of the AS.
+    pub fn isd_as(&self) -> IsdAsn {
+        match self {
+            ScionAs::Simulated { isd_as, .. } | ScionAs::External { isd_as, .. } => *isd_as,
+        }
+    }
+
+    /// Returns true if the AS is a core AS, false otherwise.
+    pub fn is_core(&self) -> bool {
+        match self {
+            ScionAs::Simulated { core, .. } | ScionAs::External { core, .. } => *core,
+        }
+    }
+
+    /// Returns the forwarding key for the AS. For simulated ASes, this is always defined.
+    ///
+    /// For external ASes, this is None, as the forwarding key is not known.
+    pub fn forwarding_key(&self) -> Option<[u8; 16]> {
+        match self {
+            ScionAs::Simulated { forwarding_key, .. } => Some(*forwarding_key),
+            ScionAs::External { .. } => None,
+        }
+    }
+
+    /// Returns true if the AS is an external AS, false otherwise.
+    pub fn is_external(&self) -> bool {
+        matches!(self, ScionAs::External { .. })
     }
 }
 

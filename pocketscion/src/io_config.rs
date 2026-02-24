@@ -20,6 +20,7 @@ use std::{
 };
 
 use anyhow::{Context, Ok};
+use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::ControlPlaneIoConfig;
 use snap_dataplane::tunnel_gateway::state::TunnelGatewayIoConfig;
@@ -45,6 +46,8 @@ pub struct IoConfig {
     endhost_apis: BTreeMap<EndhostApiId, SocketAddr>,
     /// Listen Socket for Endhost Discovery APIs
     endhost_api_discovery_apis: BTreeMap<EndhostApiDiscoveryApiId, SocketAddr>,
+    /// Listen Socket for External ASes, keyed by (ISD-AS, interface ID)
+    external_ases: BTreeMap<(IsdAsn, u16), SocketAddr>,
 }
 
 impl AsRef<IoConfig> for RwLockReadGuard<'_, IoConfig> {
@@ -70,6 +73,9 @@ impl TryFrom<IoConfigDto> for IoConfig {
             map_btree_fallible(value.endhost_discovery_apis, |v| v.parse())
                 .context("invalid endhost discovery API socket address")?;
 
+        let external_ases = map_btree_fallible(value.external_ases, |v| v.parse())
+            .context("invalid external AS API socket address")?;
+
         Ok(Self {
             snaps,
             router_sockets,
@@ -79,6 +85,7 @@ impl TryFrom<IoConfigDto> for IoConfig {
                 .context("invalid auth server I/O config")?,
             endhost_apis,
             endhost_api_discovery_apis: endhost_discovery_apis,
+            external_ases,
         })
     }
 }
@@ -93,6 +100,7 @@ impl From<&IoConfig> for IoConfigDto {
             endhost_discovery_apis: map_btree_ref(&config.endhost_api_discovery_apis, |v| {
                 v.to_string()
             }),
+            external_ases: map_btree_ref(&config.external_ases, |v| v.to_string()),
         }
     }
 }
@@ -270,6 +278,36 @@ impl SharedPocketScionIoConfig {
             .unwrap()
             .endhost_api_discovery_apis
             .insert(id, addr);
+    }
+
+    /// Gets the socket address for an external AS interface, identified by the ISD-ASN and the
+    /// interface ID.
+    pub fn external_as_interface_addr(
+        &self,
+        isd_asn: IsdAsn,
+        interface_id: u16,
+    ) -> Option<SocketAddr> {
+        self.state
+            .read()
+            .unwrap()
+            .external_ases
+            .get(&(isd_asn, interface_id))
+            .cloned()
+    }
+
+    /// Sets the socket address for an external AS interface, identified by the ISD-ASN and the
+    /// interface ID.
+    pub fn set_external_as_interface_addr(
+        &self,
+        isd_asn: IsdAsn,
+        interface_id: u16,
+        addr: SocketAddr,
+    ) {
+        self.state
+            .write()
+            .unwrap()
+            .external_ases
+            .insert((isd_asn, interface_id), addr);
     }
 }
 

@@ -35,7 +35,8 @@ use scion_proto::{
 use tracing::info_span;
 
 use crate::network::{
-    local::receiver_registry::NetworkReceiverRegistry, scion::routing::LocalAsRoutingAction,
+    local::{external_as_registry::ExternalAsRegistry, receiver_registry::NetworkReceiverRegistry},
+    scion::{routing::LocalAsRoutingAction, topology::ScionGlobalInterfaceId},
 };
 
 /// A local network simulation.
@@ -44,19 +45,23 @@ pub struct LocalNetworkSimulation<'input> {
     local_if_id: u16,
     /// Dispatchers available to the simulation.
     receivers: &'input NetworkReceiverRegistry,
+    /// Registry of external ASes, needed for forwarding to external ASes
+    external_ases: &'input ExternalAsRegistry,
 }
 
 impl LocalNetworkSimulation<'_> {
     /// Creates a new Simulator at given AS and Interface
-    pub fn new(
+    pub fn new<'input>(
         local_as: IsdAsn,
         local_if_id: u16,
-        receivers: &NetworkReceiverRegistry,
-    ) -> LocalNetworkSimulation<'_> {
+        receivers: &'input NetworkReceiverRegistry,
+        external_ases: &'input ExternalAsRegistry,
+    ) -> LocalNetworkSimulation<'input> {
         LocalNetworkSimulation {
             local_if_id,
             local_as,
             receivers,
+            external_ases,
         }
     }
 
@@ -154,6 +159,35 @@ impl LocalNetworkSimulation<'_> {
                 );
                 self.handle_scmp(true, packet)
                     .context("error handling SCMP request")?
+            }
+            LocalAsRoutingAction::ForwardExternal {
+                sim_egress_interface_id,
+                extern_ingress_interface_id,
+                external_as,
+            } => {
+                match self.external_ases.get(&external_as) {
+                    Some(adapter) => {
+                        adapter.handle_incoming_packet(
+                            ScionGlobalInterfaceId {
+                                isd_as: pkt_source_as,
+                                if_id: sim_egress_interface_id,
+                            },
+                            ScionGlobalInterfaceId {
+                                isd_as: external_as,
+                                if_id: extern_ingress_interface_id,
+                            },
+                            &mut packet.clone(),
+                        )
+                    }
+                    None => {
+                        tracing::info!(
+                            external_as = %external_as,
+                            "No adapter found for external AS, dropping packet"
+                        );
+                    }
+                }
+
+                return Ok(None);
             }
         };
 

@@ -41,12 +41,9 @@ impl TryFrom<ScionTopologyDto> for ScionTopology {
 
         for as_info in value.as_list {
             // Register the AS
-            topo.add_as(ScionAs {
-                isd_as: as_info.isd_asn,
-                core: as_info.is_core_as,
-                forwarding_key: as_info.forwarding_key,
-            })
-            .with_context(|| format!("error adding AS {} to topology", as_info.isd_asn))?;
+            let scion_as: ScionAs = as_info.into();
+            topo.add_as(scion_as)
+                .with_context(|| format!("error adding AS {:?} to topology", scion_as))?;
         }
 
         for link in value.links {
@@ -64,12 +61,8 @@ impl From<ScionTopology> for ScionTopologyDto {
         let mut registered_ases = Vec::new();
         let mut links = Vec::new();
 
-        for (isd_as, scion_as) in topo.as_map.iter() {
-            registered_ases.push(ScionAsDto {
-                isd_asn: *isd_as,
-                is_core_as: scion_as.core,
-                forwarding_key: scion_as.forwarding_key,
-            });
+        for (_isd_as, scion_as) in topo.as_map.iter() {
+            registered_ases.push((*scion_as).into());
         }
 
         for scion_link in topo.link_map.values() {
@@ -86,11 +79,77 @@ impl From<ScionTopology> for ScionTopologyDto {
 /// Human readable Pocket SCION AS
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ScionAsDto {
-    isd_asn: IsdAsn,
-    is_core_as: bool,
-    #[serde_as(as = "Base64")]
-    forwarding_key: [u8; 16],
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ScionAsDto {
+    /// AS that is simulated by PocketSCION. Packets to and from this AS will be handled by the
+    /// simulator.
+    Simulated {
+        /// ISD-AS number of the AS
+        isd_asn: IsdAsn,
+        /// Whether this AS is a core AS
+        is_core_as: bool,
+        /// Forwarding key of the AS, encoded as base64
+        #[serde_as(as = "Base64")]
+        forwarding_key: [u8; 16],
+    },
+    /// AS that is not simulated by PocketSCION, but is still part of the topology. Packets to and
+    /// from this AS will be handled by an external implementation.
+    External {
+        /// ISD-AS number of the AS
+        isd_asn: IsdAsn,
+        /// Whether this AS is a core AS
+        is_core_as: bool,
+    },
+}
+
+impl From<ScionAs> for ScionAsDto {
+    fn from(scion_as: ScionAs) -> Self {
+        match scion_as {
+            ScionAs::Simulated {
+                isd_as,
+                core,
+                forwarding_key,
+            } => {
+                Self::Simulated {
+                    isd_asn: isd_as,
+                    is_core_as: core,
+                    forwarding_key,
+                }
+            }
+            ScionAs::External { isd_as, core } => {
+                Self::External {
+                    isd_asn: isd_as,
+                    is_core_as: core,
+                }
+            }
+        }
+    }
+}
+impl From<ScionAsDto> for ScionAs {
+    fn from(dto: ScionAsDto) -> Self {
+        match dto {
+            ScionAsDto::Simulated {
+                isd_asn,
+                is_core_as,
+                forwarding_key,
+            } => {
+                ScionAs::Simulated {
+                    isd_as: isd_asn,
+                    core: is_core_as,
+                    forwarding_key,
+                }
+            }
+            ScionAsDto::External {
+                isd_asn,
+                is_core_as,
+            } => {
+                ScionAs::External {
+                    isd_as: isd_asn,
+                    core: is_core_as,
+                }
+            }
+        }
+    }
 }
 
 /// Human readable Pocket SCION Link
@@ -138,17 +197,18 @@ mod test {
 
         let isd_asn1 = IsdAsn::from_str("1-ff00:0:110").unwrap();
         // Add an AS
-        topo.add_as(ScionAs {
-            isd_as: isd_asn1,
-            core: true,
-            forwarding_key: [1; 16],
-        })
+        topo.add_as(ScionAs::new_core(isd_asn1).with_forwarding_key([1; 16]))
+            .unwrap();
+
+        topo.add_as(
+            ScionAs::new_core(IsdAsn::from_str("1-ff00:0:111").unwrap())
+                .with_forwarding_key([2; 16]),
+        )
         .unwrap();
 
-        topo.add_as(ScionAs {
-            isd_as: IsdAsn::from_str("1-ff00:0:111").unwrap(),
-            core: true,
-            forwarding_key: [2; 16],
+        topo.add_as(ScionAs::External {
+            isd_as: IsdAsn::from_str("2-ff00:0:210").unwrap(),
+            core: false,
         })
         .unwrap();
 

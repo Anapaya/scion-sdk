@@ -41,13 +41,8 @@ impl AsNetSimDispatcher {
 impl Dispatcher for AsNetSimDispatcher {
     fn try_dispatch(&self, packet: ScionPacketRaw) {
         let network_time = ScionNetworkTime::now();
-        let state_guard = self.app_state.system_state.read().unwrap();
-
-        NetworkSimulator::new(&state_guard.sim_receivers, state_guard.topology.as_ref()).dispatch(
-            self.local_as,
-            network_time,
-            packet,
-        );
+        self.app_state
+            .dispatch_to_network_sim(self.local_as, 0, network_time, packet);
     }
 }
 
@@ -67,12 +62,39 @@ impl NetSimDispatcher {
 impl Dispatcher for NetSimDispatcher {
     fn try_dispatch(&self, packet: ScionPacketRaw) {
         let network_time = ScionNetworkTime::now();
-        let state_guard = self.app_state.system_state.read().unwrap();
 
-        NetworkSimulator::new(&state_guard.sim_receivers, state_guard.topology.as_ref()).dispatch(
+        self.app_state.dispatch_to_network_sim(
             packet.headers.address.ia.source,
+            0,
             network_time,
             packet,
         );
+    }
+}
+
+impl SharedPocketScionState {
+    /// Dispatches a packet into the Network Simulator, using the given AS as the source.
+    ///
+    /// ## Parameters:
+    /// - `local_as`: The AS where the packet is being processed.
+    /// - `local_interface`: Interface where the packet is being processed. 0 means packet
+    ///   originated in the AS.
+    /// - `now`: The current network time, used for scheduling the packet in the simulator.
+    /// - `packet`: The raw SCION packet to be dispatched.
+    pub fn dispatch_to_network_sim(
+        &self,
+        local_as: IsdAsn,
+        local_interface: u16,
+        now: ScionNetworkTime,
+        packet: ScionPacketRaw,
+    ) {
+        let state_guard = self.system_state.read().unwrap();
+
+        NetworkSimulator::new(
+            &state_guard.sim_receivers,
+            &state_guard.extern_as_handlers,
+            state_guard.topology.as_ref(),
+        )
+        .dispatch(local_as, local_interface, now, packet);
     }
 }

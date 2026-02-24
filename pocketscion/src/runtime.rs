@@ -23,6 +23,7 @@ use std::{
 };
 
 use jsonwebtoken::DecodingKey;
+use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use scion_sdk_utils::{
     io::{get_tmp_path, read_file, write_file},
@@ -45,11 +46,15 @@ use crate::{
     endhost_api::{EndhostApiId, PsEndhostApi},
     io_config::{IoConfig, SharedPocketScionIoConfig},
     management_api,
-    network::local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
+    network::{
+        local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
+        scion::routing::ScionNetworkTime,
+    },
     state::{
         RouterId, SharedPocketScionState, SystemState,
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryService},
         endhost_segment_lister::StateEndhostSegmentLister,
+        external_as::ExternalAsService,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
         snap::{SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL, SnapId},
     },
@@ -285,6 +290,24 @@ impl PocketScionRuntimeBuilder {
                 .map_err(|e| io::Error::other(format!("{e:?}")))?;
         }
 
+        // Start External AS adapters
+        for (isd_as, _state) in pstate.external_ases() {
+            let pstate = pstate.clone();
+            let io_config = io_config.clone();
+            let ext_as = ExternalAsService::start(isd_as, pstate.clone(), io_config.clone())
+                .await
+                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+
+            // Add the the handler to the simulation
+            pstate
+                .register_external_as_handler(isd_as, ext_as)
+                .map_err(|e| {
+                    io::Error::other(format!(
+                        "Failed to register external AS handler for AS {isd_as}: {e:?}"
+                    ))
+                })?;
+        }
+
         // Start router sockets
         for sock_id in pstate.router_ids() {
             let udp_socket = {
@@ -401,6 +424,14 @@ impl PocketScionRuntime {
             .and_then(|_| self.io_config.endhost_api_discovery_api_addr(id))
     }
 
+    /// Returns the socket address of the interface with the given id of the external AS, if it
+    /// exists.
+    pub fn external_as_interface_addr(&self, ia: IsdAsn, interface_id: u16) -> Option<SocketAddr> {
+        self.state
+            .external_as(ia)
+            .and_then(|_| self.io_config.external_as_interface_addr(ia, interface_id))
+    }
+
     /// Returns the socket address of the control plane API of the snap with the given id, if it
     /// exists.
     pub fn snap_control_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
@@ -422,6 +453,26 @@ impl PocketScionRuntime {
         self.state
             .router(router_id)
             .and_then(|_| self.io_config.router_socket_addr(router_id))
+    }
+}
+impl PocketScionRuntime {
+    /// Dispatches a packet through PocketScions Network simulation.
+    ///
+    /// ## Parameters
+    /// - `local_as`: The ISD-AS the packet starts processing
+    /// - `local_interface`: Interface where the packet starts processing. 0 means packet originated
+    ///   in the AS.
+    /// - `now`: The timestamp to dispatch the packet at.
+    /// - `packet`: The raw SCION packet to dispatch.
+    pub fn dispatch_packet(
+        &self,
+        local_as: IsdAsn,
+        local_interface: u16,
+        now: ScionNetworkTime,
+        packet: ScionPacketRaw,
+    ) {
+        self.state
+            .dispatch_to_network_sim(local_as, local_interface, now, packet);
     }
 }
 

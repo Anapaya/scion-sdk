@@ -495,7 +495,7 @@ impl SpecRoutingLogic {
         let is_construction_dir = current_info.cons_dir;
 
         if is_final_hop {
-            debug_assert!(false, "No final hop should reach egress code");
+            tracing::warn!("Packet reached final hop at egress");
             return Ok(AsRoutingAction::Drop);
         }
         if is_seg_change {
@@ -588,7 +588,7 @@ impl SpecRoutingLogic {
 
         // Forward to the next hop
         Ok(super::AsRoutingAction::ForwardNextHop {
-            link_interface_id: out_interface,
+            egress_interface_id: out_interface,
         })
     }
 
@@ -1017,7 +1017,7 @@ mod tests {
 
         SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                link_interface_id: 1,
+                egress_interface_id: 1,
             }))
             .next_hop_should_succeed(Some(AsRoutingAction::Local(
                 LocalAsRoutingAction::ForwardLocal {
@@ -1035,7 +1035,7 @@ mod tests {
 
         SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                link_interface_id: 1,
+                egress_interface_id: 1,
             }))
             .next_hop_should_succeed(Some(AsRoutingAction::Local(
                 LocalAsRoutingAction::ForwardLocal {
@@ -1063,13 +1063,13 @@ mod tests {
 
         helper::SpecTestCtx::new(test_ctx)
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                link_interface_id: 1,
+                egress_interface_id: 1,
             }))
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                link_interface_id: 10,
+                egress_interface_id: 10,
             }))
             .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                link_interface_id: 3,
+                egress_interface_id: 3,
             }))
             .next_hop_should_succeed(Some(AsRoutingAction::Local(
                 LocalAsRoutingAction::ForwardLocal {
@@ -1203,8 +1203,7 @@ mod tests {
     }
 
     #[test_log::test]
-    #[should_panic(expected = "No final hop should reach egress code")]
-    fn should_fail_with_a_single_hop() {
+    fn should_drop_on_single_hop() {
         let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
         let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
         let test_ctx = TestPathBuilder::new(src_address, dst_address)
@@ -1213,8 +1212,8 @@ mod tests {
             .add_hop(0, 1)
             .build(1);
 
-        // Note: This hits a debug_assert in the egress code - on release it will drop the packet
-        helper::SpecTestCtx::new(test_ctx).next_hop_should_fail();
+        helper::SpecTestCtx::new(test_ctx)
+            .next_hop_should_succeed(Option::Some(AsRoutingAction::Drop));
     }
 
     mod time {
@@ -1285,7 +1284,7 @@ mod tests {
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                    link_interface_id: 1,
+                    egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
                     LocalAsRoutingAction::IngressSCMPHandleRequest { interface_id: 2 },
@@ -1307,7 +1306,7 @@ mod tests {
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                    link_interface_id: 1,
+                    egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
                     LocalAsRoutingAction::EgressSCMPHandleRequest { interface_id: 3 },
@@ -1329,7 +1328,7 @@ mod tests {
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                    link_interface_id: 1,
+                    egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
                     LocalAsRoutingAction::ForwardLocal {
@@ -1353,7 +1352,7 @@ mod tests {
 
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                    link_interface_id: 1,
+                    egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
                     LocalAsRoutingAction::ForwardLocal {

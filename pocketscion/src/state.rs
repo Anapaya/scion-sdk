@@ -44,7 +44,10 @@ use crate::{
     dto::{AuthServerStateDto, RouterStateDto, SystemStateDto},
     endhost_api::{EndhostApiId, EndhostApiState},
     network::{
-        local::{receiver_registry::NetworkReceiverRegistry, receivers::Receiver},
+        local::{
+            external_as_registry::ExternalAsRegistry, receiver_registry::NetworkReceiverRegistry,
+            receivers::Receiver,
+        },
         scion::{
             segment::registry::SegmentRegistry,
             topology::{FastTopologyLookup, ScionTopology},
@@ -52,6 +55,7 @@ use crate::{
     },
     state::{
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryState},
+        external_as::ExternalAsState,
         snap::{SnapId, SnapState},
     },
     util::{map_btree, map_btree_fallible},
@@ -59,6 +63,7 @@ use crate::{
 
 pub mod endhost_api_discovery;
 pub mod endhost_segment_lister;
+pub mod external_as;
 pub mod simulation_dispatcher;
 pub mod snap;
 
@@ -315,6 +320,8 @@ pub struct SystemState {
     topology: Option<ScionTopology>,
     topology_segments: Option<SegmentRegistry>,
     sim_receivers: NetworkReceiverRegistry,
+    external_ases: BTreeMap<IsdAsn, ExternalAsState>,
+    extern_as_handlers: ExternalAsRegistry,
 }
 
 impl SystemState {
@@ -333,6 +340,8 @@ impl SystemState {
             sim_receivers: Default::default(),
             endhost_apis: Default::default(),
             endhost_api_discovery_api: Default::default(),
+            external_ases: Default::default(),
+            extern_as_handlers: Default::default(),
         }
     }
 
@@ -388,6 +397,7 @@ impl From<&SystemState> for SystemStateDto {
                 .iter()
                 .map(|(id, discovery_state)| (*id, discovery_state.clone().into()))
                 .collect(),
+            external_ases: map_btree(system_state.external_ases.clone(), Into::into),
         }
     }
 }
@@ -434,7 +444,8 @@ impl TryFrom<SystemStateDto> for SystemState {
             .as_ref()
             .map(|topology| SegmentRegistry::new(&FastTopologyLookup::new(topology)));
 
-        let sim_receivers = NetworkReceiverRegistry::default();
+        let external_ases = map_btree_fallible(dto.external_ases, TryInto::try_into)
+            .context("invalid external AS states")?;
 
         Ok(SystemState {
             root_secret,
@@ -448,9 +459,11 @@ impl TryFrom<SystemStateDto> for SystemState {
                 .context("invalid router states")?,
             topology,
             topology_segments,
-            sim_receivers,
+            sim_receivers: Default::default(),
             endhost_apis: dto.endhost_apis,
             endhost_api_discovery_api: map_btree(dto.endhost_api_discovery_api, Into::into),
+            external_ases,
+            extern_as_handlers: Default::default(),
         })
     }
 }

@@ -39,6 +39,8 @@ pub struct SegmentRegistry {
 // Public
 impl SegmentRegistry {
     /// Creates a new [SegmentRegistry] containing all valid paths from given topology
+    ///
+    /// Will not generate Segments for External ASes
     pub fn new(topo_lookup: &FastTopologyLookup<'_>) -> Self {
         let mut isd_segments = HashMap::new();
 
@@ -58,8 +60,8 @@ impl SegmentRegistry {
                         .topology
                         .as_map
                         .values()
-                        .filter(|as_entry| as_entry.isd_as.isd() == isd)
-                        .map(|as_entry| as_entry.isd_as)
+                        .filter(|as_entry| as_entry.isd_as().isd() == isd)
+                        .map(|as_entry| as_entry.isd_as())
                         .collect(),
                 ),
             );
@@ -71,8 +73,8 @@ impl SegmentRegistry {
                 .topology
                 .as_map
                 .values()
-                .filter(|as_entry| as_entry.core)
-                .map(|as_entry| as_entry.isd_as)
+                .filter(|as_entry| as_entry.is_core())
+                .map(|as_entry| as_entry.isd_as())
                 .collect(),
         );
 
@@ -128,13 +130,14 @@ impl SegmentRegistry {
 // Computation
 impl SegmentRegistry {
     fn compute_core_segments(topo_lookup: &FastTopologyLookup<'_>) -> Vec<LinkSegment> {
-        // Get All Core ASes
+        // Get All Core ASes which are not external
         let core_ases: Vec<IsdAsn> = topo_lookup
             .topology
             .as_map
             .values()
-            .filter(|as_entry| as_entry.core)
-            .map(|as_entry| as_entry.isd_as)
+            .filter(|as_entry| !as_entry.is_external())
+            .filter(|as_entry| as_entry.is_core())
+            .map(|as_entry| as_entry.isd_as())
             .collect();
 
         // For each core AS, find all segments
@@ -150,13 +153,14 @@ impl SegmentRegistry {
         topo_lookup: &FastTopologyLookup<'_>,
         isd: Isd,
     ) -> Vec<LinkSegment> {
-        // Get All Core ASes in the ISD
+        // Get All Core ASes in the ISD which are not external
         let core_ases: Vec<IsdAsn> = topo_lookup
             .topology
             .as_map
             .values()
-            .filter(|as_entry| as_entry.core && as_entry.isd_as.isd() == isd)
-            .map(|as_entry| as_entry.isd_as)
+            .filter(|as_entry| !as_entry.is_external())
+            .filter(|as_entry| as_entry.is_core() && as_entry.isd_as().isd() == isd)
+            .map(|as_entry| as_entry.isd_as())
             .collect();
 
         // For each core AS, find all segments that start at this AS

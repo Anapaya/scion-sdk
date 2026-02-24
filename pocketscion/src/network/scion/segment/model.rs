@@ -18,7 +18,7 @@ use std::{
     fmt::Display,
 };
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use scion_proto::{
     address::IsdAsn,
@@ -28,7 +28,7 @@ use scion_proto::{
     },
 };
 
-use crate::network::scion::topology::{DirectedScionLink, ScionLinkType, ScionTopology};
+use crate::network::scion::topology::{DirectedScionLink, ScionAs, ScionLinkType, ScionTopology};
 
 /// More general representation of a [scion_proto::path::PathSegment]
 ///
@@ -84,6 +84,20 @@ impl LinkSegment {
                 .get(&hop.local_ias)
                 .with_context(|| format!("error getting AS {} from topology", hop.local_ias))?;
 
+            let (_isd_as, _is_core, forwarding_key) = match hop_as {
+                ScionAs::Simulated {
+                    isd_as,
+                    core,
+                    forwarding_key,
+                } => (*isd_as, *core, forwarding_key),
+                ScionAs::External { .. } => {
+                    bail!(
+                        "External AS {} was part of LinkSegments, but all ASes in the segment must be simulated",
+                        hop.local_ias
+                    )
+                }
+            };
+
             let epoch_s = timestamp
                 .timestamp()
                 .try_into()
@@ -95,7 +109,7 @@ impl LinkSegment {
                 &hop,
                 accumulator,
                 epoch_s,
-                &hop_as.forwarding_key.into(),
+                forwarding_key.into(),
             );
 
             let entry = Self::create_as_entry(
@@ -104,7 +118,7 @@ impl LinkSegment {
                 accumulator,
                 epoch_s,
                 local_peer_entries,
-                &hop_as.forwarding_key.into(),
+                forwarding_key.into(),
             );
 
             // Update accumulator with the MAC of the new hop
@@ -399,7 +413,8 @@ mod tests {
                 .as_map
                 .get(&entry.local)
                 .expect("Failed to get AS from topology")
-                .forwarding_key
+                .forwarding_key()
+                .expect("All ASes in the segment should be simulated")
                 .into();
 
             let expected_mac = calculate_hop_mac(

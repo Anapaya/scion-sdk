@@ -185,7 +185,7 @@ impl TestPathContextTopologyExt for TestPathContext {
         }
 
         // If there is no core AS, add one
-        if !topology.as_map.values().any(|as_entry| as_entry.core) {
+        if !topology.as_map.values().any(|as_entry| as_entry.is_core()) {
             let core_ia = IsdAsn::new(
                 Isd::new(using_isd),
                 Asn::new(as_counter.saturating_add(100)),

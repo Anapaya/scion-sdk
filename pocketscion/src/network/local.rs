@@ -13,6 +13,8 @@
 // limitations under the License.
 //! Local Network Simulation Functionality
 
+pub mod external_as_handler;
+pub mod external_as_registry;
 pub mod receiver_registry;
 pub mod receivers;
 pub mod simulator;

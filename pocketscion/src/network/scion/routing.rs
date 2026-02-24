@@ -113,6 +113,15 @@ pub enum LocalAsRoutingAction {
     },
     /// A SCMP error response should be sent
     SendSCMPErrorResponse(ScmpErrorMessage),
+    /// Packet should be forwarded to an external AS not simulated in PocketScion.
+    ForwardExternal {
+        ///  Outgoing interface ID in the current AS to forward the packet to the external AS.
+        sim_egress_interface_id: u16,
+        /// Incoming interface ID in the external AS where the packet will be received.
+        extern_ingress_interface_id: u16,
+        /// ISD-AS number of the external AS.
+        external_as: IsdAsn,
+    },
 }
 
 impl From<LocalAsRoutingAction> for AsRoutingAction {
@@ -129,7 +138,7 @@ pub enum AsRoutingAction {
     /// Packet should be forwarded to the next hop through the given interface id
     ForwardNextHop {
         /// Interface ID to forward the packet to.
-        link_interface_id: u16,
+        egress_interface_id: u16,
     },
     /// Packet should be dropped
     Drop,
