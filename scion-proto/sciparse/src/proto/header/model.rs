@@ -25,7 +25,10 @@ use crate::{
         layout::{AddressHeaderLayout, CommonHeaderLayout},
         view::{ScionHeaderView, ScionPathView},
     },
-    path::standard::{model::StandardPath, types::PathType},
+    path::{
+        onehop::model::OneHopPath,
+        standard::{model::StandardPath, types::PathType},
+    },
     scion::{
         address::host_addr::{WireHostAddr, WireHostAddrType},
         identifier::isd_asn::IsdAsn,
@@ -272,6 +275,8 @@ impl WireEncode for AddressHeader {
 pub enum Path {
     /// Standard SCION path
     Standard(StandardPath),
+    /// One-hop SCION path
+    OneHop(OneHopPath),
     /// Empty path
     Empty,
     /// Unsupported path type with raw data
@@ -289,6 +294,7 @@ impl Path {
             ScionPathView::Standard(standard_view) => {
                 Path::Standard(StandardPath::from_view(standard_view))
             }
+            ScionPathView::OneHop(onehop_view) => Path::OneHop(OneHopPath::from_view(onehop_view)),
             ScionPathView::Empty => Path::Empty,
             ScionPathView::Unsupported {
                 path_type,
@@ -307,6 +313,7 @@ impl Path {
     pub fn path_type(&self) -> PathType {
         match self {
             Path::Standard(_) => PathType::Scion,
+            Path::OneHop(_) => PathType::OneHop,
             Path::Empty => PathType::Empty,
             Path::Unsupported { path_type, .. } => PathType::Other((*path_type).into()),
         }
@@ -324,6 +331,7 @@ impl WireEncode for Path {
     fn required_size(&self) -> usize {
         match self {
             Path::Standard(path) => path.required_size(),
+            Path::OneHop(path) => path.required_size(),
             Path::Unsupported { data, .. } => data.len(),
             Path::Empty => 0,
         }
@@ -332,6 +340,7 @@ impl WireEncode for Path {
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         match self {
             Self::Standard(standard_path) => standard_path.wire_valid()?,
+            Self::OneHop(onehop_path) => onehop_path.wire_valid()?,
             Self::Empty => {}
             Self::Unsupported { path_type: _, data } => {
                 if !data.len().is_multiple_of(4) {
@@ -346,6 +355,7 @@ impl WireEncode for Path {
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         match self {
             Path::Standard(path) => unsafe { path.encode_unchecked(buf) },
+            Path::OneHop(path) => unsafe { path.encode_unchecked(buf) },
             Path::Empty => 0,
             Path::Unsupported { data, .. } => {
                 let len = data.len();

@@ -33,7 +33,10 @@ use crate::{
         write::unchecked_bit_range_be_write,
     },
     header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
-    path::standard::{types::PathType, view::StandardPathView},
+    path::{
+        onehop::view::OneHopPathView,
+        standard::{types::PathType, view::StandardPathView},
+    },
     scion::{
         address::host_addr::{HostAddressSizeError, WireHostAddr, WireHostAddrType},
         identifier::{asn::Asn, isd::Isd},
@@ -349,14 +352,25 @@ impl ScionHeaderView {
         match self.path_type() {
             PathType::Empty => ScionPathView::Empty,
             PathType::Scion => {
-                // SAFETY: buffer size is checked on construction
+                // SAFETY: min buffer size is checked on construction
                 let path_buf = unsafe { self.0.get_unchecked(path_offset..len) };
                 let path = unsafe { StandardPathView::from_slice_unchecked(path_buf) };
 
                 ScionPathView::Standard(path)
             }
+            PathType::OneHop => {
+                // SAFETY: min buffer size is checked on construction
+                let path_size = crate::proto::path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
+                let path_range = path_offset..path_offset + path_size;
+                let path_buf = unsafe { self.0.get_unchecked(path_range) };
+                let path = unsafe {
+                    crate::proto::path::onehop::view::OneHopPathView::from_slice_unchecked(path_buf)
+                };
+
+                ScionPathView::OneHop(path)
+            }
             pt => {
-                // SAFETY: buffer size is checked on construction
+                // SAFETY: min buffer size is checked on construction
                 let path_buf = unsafe { self.0.get_unchecked(path_offset..len) };
                 ScionPathView::Unsupported {
                     path_type: pt,
@@ -378,14 +392,27 @@ impl ScionHeaderView {
         match self.path_type() {
             PathType::Empty => ScionPathViewMut::Empty,
             PathType::Scion => {
-                // SAFETY: size is checked on construction of ScionHeaderView
+                // SAFETY: min size is checked on construction of ScionHeaderView
                 let path_buf = unsafe { self.0.get_unchecked_mut(path_offset..len) };
                 let path = unsafe { StandardPathView::from_mut_slice_unchecked(path_buf) };
 
                 ScionPathViewMut::Standard(path)
             }
+            PathType::OneHop => {
+                // SAFETY: min size is checked on construction of ScionHeaderView
+                let header_size = crate::proto::path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
+                let path_range = path_offset..path_offset + header_size;
+                let path_buf = unsafe { self.0.get_unchecked_mut(path_range) };
+                let path = unsafe {
+                    crate::proto::path::onehop::view::OneHopPathView::from_mut_slice_unchecked(
+                        path_buf,
+                    )
+                };
+
+                ScionPathViewMut::OneHop(path)
+            }
             pt => {
-                // SAFETY: size is checked on construction of ScionHeaderView
+                // SAFETY: min size is checked on construction of ScionHeaderView
                 let path_buf = unsafe { self.0.get_unchecked_mut(path_offset..len) };
                 ScionPathViewMut::Unsupported {
                     path_type: pt,
@@ -424,6 +451,8 @@ impl Debug for ScionHeaderView {
 pub enum ScionPathView<'a> {
     /// View over a standard SCION path
     Standard(&'a StandardPathView),
+    /// View over a one-hop SCION path
+    OneHop(&'a OneHopPathView),
     /// View over an unsupported path type
     Unsupported {
         /// The unsupported path type
@@ -440,6 +469,8 @@ pub enum ScionPathView<'a> {
 pub enum ScionPathViewMut<'a> {
     /// Mutable view over a standard SCION path
     Standard(&'a mut StandardPathView),
+    /// Mutable view over a one-hop SCION path
+    OneHop(&'a mut OneHopPathView),
     /// Mutable view over an unsupported path type
     Unsupported {
         /// The unsupported path type

@@ -4,6 +4,8 @@ publish = false
 edition = { workspace = true }
 
 [dependencies]
+aes = { workspace = true }
+cmac = { workspace = true }
 thiserror = { workspace = true }
 bitflags = { workspace = true }
 tinyvec = { workspace = true }

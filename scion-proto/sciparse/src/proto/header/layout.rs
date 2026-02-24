@@ -27,10 +27,13 @@ use crate::{
         model::{Path, ScionPacketHeader},
         view::ScionHeaderView,
     },
-    path::standard::{
-        layout::{StdPathDataLayout, StdPathMetaLayout},
-        types::PathType,
-        view::StandardPathView,
+    path::{
+        onehop::layout::OneHopPathLayout,
+        standard::{
+            layout::{StdPathDataLayout, StdPathMetaLayout},
+            types::PathType,
+            view::StandardPathView,
+        },
     },
 };
 
@@ -159,6 +162,7 @@ impl ScionHeaderLayout {
 
                 ScionHeaderPathLayout::Standard(StdPathMetaLayout, path_data_layout)
             }
+            PathType::OneHop => ScionHeaderPathLayout::OneHop(OneHopPathLayout),
             PathType::Empty => ScionHeaderPathLayout::Empty,
             path_type => {
                 // For unknown path types, we assume the rest of the header is path data
@@ -230,6 +234,7 @@ impl ScionHeaderLayout {
                     StdPathDataLayout::new(seg0, seg1, seg2),
                 )
             }
+            Path::OneHop(_) => ScionHeaderPathLayout::OneHop(OneHopPathLayout),
             Path::Empty => ScionHeaderPathLayout::Empty,
             Path::Unsupported { path_type, data } => {
                 let addr_end = common.size_bytes() + address.size_bytes();
@@ -421,6 +426,8 @@ impl Layout for AddressHeaderLayout {
 pub enum ScionHeaderPathLayout {
     /// Layout for the standard SCION path
     Standard(StdPathMetaLayout, StdPathDataLayout),
+    /// Layout for a one-hop path
+    OneHop(OneHopPathLayout),
     /// Layout for an empty path
     Empty,
     /// Layout for an unknown path type
@@ -437,6 +444,7 @@ impl ScionHeaderPathLayout {
     pub const fn path_type(&self) -> PathType {
         match self {
             ScionHeaderPathLayout::Standard(..) => PathType::Scion,
+            ScionHeaderPathLayout::OneHop(_) => PathType::OneHop,
             ScionHeaderPathLayout::Empty => PathType::Empty,
             ScionHeaderPathLayout::Unknown { path_type, .. } => *path_type,
         }
@@ -446,9 +454,12 @@ impl ScionHeaderPathLayout {
     pub fn annotations(&self) -> Annotations {
         let mut annotations = Annotations::new();
         match self {
-            ScionHeaderPathLayout::Standard(_, data_layout) => {
-                annotations.extend(StdPathMetaLayout.annotations());
+            ScionHeaderPathLayout::Standard(meta_layout, data_layout) => {
+                annotations.extend(meta_layout.annotations());
                 annotations.extend(data_layout.annotations());
+            }
+            ScionHeaderPathLayout::OneHop(layout) => {
+                annotations.extend(layout.annotations());
             }
             ScionHeaderPathLayout::Empty => {}
             ScionHeaderPathLayout::Unknown { range, .. } => {
@@ -466,6 +477,7 @@ impl Layout for ScionHeaderPathLayout {
             ScionHeaderPathLayout::Standard(meta, data_layout) => {
                 meta.size_bytes() + data_layout.size_bytes()
             }
+            ScionHeaderPathLayout::OneHop(onehop_layout) => onehop_layout.size_bytes(),
             ScionHeaderPathLayout::Empty => 0,
             ScionHeaderPathLayout::Unknown { range, .. } => range.size_bytes(),
         }

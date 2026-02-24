@@ -39,6 +39,7 @@ use sciparse::{
         model::ScionPacketHeader,
         view::{ScionHeaderView, ScionPathViewMut},
     },
+    path::standard::view::{HopFieldView, InfoFieldView},
 };
 use tinyvec::ArrayVec;
 
@@ -77,7 +78,7 @@ fn valid_headers_should_roudtrip_correctly() {
 
             prop_assert_eq!(rst.len(), 0);
 
-            exec_every_view_function(view);
+            exec_every_view_function(view)?;
 
             // Reconstruct header from view
             let reconstructed = ScionPacketHeader::from_view(view);
@@ -174,7 +175,7 @@ fn parsing_invalid_headers_must_not_panic() {
             match ScionHeaderView::from_mut_slice(&mut broken_buf) {
                 // Expected that some invalid headers may still parse successfully
                 Ok((view, _rest)) => {
-                    exec_every_view_function(view);
+                    exec_every_view_function(view)?;
                 }
                 Err(ViewConversionError::BufferTooSmall { .. })
                 | Err(ViewConversionError::Other(_)) => {
@@ -220,7 +221,7 @@ fn parsing_random_data_must_not_panic() {
             let mut data = data;
             match ScionHeaderView::from_mut_slice(&mut data) {
                 Ok((view, _rest)) => {
-                    exec_every_view_function(view);
+                    exec_every_view_function(view)?;
                 }
                 Err(ViewConversionError::BufferTooSmall { .. })
                 | Err(ViewConversionError::Other(_)) => {
@@ -279,9 +280,11 @@ fn parsing_random_data_must_not_panic() {
 
 /// Execute every function in the ScionHeaderView to ensure they do not panic
 ///
-/// Will excecute all functions, both mutable and immutable
+/// Will execute all functions, both mutable and immutable
 /// Mutable functions are called with the current value to avoid changing the header.
-fn exec_every_view_function(view: &mut ScionHeaderView) {
+fn exec_every_view_function(
+    view: &mut ScionHeaderView,
+) -> Result<(), proptest::prelude::TestCaseError> {
     // Common header - immutable functions
     let _ = view.version();
     let _ = view.traffic_class();
@@ -328,6 +331,7 @@ fn exec_every_view_function(view: &mut ScionHeaderView) {
         let _ = path_view.seg1_len();
         let _ = path_view.seg2_len();
 
+        check_slice_is_in_bounds(path_view.as_bytes());
         // Standard path - mutable functions
         path_view.set_curr_info_field(path_view.curr_info_field());
         path_view.set_curr_hop_field(path_view.curr_hop_field());
@@ -336,7 +340,99 @@ fn exec_every_view_function(view: &mut ScionHeaderView) {
             path_view.set_seg1_len(path_view.seg1_len());
             path_view.set_seg2_len(path_view.seg2_len());
         }
+
+        for info_field in path_view.info_fields_mut() {
+            exec_info_field_functions(info_field);
+            check_slice_is_in_bounds(info_field.as_bytes());
+        }
+
+        for hop_field in path_view.hop_fields_mut() {
+            exec_hop_field_functions(hop_field);
+            check_slice_is_in_bounds(hop_field.as_bytes());
+        }
+
+        // Access every field
+        for info_idx in 0..path_view.info_field_count() {
+            let fld = path_view.info_field_mut(info_idx as usize);
+            prop_assert!(
+                fld.is_some(),
+                "Info field index {} should be in bounds",
+                info_idx
+            );
+
+            let fld = fld.unwrap();
+            check_slice_is_in_bounds(fld.as_bytes());
+            exec_info_field_functions(fld);
+        }
+        // Access every field
+        for hop_idx in 0..path_view.hop_field_count() {
+            let fld = path_view.hop_field_mut(hop_idx as usize);
+            prop_assert!(
+                fld.is_some(),
+                "Hop field index {} should be in bounds",
+                hop_idx
+            );
+
+            let fld = fld.unwrap();
+            check_slice_is_in_bounds(fld.as_bytes());
+            exec_hop_field_functions(fld);
+        }
+        // access out of bounds should not return valid fields
+        let out_of_bounds_info = path_view.info_field(path_view.info_field_count() as usize);
+        let out_of_bounds_hop = path_view.hop_field(path_view.hop_field_count() as usize);
+        prop_assert!(
+            out_of_bounds_info.is_none(),
+            "Out of bounds info field should return None"
+        );
+        prop_assert!(
+            out_of_bounds_hop.is_none(),
+            "Out of bounds hop field should return None"
+        );
     }
+
+    if let ScionPathViewMut::OneHop(path_view) = view.path_mut() {
+        let _ = path_view.info_field();
+        let _ = path_view.hop_fields();
+
+        let info_field = path_view.info_field_mut();
+        check_slice_is_in_bounds(info_field.as_bytes());
+        exec_info_field_functions(info_field);
+        let hop_fields = path_view.mut_hop_fields();
+        for hop_field in hop_fields {
+            check_slice_is_in_bounds(hop_field.as_bytes());
+            exec_hop_field_functions(hop_field);
+        }
+    }
+
+    return Ok(());
+    fn exec_info_field_functions(info_field: &mut InfoFieldView) {
+        let _ = info_field.flags();
+        let _ = info_field.segment_id();
+        let _ = info_field.timestamp();
+
+        info_field.set_flags(info_field.flags());
+        info_field.set_segment_id(info_field.segment_id());
+        info_field.set_timestamp(info_field.timestamp());
+    }
+
+    fn exec_hop_field_functions(hop_field: &mut HopFieldView) {
+        let _ = hop_field.flags();
+        let _ = hop_field.exp_time();
+        let _ = hop_field.cons_ingress();
+        let _ = hop_field.cons_egress();
+        let _ = hop_field.mac();
+
+        hop_field.set_flags(hop_field.flags());
+        hop_field.set_exp_time(hop_field.exp_time());
+        hop_field.set_cons_ingress(hop_field.cons_ingress());
+        hop_field.set_cons_egress(hop_field.cons_egress());
+        hop_field.set_mac(hop_field.mac());
+    }
+}
+
+fn check_slice_is_in_bounds(slice: &[u8]) {
+    let _a = slice[0];
+    let _b = slice[slice.len() - 1];
 }
 
 /// Strategies for generating valid SCION headers
@@ -345,9 +441,12 @@ mod valid {
         address::host_addr::{ServiceAddr, WireHostAddr},
         header::model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
         identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
-        path::standard::{
-            model::{HopField, InfoField, Segment, StandardPath},
-            types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, PathType},
+        path::{
+            onehop::model::OneHopPath,
+            standard::{
+                model::{HopField, InfoField, Segment, StandardPath},
+                types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, PathType},
+            },
         },
     };
 
@@ -400,6 +499,31 @@ mod valid {
 
             let path = match &self.path {
                 HeaderPathOptions::Empty => Path::Empty,
+                HeaderPathOptions::OneHop { info, hops } => {
+                    Path::OneHop(OneHopPath {
+                        info: InfoField {
+                            flags: info.flags,
+                            segment_id: info.seg_id,
+                            timestamp: info.timestamp,
+                        },
+                        hops: [
+                            HopField {
+                                flags: hops[0].flags,
+                                expiration_units: hops[0].exp_time,
+                                cons_ingress: hops[0].cons_ingress,
+                                cons_egress: hops[0].cons_egress,
+                                mac: HopFieldMac::from(hops[0].mac),
+                            },
+                            HopField {
+                                flags: hops[1].flags,
+                                expiration_units: hops[1].exp_time,
+                                cons_ingress: hops[1].cons_ingress,
+                                cons_egress: hops[1].cons_egress,
+                                mac: HopFieldMac::from(hops[1].mac),
+                            },
+                        ],
+                    })
+                }
                 HeaderPathOptions::Unknown { path_id, raw_bytes } => {
                     Path::Unsupported {
                         path_type: PathType::Other(*path_id),
@@ -457,6 +581,10 @@ mod valid {
         Scion {
             meta: MetaOptions,
             segment: ArrayVec<[SegmentOptions; 3]>,
+        },
+        OneHop {
+            info: TestInfoField,
+            hops: [TestHopField; 2],
         },
         Empty,
         Unknown {
@@ -534,6 +662,9 @@ mod valid {
         prop_oneof![
             // Empty path
             1 => prop::strategy::Just(HeaderPathOptions::Empty),
+            // One-hop path with 2 hop fields
+            1 => (any::<TestInfoField>(), vec(any::<TestHopField>(), 2))
+                .prop_map(|(info, hops)| HeaderPathOptions::OneHop { info, hops: hops.try_into().unwrap() }),
             // Unknown path
             1 => (
                 (5u8..=255u8),

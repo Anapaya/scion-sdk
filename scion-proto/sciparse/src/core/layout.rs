@@ -177,10 +177,13 @@ impl BitRange {
 /// Macros for layout definitions
 pub mod macros {
     /// Helper macro to generate bit range constants
+    ///
+    /// gen_bitrange_const!(FIELD_NAME, START_BIT, FIELD_WIDTH)
     macro_rules! gen_bitrange_const {
         ($range_name:ident, $start:expr, $offset:expr) => {
             /// Bit range constant for the specified field
-            pub const $range_name: BitRange = BitRange::new($start, $offset);
+            pub const $range_name: crate::core::layout::BitRange =
+                crate::core::layout::BitRange::new($start, $offset);
         };
     }
 

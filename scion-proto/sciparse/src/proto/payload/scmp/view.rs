@@ -14,7 +14,6 @@
 
 use crate::{
     core::{
-        layout::Layout as _,
         macros::impl_from_ref,
         view::{
             View, ViewConversionError,

@@ -14,7 +14,7 @@
 
 //! Standard SCION path types and related structures.
 
-use std::{fmt::Debug, time::Duration};
+use std::{fmt::Debug, ops::Deref, time::Duration};
 
 /// Path types used in SCION packets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,9 +72,21 @@ impl HopFieldMac {
         &self.0
     }
 }
+impl Deref for HopFieldMac {
+    type Target = [u8; 6];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 impl From<[u8; 6]> for HopFieldMac {
     fn from(bytes: [u8; 6]) -> Self {
         HopFieldMac::new(bytes)
+    }
+}
+impl From<HopFieldMac> for [u8; 6] {
+    fn from(mac: HopFieldMac) -> Self {
+        mac.0
     }
 }
 impl Debug for HopFieldMac {

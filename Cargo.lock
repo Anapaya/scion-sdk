@@ -3874,7 +3874,9 @@ dependencies = [
 name = "sciparse"
 version = "0.0.0"
 dependencies = [
+ "aes",
  "bitflags",
+ "cmac",
  "proptest",
  "proptest-derive",
  "thiserror 2.0.18",

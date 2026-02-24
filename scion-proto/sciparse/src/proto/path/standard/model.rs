@@ -22,6 +22,7 @@ use crate::{
     },
     path::standard::{
         layout::{HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathMetaLayout},
+        mac::{ForwardingKey, HopMacCalculate, HopMacInput, HopMacInputSource},
         types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
         view::{HopFieldView, InfoFieldView, StandardPathView},
     },
@@ -37,7 +38,6 @@ pub struct StandardPath {
     /// The segments of the path
     pub segments: Vec<Segment>,
 }
-
 impl StandardPath {
     /// Constructs a `StandardPath` from a `StandardPathView`
     pub fn from_view(view: &StandardPathView) -> Self {
@@ -68,7 +68,6 @@ impl StandardPath {
         }
     }
 }
-
 // Utility
 impl StandardPath {
     /// Returns the total number of hop fields in the path
@@ -112,7 +111,6 @@ impl StandardPath {
         [seg0, seg1, seg2]
     }
 }
-
 impl WireEncode for StandardPath {
     fn required_size(&self) -> usize {
         let [seg0, seg1, seg2] = self.segment_sizes();
@@ -220,7 +218,6 @@ pub struct InfoField {
     /// Used to determine if this segment currently valid.
     pub timestamp: u32,
 }
-
 impl InfoField {
     /// Constructs a `InfoField` from a `InfoFieldView`
     pub fn from_view(view: &InfoFieldView) -> Self {
@@ -231,7 +228,6 @@ impl InfoField {
         }
     }
 }
-
 impl WireEncode for InfoField {
     fn required_size(&self) -> usize {
         InfoFieldLayout::SIZE_BYTES
@@ -297,7 +293,6 @@ pub struct HopField {
     /// It is computed when a segment is created and verified at each hop.
     pub mac: HopFieldMac,
 }
-
 impl HopField {
     /// Constructs a `HopField` from a `HopFieldView`
     pub fn from_view(view: &HopFieldView) -> Self {
@@ -310,7 +305,45 @@ impl HopField {
         }
     }
 }
-
+impl HopField {
+    /// Creates an empty `HopField` with zeroed fields.
+    pub fn empty() -> Self {
+        Self {
+            flags: HopFieldFlags::empty(),
+            expiration_units: 0,
+            cons_ingress: 0,
+            cons_egress: 0,
+            mac: HopFieldMac([0; 6]),
+        }
+    }
+}
+// MAC methods
+impl HopField {
+    /// Recalculates the MAC for this hop field and updates the `mac` field with the new value.
+    ///
+    /// See [`HopMacCalculate::calculate_mac`](crate::path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
+    pub fn with_calculated_mac(
+        mut self,
+        mac_chain_beta: u16,
+        timestamp_epoch: u32,
+        forwarding_key: &ForwardingKey,
+    ) -> Self {
+        self.mac = self.calculate_mac(mac_chain_beta, timestamp_epoch, forwarding_key);
+        self
+    }
+}
+/// Provides the necessary input for calculating the MAC of a hop field.
+/// Automatically implements [`HopMacCalculate`](crate::path::standard::mac::HopMacCalculate)
+impl HopMacInputSource for HopField {
+    #[inline]
+    fn get_mac_input(&self) -> HopMacInput {
+        HopMacInput {
+            exp_time: self.expiration_units,
+            cons_ingress: self.cons_ingress,
+            cons_egress: self.cons_egress,
+        }
+    }
+}
 impl WireEncode for HopField {
     fn required_size(&self) -> usize {
         HopFieldLayout::SIZE_BYTES

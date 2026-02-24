@@ -20,7 +20,6 @@ use std::{fmt::Debug, mem::transmute, ops::Range};
 
 use crate::{
     core::{
-        layout::Layout,
         read::unchecked_bit_range_be_read,
         view::{
             View, ViewConversionError,
@@ -32,6 +31,7 @@ use crate::{
         layout::{
             HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathLayout, StdPathMetaLayout,
         },
+        mac::{HopMacInput, HopMacInputSource},
         types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
     },
 };
@@ -483,5 +483,17 @@ impl Debug for HopFieldView {
             .field("cons_egress", &self.cons_egress())
             .field("mac", &self.mac())
             .finish()
+    }
+}
+/// Provides the necessary input for calculating the MAC of a hop field.
+/// Automatically implements [`HopMacCalculate`](crate::path::standard::mac::HopMacCalculate)
+impl HopMacInputSource for HopFieldView {
+    #[inline]
+    fn get_mac_input(&self) -> HopMacInput {
+        HopMacInput {
+            exp_time: self.exp_time(),
+            cons_ingress: self.cons_ingress(),
+            cons_egress: self.cons_egress(),
+        }
     }
 }

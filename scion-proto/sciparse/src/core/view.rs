@@ -267,6 +267,7 @@ pub(crate) mod macros {
         ($name:ident, $layout:ident) => {
             impl View for $name {
                 fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
+                    use crate::core::layout::Layout;
                     let layout = $layout::try_from(buf)?;
                     Ok(layout.size_bytes())
                 }
