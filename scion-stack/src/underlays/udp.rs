@@ -14,7 +14,7 @@
 //! UDP underlay socket.
 use std::{
     io,
-    net::{self, Ipv4Addr, Ipv6Addr},
+    net::{self},
     sync::Arc,
     task::{Poll, ready},
 };
@@ -38,19 +38,21 @@ use crate::{
         AsyncUdpUnderlaySocket, ScionSocketSendError, UnderlaySocket, scmp_handler::ScmpHandler,
         udp_polling::UdpPollHelper,
     },
-    underlays::discovery::UnderlayDiscovery,
+    underlays::{discovery::UnderlayDiscovery, source_ip_towards},
 };
 
 const UDP_DATAGRAM_BUFFER_SIZE: usize = 65535;
 
 /// Local IP resolver.
+#[async_trait::async_trait]
 pub trait LocalIpResolver: Send + Sync {
     /// Returns the local IP addresses of the host.
-    fn local_ips(&self) -> Vec<net::IpAddr>;
+    async fn local_ips(&self) -> Vec<net::IpAddr>;
 }
 
+#[async_trait::async_trait]
 impl LocalIpResolver for Vec<net::IpAddr> {
-    fn local_ips(&self) -> Vec<net::IpAddr> {
+    async fn local_ips(&self) -> Vec<net::IpAddr> {
         self.clone()
     }
 }
@@ -75,20 +77,15 @@ impl TargetAddrLocalIpResolver {
     }
 }
 
+#[async_trait::async_trait]
 impl LocalIpResolver for TargetAddrLocalIpResolver {
     /// Binds to Ipv4 and Ipv6 unspecified addresses and returns the local addresses
     /// that can reach the endhost API.
-    fn local_ips(&self) -> Vec<net::IpAddr> {
-        let mut ips = vec![];
-        for ip in [Ipv4Addr::UNSPECIFIED.into(), Ipv6Addr::UNSPECIFIED.into()] {
-            if let Ok(socket) = net::UdpSocket::bind(net::SocketAddr::new(ip, 0))
-                && socket.connect(self.api_socket_address).is_ok()
-                && let Ok(addr) = socket.local_addr()
-            {
-                ips.push(addr.ip());
-            }
+    async fn local_ips(&self) -> Vec<net::IpAddr> {
+        match source_ip_towards(self.api_socket_address).await {
+            Some(ip) => vec![ip],
+            None => vec![],
         }
-        ips
     }
 }
 

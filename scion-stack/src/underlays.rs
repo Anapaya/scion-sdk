@@ -134,7 +134,20 @@ impl UnderlayStack {
                         InvalidBindAddressError::ServiceAddress(addr),
                     ))?
             }
-            None => "0.0.0.0:0".parse().unwrap(),
+            None => {
+                if let Some(cp_addr) = cp_url
+                    .socket_addrs(|| None)
+                    .ok()
+                    .and_then(|addrs| addrs.first().cloned())
+                    && let Some(ip) = source_ip_towards(cp_addr).await
+                {
+                    Ok(net::SocketAddr::new(ip, 0))
+                } else {
+                    Err(ScionSocketBindError::InvalidBindAddress(
+                        InvalidBindAddressError::NoLocalIpAddressFound,
+                    ))
+                }?
+            }
         };
 
         let bind_addr = SocketAddr::from_std(isd_as, local_addr);
@@ -154,7 +167,7 @@ impl UnderlayStack {
         Ok(socket)
     }
 
-    fn resolve_udp_bind_addr(
+    async fn resolve_udp_bind_addr(
         &self,
         isd_as: IsdAsn,
         bind_addr: Option<SocketAddr>,
@@ -169,7 +182,7 @@ impl UnderlayStack {
                 addr
             }
             None => {
-                let local_address = *self.local_ip_resolver.local_ips().first().ok_or(
+                let local_address = *self.local_ip_resolver.local_ips().await.first().ok_or(
                     ScionSocketBindError::InvalidBindAddress(
                         InvalidBindAddressError::NoLocalIpAddressFound,
                     ),
@@ -185,7 +198,7 @@ impl UnderlayStack {
         isd_as: IsdAsn,
         bind_addr: Option<SocketAddr>,
     ) -> Result<(SocketAddr, UdpSocket), ScionSocketBindError> {
-        let bind_addr = self.resolve_udp_bind_addr(isd_as, bind_addr)?;
+        let bind_addr = self.resolve_udp_bind_addr(isd_as, bind_addr).await?;
         let local_addr: net::SocketAddr =
             bind_addr
                 .local_address()
@@ -398,4 +411,19 @@ where
     });
     target_buf.truncate(n);
     Ok(())
+}
+
+/// Returns the local source IP address that can reach the given destination address.
+pub(crate) async fn source_ip_towards(dst: net::SocketAddr) -> Option<net::IpAddr> {
+    let bind_addr = match dst.ip() {
+        net::IpAddr::V4(_) => net::Ipv4Addr::UNSPECIFIED.into(),
+        net::IpAddr::V6(_) => net::Ipv6Addr::UNSPECIFIED.into(),
+    };
+    if let Ok(socket) = tokio::net::UdpSocket::bind(net::SocketAddr::new(bind_addr, 0)).await
+        && socket.connect(dst).await.is_ok()
+        && let Ok(addr) = socket.local_addr()
+    {
+        return Some(addr.ip());
+    }
+    None
 }
