@@ -91,11 +91,11 @@ async fn list_segments_handler(
     State(path_service): State<Arc<dyn SegmentsDiscovery>>,
     ConnectRpc(request): ConnectRpc<ListSegmentsRequest>,
 ) -> Result<ConnectRpc<ListSegmentsResponse>, axum::response::Response> {
-    tracing::debug!(request = ?request, "list_segments request");
     let (src, dst) = (
         IsdAsn::from(request.src_isd_as),
         IsdAsn::from(request.dst_isd_as),
     );
+    tracing::debug!(?src, ?dst, page_size=?request.page_size, page_token=?request.page_token, "list_segments request");
     match path_service
         .list_segments(src, dst, request.page_size, request.page_token)
         .await
