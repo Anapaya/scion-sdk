@@ -54,7 +54,7 @@ impl IdentityRegistryState {
         if let Some(prev_ident) = self.associations.insert(key.clone(), ident.clone())
             && prev_ident != ident
         {
-            self.expiry.remove(&ident);
+            self.expiry.remove(&prev_ident);
         }
         self.expiry.insert(ident, expiry).is_none()
     }
