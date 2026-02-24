@@ -124,7 +124,7 @@ pub struct StaticEndhostApiDiscovery {
 }
 
 impl StaticEndhostApiDiscovery {
-    const GLOBAL_DISCOVERY_APIS: &[&'static str] = &["https://endhost-api-discovery.anapaya.net"];
+    const GLOBAL_DISCOVERY_APIS: &[&'static str] = &["https://scion-discovery.anapaya.net"];
 
     /// Creates a new `StaticEndhostApiDiscovery` with the given list of discovery API URLs.
     pub fn new(discovery_apis: Vec<Url>) -> Self {
