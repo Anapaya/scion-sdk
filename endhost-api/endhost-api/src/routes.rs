@@ -79,17 +79,19 @@ async fn list_underlays_handler(
     State(underlay_service): State<Arc<dyn UnderlayDiscovery>>,
     ConnectRpc(request): ConnectRpc<ListUnderlaysRequest>,
 ) -> ConnectRpc<ListUnderlaysResponse> {
-    ConnectRpc(
-        underlay_service
-            .list_underlays(request.isd_as.map(IsdAsn::from).unwrap_or(IsdAsn::WILDCARD))
-            .into(),
-    )
+    tracing::info!(request = ?request, "list_underlays request");
+    let response: ListUnderlaysResponse = underlay_service
+        .list_underlays(request.isd_as.map(IsdAsn::from).unwrap_or(IsdAsn::WILDCARD))
+        .into();
+    tracing::info!(response = ?response, "list_underlays response");
+    ConnectRpc(response)
 }
 
 async fn list_segments_handler(
     State(path_service): State<Arc<dyn SegmentsDiscovery>>,
     ConnectRpc(request): ConnectRpc<ListSegmentsRequest>,
 ) -> Result<ConnectRpc<ListSegmentsResponse>, axum::response::Response> {
+    tracing::debug!(request = ?request, "list_segments request");
     let (src, dst) = (
         IsdAsn::from(request.src_isd_as),
         IsdAsn::from(request.dst_isd_as),
@@ -98,11 +100,22 @@ async fn list_segments_handler(
         .list_segments(src, dst, request.page_size, request.page_token)
         .await
     {
-        Ok(segments) => Ok(ConnectRpc(segments.into())),
+        Ok(segments) => {
+            let response: ListSegmentsResponse = segments.into();
+            tracing::info!(
+                num_core = response.core_segments.len(),
+                num_up = response.up_segments.len(),
+                num_down = response.down_segments.len(),
+                "list_segments response"
+            );
+            Ok(ConnectRpc(response))
+        }
         Err(SegmentsError::InvalidArgument(msg)) => {
+            tracing::error!(src = %src, dst = %dst, error = %msg, "list_segments invalid argument");
             Err((axum::http::StatusCode::BAD_REQUEST, msg).into_response())
         }
         Err(SegmentsError::InternalError(msg)) => {
+            tracing::error!(src = %src, dst = %dst, error = %msg, "list_segments internal error");
             Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response())
         }
     }

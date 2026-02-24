@@ -14,8 +14,9 @@
 //! Observability crate for logging and prometheus metrics.
 
 use std::{
+    fmt,
     io::{IsTerminal, Write},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -38,57 +39,152 @@ pub mod prometheus_json;
 /// Environment variable to define the log level.
 pub const LOG_LEVEL_ENV: &str = "RUST_LOG";
 
-/// Setup logging using the tracing library. Log output format is json.
-///
-/// # Arguments
-///
-/// * `log_dir`: If provided, logs are written to a file that carries the name of the current
-///   executable in this directory.
-/// * `log_to_stderr`: If true, logs will additionally printed to stderr.
+/// Configuration for tracing setup.
+#[derive(Debug, Clone)]
+pub struct TracingConfig {
+    log_dir: Option<PathBuf>,
+    log_to_stderr: bool,
+    directives: Vec<String>,
+}
+
+impl Default for TracingConfig {
+    fn default() -> Self {
+        Self {
+            log_dir: None,
+            log_to_stderr: true,
+            directives: Vec::new(),
+        }
+    }
+}
+
+impl TracingConfig {
+    /// Create a new tracing configuration with defaults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set an optional log directory for file output.
+    pub fn with_log_dir<P: AsRef<Path>>(mut self, log_dir: Option<P>) -> Self {
+        self.log_dir = log_dir.map(|path| path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Enable or disable logging to stderr.
+    pub fn with_stderr(mut self, log_to_stderr: bool) -> Self {
+        self.log_to_stderr = log_to_stderr;
+        self
+    }
+
+    /// Add an additional tracing directive.
+    pub fn add_directive<S: Into<String>>(mut self, directive: S) -> Self {
+        self.directives.push(directive.into());
+        self
+    }
+
+    /// Add multiple tracing directives.
+    pub fn add_directives<I, S>(mut self, directives: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for directive in directives {
+            self.directives.push(directive.as_ref().to_string());
+        }
+        self
+    }
+
+    /// Initialize tracing using this configuration.
+    pub fn init(self) -> Result<Vec<WorkerGuard>, TracingSetupError> {
+        // Setup log tracer to forward log records to tracing subscriber, this is required to
+        // capture logs from dependencies such as squiche.
+        tracing_log::LogTracer::init().map_err(|err| {
+            TracingSetupError {
+                message: format!("Failed to initialize log tracer: {err}"),
+            }
+        })?;
+
+        let TracingConfig {
+            log_dir,
+            log_to_stderr,
+            directives,
+        } = self;
+
+        let mut log_level =
+            EnvFilter::try_from_env(LOG_LEVEL_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
+        for directive in directives {
+            log_level = log_level.add_directive(
+                directive
+                    .parse::<tracing_subscriber::filter::Directive>()
+                    .map_err(|_| {
+                        TracingSetupError {
+                            message: format!("Invalid log directive: {directive}"),
+                        }
+                    })?,
+            );
+        }
+
+        let mut guards = vec![];
+        let mut layers = vec![JsonStorageLayer.boxed()];
+
+        if let Some(log_dir) = log_dir {
+            let log_file =
+                tracing_appender::rolling::never(log_dir, format!("{}.log", extract_exec_name()));
+            let (non_blocking_writer, file_guard) = tracing_appender::non_blocking(log_file);
+            let file_logger = tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_timer(UtcTime::rfc_3339())
+                .with_writer(non_blocking_writer)
+                .with_filter(tracing::level_filters::LevelFilter::DEBUG);
+            layers.push(file_logger.boxed());
+            guards.push(file_guard);
+        }
+
+        if log_to_stderr {
+            let (non_blocking_writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+            let stderr_logger = tracing_subscriber::fmt::layer()
+                // Enable colors if the stderr is a terminal.
+                .with_ansi(std::io::stderr().is_terminal())
+                .with_timer(UtcTime::rfc_3339())
+                .with_writer(non_blocking_writer)
+                .with_filter(log_level);
+            layers.push(stderr_logger.boxed());
+            guards.push(guard);
+        }
+
+        // global subscriber
+        let subscriber = Registry::default().with(layers);
+        tracing::subscriber::set_global_default(subscriber).map_err(|err| {
+            TracingSetupError {
+                message: format!("Failed to set global tracing subscriber: {err}"),
+            }
+        })?;
+
+        tracing::debug!("Logging initialized!");
+        Ok(guards)
+    }
+}
+
+/// Error returned when tracing setup fails.
+#[derive(Debug)]
+pub struct TracingSetupError {
+    message: String,
+}
+
+impl fmt::Display for TracingSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for TracingSetupError {}
+
+/// Setup logging using the tracing library with default options. Log output format is json.
 pub fn setup_tracing<P: AsRef<Path>>(log_dir: Option<P>, log_to_stderr: bool) -> Vec<WorkerGuard> {
-    // Setup log tracer to forward log records to tracing subscriber, this is required to capture
-    // logs from dependencies such as squiche.
-    tracing_log::LogTracer::init().expect("Failed to set log tracer");
-
-    let log_level =
-        EnvFilter::try_from_env(LOG_LEVEL_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
-
-    let mut guards = vec![];
-    let mut layers = vec![JsonStorageLayer.boxed()];
-
-    if let Some(log_dir) = log_dir {
-        let log_file = tracing_appender::rolling::never(
-            log_dir.as_ref(),
-            format!("{}.log", extract_exec_name()),
-        );
-        let (non_blocking_writer, file_guard) = tracing_appender::non_blocking(log_file);
-        let file_logger = tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_timer(UtcTime::rfc_3339())
-            .with_writer(non_blocking_writer)
-            .with_filter(tracing::level_filters::LevelFilter::DEBUG);
-        layers.push(file_logger.boxed());
-        guards.push(file_guard);
-    }
-
-    if log_to_stderr {
-        let (non_blocking_writer, guard) = tracing_appender::non_blocking(std::io::stderr());
-        let stderr_logger = tracing_subscriber::fmt::layer()
-            // Enable colors if the stderr is a terminal.
-            .with_ansi(std::io::stderr().is_terminal())
-            .with_timer(UtcTime::rfc_3339())
-            .with_writer(non_blocking_writer)
-            .with_filter(log_level);
-        layers.push(stderr_logger.boxed());
-        guards.push(guard);
-    }
-
-    // global subscriber
-    let subscriber = Registry::default().with(layers);
-    tracing::subscriber::set_global_default(subscriber).unwrap();
-
-    tracing::debug!("Logging initialized!");
-    guards
+    TracingConfig::new()
+        .with_log_dir(log_dir)
+        .with_stderr(log_to_stderr)
+        .init()
+        .expect("Failed to initialize tracing")
 }
 
 #[allow(unused)]

@@ -17,6 +17,7 @@ scion-sdk-axum-connect-rpc = { workspace = true }
 
 # Global Dependencies
 axum = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true } # only used in doc-tests
