@@ -16,10 +16,12 @@
 
 mod common;
 
-use pocketscion::topologies::{UnderlayType, minimal::minimal_topology};
+use std::sync::Arc;
+
 use scion_sdk_quic_scion::{
     h3::{client::H3Client, request::H3Request, server::H3Server},
     quic::{config::QuicConfig, server::QuicServer},
+    socket::GenericScionUdpSocket,
 };
 use test_log::test;
 
@@ -29,10 +31,7 @@ use crate::common::{generate_server_config, setup_sockets};
 #[test(tokio::test)]
 #[ntest::timeout(5_000)]
 async fn http3_ping_pong() {
-    let topology = minimal_topology(UnderlayType::Snap).await;
-    let (client_socket, server_socket) = setup_sockets(&topology)
-        .await
-        .expect("failed to create client/server sockets");
+    let (client_socket, server_socket) = setup_sockets();
 
     //////////////////
     // Start the server
@@ -40,7 +39,7 @@ async fn http3_ping_pong() {
     let server_addr = server_socket.local_addr();
     let (server_config, _cert_file, _key_file) = generate_server_config();
 
-    let quic_server = QuicServer::new(server_socket.into(), server_config).unwrap();
+    let quic_server = QuicServer::new(Arc::new(server_socket), server_config).unwrap();
     let mut h3_server = H3Server::new(quic_server);
 
     let server_task = tokio::spawn(async move {
@@ -72,7 +71,7 @@ async fn http3_ping_pong() {
     let config = QuicConfig::builder().verify_peer(false).build();
     let client = H3Client::with_config(
         server_addr,
-        client_socket.into(),
+        Arc::new(client_socket),
         Some("localhost".to_string()),
         config,
     )

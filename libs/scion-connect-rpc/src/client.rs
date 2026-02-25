@@ -19,11 +19,13 @@
 use std::{borrow::Cow, sync::Arc};
 
 use scion_proto::address::SocketAddr;
-use scion_sdk_quic_scion::h3::{
-    client::{H3Client, H3ConnectionError},
-    request::H3Request,
+use scion_sdk_quic_scion::{
+    h3::{
+        client::{H3Client, H3ConnectionError},
+        request::H3Request,
+    },
+    socket::GenericScionUdpSocket,
 };
-use scion_stack::scionstack::UdpScionSocket;
 use thiserror::Error;
 use url::Url;
 
@@ -92,7 +94,7 @@ impl CrpcClient {
     /// A new client instance that is ready to connect.
     pub async fn new(
         remote: SocketAddr,
-        socket: Arc<UdpScionSocket>,
+        socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
         authorization_token: Option<String>,
     ) -> Result<Self, H3ConnectionError> {

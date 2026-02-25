@@ -18,7 +18,6 @@ use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use ring::rand::SystemRandom;
 use scion_proto::address::SocketAddr;
-use scion_stack::scionstack::{ScionSocketSendError, UdpScionSocket};
 use squiche::ConnectionId;
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, mpsc};
@@ -27,6 +26,7 @@ use crate::{
     DEFAULT_MAX_UDP_PAYLOAD_SIZE, UDP_PACKET_BUFFER_SIZE,
     buf_factory::{BufFactory, PooledBuf},
     quic::addr_validation_token::{AddrValidationTokenManager, TokenError},
+    socket::{BoxedSocketError, GenericScionUdpSocket},
 };
 
 /// Server error.
@@ -51,7 +51,10 @@ pub struct QuicServer {
 
 impl QuicServer {
     /// Creates a new QUIC server.
-    pub fn new(socket: Arc<UdpScionSocket>, config: squiche::Config) -> Result<Self, ServerError> {
+    pub fn new(
+        socket: Arc<dyn GenericScionUdpSocket>,
+        config: squiche::Config,
+    ) -> Result<Self, ServerError> {
         // XXX(bunert): Would be nice to get rid of this channel. The connection manager dispatches
         // packages from the underlying socket to existing QUIC connections. The channels basically
         // enables the accept API for the caller to retrieve a newly established connection.
@@ -88,7 +91,7 @@ type ConnectionMap = HashMap<ConnectionId<'static>, Arc<Mutex<squiche::Connectio
 /// that do not match an existing connection.
 struct ConnectionManager {
     token_manager: AddrValidationTokenManager,
-    socket: Arc<UdpScionSocket>,
+    socket: Arc<dyn GenericScionUdpSocket>,
     config: squiche::Config,
     new_connections_tx: mpsc::Sender<QuicServerConnection>,
     connection_map: Arc<Mutex<ConnectionMap>>,
@@ -368,7 +371,7 @@ impl QuicServerConnection {
 // connection map.
 struct SendDriver {
     conn: Arc<Mutex<squiche::Connection>>,
-    socket: Arc<UdpScionSocket>,
+    socket: Arc<dyn GenericScionUdpSocket>,
     send_notifier: Arc<Notify>,
     remote_isd_as: scion_proto::address::IsdAsn,
 
@@ -391,7 +394,7 @@ impl SendDriver {
         // send future directly in the select! branch.
         #[allow(clippy::type_complexity)]
         let mut pending_send: Option<
-            Pin<Box<dyn Future<Output = (Result<(), ScionSocketSendError>, Vec<u8>)> + Send>>,
+            Pin<Box<dyn Future<Output = (Result<(), BoxedSocketError>, Vec<u8>)> + Send>>,
         > = None;
 
         loop {

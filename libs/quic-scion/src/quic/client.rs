@@ -21,13 +21,13 @@ use ring::{
     rand::{SecureRandom, SystemRandom},
 };
 use scion_proto::address::{IsdAsn, SocketAddr};
-use scion_stack::scionstack::{ScionSocketSendError, UdpScionSocket};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::{
     DEFAULT_MAX_UDP_PAYLOAD_SIZE,
     buf_factory::{BufFactory, PooledBuf},
+    socket::{BoxedSocketError, GenericScionUdpSocket},
 };
 
 /// A QUIC connection over SCION.
@@ -44,7 +44,7 @@ pub struct QuicConnection {
 pub enum QuicConnectionError {
     /// Connection ID generation error.
     #[error("Failed to generate connection ID: {0}")]
-    ConnectionIdError(#[from] Unspecified),
+    ConnectionIdError(Unspecified),
     /// Invalid socket local address.
     #[error("Invalid socket local address")]
     InvalidSocketLocalAddress,
@@ -61,10 +61,10 @@ impl QuicConnection {
     pub async fn new(
         server_name: Option<String>,
         remote: SocketAddr,
-        socket: Arc<UdpScionSocket>,
+        socket: Arc<dyn GenericScionUdpSocket>,
         mut quiche_config: squiche::Config,
     ) -> Result<Self, QuicConnectionError> {
-        let scid = generate_connection_id()?;
+        let scid = generate_connection_id().map_err(QuicConnectionError::ConnectionIdError)?;
 
         let local_addr = socket
             .local_addr()
@@ -154,11 +154,11 @@ impl QuicConnection {
     }
 }
 
-/// Driver for a QUIC connection. Dispatches packets between the [UdpScionSocket] and the
+/// Driver for a QUIC connection. Dispatches packets between the [GenericScionUdpSocket] and the
 /// [squiche::Connection].
 pub struct QuicConnectionDriver {
     conn: Arc<tokio::sync::Mutex<squiche::Connection>>,
-    socket: Arc<UdpScionSocket>,
+    socket: Arc<dyn GenericScionUdpSocket>,
     remote_isd_as: IsdAsn,
     /// Notifier to hint that there are new packets to send on the socket.
     quic_tx_notifier: Arc<tokio::sync::Notify>,
@@ -170,7 +170,7 @@ impl QuicConnectionDriver {
     /// Creates a new QUIC connection driver.
     pub async fn new(
         conn: Arc<Mutex<squiche::Connection>>,
-        socket: Arc<UdpScionSocket>,
+        socket: Arc<dyn GenericScionUdpSocket>,
         remote_isd_as: IsdAsn,
         quic_tx_notifier: Arc<tokio::sync::Notify>,
     ) -> Self {
@@ -198,7 +198,7 @@ impl QuicConnectionDriver {
         // send future directly in the select! branch.
         #[allow(clippy::type_complexity)]
         let mut pending_send: Option<
-            Pin<Box<dyn Future<Output = Result<(), ScionSocketSendError>> + Send>>,
+            Pin<Box<dyn Future<Output = Result<(), BoxedSocketError>> + Send>>,
         > = None;
 
         // Send initial packet

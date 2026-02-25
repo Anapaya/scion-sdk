@@ -14,44 +14,27 @@
 
 //! Shared test utilities.
 
-use anyhow::Context;
-use pocketscion::topologies::{IA132, IA212, PocketScionHandle};
-use scion_sdk_quic_scion::quic::config::QuicConfig;
-use scion_stack::scionstack::{ScionStackBuilder, SocketConfig, UdpScionSocket};
-use snap_tokens::v0::dummy_snap_token;
+use std::{io, net::Ipv4Addr};
+
+use scion_proto::address::{ScionAddr, SocketAddr};
+use scion_sdk_quic_scion::{
+    quic::config::QuicConfig,
+    socket::{BoxedSocketError, GenericScionUdpSocket},
+};
 use tempfile::NamedTempFile;
+use tokio::sync::{Mutex, mpsc};
 
 /// Setup a client and server socket in two different ASes in the pocket SCION topology.
-pub async fn setup_sockets(
-    ps_handle: &PocketScionHandle,
-) -> anyhow::Result<(UdpScionSocket, UdpScionSocket)> {
-    // Client
-    let client_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .context("build client SCION stack")?;
+pub fn setup_sockets() -> (MockScionSocket, MockScionSocket) {
+    let ia132 = "1-32".parse().unwrap();
+    let client_addr = ScionAddr::new(ia132, Ipv4Addr::new(10, 1, 1, 0).into());
+    let client_addr = SocketAddr::new(client_addr, 0);
 
-    let client_socket = client_stack
-        .bind_with_config(None, SocketConfig::default())
-        .await
-        .context("bind client SCION socket")?;
+    let ia212 = "2-12".parse().unwrap();
+    let server_addr = ScionAddr::new(ia212, Ipv4Addr::new(10, 2, 1, 0).into());
+    let server_addr = SocketAddr::new(server_addr, 0);
 
-    // Server
-    let server_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .context("build server SCION stack")?;
-
-    let server_socket = server_stack
-        .bind_with_config(None, SocketConfig::default())
-        .await
-        .context("bind server SCION socket")?;
-
-    Ok((client_socket, server_socket))
+    MockScionSocket::pair(1024, client_addr, server_addr)
 }
 
 /// Generates a self-signed certificate and corresponding private key for testing purposes.
@@ -85,4 +68,92 @@ pub fn generate_server_config() -> (squiche::Config, NamedTempFile, NamedTempFil
         .unwrap();
 
     (config, cert_file, key_file)
+}
+
+struct MockDatagram {
+    data: Vec<u8>,
+    src: SocketAddr,
+    dst: SocketAddr,
+}
+
+/// Simple in-memory mock implementation of a `GenericScionUdpSocket`
+pub struct MockScionSocket {
+    recv_channel: Mutex<mpsc::Receiver<MockDatagram>>,
+    send_channel: mpsc::Sender<MockDatagram>,
+    local_addr: scion_proto::address::SocketAddr,
+}
+
+impl MockScionSocket {
+    /// Creates a pair of connected `MockScionSocket`s
+    pub fn pair(
+        queue_size: usize,
+        sockaddr_a: SocketAddr,
+        sockaddr_b: SocketAddr,
+    ) -> (MockScionSocket, MockScionSocket) {
+        let (a_to_b_tx, a_to_b_rx) = mpsc::channel(queue_size);
+        let (b_to_a_tx, b_to_a_rx) = mpsc::channel(queue_size);
+
+        let socket_a = MockScionSocket {
+            recv_channel: Mutex::new(a_to_b_rx),
+            send_channel: b_to_a_tx,
+            local_addr: sockaddr_a,
+        };
+
+        let socket_b = MockScionSocket {
+            recv_channel: Mutex::new(b_to_a_rx),
+            send_channel: a_to_b_tx,
+            local_addr: sockaddr_b,
+        };
+
+        (socket_a, socket_b)
+    }
+}
+
+#[async_trait::async_trait]
+impl GenericScionUdpSocket for MockScionSocket {
+    /// Asynchronously sends a Datagram to the specified destination address.
+    async fn send_to(
+        &self,
+        payload: &[u8],
+        destination: SocketAddr,
+    ) -> Result<(), BoxedSocketError> {
+        let datagram = MockDatagram {
+            data: payload.to_vec(),
+            src: self.local_addr,
+            dst: destination,
+        };
+
+        self.send_channel
+            .send(datagram)
+            .await
+            .map_err(|e| Box::new(e) as BoxedSocketError)
+    }
+
+    /// Asynchronously receives a Datagram, writing it into the provided buffer, and returns the
+    /// number of bytes read and the source address.
+    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), BoxedSocketError> {
+        loop {
+            let datagram = self.recv_channel.lock().await.recv().await.ok_or_else(|| {
+                Box::new(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Channel closed",
+                )) as BoxedSocketError
+            })?;
+
+            if datagram.dst != self.local_addr {
+                continue; // Ignore datagrams not addressed to this socket
+            }
+            let data = datagram.data;
+            let src = datagram.src;
+
+            let len = data.len().min(buf.len());
+            buf[..len].copy_from_slice(&data[..len]);
+            return Ok((len, src));
+        }
+    }
+
+    /// Returns the local socket address of this socket.
+    fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
 }

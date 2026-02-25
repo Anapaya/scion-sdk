@@ -16,8 +16,12 @@
 
 mod common;
 
-use pocketscion::topologies::{UnderlayType, minimal::minimal_topology};
-use scion_sdk_quic_scion::quic::{client::QuicConnection, config::QuicConfig, server::QuicServer};
+use std::sync::Arc;
+
+use scion_sdk_quic_scion::{
+    quic::{client::QuicConnection, config::QuicConfig, server::QuicServer},
+    socket::GenericScionUdpSocket,
+};
 use test_log::test;
 
 use crate::common::{generate_server_config, setup_sockets};
@@ -26,18 +30,14 @@ use crate::common::{generate_server_config, setup_sockets};
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn quic_ping_pong() {
-    let topology = minimal_topology(UnderlayType::Snap).await;
-
-    let (client_socket, server_socket) = setup_sockets(&topology)
-        .await
-        .expect("failed to create client/server sockets");
+    let (client_socket, server_socket) = setup_sockets();
 
     //////////////////
     // Start the server
 
     let server_addr = server_socket.local_addr();
     let (server_config, _cert_file, _key_file) = generate_server_config();
-    let mut server = QuicServer::new(server_socket.into(), server_config).unwrap();
+    let mut server = QuicServer::new(Arc::new(server_socket), server_config).unwrap();
 
     let server_task = tokio::spawn(async move {
         if let Some(conn) = server.accept().await {
@@ -73,7 +73,7 @@ async fn quic_ping_pong() {
     let client_conn = QuicConnection::new(
         Some("localhost".to_string()),
         server_addr,
-        client_socket.into(),
+        Arc::new(client_socket),
         client_config.to_quiche_config().unwrap(),
     )
     .await

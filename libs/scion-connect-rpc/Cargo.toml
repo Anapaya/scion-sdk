@@ -14,7 +14,6 @@ http = { workspace = true }
 prost = { workspace = true }
 scion-proto = { workspace = true }
 scion-sdk-quic-scion = { workspace = true }
-scion-stack = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

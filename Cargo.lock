@@ -3729,16 +3729,13 @@ dependencies = [
 name = "scion-sdk-quic-scion"
 version = "0.4.0"
 dependencies = [
- "anyhow",
+ "async-trait",
  "buffer-pool",
  "http",
  "ntest",
- "pocketscion",
  "rcgen",
  "ring",
  "scion-proto",
- "scion-stack",
- "snap-tokens",
  "squiche",
  "tempfile",
  "test-log",
@@ -3775,7 +3772,6 @@ dependencies = [
  "prost",
  "scion-proto",
  "scion-sdk-quic-scion",
- "scion-stack",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3853,6 +3849,7 @@ dependencies = [
  "rustls",
  "scc",
  "scion-proto",
+ "scion-sdk-quic-scion",
  "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-token-validator",
  "scion-sdk-utils",
