@@ -16,6 +16,8 @@
 use core::{fmt::Display, str::FromStr};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+use serde::{Deserialize, Serialize};
+
 use super::{
     AddressParseError, HostAddr, IsdAsn, ScionAddr, ScionAddrSvc, ScionAddrV4, ScionAddrV6,
     ServiceAddr, error::AddressKind,
@@ -27,7 +29,7 @@ use crate::packet::AddressInfo;
 /// SCION socket addresses consist of an ISD-AS number, a 16-bit port identifier, and either an
 /// [IPv4 address][`Ipv4Addr`], an [IPv6 address][`Ipv6Addr`], or a [SCION service
 /// address][`ServiceAddr`].
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum SocketAddr {
     /// An IPv4 socket address.
     V4(SocketAddrV4),
@@ -275,6 +277,25 @@ macro_rules! socket_address {
         impl AsRef<IsdAsn> for $name {
             fn as_ref(&self) -> &IsdAsn {
                 self.scion_addr.as_ref()
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                self.to_string().serialize(serializer)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                Self::from_str(&s).map_err(serde::de::Error::custom)
             }
         }
     };

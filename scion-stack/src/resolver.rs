@@ -40,7 +40,7 @@ pub trait ScionDnsResolver: Send + Sync {
 }
 
 /// Errors returned by SCION DNS resolution.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum ResolveError {
     /// DNS lookup failed.
     #[error("dns lookup failed: {0}")]
@@ -56,7 +56,7 @@ pub enum ResolveError {
 }
 
 /// Metadata for a TXT entry that could not be parsed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InvalidEntry {
     raw: String,
     reason: String,
