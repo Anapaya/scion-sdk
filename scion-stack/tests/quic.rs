@@ -78,6 +78,7 @@ async fn quinn_echo() {
     ));
 
     // Create a client endpoint.
+    #[allow(deprecated)]
     let mut client_endpoint = client_stack
         .quic_endpoint(None, EndpointConfig::default(), None, None)
         .await
@@ -85,6 +86,7 @@ async fn quinn_echo() {
     client_endpoint.set_default_client_config(client_config);
     let client_addr = client_endpoint.local_scion_addr();
 
+    #[allow(deprecated)]
     let server_endpoint = server_stack
         .quic_endpoint(None, EndpointConfig::default(), Some(server_config), None)
         .await

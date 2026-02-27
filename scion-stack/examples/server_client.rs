@@ -166,6 +166,7 @@ async fn main() -> Result<(), anyhow::Error> {
             scion_sdk_utils::test::generate_cert([42u8; 32], vec!["localhost".into()], vec![]);
 
         // Create a QUIC endpoint on top of the SCION network stack
+        #[allow(deprecated)]
         let server_quick_endpoint: scion_stack::scionstack::quic::Endpoint = server_network_stack
             .quic_endpoint(
                 Some(SocketAddr::new(
@@ -212,6 +213,7 @@ async fn main() -> Result<(), anyhow::Error> {
         tracing::info!("Client address: {}", addr);
 
         // Create a QUIC endpoint on top of the SCION network stack
+        #[allow(deprecated)]
         let mut client_socket = client_network_stack
             .quic_endpoint(None, EndpointConfig::default(), None, None)
             .in_current_span()

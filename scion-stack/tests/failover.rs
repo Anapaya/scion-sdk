@@ -257,6 +257,7 @@ async fn should_quic_failover_on_link_error() {
         scion_sdk_utils::test::generate_cert([42u8; 32], vec!["localhost".into()], vec![]);
 
     // Create server QUIC endpoint
+    #[allow(deprecated)]
     let server_endpoint = receiver_stack
         .quic_endpoint(None, EndpointConfig::default(), Some(server_config), None)
         .await
@@ -275,6 +276,7 @@ async fn should_quic_failover_on_link_error() {
         QuicClientConfig::try_from(client_crypto).unwrap(),
     ));
 
+    #[allow(deprecated)]
     let mut client_endpoint = sender_stack
         .quic_endpoint(None, EndpointConfig::default(), None, None)
         .await

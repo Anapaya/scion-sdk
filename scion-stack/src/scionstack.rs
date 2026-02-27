@@ -477,6 +477,10 @@ impl ScionStack {
     ///
     /// # Returns
     /// A QUIC endpoint that can be used to accept or create QUIC connections.
+    #[deprecated(
+        since = "0.4.0",
+        note = "will soon be removed; use the quic-scion crate instead"
+    )]
     pub async fn quic_endpoint(
         &self,
         bind_addr: Option<SocketAddr>,
@@ -484,6 +488,7 @@ impl ScionStack {
         server_config: Option<anapaya_quinn::ServerConfig>,
         runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
     ) -> anyhow::Result<Endpoint> {
+        #[allow(deprecated)]
         self.quic_endpoint_with_config(
             bind_addr,
             config,
@@ -508,6 +513,10 @@ impl ScionStack {
     ///
     /// # Returns
     /// A QUIC endpoint that can be used to accept or create QUIC connections.
+    #[deprecated(
+        since = "0.4.0",
+        note = "will soon be removed; use the quic-scion crate instead"
+    )]
     pub async fn quic_endpoint_with_config(
         &self,
         bind_addr: Option<SocketAddr>,

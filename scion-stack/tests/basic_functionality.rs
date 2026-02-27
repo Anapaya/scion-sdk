@@ -226,6 +226,7 @@ async fn test_quic_endpoint_creation_impl(ps_handle: PocketScionHandle) {
         .await
         .expect("build SCION stack");
 
+    #[allow(deprecated)]
     let endpoint = stack
         .quic_endpoint(None, anapaya_quinn::EndpointConfig::default(), None, None)
         .await;
