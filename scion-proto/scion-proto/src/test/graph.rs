@@ -22,7 +22,8 @@ use super::topo::LinkType;
 use crate::{
     address::IsdAsn,
     path::{
-        ASEntry, HopEntry, NewSegmentError, PathSegment, PeerEntry, SegmentHopField, SignedMessage,
+        ASEntry, HopEntry, NewSegmentError, PathSegment, PeerEntry, SegmentHopField,
+        signed_message::SignedMessage,
     },
     test::topo::Topo,
 };

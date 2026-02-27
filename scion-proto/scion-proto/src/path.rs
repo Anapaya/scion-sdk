@@ -81,6 +81,9 @@ pub use meta_header::{HopFieldIndex, InfoFieldIndex, MetaHeader, MetaReserved, S
 pub mod crypto;
 pub mod test_builder;
 
+/// Signed-message helpers for authenticated payloads.
+pub mod signed_message;
+
 /// Minimum MTU along any path or within any AS.
 pub const PATH_MIN_MTU: u16 = 1280;
 

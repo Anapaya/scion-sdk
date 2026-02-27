@@ -16,12 +16,21 @@
 use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
     fmt::{Display, Formatter},
+    hash::Hash,
     str::FromStr,
 };
 
 use anyhow::{Context, bail};
+use ecdsa::SigningKey;
+use p256::NistP256;
+use rcgen::{CertificateParams, Issuer, KeyPair};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use scion_proto::address::{Isd, IsdAsn};
+use sha2::Digest;
 
+use crate::network::scion::topology::certs::create_as_cert;
+
+pub mod certs;
 pub mod dto;
 pub mod visitor;
 
@@ -302,7 +311,7 @@ impl ScionTopology {
 }
 
 /// Representation of a SCION Autonomous System (AS).
-#[derive(Hash, Copy, Eq, PartialEq, Debug, Clone)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub enum ScionAs {
     /// Representation of a simulated AS, which can be linked to other simulated ASes and external
     /// ASes.
@@ -313,6 +322,8 @@ pub enum ScionAs {
         core: bool,
         /// Forwarding key for the AS - if not defined, falls back to all 0
         forwarding_key: [u8; 16],
+        /// Certificate and Key for the AS
+        crypto_identity: AsIdentity,
     },
     /// Representation of an external AS, external ASes are not simulated
     External {
@@ -323,6 +334,31 @@ pub enum ScionAs {
     },
 }
 
+/// Cryptographic identity of a SCION AS, consisting of a private key and a certificate.
+#[derive(Eq, PartialEq, Debug)]
+pub struct AsIdentity {
+    /// AS Private Key
+    pub key: PrivateKeyDer<'static>,
+    /// AS Certificate
+    pub certificate: CertificateDer<'static>,
+}
+
+impl Clone for AsIdentity {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone_key(),
+            certificate: self.certificate.clone(),
+        }
+    }
+}
+
+impl Hash for AsIdentity {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.secret_der().hash(state);
+        self.certificate.as_ref().hash(state);
+    }
+}
+
 impl ScionAs {
     /// Creates a new core SCION AS.
     pub fn new_core(isd_as: IsdAsn) -> Self {
@@ -330,6 +366,7 @@ impl ScionAs {
             isd_as,
             core: true,
             forwarding_key: Self::default_forwarding_key(isd_as),
+            crypto_identity: Self::default_crypto_identity(isd_as),
         }
     }
 
@@ -339,6 +376,7 @@ impl ScionAs {
             isd_as,
             core: false,
             forwarding_key: Self::default_forwarding_key(isd_as),
+            crypto_identity: Self::default_crypto_identity(isd_as),
         }
     }
 
@@ -368,11 +406,69 @@ impl ScionAs {
         self
     }
 
+    /// Sets the Key and Certificate for the AS.
+    ///
+    /// This function does not validate that the provided certificate and key are valid or match
+    /// each other.
+    ///
+    /// If this AS is an external AS, this is a no-op.
+    pub fn with_crypo_identity(
+        mut self,
+        key: PrivateKeyDer<'static>,
+        certificate: CertificateDer<'static>,
+    ) -> Self {
+        match &mut self {
+            ScionAs::Simulated {
+                crypto_identity: ci,
+                ..
+            } => *ci = AsIdentity { key, certificate },
+            ScionAs::External { .. } => {}
+        }
+        self
+    }
+
     /// Use the ISD-AS to create the forwarding key.
     fn default_forwarding_key(isd_as: IsdAsn) -> [u8; 16] {
         let mut forwarding_key = [0; 16];
         forwarding_key[..8].copy_from_slice(&isd_as.0.to_be_bytes());
         forwarding_key
+    }
+
+    /// Generates a mock AS certificate for the AS.
+    fn default_crypto_identity(isd_as: IsdAsn) -> AsIdentity {
+        use p256::pkcs8::EncodePrivateKey;
+        // This function is a bit of a mess since we work with three different libs
+
+        // Generate a ecdsa signing key
+        let hash = sha2::Sha256::digest(isd_as.0.to_be_bytes());
+        let key =
+            SigningKey::<NistP256>::from_bytes(&hash).expect("Hash should be a valid secret key");
+        let key = PrivatePkcs8KeyDer::from(
+            key.to_pkcs8_der()
+                .expect("Should not fail with static input")
+                .as_bytes()
+                .to_vec(),
+        );
+        // Canonicalize the key
+        let key: PrivateKeyDer<'static> = key.into();
+
+        // Issue self-signed certificate for the AS with the key
+        let mut issuer_params =
+            CertificateParams::new(vec![]).expect("Should not fail with static input");
+
+        issuer_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Mock Issuer".to_string());
+
+        let rcgen_key_pair: KeyPair = (&key)
+            .try_into()
+            .expect("Should not fail with static input");
+        let issuer = Issuer::new(issuer_params, &rcgen_key_pair);
+
+        let certificate =
+            create_as_cert(&key, &issuer, isd_as).expect("Should not fail with static input");
+
+        AsIdentity { key, certificate }
     }
 }
 
@@ -401,6 +497,28 @@ impl ScionAs {
         }
     }
 
+    /// Returns the ecdsa signing key for the AS. For simulated ASes, this is always defined.
+    pub fn as_key(&self) -> Option<&PrivateKeyDer<'static>> {
+        match self {
+            ScionAs::Simulated {
+                crypto_identity: ident,
+                ..
+            } => Some(&ident.key),
+            ScionAs::External { .. } => None,
+        }
+    }
+
+    /// Returns the certificate for the AS. For simulated ASes, this is always defined.
+    pub fn as_certificate(&self) -> Option<&CertificateDer<'static>> {
+        match self {
+            ScionAs::Simulated {
+                crypto_identity: cert,
+                ..
+            } => Some(&cert.certificate),
+            ScionAs::External { .. } => None,
+        }
+    }
+
     /// Returns true if the AS is an external AS, false otherwise.
     pub fn is_external(&self) -> bool {
         matches!(self, ScionAs::External { .. })
@@ -410,6 +528,36 @@ impl ScionAs {
 impl From<IsdAsn> for ScionAs {
     fn from(isd_as: IsdAsn) -> Self {
         Self::new(isd_as)
+    }
+}
+
+/// A ECDSA NistP256 signing key
+#[derive(Eq, Copy, Hash, PartialEq, Debug, Clone)]
+pub struct AsSigningKey([u8; 32]);
+impl AsSigningKey {
+    /// Creates a new `AsSigningKey` from a `SigningKey<NistP256>`.
+    pub fn new(signing_key: SigningKey<NistP256>) -> Self {
+        Self(signing_key.to_bytes().into())
+    }
+
+    /// Attempts to create a new `AsSigningKey` from the given bytes. Validates that the bytes are a
+    /// valid signing key for NistP256.
+    pub fn from_bytes(bytes: [u8; 32]) -> anyhow::Result<Self> {
+        SigningKey::<NistP256>::from_slice(&bytes)
+            .context("Provided bytes are not a valid signing key for NistP256")?;
+
+        Ok(Self(bytes))
+    }
+
+    /// Returns the `SigningKey<NistP256>` representation of this `AsSigningKey`.
+    pub fn key(&self) -> SigningKey<NistP256> {
+        // SAFETY: We ensure that the inner bytes are always a valid signing key by construction.
+        SigningKey::from_slice(&self.0).expect("Type should not allow invalid signing keys")
+    }
+
+    /// Returns the raw bytes of the signing key.
+    pub fn bytes(&self) -> [u8; 32] {
+        self.0
     }
 }
 

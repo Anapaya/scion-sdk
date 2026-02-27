@@ -15,6 +15,8 @@ aes = { workspace = true }
 bytes = { workspace = true }
 cmac = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+ecdsa = { workspace = true }
+p256 = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 scion-protobuf = { workspace = true }

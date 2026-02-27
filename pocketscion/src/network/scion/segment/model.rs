@@ -20,11 +20,13 @@ use std::{
 
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
+use p256::pkcs8::DecodePrivateKey;
 use scion_proto::{
     address::IsdAsn,
     path::{
-        ASEntry, HopEntry, PathSegment, PeerEntry, SegmentHopField, SignedMessage,
+        ASEntry, HopEntry, PathSegment, PeerEntry, SegmentHopField,
         crypto::{ForwardingKey, calculate_hop_mac, mac_chaining_step},
+        signed_message::SignedMessage,
     },
 };
 
@@ -74,7 +76,11 @@ impl LinkSegment {
         segment_id: u16,
         hop_entry_expiry: u8,
     ) -> anyhow::Result<PathSegment> {
-        let mut as_entries = Vec::with_capacity(self.links.len());
+        let mut path_segment = PathSegment {
+            info: scion_proto::path::Info::new(timestamp, segment_id),
+            as_entries: Vec::with_capacity(self.links.len()),
+        };
+
         let mut accumulator = segment_id; // Beta for MAC chaining
 
         // Iterate through all hop pairs in construction direction
@@ -84,12 +90,13 @@ impl LinkSegment {
                 .get(&hop.local_ias)
                 .with_context(|| format!("error getting AS {} from topology", hop.local_ias))?;
 
-            let (_isd_as, _is_core, forwarding_key) = match hop_as {
+            let (_isd_as, _is_core, forwarding_key, as_key) = match hop_as {
                 ScionAs::Simulated {
                     isd_as,
                     core,
                     forwarding_key,
-                } => (*isd_as, *core, forwarding_key),
+                    crypto_identity,
+                } => (*isd_as, *core, forwarding_key, &crypto_identity.key),
                 ScionAs::External { .. } => {
                     bail!(
                         "External AS {} was part of LinkSegments, but all ASes in the segment must be simulated",
@@ -112,7 +119,7 @@ impl LinkSegment {
                 forwarding_key.into(),
             );
 
-            let entry = Self::create_as_entry(
+            let mut entry = Self::create_unsigned_as_entry(
                 hop_entry_expiry,
                 hop,
                 accumulator,
@@ -121,20 +128,29 @@ impl LinkSegment {
                 forwarding_key.into(),
             );
 
+            let ecdsa_key =
+                ecdsa::SigningKey::<p256::NistP256>::from_pkcs8_der(as_key.secret_der())
+                    .context("AS key is not a valid PKCS8 DER ECDSA P256 key")?;
+
+            // Sign the AS entry
+            entry.signed = entry.signature(&ecdsa_key, None, timestamp.into(), &path_segment)?;
+
             // Update accumulator with the MAC of the new hop
             accumulator = mac_chaining_step(accumulator, entry.hop_entry.hop_field.mac);
 
-            as_entries.push(entry);
+            // Add the new AS entry to the path segment
+            path_segment = path_segment.add_as_entry(entry);
         }
 
-        PathSegment::new(timestamp, segment_id, as_entries).context("error creating path segment")
+        Ok(path_segment)
     }
 }
 // AS Entry conversion
 impl LinkSegment {
     const HARDCODED_MTU: u16 = 1280;
 
-    fn create_as_entry(
+    /// Creates an unsigned AS entry for the given hop.
+    fn create_unsigned_as_entry(
         hop_entry_expiry: u8,
         hop: Hop,
         accumulator: u16,
@@ -172,7 +188,7 @@ impl LinkSegment {
             signed: SignedMessage {
                 header_and_body: Vec::new(),
                 signature: Vec::new(),
-            }, // TODO: Signing
+            },
         }
     }
 

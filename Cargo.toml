@@ -79,6 +79,7 @@ cms = "0.2"
 criterion = "0.7"
 derive_more = { version = "2.0", features = ["display", "deref"] }
 der = { version = "0.7", features = ["pem", "derive"] }
+ecdsa = { version = "0.16", features = ["arithmetic"] }
 ed25519-dalek = { version = "2.1", features = ["pkcs8", "pem"] }
 foldhash = "0.2"
 futures = "0.3"
@@ -90,6 +91,7 @@ jsonwebtoken = "9.3"
 mockall = "0.13"
 num-traits = "0.2"
 ntest = "0.9"
+p256 = "0.13"
 pem = "3.0"
 pin-project-lite = "0.2"
 prometheus = { version = "0.14", features = ["process"] }

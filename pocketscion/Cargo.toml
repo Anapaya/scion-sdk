@@ -39,16 +39,21 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 derive_more = { workspace = true }
+ecdsa = { workspace = true }
 ed25519-dalek = { workspace = true }
 http = { workspace = true }
 ipnet = { workspace = true, features = ["serde"] }
+p256 = { workspace = true }
 pem = { workspace = true, features = ["serde"] }
+rcgen = { workspace = true, features = ["x509-parser", "pem"] }
 reqwest = { workspace = true, features = ["json", "blocking"] }
+rustls = { workspace = true }
 jsonwebtoken = { workspace = true }
 serde = { workspace = true }
 serde_with = { workspace = true, features = ["base64"] }
 serde_json = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

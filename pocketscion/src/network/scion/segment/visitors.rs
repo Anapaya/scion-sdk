@@ -37,7 +37,7 @@ impl TopologyLinkVisitor for CoreSegmentCollector {
         if let Some(link) = used_link {
             let _ = self
                 .links
-                .add_link(*current_as, link.clone(), true)
+                .add_link(current_as, link.clone(), true)
                 .inspect_err(|e| {
                     debug_assert!(false, "Should never fail to add hop to segment");
                     tracing::error!(error = %e, "Failed to add hop to segment in core path aggregator");
@@ -73,7 +73,7 @@ impl TopologyLinkVisitor for DownSegmentCollector {
         if let Some(link) = used_link {
             let _ = self
                 .links
-                .add_link(*current_as, link.clone(), true)
+                .add_link(current_as, link.clone(), true)
                 .inspect_err(|e| {
                     debug_assert!(false, "Should never fail to add hop to links");
                     tracing::error!(error = %e, "Failed to add hop to links in down segment collector");
@@ -139,7 +139,7 @@ impl DirectedLinks {
 
     pub fn add_link(
         &mut self,
-        to_as: ScionAs,
+        to_as: &ScionAs,
         used_link: ScionLink,
         is_construction_dir: bool,
     ) -> anyhow::Result<()> {

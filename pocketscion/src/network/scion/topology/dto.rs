@@ -16,6 +16,7 @@
 use std::any::type_name;
 
 use anyhow::Context;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
@@ -24,7 +25,7 @@ use utoipa::{
     openapi::{Object, Type, schema::SchemaType},
 };
 
-use crate::network::scion::topology::{ScionAs, ScionLink, ScionTopology};
+use crate::network::scion::topology::{AsIdentity, ScionAs, ScionLink, ScionTopology};
 
 /// Human readable ScionTopology
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -41,8 +42,8 @@ impl TryFrom<ScionTopologyDto> for ScionTopology {
 
         for as_info in value.as_list {
             // Register the AS
-            let scion_as: ScionAs = as_info.into();
-            topo.add_as(scion_as)
+            let scion_as: ScionAs = as_info.try_into()?;
+            topo.add_as(scion_as.clone())
                 .with_context(|| format!("error adding AS {:?} to topology", scion_as))?;
         }
 
@@ -61,12 +62,12 @@ impl From<ScionTopology> for ScionTopologyDto {
         let mut registered_ases = Vec::new();
         let mut links = Vec::new();
 
-        for (_isd_as, scion_as) in topo.as_map.iter() {
-            registered_ases.push((*scion_as).into());
+        for (_isd_as, scion_as) in topo.as_map.into_iter() {
+            registered_ases.push(scion_as.into());
         }
 
-        for scion_link in topo.link_map.values() {
-            links.push(ScionLinkDto(scion_link.clone()));
+        for scion_link in topo.link_map.into_values() {
+            links.push(ScionLinkDto(scion_link));
         }
 
         Self {
@@ -91,6 +92,8 @@ pub enum ScionAsDto {
         /// Forwarding key of the AS, encoded as base64
         #[serde_as(as = "Base64")]
         forwarding_key: [u8; 16],
+        /// Signing key of the AS
+        crypto_identity: ScionAsIdentityDto,
     },
     /// AS that is not simulated by PocketSCION, but is still part of the topology. Packets to and
     /// from this AS will be handled by an external implementation.
@@ -109,11 +112,13 @@ impl From<ScionAs> for ScionAsDto {
                 isd_as,
                 core,
                 forwarding_key,
+                crypto_identity,
             } => {
                 Self::Simulated {
                     isd_asn: isd_as,
                     is_core_as: core,
                     forwarding_key,
+                    crypto_identity: crypto_identity.into(),
                 }
             }
             ScionAs::External { isd_as, core } => {
@@ -125,18 +130,22 @@ impl From<ScionAs> for ScionAsDto {
         }
     }
 }
-impl From<ScionAsDto> for ScionAs {
-    fn from(dto: ScionAsDto) -> Self {
-        match dto {
+
+impl TryFrom<ScionAsDto> for ScionAs {
+    type Error = anyhow::Error;
+    fn try_from(dto: ScionAsDto) -> Result<Self, Self::Error> {
+        let res = match dto {
             ScionAsDto::Simulated {
                 isd_asn,
                 is_core_as,
                 forwarding_key,
+                crypto_identity,
             } => {
                 ScionAs::Simulated {
                     isd_as: isd_asn,
                     core: is_core_as,
                     forwarding_key,
+                    crypto_identity: crypto_identity.try_into()?,
                 }
             }
             ScionAsDto::External {
@@ -148,7 +157,40 @@ impl From<ScionAsDto> for ScionAs {
                     core: is_core_as,
                 }
             }
+        };
+
+        Ok(res)
+    }
+}
+
+/// Cryptographic identity of a simulated AS
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ScionAsIdentityDto {
+    /// Signing key of the AS, encoded as base64
+    #[serde_as(as = "Base64")]
+    key: Vec<u8>,
+    /// DER encoded certificate for the AS serialized as bas64
+    #[serde_as(as = "Base64")]
+    certificate: Vec<u8>,
+}
+
+impl From<AsIdentity> for ScionAsIdentityDto {
+    fn from(identity: AsIdentity) -> Self {
+        Self {
+            key: identity.key.secret_der().to_vec(),
+            certificate: identity.certificate.to_vec(),
         }
+    }
+}
+
+impl TryFrom<ScionAsIdentityDto> for AsIdentity {
+    type Error = anyhow::Error;
+    fn try_from(dto: ScionAsIdentityDto) -> Result<Self, Self::Error> {
+        let key = PrivateKeyDer::try_from(dto.key)
+            .map_err(|e| anyhow::anyhow!("error converting signing key from bytes: {}", e))?;
+        let certificate = CertificateDer::from(dto.certificate);
+        Ok(Self { key, certificate })
     }
 }
 

@@ -19,14 +19,22 @@
 //! Path segments are used during the beaconing process and stored in path servers.
 //! They can be combined to form end-to-end paths used for data plane forwarding.
 
-use std::{fmt, hash::Hasher, time::Duration};
+use std::{
+    fmt,
+    hash::Hasher,
+    time::{Duration, SystemTime},
+};
 
 use chrono::{DateTime, Utc};
+use ecdsa::signature;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::address::IsdAsn;
+use crate::{
+    address::IsdAsn,
+    path::signed_message::{DigestAlgorithm, SignedMessage, ValidateError},
+};
 
 // MaxTTL is the maximum age of a HopField (24h).
 const MAX_TTL: Duration = Duration::from_secs(86400);
@@ -244,7 +252,7 @@ impl PathSegment {
         self.as_entries.iter()
     }
 
-    /// Adds an AS entry to the path segment and signs it.
+    /// Adds an AS entry to the path segment
     pub fn add_as_entry(mut self, as_entry: ASEntry) -> Self {
         self.as_entries.push(as_entry);
         self
@@ -354,6 +362,114 @@ pub struct ASEntry {
     pub unsigned_extensions: Vec<u8>,
     /// Signed message containing the AS entry. It is used for signature input.
     pub signed: SignedMessage,
+}
+
+impl ASEntry {
+    /// Returns the AS entry's associated data for signing/verification.
+    ///
+    /// The associated data includes the raw protobuf encoded info of the path segment and all
+    /// previous AS entries in the path segment.
+    ///
+    /// Returns the total length of the associated data and an iterator over the associated data
+    /// slices.
+    pub fn associated_data<'seg>(
+        &self,
+        path_segment: &'seg PathSegment,
+    ) -> (usize, impl Iterator<Item = &'seg [u8]>) {
+        let entry_iter = path_segment
+            .as_entries
+            .iter()
+            // Take all entries before the current one in the path segment.
+            .take_while(|e| **e != *self)
+            .flat_map(|entry| {
+                [
+                    entry.signed.header_and_body.as_slice(),
+                    entry.signed.signature.as_slice(),
+                ]
+            });
+
+        let final_iter = std::iter::once(path_segment.info.raw.as_slice()).chain(entry_iter);
+
+        // Calculate the total length of the associated data by summing the lengths of all slices.
+        let len = final_iter.clone().map(|slice| slice.len()).sum();
+
+        (len, final_iter)
+    }
+
+    /// Creates a signature for the AS entry using the provided signing key, key ID, timestamp, and
+    /// path segment.
+    ///
+    /// All entries before the AS entry must be signed before calling this method, as the signature
+    /// covers all previous entries in the path segment.
+    ///
+    /// The signature can not be reused indiscriminately across different path segments, as the
+    /// associated data includes the SignedMessage of all previous AS entries in the path segment.
+    /// Reusing a signature across different path segments would require that all previous AS
+    /// entries in those segments are identical, which is unlikely in practice.
+    pub fn signature(
+        &self,
+        key: &p256::ecdsa::SigningKey,
+        key_id: Option<Vec<u8>>,
+        timestamp: SystemTime,
+        path_segment: &PathSegment,
+    ) -> Result<SignedMessage, signature::Error> {
+        let body = scion_protobuf::control_plane::v1::AsEntrySignedBody {
+            isd_as: self.local.to_u64(),
+            next_isd_as: self.next.to_u64(),
+            hop_entry: Some(scion_protobuf::control_plane::v1::HopEntry {
+                hop_field: Some(scion_protobuf::control_plane::v1::HopField {
+                    ingress: self.hop_entry.hop_field.cons_ingress as u64,
+                    egress: self.hop_entry.hop_field.cons_egress as u64,
+                    exp_time: self.hop_entry.hop_field.exp_time as u32,
+                    mac: self.hop_entry.hop_field.mac.to_vec(),
+                }),
+                ingress_mtu: self.hop_entry.ingress_mtu as u32,
+            }),
+            peer_entries: self
+                .peer_entries
+                .iter()
+                .map(|peer| {
+                    scion_protobuf::control_plane::v1::PeerEntry {
+                        peer_isd_as: peer.peer.to_u64(),
+                        peer_interface: peer.peer_interface as u64,
+                        peer_mtu: peer.peer_mtu as u32,
+                        hop_field: Some(scion_protobuf::control_plane::v1::HopField {
+                            ingress: peer.hop_field.cons_ingress as u64,
+                            egress: peer.hop_field.cons_egress as u64,
+                            exp_time: peer.hop_field.exp_time as u32,
+                            mac: peer.hop_field.mac.to_vec(),
+                        }),
+                    }
+                })
+                .collect(),
+            mtu: self.mtu,
+            extensions: None, // Todo: support extensions
+        };
+
+        let associated_data = self.associated_data(path_segment);
+
+        SignedMessage::sign(
+            key,
+            DigestAlgorithm::Sha256,
+            timestamp,
+            key_id,
+            associated_data,
+            &body,
+            &(),
+        )
+    }
+
+    /// Validates the AS entry's signature using the provided path segment.
+    pub fn validate_signature(
+        &self,
+        key: &p256::ecdsa::VerifyingKey,
+        key_id: Option<Vec<u8>>,
+        path_segment: &PathSegment,
+    ) -> Result<(), ValidateError> {
+        self.signed
+            .validate(key, key_id, self.associated_data(path_segment))
+            .map(|_| ())
+    }
 }
 
 impl std::fmt::Display for ASEntry {
@@ -468,15 +584,6 @@ impl std::fmt::Display for SegmentHopField {
             self.cons_ingress, self.cons_egress, self.exp_time, self.mac
         )
     }
-}
-
-/// Signed message containing header, body, and signature.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SignedMessage {
-    /// The header and body of the message.
-    pub header_and_body: Vec<u8>,
-    /// The signature of the message.
-    pub signature: Vec<u8>,
 }
 
 /// ExpTimeToDuration calculates the relative expiration time in seconds.

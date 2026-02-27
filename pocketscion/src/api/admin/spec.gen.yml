@@ -437,8 +437,12 @@ components:
         - isd_asn
         - is_core_as
         - forwarding_key
+        - crypto_identity
         - type
         properties:
+          crypto_identity:
+            $ref: '#/components/schemas/ScionAsIdentityDto'
+            description: Signing key of the AS
           forwarding_key:
             type: array
             items:
@@ -476,6 +480,27 @@ components:
             enum:
             - external
       description: Human readable Pocket SCION AS
+    ScionAsIdentityDto:
+      type: object
+      description: Cryptographic identity of a simulated AS
+      required:
+      - key
+      - certificate
+      properties:
+        certificate:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+          description: DER encoded certificate for the AS serialized as bas64
+        key:
+          type: array
+          items:
+            type: integer
+            format: int32
+            minimum: 0
+          description: Signing key of the AS, encoded as base64
     ScionTopologyDto:
       type: object
       description: Human readable ScionTopology

@@ -470,13 +470,13 @@ mod tests {
         let as4 = ScionAs::new("1-4".parse().unwrap());
 
         topology
-            .add_as(as1)
+            .add_as(as1.clone())
             .unwrap()
-            .add_as(as2)
+            .add_as(as2.clone())
             .unwrap()
-            .add_as(as3)
+            .add_as(as3.clone())
             .unwrap()
-            .add_as(as4)
+            .add_as(as4.clone())
             .unwrap();
 
         topology

@@ -17,7 +17,6 @@ use prost::Message;
 
 use crate::path::{
     ASEntry, HopEntry, Info, PathSegment, PeerEntry, SegmentHopField, Segments, SegmentsPage,
-    SignedMessage,
 };
 
 /// Invalid segment error.
@@ -124,15 +123,6 @@ impl From<ASEntry> for scion_protobuf::control_plane::v1::AsEntry {
                 signed: Some(as_entry.signed.into()),
                 unsigned: None,
             }
-        }
-    }
-}
-
-impl From<SignedMessage> for scion_protobuf::crypto::v1::SignedMessage {
-    fn from(signed: SignedMessage) -> Self {
-        Self {
-            header_and_body: signed.header_and_body,
-            signature: signed.signature,
         }
     }
 }
@@ -271,15 +261,6 @@ impl TryFrom<scion_protobuf::control_plane::v1::AsEntry> for ASEntry {
             unsigned_extensions: Vec::new(),
             signed: signed.clone().into(),
         })
-    }
-}
-
-impl From<scion_protobuf::crypto::v1::SignedMessage> for SignedMessage {
-    fn from(value: scion_protobuf::crypto::v1::SignedMessage) -> Self {
-        Self {
-            header_and_body: value.header_and_body,
-            signature: value.signature,
-        }
     }
 }
 

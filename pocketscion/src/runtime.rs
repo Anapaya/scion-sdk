@@ -22,6 +22,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use anyhow::Context;
 use jsonwebtoken::DecodingKey;
 use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
@@ -42,7 +43,7 @@ use crate::{
     addr_to_http_url,
     api::admin,
     authorization_server,
-    dto::{self},
+    dto::{self, SystemStateDto},
     endhost_api::{EndhostApiId, PsEndhostApi},
     io_config::{IoConfig, SharedPocketScionIoConfig},
     management_api,
@@ -548,16 +549,19 @@ impl PathOrObject<SystemState> {
     /// This method panics in case of i/o-errors. We deem this acceptable as it
     /// is primarily used in testing.
     #[allow(unused)]
-    pub(crate) async fn sync_to_file(self) -> Option<PathBuf> {
+    pub(crate) async fn sync_to_file(self) -> anyhow::Result<Option<PathBuf>> {
         let state = match self {
-            PathOrObject::Unspecified => return None,
-            PathOrObject::Path(path_buf) => return Some(path_buf),
+            PathOrObject::Unspecified => return Ok(None),
+            PathOrObject::Path(path_buf) => return Ok(Some(path_buf)),
             PathOrObject::Object(s) => s,
         };
         let path = get_tmp_path("system_state.json");
-        let dto = crate::dto::SystemStateDto::from(&state);
-        write_file(path.clone(), &dto).await.expect("failed");
-        Some(path)
+        let dto: SystemStateDto = (&state).into();
+        write_file(path.clone(), &dto)
+            .await
+            .context("failed to write system state")?;
+
+        Ok(Some(path))
     }
 
     pub(crate) async fn load(self, start_time: SystemTime) -> Result<SystemState, std::io::Error> {
