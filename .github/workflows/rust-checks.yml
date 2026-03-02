@@ -49,17 +49,17 @@ jobs:
       - name: Disk space check after cleanup
         if: runner.os == 'Linux'
         run: df -h
-      - name: Cache protoc
+      - name: Restore protoc cache
         id: cache-protoc-windows
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         if: runner.os == 'Windows'
         with:
           path: ~/.protoc
           key: ${{ runner.os }}-protoc-${{ env.PROTOC_VERSION }}
-      - name: Cache protoc
+      - name: Restore protoc cache
         id: cache-protoc-linux
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.protoc
           key: ${{ runner.os }}-protoc-${{ env.PROTOC_VERSION }}
@@ -79,15 +79,28 @@ jobs:
           curl -LO "${PROTOC_URL}"
           unzip -q "${PROTOC_ZIP}" -d "${PROTOC_DIR}"
           rm "${PROTOC_ZIP}"
+      - name: Save protoc cache
+        uses: actions/cache/save@v4
+        if: runner.os == 'Windows' && github.event_name == 'push' && steps.cache-protoc-windows.outputs.cache-hit != 'true'
+        with:
+          path: ~/.protoc
+          key: ${{ runner.os }}-protoc-${{ env.PROTOC_VERSION }}
+      - name: Save protoc cache
+        if: runner.os == 'Linux' && github.event_name == 'push' && steps.cache-protoc-linux.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.protoc
+          key: ${{ runner.os }}-protoc-${{ env.PROTOC_VERSION }}
       - name: Add protoc to PATH on Linux
         if: runner.os == 'Linux'
         run: echo "$HOME/.protoc/bin" >> $GITHUB_PATH
       - name: Set PROTOC env var on Windows
         if: runner.os == 'Windows'
         run: echo "PROTOC=${HOME}/.protoc/bin/protoc.exe" >> $GITHUB_ENV
-      - name: Cache cargo dependencies
+      - name: Restore cargo cache
+        id: cargo-cache-linux
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           key: ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
           path: |-
@@ -98,8 +111,9 @@ jobs:
             ${{ runner.os }}-cargo-shear-1.3.2
             ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
             ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
-      - name: Cache cargo dependencies on Windows
-        uses: actions/cache@v4
+      - name: Restore cargo cache on Windows
+        id: cargo-cache-windows
+        uses: actions/cache/restore@v4
         if: runner.os == 'Windows'
         with:
           path: C:\\rust_cache.vhdx
@@ -147,3 +161,27 @@ jobs:
       - name: Unused dependencies
         run: cargo install --version 1.3.2 cargo-shear && cargo shear
         if: runner.os == 'Linux'
+      - name: Save cargo cache
+        if: runner.os == 'Linux' && github.event_name == 'push' && steps.cargo-cache-linux.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |-
+            ~/.rustup
+            ~/.cargo
+            ${{ env.workspace }}/target/
+          key: ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
+          restore-keys: |-
+            ${{ runner.os }}-cargo-shear-1.3.2
+            ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
+            ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
+      - name: Save cargo cache on Windows
+        uses: actions/cache/save@v4
+        if: runner.os == 'Windows' && github.event_name == 'push' && steps.cargo-cache-windows.outputs.cache-hit != 'true'
+        with:
+          path: C:\\rust_cache.vhdx
+          key: ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
+          restore-keys: |-
+            ${{ runner.os }}-80GB
+            ${{ runner.os }}-80GB-cargo-shear-1.3.2
+            ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
+            ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
