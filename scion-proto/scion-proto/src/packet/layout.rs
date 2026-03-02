@@ -58,6 +58,10 @@ macro_rules! gen_variable_field_offset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BitOffset(u16);
 impl BitOffset {
+    /// Creates a new BitOffset from the given offset in bits.
+    pub fn new(offset: u16) -> Self {
+        Self(offset)
+    }
     /// Returns the offset in bytes
     pub fn bytes(self) -> u16 {
         self.0 / 8

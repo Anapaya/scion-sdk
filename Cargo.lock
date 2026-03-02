@@ -2898,6 +2898,7 @@ dependencies = [
  "scion-sdk-observability",
  "scion-sdk-token-validator",
  "scion-sdk-utils",
+ "sciparse",
  "serde",
  "serde_json",
  "serde_with",

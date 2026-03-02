@@ -20,7 +20,10 @@ use crate::{
     core::view::{View, ViewConversionError},
     path::{
         onehop::layout::OneHopPathLayout,
-        standard::view::{HopFieldView, InfoFieldView},
+        standard::{
+            mac::{ForwardingKey, HopMacCalculate, algo::mac_beta_step},
+            view::{HopFieldView, InfoFieldView},
+        },
     },
 };
 
@@ -77,6 +80,45 @@ impl OneHopPathView {
                 HopFieldView::from_mut_slice_unchecked(hop2),
             ]
         }
+    }
+}
+impl OneHopPathView {
+    /// Sets the second hop field with the given ingress interface and recalculates the MAC.
+    ///
+    /// Expiration is copied from the first hop.
+    ///
+    /// # Parameters
+    /// * `ingress_interface` is the interface on which the packet is expected to arrive at the
+    ///   second hop.
+    /// * `forwarding_key` is the key used for MAC calculation
+    /// * `segment_id_was_advanced` indicates whether the segment ID was advanced to the next hop
+    ///   before calling this method, or if it is still at the first hop
+    pub fn set_second_hop(
+        &mut self,
+        ingress_interface: u16,
+        forwarding_key: ForwardingKey,
+        segment_id_was_advanced: bool,
+    ) {
+        let (beta, timestamp) = {
+            let info = self.info_field();
+            let beta = if segment_id_was_advanced {
+                info.segment_id()
+            } else {
+                mac_beta_step(info.segment_id(), self.hop_fields()[0].mac().into())
+            };
+
+            (beta, info.timestamp())
+        };
+
+        let [hop1, hop2] = self.mut_hop_fields();
+        hop2.set_cons_ingress(ingress_interface);
+        hop2.set_cons_ingress(ingress_interface);
+        hop2.set_cons_egress(0);
+        hop2.set_cons_ingress(ingress_interface);
+        hop2.set_exp_time(hop1.exp_time());
+
+        let mac = hop2.calculate_mac(beta, timestamp, &forwarding_key);
+        hop2.set_mac(mac);
     }
 }
 impl Debug for OneHopPathView {

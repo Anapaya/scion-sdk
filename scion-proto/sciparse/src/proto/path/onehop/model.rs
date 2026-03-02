@@ -20,7 +20,7 @@ use crate::{
         onehop::layout::OneHopPathLayout,
         standard::{
             mac::{ForwardingKey, algo::mac_beta_step},
-            model::{HopField, InfoField},
+            model::{HopField, InfoField, Segment, StandardPath},
             types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
         },
     },
@@ -76,8 +76,24 @@ impl OneHopPath {
     }
 
     /// Sets the second hop field with the given ingress interface and recalculates the MAC.
-    pub fn set_second_hop(&mut self, ingress_interface: u16, forwarding_key: ForwardingKey) {
-        let beta = mac_beta_step(self.info.segment_id, self.hops[0].mac.into());
+    ///
+    /// # Parameters
+    /// * `ingress_interface` is the interface on which the packet is expected to arrive at the
+    ///   second hop.
+    /// * `forwarding_key` is the key used for MAC calculation
+    /// * `segment_id_was_advanced` indicates whether the segment ID was advanced to the next hop
+    ///   before calling this method, or if it is still at the first hop
+    pub fn set_second_hop(
+        &mut self,
+        ingress_interface: u16,
+        forwarding_key: ForwardingKey,
+        segment_id_was_advanced: bool,
+    ) {
+        let beta = if segment_id_was_advanced {
+            self.info.segment_id
+        } else {
+            mac_beta_step(self.info.segment_id, self.hops[0].mac.into())
+        };
 
         self.hops[1] = HopField {
             flags: HopFieldFlags::empty(),
@@ -87,6 +103,44 @@ impl OneHopPath {
             mac: HopFieldMac([0u8; 6]),
         }
         .with_calculated_mac(beta, self.info.timestamp, &forwarding_key);
+    }
+
+    /// Reverses the one-hop path to create a standard path with two hops in the opposite direction.
+    ///
+    /// If the second hop field is not set, this will return an error containing the original
+    /// OneHopPath.
+    ///
+    /// ## Note
+    /// This assumes that the Segment ID was advanced to the last hop of the path.
+    ///
+    /// Since the One Hop does not track which hop it is currently on, the caller must ensure that
+    /// the Segment ID is correctly set to reflect the final hop of the path before calling this
+    /// method.
+    pub fn into_reversed_standard_path(self) -> Result<StandardPath, Self> {
+        if self.hops[1].cons_ingress == 0 {
+            // The second hop is not set, we cannot reverse the path
+            return Err(self);
+        }
+
+        let OneHopPath {
+            mut info,
+            hops: [hop1, hop2],
+        } = self;
+
+        // Segment ID is final segment ID, so we can use it directly, we just need to reverse the
+        // CONS_DIR flag to indicate the reversed direction.
+        info.flags ^= InfoFieldFlags::CONS_DIR;
+
+        let standard_path = StandardPath {
+            current_info_field: 0,
+            curr_hop_field: 0,
+            segments: vec![Segment {
+                info_field: info,
+                hop_fields: vec![hop2, hop1],
+            }],
+        };
+
+        Ok(standard_path)
     }
 }
 impl OneHopPath {

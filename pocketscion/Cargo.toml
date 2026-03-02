@@ -17,6 +17,7 @@ scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
 
+sciparse = { workspace = true }
 scion-proto = { workspace = true }
 
 snap-control = { workspace = true }

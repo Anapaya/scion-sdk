@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use bytes::{Buf as _, BufMut, Bytes};
 use chrono::{DateTime, Utc};
+use sciparse::path::standard::types::{HopFieldFlags, InfoFieldFlags};
 
 use super::{HopFieldIndex, InfoFieldIndex, MetaHeader, MetaReserved, SegmentLength, encoded};
 use crate::{
@@ -76,6 +77,57 @@ impl StandardPath {
         self.info_fields.push(info_field);
         self.hop_fields.extend(hop_fields);
         Ok(())
+    }
+
+    /// Creates a StandardPath from a sciparse standard path.
+    #[doc(hidden)]
+    pub fn from_sciparse_standard_path(
+        sciparse_path: sciparse::path::standard::model::StandardPath,
+    ) -> Self {
+        let info_fields = sciparse_path
+            .iter_info_fields()
+            .map(|f| {
+                InfoField {
+                    peer: f.flags.contains(InfoFieldFlags::PEERING),
+                    cons_dir: f.flags.contains(InfoFieldFlags::CONS_DIR),
+                    seg_id: f.segment_id,
+                    timestamp_epoch: f.timestamp,
+                }
+            })
+            .collect();
+
+        let hop_fields = sciparse_path
+            .iter_hop_fields()
+            .map(|f| {
+                HopField {
+                    ingress_router_alert: f
+                        .flags
+                        .contains(HopFieldFlags::CONS_INGRESS_ROUTER_ALERT),
+                    egress_router_alert: f.flags.contains(HopFieldFlags::CONS_EGRESS_ROUTER_ALERT),
+                    exp_time: f.expiration_units,
+                    cons_ingress: f.cons_ingress,
+                    cons_egress: f.cons_egress,
+                    mac: f.mac.0,
+                }
+            })
+            .collect();
+
+        let (seg1, seg2, seg3) = sciparse_path.segment_lengths();
+
+        Self {
+            path_meta: MetaHeader {
+                current_info_field: InfoFieldIndex::new_unchecked(sciparse_path.current_info_field),
+                current_hop_field: HopFieldIndex::new_unchecked(sciparse_path.curr_hop_field),
+                reserved: MetaReserved::new_unchecked(0),
+                segment_lengths: [
+                    SegmentLength::new_unchecked(seg1),
+                    SegmentLength::new_unchecked(seg2),
+                    SegmentLength::new_unchecked(seg3),
+                ],
+            },
+            info_fields,
+            hop_fields,
+        }
     }
 }
 

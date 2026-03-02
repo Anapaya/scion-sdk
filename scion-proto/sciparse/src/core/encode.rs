@@ -74,6 +74,13 @@ pub trait WireEncode {
         // SAFETY: buffer length is checked above
         unsafe { Ok(self.encode_unchecked(buf)) }
     }
+
+    /// Encodes the structure into a new `Vec<u8>`.
+    fn encode_to_vec(&self) -> Result<Vec<u8>, EncodeError> {
+        let mut buf = vec![0u8; self.required_size()];
+        self.encode(&mut buf)?;
+        Ok(buf)
+    }
 }
 
 /// Errors that can occur during encoding.

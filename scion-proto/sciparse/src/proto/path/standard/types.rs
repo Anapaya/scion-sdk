@@ -121,10 +121,10 @@ bitflags::bitflags! {
     /// HopField flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
     pub struct HopFieldFlags: u8 {
-        /// If ConsIngress Router Alert is set, the ingress router in construction direction will process the L4 payload in the packet.
-        const CONS_INGRESS_ROUTER_ALERT = 0b0000_0001;
         /// If ConsEgress Router Alert is set, the egress router in construction direction will process the L4 payload in the packet.
-        const CONS_EGRESS_ROUTER_ALERT = 0b0000_0010;
+        const CONS_EGRESS_ROUTER_ALERT = 0b0000_0001;
+        /// If ConsIngress Router Alert is set, the ingress router in construction direction will process the L4 payload in the packet.
+        const CONS_INGRESS_ROUTER_ALERT = 0b0000_0010;
 
         // Other bits are reserved.
         const _ = !0;
