@@ -39,11 +39,35 @@ pub mod prometheus_json;
 /// Environment variable to define the log level.
 pub const LOG_LEVEL_ENV: &str = "RUST_LOG";
 
+/// Selects where log lines are written.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogOutput {
+    /// Write to stderr.
+    #[default]
+    Stderr,
+    /// Write to stdout.
+    Stdout,
+}
+
+/// Selects the log line format.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    /// Human-readable text, with ANSI colours when the output is a terminal.
+    #[default]
+    Text,
+    /// Newline-delimited JSON.
+    Json,
+}
+
 /// Configuration for tracing setup.
 #[derive(Debug, Clone)]
 pub struct TracingConfig {
     log_dir: Option<PathBuf>,
-    log_to_stderr: bool,
+    /// Console output sink. `None` disables console logging.
+    console_output: Option<LogOutput>,
+    console_format: LogFormat,
     directives: Vec<String>,
 }
 
@@ -51,7 +75,9 @@ impl Default for TracingConfig {
     fn default() -> Self {
         Self {
             log_dir: None,
-            log_to_stderr: true,
+            // Default: human-readable text → stderr (preserves existing behaviour).
+            console_output: Some(LogOutput::Stderr),
+            console_format: LogFormat::Text,
             directives: Vec::new(),
         }
     }
@@ -69,9 +95,18 @@ impl TracingConfig {
         self
     }
 
-    /// Enable or disable logging to stderr.
-    pub fn with_stderr(mut self, log_to_stderr: bool) -> Self {
-        self.log_to_stderr = log_to_stderr;
+    /// Set where console log lines are written.
+    /// Call with the desired [`LogOutput`] variant. To disable console logging
+    /// entirely pass `None` directly via `TracingConfig { console_output: None, .. }`
+    /// or build the config manually.
+    pub fn with_output(mut self, output: LogOutput) -> Self {
+        self.console_output = Some(output);
+        self
+    }
+
+    /// Set the console log format.
+    pub fn with_format(mut self, format: LogFormat) -> Self {
+        self.console_format = format;
         self
     }
 
@@ -105,23 +140,29 @@ impl TracingConfig {
 
         let TracingConfig {
             log_dir,
-            log_to_stderr,
+            console_output,
+            console_format,
             directives,
         } = self;
 
-        let mut log_level =
-            EnvFilter::try_from_env(LOG_LEVEL_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
-        for directive in directives {
-            log_level = log_level.add_directive(
-                directive
-                    .parse::<tracing_subscriber::filter::Directive>()
-                    .map_err(|_| {
-                        TracingSetupError {
-                            message: format!("Invalid log directive: {directive}"),
-                        }
-                    })?,
-            );
-        }
+        // Closure that builds a fresh EnvFilter with all configured directives applied.
+        // Called once per logger so that each layer gets its own independent filter
+        // (EnvFilter does not implement Clone).
+        let make_filter = |directives: &[String]| -> Result<EnvFilter, TracingSetupError> {
+            let mut filter =
+                EnvFilter::try_from_env(LOG_LEVEL_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
+            for d in directives {
+                filter = filter.add_directive(
+                    d.parse::<tracing_subscriber::filter::Directive>()
+                        .map_err(|_| {
+                            TracingSetupError {
+                                message: format!("Invalid log directive: {d}"),
+                            }
+                        })?,
+                );
+            }
+            Ok(filter)
+        };
 
         let mut guards = vec![];
         let mut layers = vec![JsonStorageLayer.boxed()];
@@ -139,16 +180,57 @@ impl TracingConfig {
             guards.push(file_guard);
         }
 
-        if log_to_stderr {
-            let (non_blocking_writer, guard) = tracing_appender::non_blocking(std::io::stderr());
-            let stderr_logger = tracing_subscriber::fmt::layer()
-                // Enable colors if the stderr is a terminal.
-                .with_ansi(std::io::stderr().is_terminal())
-                .with_timer(UtcTime::rfc_3339())
-                .with_writer(non_blocking_writer)
-                .with_filter(log_level);
-            layers.push(stderr_logger.boxed());
-            guards.push(guard);
+        if let Some(output) = console_output {
+            match (output, &console_format) {
+                (LogOutput::Stdout, LogFormat::Json) => {
+                    let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+                    layers.push(
+                        tracing_subscriber::fmt::layer()
+                            .json()
+                            .with_timer(UtcTime::rfc_3339())
+                            .with_writer(writer)
+                            .with_filter(make_filter(&directives)?)
+                            .boxed(),
+                    );
+                    guards.push(guard);
+                }
+                (LogOutput::Stdout, LogFormat::Text) => {
+                    let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+                    layers.push(
+                        tracing_subscriber::fmt::layer()
+                            .with_ansi(std::io::stdout().is_terminal())
+                            .with_timer(UtcTime::rfc_3339())
+                            .with_writer(writer)
+                            .with_filter(make_filter(&directives)?)
+                            .boxed(),
+                    );
+                    guards.push(guard);
+                }
+                (LogOutput::Stderr, LogFormat::Json) => {
+                    let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+                    layers.push(
+                        tracing_subscriber::fmt::layer()
+                            .json()
+                            .with_timer(UtcTime::rfc_3339())
+                            .with_writer(writer)
+                            .with_filter(make_filter(&directives)?)
+                            .boxed(),
+                    );
+                    guards.push(guard);
+                }
+                (LogOutput::Stderr, LogFormat::Text) => {
+                    let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
+                    layers.push(
+                        tracing_subscriber::fmt::layer()
+                            .with_ansi(std::io::stderr().is_terminal())
+                            .with_timer(UtcTime::rfc_3339())
+                            .with_writer(writer)
+                            .with_filter(make_filter(&directives)?)
+                            .boxed(),
+                    );
+                    guards.push(guard);
+                }
+            }
         }
 
         // global subscriber
@@ -180,11 +262,11 @@ impl std::error::Error for TracingSetupError {}
 
 /// Setup logging using the tracing library with default options. Log output format is json.
 pub fn setup_tracing<P: AsRef<Path>>(log_dir: Option<P>, log_to_stderr: bool) -> Vec<WorkerGuard> {
-    TracingConfig::new()
-        .with_log_dir(log_dir)
-        .with_stderr(log_to_stderr)
-        .init()
-        .expect("Failed to initialize tracing")
+    let mut cfg = TracingConfig::new().with_log_dir(log_dir);
+    if !log_to_stderr {
+        cfg.console_output = None;
+    }
+    cfg.init().expect("Failed to initialize tracing")
 }
 
 #[allow(unused)]
