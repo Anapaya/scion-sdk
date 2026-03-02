@@ -103,12 +103,12 @@ jobs:
         if: runner.os == 'Windows'
         with:
           path: C:\\rust_cache.vhdx
-          key: ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
+          key: ${{ matrix.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', env.workspace)) }}
           restore-keys: |-
-            ${{ runner.os }}-80GB
-            ${{ runner.os }}-80GB-cargo-shear-1.3.2
-            ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
-            ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
+            ${{ matrix.os }}-80GB
+            ${{ matrix.os }}-80GB-cargo-shear-1.3.2
+            ${{ matrix.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}
+            ${{ matrix.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', env.workspace)) }}-${{ env.NIGHTLY_VERSION }}
       - name: Setup dev drive on Windows
         uses: samypr100/setup-dev-drive@v3
         if: runner.os == 'Windows'
