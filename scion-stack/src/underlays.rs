@@ -114,7 +114,7 @@ impl UnderlayStack {
 
     async fn bind_snap_socket(
         &self,
-        bind_addr: Option<scion_proto::address::SocketAddr>,
+        requested_addr: Option<scion_proto::address::SocketAddr>,
         isd_as: IsdAsn,
         cp_url: Url,
     ) -> Result<snap::SnapUnderlaySocket, ScionSocketBindError> {
@@ -127,7 +127,7 @@ impl UnderlayStack {
             ))?;
         };
 
-        let local_addr = match bind_addr {
+        let local_addr = match requested_addr {
             Some(addr) => {
                 addr.local_address()
                     .ok_or(ScionSocketBindError::InvalidBindAddress(
@@ -164,6 +164,28 @@ impl UnderlayStack {
             self.pool.clone(),
         )
         .await?;
+
+        let assigned_addr = socket.local_addr();
+        // If the requested address is specified but does not match the assigned address, return an
+        // error.
+        if let Some(requested_addr) = requested_addr
+            // IsdAsn mismatch
+        && requested_addr.isd_asn().matches(assigned_addr.isd_asn())
+            // IP mismatch. Note, that both addresses will have ip addresses.
+        && let Some(requested_socket_addr) = requested_addr.local_address()
+        && let Some(assigned_socket_addr) = assigned_addr.local_address()
+        && ((!requested_socket_addr.ip().is_unspecified() && assigned_socket_addr.ip() != requested_socket_addr.ip())
+            // Port mismatch
+                || (requested_socket_addr.port() != 0 && assigned_socket_addr.port() != requested_socket_addr.port()))
+        {
+            return Err(crate::scionstack::ScionSocketBindError::InvalidBindAddress(
+                crate::scionstack::InvalidBindAddressError::AddressMismatch {
+                    assigned_addr: SocketAddr::from_std(bind_addr.isd_asn(), requested_socket_addr),
+                    bind_addr,
+                },
+            ));
+        }
+
         Ok(socket)
     }
 

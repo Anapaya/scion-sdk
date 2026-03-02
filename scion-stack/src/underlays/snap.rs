@@ -118,27 +118,10 @@ impl SnapUnderlaySocket {
             pool.clone(),
         ).await.map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
 
-        let assigned_addr = tunnel.local_addr();
-
-        // If the bind address is specified but does not match the assigned address, return an
-        // error.
-        if let Some(local_bind_addr) = bind_addr.local_address()
-            // IP mismatch
-        && ((!local_bind_addr.ip().is_unspecified() && assigned_addr.ip() != local_bind_addr.ip())
-            // Port mismatch
-                || (local_bind_addr.port() != 0 && assigned_addr.port() != local_bind_addr.port()))
-        {
-            return Err(crate::scionstack::ScionSocketBindError::InvalidBindAddress(
-                crate::scionstack::InvalidBindAddressError::AddressMismatch {
-                    assigned_addr: SocketAddr::from_std(bind_addr.isd_asn(), assigned_addr),
-                    bind_addr,
-                },
-            ));
-        }
-
+        let local_addr = SocketAddr::from_std(bind_addr.isd_asn(), tunnel.local_addr());
         Ok(Self {
             inner: Arc::new(tunnel),
-            local_addr: SocketAddr::from_std(bind_addr.isd_asn(), assigned_addr),
+            local_addr,
             _task: Arc::new(SnapUnderlaySocketTaskHandle(tokio::spawn(async {}))),
             pool,
         })
