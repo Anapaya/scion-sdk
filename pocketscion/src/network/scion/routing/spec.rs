@@ -1355,7 +1355,7 @@ mod tests {
         fn should_correctly_route_empty_path() {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .build(1);
 
@@ -1383,7 +1383,7 @@ mod tests {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .using_forwarding_key([3; 16].into())
@@ -1403,7 +1403,7 @@ mod tests {
                 )));
 
             // Final Egress interface can also be non 0
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1425,7 +1425,7 @@ mod tests {
         fn should_correctly_route_segment_changes() {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1459,7 +1459,7 @@ mod tests {
         fn should_fail_on_invalid_segment_change() {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .core()
                 .add_hop(0, 1)
@@ -1474,7 +1474,7 @@ mod tests {
                 .next_hop_should_fail()
                 .expect_parameter_problem(ParameterProblemCode::InvalidSegmentChange);
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .down()
                 .add_hop(0, 1)
@@ -1489,7 +1489,7 @@ mod tests {
                 .next_hop_should_fail()
                 .expect_parameter_problem(ParameterProblemCode::InvalidSegmentChange);
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1510,7 +1510,7 @@ mod tests {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1528,7 +1528,7 @@ mod tests {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .down()
                 .add_hop(0, 1)
@@ -1546,7 +1546,7 @@ mod tests {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .down()
                 .add_hop_with_egress_down(0, 1)
@@ -1563,7 +1563,7 @@ mod tests {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .using_forwarding_key([3; 16].into())
@@ -1583,7 +1583,7 @@ mod tests {
         fn should_drop_on_single_hop() {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .core()
                 .add_hop(0, 1)
@@ -1603,7 +1603,7 @@ mod tests {
 
             // Timestamp in future
             helper::SpecTestCtx::new(
-                TestPathBuilder::new(src_address, dst_address)
+                TestPathBuilder::new(src_address.into(), dst_address.into())
                     .using_info_timestamp(1)
                     .up()
                     .add_hop(0, 1)
@@ -1615,7 +1615,7 @@ mod tests {
 
             // Timestamp expired
             helper::SpecTestCtx::new(
-                TestPathBuilder::new(src_address, dst_address)
+                TestPathBuilder::new(src_address.into(), dst_address.into())
                     .using_info_timestamp(0)
                     .with_hop_expiry(0)
                     .up()
@@ -1633,7 +1633,7 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             helper::SpecTestCtx::new(
-                TestPathBuilder::new(src_address, dst_address)
+                TestPathBuilder::new(src_address.into(), dst_address.into())
                     .using_info_timestamp(0)
                     .with_hop_expiry(0)
                     .up()
@@ -1652,7 +1652,7 @@ mod tests {
         fn should_handle_ingress_scmp_requests() {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1673,7 +1673,7 @@ mod tests {
             let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1696,7 +1696,7 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // No egress scmp on final hop
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1720,7 +1720,7 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // No ingress scmp on first hop
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop_with_alerts(0, true, 1, false)
@@ -1744,7 +1744,7 @@ mod tests {
             let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // Not before segment change
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1760,7 +1760,7 @@ mod tests {
                 .expect_parameter_problem(ParameterProblemCode::ErroneousHeaderField);
 
             // Not after segment change
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)

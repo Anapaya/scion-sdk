@@ -1176,10 +1176,11 @@ mod tests {
         pub const BASE_TIME: SystemTime = SystemTime::UNIX_EPOCH;
 
         pub fn dummy_path(hop_count: u16, timestamp: u32, exp_units: u8, seed: u32) -> Path {
-            let mut builder: TestPathBuilder = TestPathBuilder::new(SRC_ADDR, DST_ADDR)
-                .using_info_timestamp(timestamp)
-                .with_hop_expiry(exp_units)
-                .up();
+            let mut builder: TestPathBuilder =
+                TestPathBuilder::new(SRC_ADDR.into(), DST_ADDR.into())
+                    .using_info_timestamp(timestamp)
+                    .with_hop_expiry(exp_units)
+                    .up();
 
             builder = builder.add_hop(0, 1);
 

@@ -80,7 +80,7 @@ mod scmp_error_handler_tests {
     fn test_context() -> TestPathContext {
         let src = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(10)), [192, 0, 2, 1].into());
         let dst = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(20)), [198, 51, 100, 1].into());
-        TestPathBuilder::new(src, dst)
+        TestPathBuilder::new(src.into(), dst.into())
             .using_info_timestamp(42)
             .up()
             .add_hop(0, 11)

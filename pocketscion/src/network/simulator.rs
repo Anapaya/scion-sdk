@@ -14,13 +14,14 @@
 //! Full network Simulation for SCION and Local Network
 
 use anyhow::Context;
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw, scmp::ScmpErrorMessage};
+use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
 use tracing::info_span;
 
 use crate::network::{
     local::{
-        external_as_registry::ExternalAsRegistry, receiver_registry::NetworkReceiverRegistry,
-        simulator::LocalNetworkSimulation,
+        external_as_registry::ExternalAsRegistry,
+        receiver_registry::NetworkReceiverRegistry,
+        simulator::{DispatchEffect, LocalNetworkSimulation},
     },
     scion::{
         routing::{LocalAsRoutingAction, ScionNetworkTime, spec::SpecRoutingLogic},
@@ -121,7 +122,7 @@ impl NetworkSimulator<'_> {
             .handle_local_routing_action(routing_output.action, packet)
             .context("local simulation failed")?
             {
-                self.dispatch(routing_output.at_as, 0, now, reply.into());
+                self.dispatch(routing_output.at_as, 0, now, reply);
             };
 
             anyhow::Ok(())
@@ -145,7 +146,7 @@ impl NetworkSimulator<'_> {
         local_as: IsdAsn,
         local_router_if: u16,
         packet: ScionPacketRaw,
-    ) -> Result<(), ScmpErrorMessage> {
+    ) -> Option<DispatchEffect> {
         LocalNetworkSimulation::new(
             local_as,
             local_router_if,
@@ -166,7 +167,7 @@ mod test {
 
     use ipnet::IpNet;
     use scion_proto::{
-        address::{EndhostAddr, ScionAddr},
+        address::ScionAddr,
         packet::classify_scion_packet,
         path::test_builder::{TestPathBuilder, TestPathContext},
     };
@@ -187,9 +188,9 @@ mod test {
 
     /// Sets up a bidirectional test with two endpoints, each having a MockReceiver.
     fn setup(
-        builder_cb: impl FnOnce(EndhostAddr, EndhostAddr) -> TestPathBuilder,
+        builder_cb: impl FnOnce(ScionAddr, ScionAddr) -> TestPathBuilder,
         timestamp: u32,
-        overwrite_dst: Option<EndhostAddr>,
+        overwrite_dst: Option<ScionAddr>,
     ) -> TestSetup {
         let src_ip_net: IpNet = "10.0.0.1/32".parse().unwrap();
         let src_ip = Ipv4Addr::from_str("10.0.0.1").unwrap();
@@ -214,10 +215,7 @@ mod test {
             .add_receiver(dst_ia, dst_ip_net, dst_dp.clone())
             .unwrap();
 
-        let builder = builder_cb(
-            EndhostAddr::try_from(src).unwrap(),
-            overwrite_dst.unwrap_or_else(|| EndhostAddr::try_from(dst).unwrap()),
-        );
+        let builder = builder_cb(src, overwrite_dst.unwrap_or(dst));
 
         let test = builder.build(timestamp);
 
@@ -298,6 +296,99 @@ mod test {
                 vec![1, 2, 3],
                 "Expected SCMP EchoReply with data [1, 2, 3]"
             );
+        }
+    }
+
+    mod svc_resolution {
+
+        use std::net::SocketAddr;
+
+        use bytes::Bytes;
+        use scion_proto::{
+            address::{ScionAddrSvc, ServiceAddr},
+            packet::{ByEndpoint, ScionPacketUdp},
+            path::DataPlanePath,
+        };
+        use scion_protobuf::control_plane::v1::{
+            ServiceResolutionRequest, ServiceResolutionResponse,
+        };
+
+        use super::*;
+        use crate::network::scion::topology::ScionAs;
+
+        #[test_log::test]
+        fn should_resolve_svc_address() {
+            let src_ia = IsdAsn::from_str("1-1").unwrap();
+            let dst_ia = IsdAsn::from_str("1-99").unwrap();
+            let src_ip_net: IpNet = "10.0.0.1/32".parse().unwrap();
+            let svc_addr: SocketAddr = "10.1.2.3:54321".parse().unwrap();
+
+            let mut topology = ScionTopology::new();
+            topology
+                .add_as(ScionAs::new_core(src_ia).with_forwarding_key([0; 16])) // Src AS
+                .unwrap()
+                .add_as(ScionAs::new_core(dst_ia).with_forwarding_key([0; 16])) // Dst AS
+                .unwrap()
+                .add_link("1-1#1 core 1-99#1".parse().unwrap())
+                .unwrap();
+
+            let src_receiver = Arc::new(MockReceiver::default());
+            let mut network_receivers = NetworkReceiverRegistry::new();
+            network_receivers
+                .add_svc_mapping(dst_ia, ServiceAddr::CONTROL, "test".to_string(), svc_addr)
+                .unwrap();
+
+            network_receivers
+                .add_receiver(src_ia, src_ip_net, src_receiver.clone())
+                .unwrap();
+
+            let src_addr = ScionAddr::new(src_ia, src_ip_net.addr().into());
+            let dst_addr = ScionAddrSvc::new(dst_ia, ServiceAddr::CONTROL);
+
+            let path = TestPathBuilder::new(src_addr, dst_addr.into())
+                .core()
+                .add_hop(0, 1)
+                .add_hop(1, 0)
+                .build(0)
+                .path();
+
+            use prost::Message;
+
+            let req_packet = ScionPacketUdp::new(
+                ByEndpoint::<scion_proto::address::SocketAddr> {
+                    source: scion_proto::address::SocketAddr::new(src_addr, 12345),
+                    destination: scion_proto::address::SocketAddr::new(dst_addr.into(), 54321),
+                },
+                path.data_plane_path,
+                Bytes::from_owner(ServiceResolutionRequest {}.encode_to_vec()),
+            )
+            .unwrap();
+
+            NetworkSimulator::new(&network_receivers, &Default::default(), Some(&topology))
+                .dispatch(src_ia, 0, ScionNetworkTime(0), req_packet.into());
+
+            let recv = src_receiver
+                .last_recv()
+                .expect("Should have received a packet");
+
+            let udp: ScionPacketUdp = recv.try_into().expect("Should have received a udp packet");
+            assert!(
+                matches!(udp.headers.path, DataPlanePath::Standard(_)),
+                "Expected a Standard path in the response"
+            );
+
+            let rsp = ServiceResolutionResponse::decode(udp.payload().to_owned())
+                .expect("Should decode ServiceResolutionResponse");
+
+            let ip = rsp
+                .transports
+                .get("test")
+                .expect("Should have resolution for 'test'")
+                .address
+                .parse::<SocketAddr>()
+                .expect("Should have valid IP in resolution");
+
+            assert_eq!(ip, svc_addr);
         }
     }
 

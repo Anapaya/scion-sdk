@@ -88,7 +88,7 @@
 use chrono::DateTime;
 
 use crate::{
-    address::{Asn, EndhostAddr, Isd, IsdAsn, SocketAddr},
+    address::{Asn, Isd, IsdAsn, ScionAddr, SocketAddr},
     packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
     path::{
         DataPlanePath, HopField, InfoField, MetaHeader, Metadata, Path, PathInterface,
@@ -110,8 +110,8 @@ use crate::{
 #[derive(Debug)]
 pub struct TestPathBuilder {
     segments: Vec<TestPathBuilderSegment>,
-    src_address: EndhostAddr,
-    dst_address: EndhostAddr,
+    src_address: ScionAddr,
+    dst_address: ScionAddr,
     current_isd: u16,
     current_asn: u32,
     default_timestamp: u32,
@@ -122,7 +122,7 @@ pub struct TestPathBuilder {
 impl TestPathBuilder {
     /// Creates a new TestBuilder
     #[allow(unused)]
-    pub fn new(src_address: EndhostAddr, dst_address: EndhostAddr) -> Self {
+    pub fn new(src_address: ScionAddr, dst_address: ScionAddr) -> Self {
         let current_isd = src_address.isd_asn().isd().0;
         let current_asn = src_address.isd_asn().asn().0 as u32;
 
@@ -515,9 +515,9 @@ pub struct TestPathContext {
     pub test_segments: Vec<TestPathBuilderSegment>,
 
     /// The source address of the packet
-    pub src_address: EndhostAddr,
+    pub src_address: ScionAddr,
     /// The destination address of the packet
-    pub dst_address: EndhostAddr,
+    pub dst_address: ScionAddr,
 }
 
 impl TestPathContext {
@@ -527,8 +527,8 @@ impl TestPathContext {
     pub fn scion_packet_raw(&self, payload: &[u8]) -> ScionPacketRaw {
         ScionPacketRaw::new(
             ByEndpoint {
-                source: self.src_address.into(),
-                destination: self.dst_address.into(),
+                source: self.src_address,
+                destination: self.dst_address,
             },
             self.data_plane_path.clone(),
             payload.to_owned().into(),
@@ -544,8 +544,8 @@ impl TestPathContext {
     pub fn scion_packet_udp(&self, payload: &[u8], src_port: u16, dst_port: u16) -> ScionPacketUdp {
         ScionPacketUdp::new(
             ByEndpoint {
-                source: SocketAddr::new(self.src_address.into(), src_port),
-                destination: SocketAddr::new(self.dst_address.into(), dst_port),
+                source: SocketAddr::new(self.src_address, src_port),
+                destination: SocketAddr::new(self.dst_address, dst_port),
             },
             self.data_plane_path.clone(),
             payload.to_owned().into(),
@@ -559,8 +559,8 @@ impl TestPathContext {
     pub fn scion_packet_scmp(&self, message: ScmpMessage) -> ScionPacketScmp {
         ScionPacketScmp::new(
             ByEndpoint {
-                source: self.src_address.into(),
-                destination: self.dst_address.into(),
+                source: self.src_address,
+                destination: self.dst_address,
             },
             self.data_plane_path.clone(),
             message,
@@ -701,8 +701,8 @@ mod test {
     #[test]
     fn should_generate_correct_interfaces() {
         let ctx = super::TestPathBuilder::new(
-            EndhostAddr::new(IsdAsn::new(Isd(1), Asn(2)), [192, 168, 0, 1].into()),
-            EndhostAddr::new(IsdAsn::new(Isd(2), Asn(2)), [10, 0, 0, 1].into()),
+            EndhostAddr::new(IsdAsn::new(Isd(1), Asn(2)), [192, 168, 0, 1].into()).into(),
+            EndhostAddr::new(IsdAsn::new(Isd(2), Asn(2)), [10, 0, 0, 1].into()).into(),
         )
         .using_info_timestamp(1000)
         .up()

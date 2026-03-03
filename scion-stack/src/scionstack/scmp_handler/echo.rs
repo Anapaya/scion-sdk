@@ -111,7 +111,7 @@ mod default_echo_handler_tests {
     fn test_context() -> TestPathContext {
         let src = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(10)), [192, 0, 2, 1].into());
         let dst = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(20)), [198, 51, 100, 1].into());
-        TestPathBuilder::new(src, dst)
+        TestPathBuilder::new(src.into(), dst.into())
             .using_info_timestamp(42)
             .up()
             .add_hop(0, 11)
@@ -122,8 +122,8 @@ mod default_echo_handler_tests {
     #[test]
     fn replies_to_echo_request() {
         let ctx = test_context();
-        let expected_src = ctx.dst_address.into();
-        let expected_dst = ctx.src_address.into();
+        let expected_src = ctx.dst_address;
+        let expected_dst = ctx.src_address;
         let request = ctx.scion_packet_scmp(ScmpMessage::EchoRequest(ScmpEchoRequest::new(
             7,
             9,

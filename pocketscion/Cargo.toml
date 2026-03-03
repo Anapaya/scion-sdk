@@ -19,7 +19,7 @@ scion-sdk-utils = { workspace = true }
 
 sciparse = { workspace = true }
 scion-proto = { workspace = true }
-
+scion-protobuf = { workspace = true }
 snap-control = { workspace = true }
 snap-dataplane = { workspace = true }
 snap-tokens = { workspace = true }
@@ -46,6 +46,7 @@ http = { workspace = true }
 ipnet = { workspace = true, features = ["serde"] }
 p256 = { workspace = true }
 pem = { workspace = true, features = ["serde"] }
+prost = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser", "pem"] }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 rustls = { workspace = true }

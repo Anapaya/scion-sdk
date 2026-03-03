@@ -37,7 +37,7 @@ use pocketscion::{
     state::SharedPocketScionState,
 };
 use scion_proto::{
-    address::{EndhostAddr, IsdAsn},
+    address::{IsdAsn, ScionAddr},
     packet::{ByEndpoint, ScionPacketRaw},
     path::{DataPlanePath, HopFieldIndex, StandardPath, test_builder::TestPathBuilder},
     wire_encoding::{WireDecode, WireEncodeVec},
@@ -54,8 +54,8 @@ async fn external_as_should_work() -> anyhow::Result<()> {
     let ia1 = IsdAsn::from_str("1-1")?;
     let ia1_key = [0; 16];
     let ia2 = IsdAsn::from_str("1-2")?;
-    let addr1 = EndhostAddr::new(ia1, Ipv4Addr::new(10, 0, 0, 1).into());
-    let addr2 = EndhostAddr::new(ia2, Ipv4Addr::new(20, 0, 0, 1).into());
+    let addr1 = ScionAddr::new(ia1, Ipv4Addr::new(10, 0, 0, 1).into());
+    let addr2 = ScionAddr::new(ia2, Ipv4Addr::new(20, 0, 0, 1).into());
 
     let network_time = ScionNetworkTime::now();
     // Setup minimal topology
@@ -119,8 +119,8 @@ async fn external_as_should_work() -> anyhow::Result<()> {
     // // A packet sent to the external AS should be received by the external AS socket
     let packet = ScionPacketRaw::new(
         ByEndpoint {
-            source: addr1.into(),
-            destination: addr2.into(),
+            source: addr1,
+            destination: addr2,
         },
         path1to2.data_plane_path,
         "hello external AS".into(),
@@ -160,8 +160,8 @@ async fn external_as_should_work() -> anyhow::Result<()> {
     });
     let response_packet = ScionPacketRaw::new(
         ByEndpoint {
-            source: addr2.into(),
-            destination: addr1.into(),
+            source: addr2,
+            destination: addr1,
         },
         reversed_path,
         "hello local AS".into(),
