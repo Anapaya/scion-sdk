@@ -328,7 +328,6 @@ impl UnderlaySocket for UdpUnderlaySocket {
                     tracing::debug!(destination = ?dst, assigned_addr = %self.bind_addr.scion_address(), "Packet destination does not match assigned address, skipping");
                     continue;
                 }
-
                 return Ok(packet);
             }
         })
@@ -493,6 +492,15 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
                     .address
                     .destination()
                     .context("reading destination address")?;
+
+                // Drop packets that are not addressed to this socket.
+                if dst != self.local_addr.scion_address() {
+                    anyhow::bail!(
+                        "Packet destination does not match assigned address, skipping (dst: {}, assigned: {})",
+                        dst,
+                        self.local_addr.scion_address()
+                    );
+                }
 
                 let path = Path::new(
                     packet.headers.path.clone(),

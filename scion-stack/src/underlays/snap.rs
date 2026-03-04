@@ -279,6 +279,15 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
                     .destination()
                     .context("reading destination address")?;
 
+                // Drop packets that are not addressed to this socket.
+                if dst != self.socket.local_addr.scion_address() {
+                    anyhow::bail!(
+                        "Packet destination does not match assigned address, skipping (dst: {}, assigned: {})",
+                        dst,
+                        self.socket.local_addr().scion_address()
+                    );
+                }
+
                 let path = Path::new(
                     packet.headers.path.clone(),
                     ByEndpoint {
