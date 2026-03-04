@@ -49,6 +49,8 @@ jobs:
       - name: Disk space check after cleanup
         if: runner.os == 'Linux'
         run: df -h
+      - name: Install NASM
+        uses: ilammy/setup-nasm@v1
       - name: Restore protoc cache
         id: cache-protoc-windows
         uses: actions/cache/restore@v4
