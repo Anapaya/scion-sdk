@@ -15,7 +15,6 @@
 
 pub mod cert_validator;
 pub mod client;
-pub mod metrics;
 pub mod server;
 
 // Public for testing purposes only
