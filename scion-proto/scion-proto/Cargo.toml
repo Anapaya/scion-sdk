@@ -29,6 +29,7 @@ utoipa = { workspace = true }
 sciparse = { path = "../sciparse" }
 
 [dev-dependencies]
+base64 = { workspace = true }
 criterion = { workspace = true }
 prost-types = { workspace = true }
 rand_xorshift = { workspace = true }

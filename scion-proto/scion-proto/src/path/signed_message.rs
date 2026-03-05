@@ -14,13 +14,14 @@
 
 //! Support for signing and validating protobuf messages with ECDSA signatures.
 
-use std::time::SystemTime;
+use std::{borrow::Cow, time::SystemTime};
 
 use ecdsa::signature::{
     self,
     hazmat::{PrehashSigner, PrehashVerifier},
 };
 use prost::{DecodeError, Message};
+use scion_protobuf::control_plane::v1::VerificationKeyId;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use thiserror::Error;
@@ -80,7 +81,7 @@ impl SignedMessage {
         key: &'a p256::ecdsa::SigningKey,
         digest_algo: DigestAlgorithm,
         timestamp: SystemTime,
-        verification_key_id: Option<Vec<u8>>,
+        verification_key_id: Option<VerificationKeyId>,
         associated_data: (usize, impl IntoIterator<Item = &'a [u8]>),
         message: &impl prost::Message,
         metadata: &impl prost::Message,
@@ -97,11 +98,11 @@ impl SignedMessage {
             }
         };
 
-        let verification_key_id = verification_key_id.unwrap_or_default();
+        let verification_key_id = verification_key_id.map(|k| k.encode_to_vec());
 
         let header = scion_protobuf::crypto::v1::Header {
             signature_algorithm: signature_algorithm as i32,
-            verification_key_id,
+            verification_key_id: verification_key_id.unwrap_or_default(),
             timestamp: Some(timestamp.into()),
             associated_data_length: associated_data.0 as i32,
             metadata: metadata.encode_to_vec(),
@@ -149,10 +150,18 @@ pub enum ValidateError {
     /// Header could not be decoded.
     #[error("invalid header")]
     InvalidHeader,
+    /// Header could not be decoded.
+    #[error("invalid verification key id")]
+    InvalidValidationKeyId,
     /// The length of the provided associated data does not match the length specified in the
     /// header.
-    #[error("associated data length mismatch")]
-    InvalidAssociatedDataLength,
+    #[error("associated data length mismatch (expected {expected}, got {actual})")]
+    InvalidAssociatedDataLength {
+        /// Expected length of the associated data as specified in the header.
+        expected: usize,
+        /// Actual length of the associated data provided for validation.
+        actual: usize,
+    },
     /// Signature algorithm is unknown or unsupported.
     #[error("invalid digest algorithm")]
     InvalidDigestAlgorithm,
@@ -163,8 +172,8 @@ pub enum ValidateError {
     #[error("invalid metadata")]
     InvalidMetadata,
     /// The provided key id does not match the header key id.
-    #[error("key id mismatch")]
-    KeyIdMismatch,
+    #[error("no key matching key found: {0}")]
+    KeyMissing(Cow<'static, str>),
     /// Signature bytes are malformed.
     #[error("signature malformed")]
     SignatureMalformed,
@@ -176,16 +185,17 @@ impl SignedMessage {
     /// Validates the signature of the signed message using the provided ECDSA verification key.
     ///
     /// ## Parameters
-    /// - `key`: The ECDSA verification key to use for validating the signature.
-    /// - `key_id`: Optional identifier for the verification key to check against the signature
-    ///   header.
+    /// - `key_provider`: A function taking the content of `header.verification_key_id` and returns
+    ///   the corresponding `p256::ecdsa::VerifyingKey` if available. The `VerificationKeyId` is
+    ///   extracted from the message header, and can be used to look up the appropriate key for
+    ///   signature verification. If the header does not include a key id, the function will be
+    ///   called with `None`.
     /// - `associated_data`: Additional data that is covered by the signature but not included in
     ///   the header and body, which should be provided for validation if it was included during
     ///   signing.
     pub fn validate<'a>(
         &'a self,
-        key: &p256::ecdsa::VerifyingKey,
-        key_id: Option<Vec<u8>>,
+        key_provider: impl Fn(&[u8]) -> Result<p256::ecdsa::VerifyingKey, ValidateError>,
         associated_data: (usize, impl IntoIterator<Item = &'a [u8]>),
     ) -> Result<(scion_protobuf::crypto::v1::Header, Vec<u8>), ValidateError> {
         {
@@ -198,14 +208,13 @@ impl SignedMessage {
             let header = scion_protobuf::crypto::v1::Header::decode(&header_and_body.header[..])
                 .map_err(|_| ValidateError::InvalidHeader)?;
 
-            if let Some(expected_key_id) = key_id
-                && header.verification_key_id != expected_key_id
-            {
-                return Err(ValidateError::KeyIdMismatch);
-            }
+            let verification_key = key_provider(&header.verification_key_id[..])?;
 
             if header.associated_data_length as usize != associated_data.0 {
-                return Err(ValidateError::InvalidAssociatedDataLength);
+                return Err(ValidateError::InvalidAssociatedDataLength {
+                    expected: header.associated_data_length as usize,
+                    actual: associated_data.0,
+                });
             }
 
             let algo = match scion_protobuf::crypto::v1::SignatureAlgorithm::try_from(
@@ -240,10 +249,12 @@ impl SignedMessage {
                     }
                 }
             };
+
             let sig = p256::ecdsa::Signature::from_der(&self.signature)
                 .map_err(|_| ValidateError::SignatureMalformed)?;
 
-            key.verify_prehash(&hash, &sig)
+            verification_key
+                .verify_prehash(&hash, &sig)
                 .map_err(ValidateError::SignatureVerificationFailed)?;
 
             Ok((header, header_and_body.body))
@@ -255,15 +266,14 @@ impl SignedMessage {
     /// Decodes a signed message after validating its signature.
     pub fn decode_validated<'a, Body, Metadata>(
         &'a self,
-        key: &p256::ecdsa::VerifyingKey,
-        key_id: Option<Vec<u8>>,
+        key_provider: impl Fn(&[u8]) -> Result<p256::ecdsa::VerifyingKey, ValidateError>,
         associated_data: (usize, impl IntoIterator<Item = &'a [u8]>),
     ) -> Result<(Body, Option<Metadata>), ValidateError>
     where
         Body: prost::Message + Default,
         Metadata: prost::Message + Default,
     {
-        let (header, body) = self.validate(key, key_id, associated_data)?;
+        let (header, body) = self.validate(key_provider, associated_data)?;
 
         let body = Body::decode(&body[..]).map_err(|_| ValidateError::InvalidBody)?;
 
@@ -342,13 +352,20 @@ mod test {
 
     fn test_data() -> (
         p256::ecdsa::SigningKey,
-        Vec<u8>,
+        VerificationKeyId,
         Vec<u8>,
         scion_protobuf::control_plane::v1::SegmentsRequest,
         scion_protobuf::control_plane::v1::SegmentsRequest,
     ) {
         let key = p256::ecdsa::SigningKey::random(&mut OsRng);
         let key_id: Vec<u8> = rand::rng().random_iter().take(16).collect();
+        let key_id = VerificationKeyId {
+            isd_as: 1,
+            subject_key_id: key_id.clone(),
+            trc_base: 125,
+            trc_serial: 31536,
+        };
+
         let assoc_data = "hello crypto".as_bytes().to_vec();
         let message = scion_protobuf::control_plane::v1::SegmentsRequest {
             src_isd_as: 1,
@@ -364,7 +381,7 @@ mod test {
 
     fn signed_message_with_metadata(
         key: &p256::ecdsa::SigningKey,
-        key_id: Vec<u8>,
+        key_id: VerificationKeyId,
         assoc_data: &Vec<u8>,
         message: &scion_protobuf::control_plane::v1::SegmentsRequest,
         metadata: &scion_protobuf::control_plane::v1::SegmentsRequest,
@@ -389,9 +406,17 @@ mod test {
 
         let verifying_key = key.verifying_key();
         let validation_result = signed_message
-            .decode_validated::<scion_protobuf::control_plane::v1::SegmentsRequest, scion_protobuf::control_plane::v1::SegmentsRequest>(
-                verifying_key,
-                Some(key_id),
+            .decode_validated::<scion_protobuf::control_plane::v1::SegmentsRequest, scion_protobuf::control_plane::v1::SegmentsRequest>(             |encoded_key_id| {
+                    let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                        .map_err(|_| ValidateError::InvalidValidationKeyId)?;
+                    if decoded_key_id != key_id {
+                        return Err(ValidateError::KeyMissing(format!(
+                            "expected key id {:?}, got {:?}",
+                            key_id, decoded_key_id
+                        ).into()));
+                    }
+                    Ok(*verifying_key)
+                },
                 (assoc_data.len(), std::iter::once(assoc_data.as_slice())),
             );
 
@@ -434,8 +459,16 @@ mod test {
 
         let verifying_key = key.verifying_key();
         let result = tampered.validate(
-            verifying_key,
-            Some(key_id),
+            |encoded_key_id| {
+                let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                    .map_err(|_| ValidateError::InvalidValidationKeyId)?;
+                if decoded_key_id != key_id {
+                    return Err(ValidateError::KeyMissing(
+                        format!("expected key id {:?}, got {:?}", key_id, decoded_key_id).into(),
+                    ));
+                }
+                Ok(*verifying_key)
+            },
             (assoc_data.len(), std::iter::once(assoc_data.as_slice())),
         );
 
@@ -452,14 +485,19 @@ mod test {
             signed_message_with_metadata(&key, key_id.clone(), &assoc_data, &message, &metadata);
 
         let verifying_key = key.verifying_key();
-        let wrong_key_id: Vec<u8> = rand::rng().random_iter().take(16).collect();
+        let wrong_key_id_bytes: Vec<u8> = rand::rng().random_iter().take(16).collect();
         let result = signed_message.validate(
-            verifying_key,
-            Some(wrong_key_id),
+            |encoded_key_id| {
+                // Return error if the key id doesn't match what we expect
+                if encoded_key_id != wrong_key_id_bytes {
+                    return Err(ValidateError::KeyMissing("key id mismatch".into()));
+                }
+                Ok(*verifying_key)
+            },
             (assoc_data.len(), std::iter::once(assoc_data.as_slice())),
         );
 
-        assert!(matches!(result, Err(ValidateError::KeyIdMismatch)));
+        assert!(matches!(result, Err(ValidateError::KeyMissing(_))));
     }
 
     #[test]
@@ -471,8 +509,16 @@ mod test {
         let verifying_key = key.verifying_key();
         let wrong_assoc_data = "wrong data".as_bytes().to_vec();
         let result = signed_message.validate(
-            verifying_key,
-            Some(key_id),
+            |encoded_key_id| {
+                let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                    .map_err(|_| ValidateError::InvalidValidationKeyId)?;
+                if decoded_key_id != key_id {
+                    return Err(ValidateError::KeyMissing(
+                        format!("expected key id {:?}, got {:?}", key_id, decoded_key_id).into(),
+                    ));
+                }
+                Ok(*verifying_key)
+            },
             (
                 wrong_assoc_data.len(),
                 std::iter::once(wrong_assoc_data.as_slice()),
@@ -480,7 +526,10 @@ mod test {
         );
 
         assert!(
-            matches!(result, Err(ValidateError::InvalidAssociatedDataLength)),
+            matches!(
+                result,
+                Err(ValidateError::InvalidAssociatedDataLength { .. })
+            ),
             "validation should fail with InvalidAssociatedDataLength, but got: {result:?}"
         );
     }
@@ -495,8 +544,16 @@ mod test {
 
         let verifying_key = key.verifying_key();
         let result = signed_message.validate(
-            verifying_key,
-            Some(key_id),
+            |encoded_key_id| {
+                let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                    .map_err(|_| ValidateError::InvalidValidationKeyId)?;
+                if decoded_key_id != key_id {
+                    return Err(ValidateError::KeyMissing(
+                        format!("expected key id {:?}, got {:?}", key_id, decoded_key_id).into(),
+                    ));
+                }
+                Ok(*verifying_key)
+            },
             (assoc_data.len(), std::iter::once(assoc_data.as_slice())),
         );
 
@@ -566,8 +623,17 @@ mod test {
         let verifying_key = key.verifying_key();
         let result = signed_message
             .decode_validated::<scion_protobuf::control_plane::v1::SegmentsRequest, ()>(
-                verifying_key,
-                Some(key_id),
+                |encoded_key_id| {
+                    let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                        .map_err(|_| ValidateError::InvalidValidationKeyId)?;
+                    if decoded_key_id != key_id {
+                        return Err(ValidateError::KeyMissing(
+                            format!("expected key id {:?}, got {:?}", key_id, decoded_key_id)
+                                .into(),
+                        ));
+                    }
+                    Ok(*verifying_key)
+                },
                 (assoc_data.len(), std::iter::once(assoc_data.as_slice())),
             );
 

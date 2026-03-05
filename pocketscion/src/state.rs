@@ -51,9 +51,11 @@ use crate::{
         scion::{
             segment::registry::SegmentRegistry,
             topology::{FastTopologyLookup, ScionTopology},
+            trust_store::TrustStore,
         },
     },
     state::{
+        control_service::ControlServiceState,
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryState},
         external_as::ExternalAsState,
         snap::{SnapId, SnapState},
@@ -61,9 +63,11 @@ use crate::{
     util::{map_btree, map_btree_fallible},
 };
 
+pub mod control_service;
 pub mod endhost_api_discovery;
 pub mod endhost_segment_lister;
 pub mod external_as;
+pub mod network_sim_socket;
 pub mod simulation_dispatcher;
 pub mod snap;
 
@@ -251,7 +255,7 @@ impl SharedPocketScionState {
         let mut state_write_guard = self.system_state.write().unwrap();
 
         state_write_guard.topology = Some(topology);
-        state_write_guard.topology_segments = Some(segment_store);
+        state_write_guard.segment_registry = Some(segment_store);
     }
 
     /// Sets the state of a link in the topology.
@@ -318,10 +322,12 @@ pub struct SystemState {
     endhost_apis: BTreeMap<EndhostApiId, EndhostApiState>,
     endhost_api_discovery_api: BTreeMap<EndhostApiDiscoveryApiId, EndhostApiDiscoveryState>,
     topology: Option<ScionTopology>,
-    topology_segments: Option<SegmentRegistry>,
+    segment_registry: Option<SegmentRegistry>,
     sim_receivers: NetworkReceiverRegistry,
     external_ases: BTreeMap<IsdAsn, ExternalAsState>,
     extern_as_handlers: ExternalAsRegistry,
+    control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
+    trust_store: TrustStore,
 }
 
 impl SystemState {
@@ -336,12 +342,14 @@ impl SystemState {
             routers: Default::default(),
             auth_server: Default::default(),
             topology: Default::default(),
-            topology_segments: Default::default(),
+            segment_registry: Default::default(),
             sim_receivers: Default::default(),
             endhost_apis: Default::default(),
             endhost_api_discovery_api: Default::default(),
             external_ases: Default::default(),
             extern_as_handlers: Default::default(),
+            control_service_states: Default::default(),
+            trust_store: Default::default(),
         }
     }
 
@@ -398,6 +406,8 @@ impl From<&SystemState> for SystemStateDto {
                 .map(|(id, discovery_state)| (*id, discovery_state.clone().into()))
                 .collect(),
             external_ases: map_btree(system_state.external_ases.clone(), Into::into),
+            control_service_states: system_state.control_service_states.clone(),
+            trust_store: system_state.trust_store.clone(),
         }
     }
 }
@@ -458,12 +468,14 @@ impl TryFrom<SystemStateDto> for SystemState {
             routers: map_btree_fallible(dto.routers, TryInto::try_into)
                 .context("invalid router states")?,
             topology,
-            topology_segments,
+            segment_registry: topology_segments,
             sim_receivers: Default::default(),
             endhost_apis: dto.endhost_apis,
             endhost_api_discovery_api: map_btree(dto.endhost_api_discovery_api, Into::into),
             external_ases,
             extern_as_handlers: Default::default(),
+            control_service_states: dto.control_service_states,
+            trust_store: dto.trust_store,
         })
     }
 }

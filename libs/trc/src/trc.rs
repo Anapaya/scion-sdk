@@ -33,7 +33,7 @@ use sciparse::{
 use thiserror::Error;
 
 /// Trust root certificate (TRC).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Trc {
     id: TrcId,
     trc_payload: TrcPayload,
@@ -158,7 +158,7 @@ impl TrcId {
 ///
 /// [1]: <https://docs.scion.org/en/v0.11.0/cryptography/trc.html>
 /// [2]: <https://github.com/scionproto/scion/blob/v0.12.0/pkg/scrypto/cppki/trc_asn1.go#L215>
-#[derive(Debug, PartialEq, Sequence)]
+#[derive(Debug, PartialEq, Sequence, Clone)]
 pub struct TrcPayload {
     /// Version number.
     pub version: Int,
@@ -185,7 +185,7 @@ pub struct TrcPayload {
 }
 
 /// TRC ID payload.
-#[derive(Debug, PartialEq, Sequence)]
+#[derive(Debug, PartialEq, Sequence, Clone)]
 pub struct TrcIdPayload {
     /// ISD number.
     pub isd: Int,
@@ -196,7 +196,7 @@ pub struct TrcIdPayload {
 }
 
 /// Validity period.
-#[derive(Debug, PartialEq, Sequence)]
+#[derive(Debug, PartialEq, Sequence, Clone)]
 pub struct Validity {
     /// Not before time.
     pub not_before: GeneralizedTime,
@@ -211,7 +211,7 @@ pub struct Validity {
 /// an error is returned.
 ///
 /// [1]: <https://www.itu.int/rec/T-REC-X.690-202102-I/en>
-fn der_int_to_u64(asn_int: &Int) -> Result<u64, ParseTrcError> {
+pub fn der_int_to_u64(asn_int: &Int) -> Result<u64, ParseTrcError> {
     const U64_SIZE: usize = std::mem::size_of::<u64>();
     let bytes = asn_int.as_bytes();
     if bytes.is_empty() || bytes.len() > U64_SIZE + 1 {

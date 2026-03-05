@@ -29,6 +29,8 @@ use scion_proto::{
         signed_message::SignedMessage,
     },
 };
+use scion_protobuf::control_plane::v1::VerificationKeyId;
+use scion_sdk_trc::trc::der_int_to_u64;
 
 use crate::network::scion::topology::{DirectedScionLink, ScionAs, ScionLinkType, ScionTopology};
 
@@ -57,24 +59,27 @@ impl Display for LinkSegment {
 
 impl LinkSegment {
     /// Returns an iterator over all hops in the link segment.
-    pub fn iter_hops(&self) -> HopIter<'_> {
+    pub fn iter_hops(&self, skip_tail: bool) -> HopIter<'_> {
         HopIter {
             last_ingress_link: None,
             link_iter: self.links.iter(),
+            skip_tail,
         }
     }
 
     /// Converts [LinkSegment] into a [PathSegment].
     ///
-    /// `timestamp` is the time when the segment was created.
-    /// `segment_id` is a random number identifying the segment.
-    /// `hop_entry_expiry` is expiry time for each hop entry in the segment.
+    /// * `timestamp` is the time when the segment was created.
+    /// * `segment_id` is a random number identifying the segment.
+    /// * `hop_entry_expiry` is expiry time for each hop entry in the segment.
+    /// * `skip_tail` indicates that no final hop using egress 0 should be generated
     pub fn to_path_segment(
         &self,
         topo: &ScionTopology,
         timestamp: DateTime<Utc>,
         segment_id: u16,
         hop_entry_expiry: u8,
+        skip_tail: bool,
     ) -> anyhow::Result<PathSegment> {
         let mut path_segment = PathSegment {
             info: scion_proto::path::Info::new(timestamp, segment_id),
@@ -84,19 +89,18 @@ impl LinkSegment {
         let mut accumulator = segment_id; // Beta for MAC chaining
 
         // Iterate through all hop pairs in construction direction
-        for hop in self.iter_hops() {
+        for hop in self.iter_hops(skip_tail) {
             let hop_as = topo
                 .as_map
                 .get(&hop.local_ias)
                 .with_context(|| format!("error getting AS {} from topology", hop.local_ias))?;
 
-            let (_isd_as, _is_core, forwarding_key, as_key) = match hop_as {
+            let (_isd_as, _is_core, forwarding_key) = match hop_as {
                 ScionAs::Simulated {
                     isd_as,
                     core,
                     forwarding_key,
-                    crypto_identity,
-                } => (*isd_as, *core, forwarding_key, &crypto_identity.key),
+                } => (*isd_as, *core, forwarding_key),
                 ScionAs::External { .. } => {
                     bail!(
                         "External AS {} was part of LinkSegments, but all ASes in the segment must be simulated",
@@ -104,6 +108,16 @@ impl LinkSegment {
                     )
                 }
             };
+
+            let as_key_pair = topo
+                .trust_store
+                .as_key_pair(&hop.local_ias)
+                .with_context(|| {
+                    format!(
+                        "AS {} is missing an identity in the trust store",
+                        hop.local_ias
+                    )
+                })?;
 
             let epoch_s = timestamp
                 .timestamp()
@@ -129,11 +143,34 @@ impl LinkSegment {
             );
 
             let ecdsa_key =
-                ecdsa::SigningKey::<p256::NistP256>::from_pkcs8_der(as_key.secret_der())
+                ecdsa::SigningKey::<p256::NistP256>::from_pkcs8_der(as_key_pair.key.secret_der())
                     .context("AS key is not a valid PKCS8 DER ECDSA P256 key")?;
 
+            let key_id = as_key_pair
+                .cert
+                .subject_key_id()
+                .context("AS certificate does not contain a Subject Key Identifier")?;
+
+            let trc = topo
+                .trust_store
+                .trc(&hop_as.isd_as().isd())
+                .with_context(|| {
+                    format!(
+                        "Failed to get TRC for ISD {} from TRC store",
+                        hop_as.isd_as().isd()
+                    )
+                })?;
+
+            let key_id = VerificationKeyId {
+                isd_as: hop_as.isd_as().to_u64(),
+                subject_key_id: key_id.clone(),
+                trc_base: der_int_to_u64(&trc.raw_trc_payload().id.base_number)?,
+                trc_serial: der_int_to_u64(&trc.raw_trc_payload().id.serial_number)?,
+            };
+
             // Sign the AS entry
-            entry.signed = entry.signature(&ecdsa_key, None, timestamp.into(), &path_segment)?;
+            entry.signed =
+                entry.signature(&ecdsa_key, Some(key_id), timestamp.into(), &path_segment)?;
 
             // Update accumulator with the MAC of the new hop
             accumulator = mac_chaining_step(accumulator, entry.hop_entry.hop_field.mac);
@@ -256,6 +293,8 @@ pub struct Hop {
 pub struct HopIter<'links> {
     last_ingress_link: Option<&'links DirectedScionLink>,
     link_iter: vec_deque::Iter<'links, DirectedScionLink>,
+    // If set, the iterator will skip the last hop
+    skip_tail: bool,
 }
 
 impl Iterator for HopIter<'_> {
@@ -284,7 +323,7 @@ impl Iterator for HopIter<'_> {
                     next_ias: egr.to.isd_as,
                 }
             }
-            (Some(ing), None) => {
+            (Some(ing), None) if !self.skip_tail => {
                 // Last hop is ingress only
                 Hop {
                     ingress_if: ing.to.if_id,
@@ -292,6 +331,10 @@ impl Iterator for HopIter<'_> {
                     egress_if: 0,
                     next_ias: IsdAsn(0),
                 }
+            }
+            (Some(_), None) => {
+                // No more hops, and we are skipping the tail
+                return None;
             }
         };
 
@@ -330,7 +373,7 @@ mod tests {
                     link_type: ScionLinkType::Core,
                 }]),
             };
-            let mut iter = link_segment.iter_hops();
+            let mut iter = link_segment.iter_hops(false);
             assert_eq!(
                 iter.next(),
                 Some(Hop {
@@ -389,7 +432,7 @@ mod tests {
                     },
                 ]),
             };
-            let mut iter = link_segment.iter_hops();
+            let mut iter = link_segment.iter_hops(false);
             assert_eq!(
                 iter.next(),
                 Some(Hop {
@@ -522,7 +565,7 @@ mod tests {
             let timestamp = Utc::now();
             let segment_id = 42;
             let path_segment = segment
-                .to_path_segment(&topo.topo, timestamp, segment_id, 1)
+                .to_path_segment(&topo.topo, timestamp, segment_id, 1, false)
                 .expect("Failed to create PathSegment");
 
             validate_hop_macs(&path_segment, &topo.topo);
@@ -538,7 +581,7 @@ mod tests {
             let timestamp = Utc::now();
             let segment_id = 120;
             let path_segment = segment
-                .to_path_segment(&topo.topo, timestamp, segment_id, 1)
+                .to_path_segment(&topo.topo, timestamp, segment_id, 1, false)
                 .expect("Failed to create PathSegment");
 
             assert_eq!(path_segment.info.timestamp, timestamp);

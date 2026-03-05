@@ -155,19 +155,25 @@ impl SnapListSegmentsOutput<'_> {
         let up = self
             .up
             .into_iter()
-            .map(|segment| segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry))
+            .map(|segment| {
+                segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry, false)
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         let core = self
             .core
             .into_iter()
-            .map(|segment| segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry))
+            .map(|segment| {
+                segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry, false)
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         let down = self
             .down
             .into_iter()
-            .map(|segment| segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry))
+            .map(|segment| {
+                segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry, false)
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         Ok(SnapListPathSegments {

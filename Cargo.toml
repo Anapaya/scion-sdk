@@ -41,6 +41,7 @@ scion-sdk-observability = { path = "libs/observability", version = "0.4.0" }
 scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.4.0" }
 scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.4.0" }
 scion-sdk-scion-connect-rpc = { path = "libs/scion-connect-rpc", version = "0.4.0" }
+scion-sdk-trc = { path = "libs/trc", version = "0.4.0" }
 scion-sdk-token-validator = { path = "libs/token-validator", version = "0.4.0" }
 scion-sdk-utils = { path = "libs/utils", version = "0.4.0" }
 

@@ -2898,16 +2898,19 @@ dependencies = [
  "scion-proto",
  "scion-protobuf",
  "scion-sdk-observability",
+ "scion-sdk-quic-scion",
+ "scion-sdk-scion-connect-rpc",
  "scion-sdk-token-validator",
+ "scion-sdk-trc",
  "scion-sdk-utils",
  "sciparse",
  "serde",
  "serde_json",
  "serde_with",
- "sha2",
  "snap-control",
  "snap-dataplane",
  "snap-tokens",
+ "tempfile",
  "test-log",
  "thiserror 2.0.18",
  "tokio",
@@ -2920,6 +2923,7 @@ dependencies = [
  "utoipa-redoc",
  "uuid",
  "x25519-dalek",
+ "x509-cert",
 ]
 
 [[package]]
@@ -3765,6 +3769,7 @@ name = "scion-proto"
 version = "0.4.0"
 dependencies = [
  "aes",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "cmac",

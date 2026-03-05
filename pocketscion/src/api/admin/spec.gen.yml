@@ -138,6 +138,47 @@ components:
         token_exchanger:
           $ref: '#/components/schemas/TokenExchangerStateDto'
           description: The token exchange state.
+    CertifiedKeyPair:
+      type: object
+      description: |-
+        Struct containing a certificate and private key for an AS, used for both AS certificates and
+        CA certificates
+      required:
+      - key
+      - cert
+      properties:
+        cert:
+          $ref: '#/components/schemas/StoreCertificateDer'
+          description: Certificate
+        key:
+          $ref: '#/components/schemas/StoreKeyDer'
+          description: Private Key
+    ControlServiceState:
+      type: object
+      description: Serializable PocketScion State for the control service
+      required:
+      - beaconing_interfaces
+      properties:
+        beaconing_interfaces:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/InterfaceBeaconState'
+          propertyNames:
+            type: object
+            description: Globally unique identifier for a SCION interface.
+            required:
+            - isd_as
+            - if_id
+            properties:
+              if_id:
+                type: integer
+                format: int32
+                description: Interface ID within the AS.
+                minimum: 0
+              isd_as:
+                $ref: '#/components/schemas/IsdAsn'
+                description: ISD-AS number of the AS the interface belongs to.
+            example: 1-1#0
     EndhostApiDiscoveryStateDto:
       description: Serialized state for EndhostApiDiscoveryState
       default: null
@@ -215,6 +256,10 @@ components:
       required:
       - interfaces
       properties:
+        beacon_interval:
+          type:
+          - string
+          - 'null'
         interfaces:
           type: object
           additionalProperties:
@@ -232,6 +277,46 @@ components:
         public_key:
           type: string
           description: The public key (PEM format) used to verify ID tokens.
+    InterfaceBeaconState:
+      type: object
+      description: The beaconing state for a specific interface
+      required:
+      - interface
+      - is_core
+      - hop_expiry_units
+      - generate_forward_beacons
+      - beacon_interval
+      - beacon_retry_interval
+      - next_send_time
+      properties:
+        beacon_interval:
+          type: string
+          description: The interval at which beacons should be sent on this interface
+        beacon_retry_interval:
+          type: string
+          description: The interval to wait before retrying beacon sending after a failure
+        generate_forward_beacons:
+          type: boolean
+          description: |-
+            If beacons which would pass through this interface's AS should be generated and sent on
+            this interface
+        hop_expiry_units:
+          type: integer
+          format: int32
+          description: |-
+            The number of hop expiry units to set for generated beacons, which determines the
+            validity
+          minimum: 0
+        interface:
+          $ref: '#/components/schemas/ScionGlobalInterfaceId'
+          description: Beacon egress interface
+        is_core:
+          type: boolean
+          description: Whether the AS is a core AS, which determines the beacon generation logic
+        next_send_time:
+          type: string
+          format: date-time
+          description: The next scheduled time to send beacons on this interface
     IoAuthServerConfigDto:
       type: object
       description: The I/O configuration of the Auth server.
@@ -344,6 +429,16 @@ components:
         data_plane:
           $ref: '#/components/schemas/IoDataPlaneConfigDto'
           description: The list of data plane I/O configurations.
+    Isd:
+      type: integer
+      format: int32
+      description: |-
+        A 16-bit identifier of a SCION Isolation Domain.
+
+        See [this table][anapaya-assignments] for current ISD network assignments.
+
+        [anapaya-assignments]: https://docs.anapaya.net/en/latest/resources/isd-as-assignments/
+      minimum: 0
     IsdAsn:
       type: string
       description: |-
@@ -362,6 +457,86 @@ components:
       examples:
       - 1-ff00:0:110
       pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
+    IsdCa:
+      type: object
+      description: |-
+        CA certificate for an ISD-AS, containing the certificate and private key for the CA, as well as
+        the root certificate for the ISD
+      required:
+      - isd_as
+      - root
+      - intermediary
+      properties:
+        intermediary:
+          $ref: '#/components/schemas/CertifiedKeyPair'
+          description: The intermediary identity for this CA
+        isd_as:
+          $ref: '#/components/schemas/IsdAsn'
+          description: The ISD-AS for this CA
+        root:
+          $ref: '#/components/schemas/CertifiedKeyPair'
+          description: The root identity for this CA
+    IsdTrustStore:
+      type: object
+      description: Isd specific trust store, containing the TRC and CA certificates for the ISD
+      required:
+      - isd
+      - trc
+      - ca_certs
+      - as_certs
+      properties:
+        as_certs:
+          type: object
+          description: The AS certificates for this ISD, keyed by ISD-AS
+          additionalProperties:
+            $ref: '#/components/schemas/CertifiedKeyPair'
+          propertyNames:
+            type: string
+            description: |-
+              The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
+
+              # Examples
+
+              ```
+              # use scion_proto::address::IsdAsn;
+              #
+              # fn main() -> Result<(), Box<dyn std::error::Error>> {
+              assert_eq!(IsdAsn(0x1_ff00_0000_0110), "1-ff00:0:110".parse()?);
+              # Ok(())
+              # }
+              ```
+            examples:
+            - 1-ff00:0:110
+            pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
+        ca_certs:
+          type: object
+          description: The CA certificates for this ISD, keyed by ISD-AS
+          additionalProperties:
+            $ref: '#/components/schemas/IsdCa'
+          propertyNames:
+            type: string
+            description: |-
+              The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
+
+              # Examples
+
+              ```
+              # use scion_proto::address::IsdAsn;
+              #
+              # fn main() -> Result<(), Box<dyn std::error::Error>> {
+              assert_eq!(IsdAsn(0x1_ff00_0000_0110), "1-ff00:0:110".parse()?);
+              # Ok(())
+              # }
+              ```
+            examples:
+            - 1-ff00:0:110
+            pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
+        isd:
+          $ref: '#/components/schemas/Isd'
+          description: The ISD for this trust store
+        trc:
+          $ref: '#/components/schemas/StoreTrc'
+          description: The TRC of this ISD
     ReadyState:
       type: string
       description: PocketSCION ready state.
@@ -437,12 +612,8 @@ components:
         - isd_asn
         - is_core_as
         - forwarding_key
-        - crypto_identity
         - type
         properties:
-          crypto_identity:
-            $ref: '#/components/schemas/ScionAsIdentityDto'
-            description: Signing key of the AS
           forwarding_key:
             type: array
             items:
@@ -480,31 +651,27 @@ components:
             enum:
             - external
       description: Human readable Pocket SCION AS
-    ScionAsIdentityDto:
+    ScionGlobalInterfaceId:
       type: object
-      description: Cryptographic identity of a simulated AS
+      description: Globally unique identifier for a SCION interface.
       required:
-      - key
-      - certificate
+      - isd_as
+      - if_id
       properties:
-        certificate:
-          type: array
-          items:
-            type: integer
-            format: int32
-            minimum: 0
-          description: DER encoded certificate for the AS serialized as bas64
-        key:
-          type: array
-          items:
-            type: integer
-            format: int32
-            minimum: 0
-          description: Signing key of the AS, encoded as base64
+        if_id:
+          type: integer
+          format: int32
+          description: Interface ID within the AS.
+          minimum: 0
+        isd_as:
+          $ref: '#/components/schemas/IsdAsn'
+          description: ISD-AS number of the AS the interface belongs to.
+      example: 1-1#0
     ScionTopologyDto:
       type: object
       description: Human readable ScionTopology
       required:
+      - trust_store
       - as_list
       - links
       properties:
@@ -516,6 +683,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/pocketscion::network::scion::topology::dto::ScionLinkDto'
+        trust_store:
+          $ref: '#/components/schemas/TrustStore'
     Snap:
       type: object
       description: SNAP in pocketSCION.
@@ -558,6 +727,14 @@ components:
         state:
           $ref: '#/components/schemas/ReadyState'
           description: The current ready state of pocketSCION.
+    StoreCertificateDer:
+      type: string
+      description: Wrapper around CertificateDer
+    StoreKeyDer:
+      type: string
+      description: Wrapper around PrivateKeyDer
+    StoreTrc:
+      type: string
     SystemStateDto:
       type: object
       description: The pocket SCION system state.
@@ -568,10 +745,35 @@ components:
       - endhost_apis
       - endhost_api_discovery_api
       - external_ases
+      - control_service_states
+      - trust_store
       properties:
         auth_server_state:
           $ref: '#/components/schemas/AuthServerStateDto'
           description: Test authentication server.
+        control_service_states:
+          type: object
+          description: The state of the control service for each ISD-AS
+          additionalProperties:
+            $ref: '#/components/schemas/ControlServiceState'
+          propertyNames:
+            type: string
+            description: |-
+              The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
+
+              # Examples
+
+              ```
+              # use scion_proto::address::IsdAsn;
+              #
+              # fn main() -> Result<(), Box<dyn std::error::Error>> {
+              assert_eq!(IsdAsn(0x1_ff00_0000_0110), "1-ff00:0:110".parse()?);
+              # Ok(())
+              # }
+              ```
+            examples:
+            - 1-ff00:0:110
+            pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
         endhost_api_discovery_api:
           type: object
           description: Endhost API discovery state
@@ -647,6 +849,9 @@ components:
         topology:
           $ref: '#/components/schemas/ScionTopologyDto'
           description: Scion Topology used for routing
+        trust_store:
+          $ref: '#/components/schemas/TrustStore'
+          description: Trust store containing the TRCs and AS certificates for each ISD-AS.
     TokenExchangerConfigDto:
       type: object
       description: Token exchanger configuration.
@@ -681,6 +886,27 @@ components:
             type: string
           propertyNames:
             type: string
+    TrustStore:
+      type: object
+      description: Pocket SCION trust store
+      required:
+      - isds
+      properties:
+        isds:
+          type: object
+          description: The ISD trust stores, keyed by ISD
+          additionalProperties:
+            $ref: '#/components/schemas/IsdTrustStore'
+          propertyNames:
+            type: integer
+            format: int32
+            description: |-
+              A 16-bit identifier of a SCION Isolation Domain.
+
+              See [this table][anapaya-assignments] for current ISD network assignments.
+
+              [anapaya-assignments]: https://docs.anapaya.net/en/latest/resources/isd-as-assignments/
+            minimum: 0
     pocketscion::network::scion::topology::dto::ScionLinkDto:
       type: string
       examples:

@@ -95,6 +95,61 @@ impl NetworkReceiverRegistry {
         Ok(())
     }
 
+    /// Removes the receiver for the given ISD-AS and IP range, if it exists.
+    ///
+    /// Otherwise, returns an error.
+    pub fn remove_receiver(&mut self, ias: IsdAsn, ipnet: IpNet) -> anyhow::Result<()> {
+        let recvs = self.receivers.get_mut(&ias).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No receivers found for ISD-AS {}, cannot remove receiver",
+                ias
+            )
+        })?;
+
+        let LocalNetworkReceivers::ByAddressRanges { receivers } = recvs else {
+            bail!(
+                "Receiver for ISD-AS {} is a wildcard receiver, cannot remove specific IP range",
+                ias
+            );
+        };
+
+        if let Some(pos) = receivers.iter().position(|(net, _)| *net == ipnet) {
+            receivers.remove(pos);
+            Ok(())
+        } else {
+            bail!(
+                "No receiver found for ISD-AS {} with IP range {}, cannot remove",
+                ias,
+                ipnet
+            );
+        }
+    }
+
+    /// Removes the wildcard receiver for the given ISD-AS, if it exists.
+    ///
+    /// Otherwise, returns an error.
+    pub fn remove_wildcard_receiver(&mut self, ias: IsdAsn) -> anyhow::Result<()> {
+        // check if wildcard receiver exists for the given ISD-AS
+        match self.receivers.get(&ias) {
+            Some(LocalNetworkReceivers::WildcardReceiver { .. }) => {
+                self.receivers.remove(&ias);
+                Ok(())
+            }
+            Some(LocalNetworkReceivers::ByAddressRanges { .. }) => {
+                bail!(
+                    "Receiver for ISD-AS {} is not a wildcard receiver, cannot remove",
+                    ias
+                );
+            }
+            None => {
+                bail!(
+                    "No receivers found for ISD-AS {}, cannot remove wildcard receiver",
+                    ias
+                );
+            }
+        }
+    }
+
     /// Returns the receiver for the given address, if one exists.
     pub fn by_addr(&self, ia: IsdAsn, dst_ip: IpAddr) -> Option<&Arc<dyn Receiver>> {
         self.receivers.get(&ia).and_then(|registration| {

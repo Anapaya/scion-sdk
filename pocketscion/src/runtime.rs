@@ -53,6 +53,7 @@ use crate::{
     },
     state::{
         RouterId, SharedPocketScionState, SystemState,
+        control_service::ControlService,
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryService},
         endhost_segment_lister::StateEndhostSegmentLister,
         external_as::ExternalAsService,
@@ -307,6 +308,23 @@ impl PocketScionRuntimeBuilder {
                         "Failed to register external AS handler for AS {isd_as}: {e:?}"
                     ))
                 })?;
+        }
+
+        // Control Services
+        for (isd_as, _) in pstate.get_control_services() {
+            let pstate = pstate.clone();
+            task_set.join_set.spawn(async move {
+                match ControlService::start(isd_as, pstate) {
+                    Ok(_) => {
+                        tracing::info!(isd_as = %isd_as, "Control Service started");
+                        Ok(())
+                    },
+                    Err(e) => {
+                        tracing::error!(isd_as = %isd_as, error = ?e, "Failed to start Control Service");
+                        Err(io::Error::other(format!("Failed to start Control Service for AS {isd_as}: {e:?}")))
+                    }
+                }
+            });
         }
 
         // Start router sockets

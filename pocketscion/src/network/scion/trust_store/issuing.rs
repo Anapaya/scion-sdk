@@ -63,7 +63,7 @@ pub fn create_ca_root_cert(
 
 /// Creates a CA certificate for the given ISD-AS, signed by the given issuer.
 /// The certificate is signed with the given key.
-pub fn create_core_ca_cert<S: rcgen::SigningKey>(
+pub fn create_ca_cert<S: rcgen::SigningKey>(
     key: &PrivateKeyDer,
     issuer: &Issuer<S>,
     isd_asn: IsdAsn,

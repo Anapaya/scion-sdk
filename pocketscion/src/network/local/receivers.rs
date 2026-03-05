@@ -20,7 +20,7 @@ pub mod router_socket;
 
 /// A simulated network receiver that can receive packets from the network simulation.
 ///
-/// NOTE: Receivers **MUST NOT** try to lock the `SharedPocketScionState` in their
+/// NOTE: Receivers **MUST NOT** try to aquire a write lock on the `SharedPocketScionState` in their
 /// `receive_packet` method, as the network simulation is holding this lock during dispatch.
 pub trait Receiver: Sync + Send {
     /// Callback called by the network simulation to deliver a packet to this receiver.

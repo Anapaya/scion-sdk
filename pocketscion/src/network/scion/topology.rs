@@ -21,22 +21,19 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use ecdsa::SigningKey;
-use p256::NistP256;
-use rcgen::{CertificateParams, Issuer, KeyPair};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use scion_proto::address::{Isd, IsdAsn};
-use sha2::Digest;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-use crate::network::scion::topology::certs::create_as_cert;
+use crate::network::scion::trust_store::TrustStore;
 
-pub mod certs;
 pub mod dto;
 pub mod visitor;
 
 /// General representation of a SCION Topology.
 #[derive(Eq, PartialEq, Debug, Clone, Default)]
 pub struct ScionTopology {
+    pub(crate) trust_store: TrustStore,
     pub(crate) as_map: BTreeMap<IsdAsn, ScionAs>,
     pub(crate) link_map: BTreeMap<ScionLinkId, ScionLink>,
 }
@@ -45,15 +42,51 @@ impl ScionTopology {
     /// Creates a new, empty SCION topology.
     pub fn new() -> Self {
         Self {
+            trust_store: TrustStore::new(),
             as_map: Default::default(),
             link_map: Default::default(),
         }
     }
 
+    /// Sets the trust store to use for this topology.
+    ///
+    /// The trust store must contain certificates for all ASes in the topology, or this will return
+    /// an error.
+    ///
+    /// If setting the trust store before adding ASes, the trust store will be used to issue
+    /// certificates for ASes as they are added.
+    pub fn set_trust_store(&mut self, trust_store: TrustStore) -> anyhow::Result<&mut Self> {
+        // Apply certificates from trust store to ASes in the topology, if they exist. If an AS does
+        // not have a certificate in the trust store, this will fail
+        for sas in self.as_map.values_mut() {
+            let sas @ ScionAs::Simulated { .. } = sas else {
+                continue;
+            };
+
+            // Check that AS identity exists
+            trust_store.as_key_pair(&sas.isd_as()).with_context(|| {
+                format!(
+                    "AS '{}' does not have a certificate in the trust store",
+                    sas.isd_as()
+                )
+            })?;
+        }
+
+        self.trust_store = trust_store;
+
+        Ok(self)
+    }
+
     /// Add a new AS to the topology.
+    ///
+    /// If a Trust Store is set, this will issue a certificate for the AS and add it to the trust
+    /// store, or use the existing certificate if it already exists in the trust store.
     ///
     /// Validates that the AS does not already exist.
     pub fn add_as(&mut self, scion_as: ScionAs) -> anyhow::Result<&mut Self> {
+        // Ensure AS has identity in the trust store
+        let _identity = self.trust_store.get_or_issue_as_key_pair(scion_as.isd_as());
+
         match self.as_map.entry(scion_as.isd_as()) {
             Entry::Occupied(occupied_entry) => {
                 bail!("AS '{}' already exists", occupied_entry.key())
@@ -322,8 +355,6 @@ pub enum ScionAs {
         core: bool,
         /// Forwarding key for the AS - if not defined, falls back to all 0
         forwarding_key: [u8; 16],
-        /// Certificate and Key for the AS
-        crypto_identity: AsIdentity,
     },
     /// Representation of an external AS, external ASes are not simulated
     External {
@@ -334,31 +365,6 @@ pub enum ScionAs {
     },
 }
 
-/// Cryptographic identity of a SCION AS, consisting of a private key and a certificate.
-#[derive(Eq, PartialEq, Debug)]
-pub struct AsIdentity {
-    /// AS Private Key
-    pub key: PrivateKeyDer<'static>,
-    /// AS Certificate
-    pub certificate: CertificateDer<'static>,
-}
-
-impl Clone for AsIdentity {
-    fn clone(&self) -> Self {
-        Self {
-            key: self.key.clone_key(),
-            certificate: self.certificate.clone(),
-        }
-    }
-}
-
-impl Hash for AsIdentity {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.key.secret_der().hash(state);
-        self.certificate.as_ref().hash(state);
-    }
-}
-
 impl ScionAs {
     /// Creates a new core SCION AS.
     pub fn new_core(isd_as: IsdAsn) -> Self {
@@ -366,7 +372,6 @@ impl ScionAs {
             isd_as,
             core: true,
             forwarding_key: Self::default_forwarding_key(isd_as),
-            crypto_identity: Self::default_crypto_identity(isd_as),
         }
     }
 
@@ -376,7 +381,6 @@ impl ScionAs {
             isd_as,
             core: false,
             forwarding_key: Self::default_forwarding_key(isd_as),
-            crypto_identity: Self::default_crypto_identity(isd_as),
         }
     }
 
@@ -406,69 +410,11 @@ impl ScionAs {
         self
     }
 
-    /// Sets the Key and Certificate for the AS.
-    ///
-    /// This function does not validate that the provided certificate and key are valid or match
-    /// each other.
-    ///
-    /// If this AS is an external AS, this is a no-op.
-    pub fn with_crypo_identity(
-        mut self,
-        key: PrivateKeyDer<'static>,
-        certificate: CertificateDer<'static>,
-    ) -> Self {
-        match &mut self {
-            ScionAs::Simulated {
-                crypto_identity: ci,
-                ..
-            } => *ci = AsIdentity { key, certificate },
-            ScionAs::External { .. } => {}
-        }
-        self
-    }
-
     /// Use the ISD-AS to create the forwarding key.
     fn default_forwarding_key(isd_as: IsdAsn) -> [u8; 16] {
         let mut forwarding_key = [0; 16];
         forwarding_key[..8].copy_from_slice(&isd_as.0.to_be_bytes());
         forwarding_key
-    }
-
-    /// Generates a mock AS certificate for the AS.
-    fn default_crypto_identity(isd_as: IsdAsn) -> AsIdentity {
-        use p256::pkcs8::EncodePrivateKey;
-        // This function is a bit of a mess since we work with three different libs
-
-        // Generate a ecdsa signing key
-        let hash = sha2::Sha256::digest(isd_as.0.to_be_bytes());
-        let key =
-            SigningKey::<NistP256>::from_bytes(&hash).expect("Hash should be a valid secret key");
-        let key = PrivatePkcs8KeyDer::from(
-            key.to_pkcs8_der()
-                .expect("Should not fail with static input")
-                .as_bytes()
-                .to_vec(),
-        );
-        // Canonicalize the key
-        let key: PrivateKeyDer<'static> = key.into();
-
-        // Issue self-signed certificate for the AS with the key
-        let mut issuer_params =
-            CertificateParams::new(vec![]).expect("Should not fail with static input");
-
-        issuer_params
-            .distinguished_name
-            .push(rcgen::DnType::CommonName, "Mock Issuer".to_string());
-
-        let rcgen_key_pair: KeyPair = (&key)
-            .try_into()
-            .expect("Should not fail with static input");
-        let issuer = Issuer::new(issuer_params, &rcgen_key_pair);
-
-        let certificate =
-            create_as_cert(&key, &issuer, isd_as).expect("Should not fail with static input");
-
-        AsIdentity { key, certificate }
     }
 }
 
@@ -497,28 +443,6 @@ impl ScionAs {
         }
     }
 
-    /// Returns the ecdsa signing key for the AS. For simulated ASes, this is always defined.
-    pub fn as_key(&self) -> Option<&PrivateKeyDer<'static>> {
-        match self {
-            ScionAs::Simulated {
-                crypto_identity: ident,
-                ..
-            } => Some(&ident.key),
-            ScionAs::External { .. } => None,
-        }
-    }
-
-    /// Returns the certificate for the AS. For simulated ASes, this is always defined.
-    pub fn as_certificate(&self) -> Option<&CertificateDer<'static>> {
-        match self {
-            ScionAs::Simulated {
-                crypto_identity: cert,
-                ..
-            } => Some(&cert.certificate),
-            ScionAs::External { .. } => None,
-        }
-    }
-
     /// Returns true if the AS is an external AS, false otherwise.
     pub fn is_external(&self) -> bool {
         matches!(self, ScionAs::External { .. })
@@ -531,42 +455,33 @@ impl From<IsdAsn> for ScionAs {
     }
 }
 
-/// A ECDSA NistP256 signing key
-#[derive(Eq, Copy, Hash, PartialEq, Debug, Clone)]
-pub struct AsSigningKey([u8; 32]);
-impl AsSigningKey {
-    /// Creates a new `AsSigningKey` from a `SigningKey<NistP256>`.
-    pub fn new(signing_key: SigningKey<NistP256>) -> Self {
-        Self(signing_key.to_bytes().into())
-    }
+/// Globally unique identifier for a SCION interface.
+#[derive(Hash, Copy, Eq, PartialEq, Debug, Clone, PartialOrd, Ord, ToSchema)]
+#[schema(example = "1-1#0")]
+pub struct ScionGlobalInterfaceId {
+    /// ISD-AS number of the AS the interface belongs to.
+    pub isd_as: IsdAsn,
+    /// Interface ID within the AS.
+    pub if_id: u16,
+}
 
-    /// Attempts to create a new `AsSigningKey` from the given bytes. Validates that the bytes are a
-    /// valid signing key for NistP256.
-    pub fn from_bytes(bytes: [u8; 32]) -> anyhow::Result<Self> {
-        SigningKey::<NistP256>::from_slice(&bytes)
-            .context("Provided bytes are not a valid signing key for NistP256")?;
-
-        Ok(Self(bytes))
-    }
-
-    /// Returns the `SigningKey<NistP256>` representation of this `AsSigningKey`.
-    pub fn key(&self) -> SigningKey<NistP256> {
-        // SAFETY: We ensure that the inner bytes are always a valid signing key by construction.
-        SigningKey::from_slice(&self.0).expect("Type should not allow invalid signing keys")
-    }
-
-    /// Returns the raw bytes of the signing key.
-    pub fn bytes(&self) -> [u8; 32] {
-        self.0
+impl Serialize for ScionGlobalInterfaceId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&format!("{}#{}", self.isd_as, self.if_id))
     }
 }
 
-/// Globally unique identifier for a SCION interface.
-#[derive(Hash, Copy, Eq, PartialEq, Debug, Clone, PartialOrd, Ord)]
-pub struct ScionGlobalInterfaceId {
-    pub(crate) isd_as: IsdAsn,
-    /// Interface ID within the AS.
-    pub(crate) if_id: u16,
+impl<'de> Deserialize<'de> for ScionGlobalInterfaceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        ScionGlobalInterfaceId::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Display for ScionGlobalInterfaceId {

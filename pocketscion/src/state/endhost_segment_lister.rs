@@ -71,7 +71,7 @@ impl SegmentsDiscovery for StateEndhostSegmentLister {
 
         let state_guard = self.app_state.system_state.read().unwrap();
 
-        let Some(ref segments) = state_guard.topology_segments else {
+        let Some(ref segments) = state_guard.segment_registry else {
             tracing::error!("Cannot list segments: topology store is missing");
             return Err(SegmentsError::InternalError(
                 "missing topology store".to_string(),

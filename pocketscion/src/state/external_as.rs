@@ -14,6 +14,7 @@
 
 //! External AS allows clients to discover Endhost APIs available to them
 
+use core::time;
 use std::{
     collections::{BTreeMap, HashMap},
     io,
@@ -23,12 +24,10 @@ use std::{
 
 use anyhow::Context;
 use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
-use serde::{Deserialize, Serialize};
 use tokio::{
     net::UdpSocket,
     task::{self},
 };
-use utoipa::ToSchema;
 
 use crate::{
     io_config::SharedPocketScionIoConfig,
@@ -37,8 +36,10 @@ use crate::{
         scion::{routing::ScionNetworkTime, topology::ScionGlobalInterfaceId},
     },
     state::{SharedPocketScionState, external_as::conn::ExternalAsConnection},
-    util::{BtreeMapError, map_btree, map_btree_fallible},
 };
+
+mod conn;
+pub mod dto;
 
 /// Represents multiple connections to an External AS in Pocket SCION
 ///
@@ -50,8 +51,11 @@ pub struct ExternalAsService {
     /// IsdAsn of the External AS.
     #[expect(unused)]
     isd_as: IsdAsn,
+    /// External AS is a core AS
+    #[expect(unused)]
+    is_core: bool,
     /// Map of as interfaces which connect to the External AS, keyed by IsdAsn and interface ID
-    as_interfaces: HashMap<IsdAsn, HashMap<u16, ExternalAsInterface>>,
+    as_interfaces: HashMap<IsdAsn, HashMap<u16, ExternalAsLink>>,
     #[expect(unused)]
     app_state: SharedPocketScionState,
     #[expect(unused)]
@@ -77,15 +81,32 @@ impl ExternalAsService {
         app_state: SharedPocketScionState,
         io_config: SharedPocketScionIoConfig,
     ) -> anyhow::Result<Arc<ExternalAsService>> {
-        let external_as = app_state
+        let as_state = app_state
             .external_as(ext_isd_as)
             .context("No External AS API configured with the given ID")?;
 
         // Map of (external_if, internal_if)
         let mut link_map = HashMap::new();
         // Validate that the topology and External AS state are consistent with each other.
-        {
+        let topo_as = {
             let state_guard = app_state.system_state.read().unwrap();
+            let topo = state_guard.topology.as_ref().context(
+                "To start External AS Service, a topology must be present in the system state",
+            )?;
+
+            let topo_as = topo
+                .as_map
+                .get(&ext_isd_as)
+                .context(
+                    "To start External AS Service, the topology must contain an external AS with the given ISD-ASN",
+                )?;
+
+            if !topo_as.is_external() {
+                anyhow::bail!(
+                    "AS with the given ISD-ASN is not marked as external in the topology, cannot start External AS Service"
+                );
+            }
+
             let link_iter = state_guard
                 .topology
                 .as_ref()
@@ -102,7 +123,7 @@ impl ExternalAsService {
                 let intern = link.to;
 
                 // Check that the interface is present in the External AS state
-                let Some(_) = external_as.interfaces.get(&ext.if_id) else {
+                let Some(_) = as_state.interfaces.get(&ext.if_id) else {
                     anyhow::bail!(
                         "Interface {} for External AS {} is missing from External AS state",
                         ext.if_id,
@@ -112,7 +133,9 @@ impl ExternalAsService {
 
                 link_map.insert(ext.if_id, (ext, intern));
             }
-        }
+
+            topo_as.clone()
+        };
 
         let mut interfaces = HashMap::new();
         let mut task_set = task::JoinSet::new();
@@ -120,7 +143,7 @@ impl ExternalAsService {
         // Note: These copy the system state, so they will not react to runtime changes in the
         // system state.
         {
-            for (ext_iface_id, iface_state) in external_as.interfaces.iter() {
+            for (ext_iface_id, iface_state) in as_state.interfaces.iter() {
                 let (external_if, internal_if) = *link_map.get(ext_iface_id).context(format!(
                     "Topology is missing link with interface {}#{}",
                     ext_isd_as, ext_iface_id,
@@ -149,7 +172,7 @@ impl ExternalAsService {
                 );
 
                 // Create connection and spawn recv task
-                let iface = ExternalAsInterface {
+                let iface = ExternalAsLink {
                     external_if,
                     internal_if,
                     conn: ExternalAsConnection::new(ext_isd_as, socket, target_addr),
@@ -177,6 +200,7 @@ impl ExternalAsService {
 
         Ok(Arc::new(ExternalAsService {
             isd_as: ext_isd_as,
+            is_core: topo_as.is_core(),
             app_state,
             as_interfaces: interfaces,
             task_set,
@@ -211,7 +235,7 @@ impl ExternalAsHandler for ExternalAsService {
 /// for sending and receiving packets to/from the External AS on that interface and dispatching
 /// received packets to the network simulation.
 #[derive(Clone)]
-struct ExternalAsInterface {
+struct ExternalAsLink {
     /// The External AS interface ID
     external_if: ScionGlobalInterfaceId,
     /// The internal interface ID
@@ -220,10 +244,18 @@ struct ExternalAsInterface {
     state: SharedPocketScionState,
 }
 
-impl ExternalAsInterface {
+impl ExternalAsLink {
     /// Continuously receives packets from the External AS connection and dispatches them to the
     /// network simulation until an error occurs.
     pub async fn recv_loop(self) {
+        tracing::info!(
+            internal_if = %self.internal_if,
+            external_as = %self.external_if,
+            peer_addr = %self.conn.peer_addr(),
+            local_addr = ?self.conn.local_addr(),
+            "External AS interface started recv loop",
+        );
+
         let mut recv_buf = Box::new([0u8; 65535]);
         loop {
             match self.conn.recv(&mut *recv_buf).await {
@@ -302,6 +334,7 @@ impl ExternalAsInterface {
 #[derive(Debug, Clone)]
 pub struct ExternalAsState {
     interfaces: BTreeMap<u16, ExternalAsInterfaceState>,
+    beacon_interval: Option<time::Duration>,
 }
 
 /// Serializable State for an External AS interface stored in ExternalAsState
@@ -314,63 +347,13 @@ pub struct ExternalAsInterfaceState {
     target_addr: SocketAddr,
 }
 
-/// Serialized state for ExternalAsState
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ExternalAsStateDto {
-    interfaces: BTreeMap<u16, ExternalAsInterfaceDto>,
-}
-
-impl From<ExternalAsState> for ExternalAsStateDto {
-    fn from(value: ExternalAsState) -> Self {
-        ExternalAsStateDto {
-            interfaces: map_btree(value.interfaces, |iface_state| iface_state.into()),
-        }
-    }
-}
-
-impl TryFrom<ExternalAsStateDto> for ExternalAsState {
-    type Error = BtreeMapError<u16, std::net::AddrParseError>;
-
-    fn try_from(value: ExternalAsStateDto) -> Result<Self, Self::Error> {
-        Ok(ExternalAsState {
-            interfaces: map_btree_fallible(value.interfaces, |iface_state| iface_state.try_into())?,
-        })
-    }
-}
-
-/// Serialized state for ExternalAsInterfaceState
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ExternalAsInterfaceDto {
-    /// ID of the interface described
-    interface_id: u16,
-    /// Address to where this interface connects, used for sending packets to the External AS and
-    /// validating received packets
-    target_addr: String,
-}
-
-impl From<ExternalAsInterfaceState> for ExternalAsInterfaceDto {
-    fn from(value: ExternalAsInterfaceState) -> Self {
-        ExternalAsInterfaceDto {
-            interface_id: value.interface_id,
-            target_addr: value.target_addr.to_string(),
-        }
-    }
-}
-
-impl TryFrom<ExternalAsInterfaceDto> for ExternalAsInterfaceState {
-    type Error = std::net::AddrParseError;
-
-    fn try_from(value: ExternalAsInterfaceDto) -> Result<Self, Self::Error> {
-        Ok(ExternalAsInterfaceState {
-            interface_id: value.interface_id,
-            target_addr: value.target_addr.parse()?,
-        })
-    }
-}
-
 impl SharedPocketScionState {
     /// Adds a new External AS to the System state with the given IAs
-    pub fn add_external_as(&mut self, isd_asn: IsdAsn) -> anyhow::Result<()> {
+    pub fn add_external_as(
+        &mut self,
+        isd_asn: IsdAsn,
+        beacon_interval: Option<time::Duration>,
+    ) -> anyhow::Result<()> {
         let mut sstate = self.system_state.write().unwrap();
         let is_external = sstate
             .topology
@@ -397,6 +380,7 @@ impl SharedPocketScionState {
             isd_asn,
             ExternalAsState {
                 interfaces: BTreeMap::new(),
+                beacon_interval,
             },
         );
 
@@ -473,107 +457,5 @@ impl SharedPocketScionState {
             .register_external_as(isd_asn, handler);
 
         Ok(())
-    }
-}
-
-mod conn {
-    use std::{io, net::SocketAddr, sync::Arc};
-
-    use scion_proto::{
-        address::IsdAsn,
-        packet::ScionPacketRaw,
-        wire_encoding::{WireDecode, WireEncodeVec},
-    };
-    use tokio::net::UdpSocket;
-
-    /// Actual IO connection to the External AS, responsible for sending and receiving packets
-    /// to/from the peer
-    #[derive(Debug, Clone)]
-    pub struct ExternalAsConnection {
-        isd_as: IsdAsn,
-        /// Socket for sending and receiving packets to/from the peer
-        socket: Arc<UdpSocket>,
-        /// The address of the peer we expect to receive packets from and send packets to
-        ///
-        /// Received packets from other ip addresses will be discarded, port is ignored on recv
-        peer_addr: SocketAddr,
-    }
-
-    impl ExternalAsConnection {
-        pub fn new(
-            isd_as: IsdAsn,
-            socket: UdpSocket,
-            upstream_addr: SocketAddr,
-        ) -> ExternalAsConnection {
-            ExternalAsConnection {
-                isd_as,
-                socket: Arc::new(socket),
-                peer_addr: upstream_addr,
-            }
-        }
-
-        /// Sends a packet to the External AS peer address.
-        #[expect(unused)]
-        pub async fn send(&self, send_msg: ScionPacketRaw) -> io::Result<usize> {
-            let bytes: Vec<u8> = send_msg.encode_to_bytes_vec().concat();
-
-            self.socket.send_to(&bytes, self.peer_addr).await
-        }
-
-        /// Attempts to send a packet to the External AS peer address, returning an error if the
-        /// send buffer is full or if another socket error occurs.
-        pub fn try_send(&self, send_msg: ScionPacketRaw) -> io::Result<usize> {
-            let bytes: Vec<u8> = send_msg.encode_to_bytes_vec().concat();
-
-            self.socket.try_send_to(&bytes, self.peer_addr)
-        }
-
-        fn check_recv(&self, buf: &[u8], recv_addr: SocketAddr) -> io::Result<ScionPacketRaw> {
-            let recv_ip = recv_addr.ip();
-            let peer_ip = self.peer_addr.ip();
-
-            // Message must come from the same IP as the configured upstream address
-            if recv_ip != peer_ip {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "Received packet from unexpected IP address {}, expected {}",
-                        recv_ip, peer_ip
-                    ),
-                ));
-            }
-
-            let packet = ScionPacketRaw::decode(&mut &buf[..])
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-            Ok(packet)
-        }
-
-        /// Receives a packet from the External AS, validating that it comes from the expected peer
-        /// address and returns the decoded packet, otherwise continues to wait for the next packet.
-        pub async fn recv(&self, buf: &mut [u8]) -> io::Result<ScionPacketRaw> {
-            loop {
-                let (size, recv_addr) = self.socket.recv_from(buf).await?;
-                match self.check_recv(&buf[..size], recv_addr) {
-                    Ok(pkt) => return Ok(pkt),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = ?e,
-                            "Received invalid packet from External Interface {}, ignoring packet and continuing to receive",
-                            self.isd_as
-                        );
-                    }
-                }
-            }
-        }
-
-        /// Attempts to receive a packet from the External AS, returning an error if the recv buffer
-        /// is empty, or if another socket error occurs or if the received packet was
-        /// invalid.
-        #[expect(unused)]
-        pub fn try_recv(&self, buf: &mut [u8]) -> io::Result<ScionPacketRaw> {
-            let (size, recv_addr) = self.socket.try_recv_from(buf)?;
-            self.check_recv(&buf[..size], recv_addr)
-        }
     }
 }

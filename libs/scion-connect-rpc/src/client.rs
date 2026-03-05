@@ -24,6 +24,7 @@ use scion_sdk_quic_scion::{
         client::{H3Client, H3ConnectionError},
         request::H3Request,
     },
+    quic::config::QuicConfig,
     socket::GenericScionUdpSocket,
 };
 use thiserror::Error;
@@ -99,6 +100,32 @@ impl CrpcClient {
         authorization_token: Option<String>,
     ) -> Result<Self, H3ConnectionError> {
         let h3_client = H3Client::new(remote, socket, server_name).await?;
+
+        Ok(Self {
+            h3_client,
+            authorization_token,
+        })
+    }
+
+    /// Create a new Connect-RPC client with the given configuration and UDP SCION socket.
+    ///
+    /// # Arguments
+    /// * `remote` - The remote SCION socket address of the server.
+    /// * `socket` - The SCION UDP socket to use for sending/receiving packets
+    /// * `server_name` - Optional server name for TLS SNI (also used as :authority header)
+    /// * `authorization_token` - Optional authorization token for authentication
+    /// * `config` - Custom QUIC configuration for the client
+    ///
+    /// # Returns
+    /// A new client instance that is ready to connect.
+    pub async fn with_quic_config(
+        remote: SocketAddr,
+        socket: Arc<dyn GenericScionUdpSocket>,
+        server_name: Option<String>,
+        authorization_token: Option<String>,
+        config: QuicConfig,
+    ) -> Result<Self, H3ConnectionError> {
+        let h3_client = H3Client::with_config(remote, socket, server_name, config).await?;
 
         Ok(Self {
             h3_client,

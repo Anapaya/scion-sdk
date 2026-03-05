@@ -22,8 +22,7 @@ use super::topo::LinkType;
 use crate::{
     address::IsdAsn,
     path::{
-        ASEntry, HopEntry, NewSegmentError, PathSegment, PeerEntry, SegmentHopField,
-        signed_message::SignedMessage,
+        ASEntry, HopEntry, PathSegment, PeerEntry, SegmentHopField, signed_message::SignedMessage,
     },
     test::topo::Topo,
 };
@@ -59,9 +58,6 @@ pub enum GraphError {
     /// The specified interface ID is not present in the graph.
     #[error("unknown interface id {0}")]
     UnknownIfId(u16),
-    /// Error creating a new segment.
-    #[error(transparent)]
-    NewSegmentError(#[from] NewSegmentError),
     /// Invalid argument provided.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
@@ -314,7 +310,7 @@ impl Graph {
         let now = Utc::now();
         let timestamp = DateTime::from_timestamp(now.timestamp(), 0)
             .expect("current timestamp should be valid");
-        Ok(PathSegment::new(timestamp, rand::random(), as_entries)?)
+        Ok(PathSegment::new(timestamp, rand::random(), as_entries))
     }
 
     /// Generates a mermaid flowchart representation of the graph.

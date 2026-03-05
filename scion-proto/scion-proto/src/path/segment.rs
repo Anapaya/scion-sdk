@@ -27,9 +27,9 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use ecdsa::signature;
+use scion_protobuf::control_plane::v1::VerificationKeyId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use thiserror::Error;
 
 use crate::{
     address::IsdAsn,
@@ -164,28 +164,13 @@ impl std::hash::Hash for SegmentID {
     }
 }
 
-/// New path segment errors.
-#[derive(Debug, Error)]
-pub enum NewSegmentError {
-    /// Empty AS entries.
-    #[error("segment must be created with at least one AS entry")]
-    EmptyASEntries,
-}
-
 impl PathSegment {
     /// Creates a new path segment with the given timestamp and segment ID.
-    pub fn new(
-        timestamp: DateTime<Utc>,
-        segment_id: u16,
-        as_entries: Vec<ASEntry>,
-    ) -> Result<Self, NewSegmentError> {
-        if as_entries.is_empty() {
-            return Err(NewSegmentError::EmptyASEntries);
-        }
-        Ok(Self {
+    pub fn new(timestamp: DateTime<Utc>, segment_id: u16, as_entries: Vec<ASEntry>) -> Self {
+        Self {
             info: Info::new(timestamp, segment_id),
             as_entries,
-        })
+        }
     }
 
     /// Returns a hash of the segment covering all hops, except for peerings.
@@ -409,7 +394,7 @@ impl ASEntry {
     pub fn signature(
         &self,
         key: &p256::ecdsa::SigningKey,
-        key_id: Option<Vec<u8>>,
+        key_id: Option<VerificationKeyId>,
         timestamp: SystemTime,
         path_segment: &PathSegment,
     ) -> Result<SignedMessage, signature::Error> {
@@ -460,14 +445,19 @@ impl ASEntry {
     }
 
     /// Validates the AS entry's signature using the provided path segment.
+    ///
+    /// ## Parameters
+    /// * `key_provider`: A function which takes the slice contained in `header.key_id` and returns
+    ///   the corresponding `p256::ecdsa::VerifyingKey` if available.
+    /// * `path_segment`: The `PathSegment` containing the AS entry. All entries before the AS entry
+    ///   in the path segment must be included, as the signature covers all previous entries.
     pub fn validate_signature(
         &self,
-        key: &p256::ecdsa::VerifyingKey,
-        key_id: Option<Vec<u8>>,
+        key_provider: impl Fn(&[u8]) -> Result<p256::ecdsa::VerifyingKey, ValidateError>,
         path_segment: &PathSegment,
     ) -> Result<(), ValidateError> {
         self.signed
-            .validate(key, key_id, self.associated_data(path_segment))
+            .validate(key_provider, self.associated_data(path_segment))
             .map(|_| ())
     }
 }
@@ -493,18 +483,22 @@ pub struct Info {
     pub timestamp: DateTime<Utc>,
     /// Segment identifier.
     pub segment_id: u16,
-    /// Raw protobuf encoded info data.
+    /// Raw protobuf encoded info used for signature input.
     pub raw: Vec<u8>,
 }
 
 impl Info {
     /// Creates a new Info with the given timestamp and segment ID.
     pub fn new(timestamp: DateTime<Utc>, segment_id: u16) -> Self {
+        use prost::Message;
         Self {
             timestamp,
             segment_id,
-            // TODO: replace this with the protobuf encoded info data.
-            raw: Vec::new(),
+            raw: scion_protobuf::control_plane::v1::SegmentInformation {
+                timestamp: timestamp.timestamp(),
+                segment_id: segment_id as u32,
+            }
+            .encode_to_vec(),
         }
     }
 }
@@ -616,4 +610,147 @@ pub fn exp_time_from_duration(d: Duration) -> Result<u8, ExpTimeError> {
         return Err(ExpTimeError::DurationTooLarge);
     }
     Ok(((d.as_nanos() * 256) / MAX_TTL.as_nanos() - 1) as u8)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::time::SystemTime;
+
+    use base64::prelude::BASE64_STANDARD;
+    use chrono::DateTime;
+    use ecdsa::signature::rand_core::OsRng;
+    use p256::pkcs8::DecodePublicKey;
+    use prost::Message;
+
+    use crate::{
+        address::{Asn, Isd, IsdAsn},
+        path::{ASEntry, HopEntry, PathSegment, SegmentHopField, signed_message::SignedMessage},
+    };
+
+    const PUB_KEY_1_BASE64_DER: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQUUW2ZQaiYHsKgz1ow404XaMK2QSeB622LqyoMbU6NbJaUe9uJCkup5aqLJBMpgopXAWtFoK+hljpeTflwdvag==";
+    const PUB_KEY_2_BASE64_DER: &str = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4ef6rUbpCrI3uzMA14HnbSbZUXil5fI/OR+ztE4QHkh3OEcSrf4GmghWp0f/MLpbhkzwZS41nCYh3Iyo0VWLAw==";
+    const PATH_SEGMENT_BASE64: &str = "CgkIntqgzQYQuQoSlAEKkQEKRQoeCAESCr3ltqGkjVLLRB0aDAie2qDNBhD+wuiKAigJEiMIkIKAgIDgfxCRgoCAgOB/Gg4KDBABGD8iBhERERERESjcCxJIMEYCIQCVJj3K7blapL979ZwlmJQcdFPjz6HaJm2+Of97+Sq2vAIhAP52eTIgXBHjcCoCtdllIzXIE4yLzwxL3XikgQC5gzw8EpkBCpYBCksKHwgBEgpBl2HLMkBdrr1vGgwIntqgzQYQzdvwigIolgESKAiRgoCAgOB/EJKCgICA4H8aEwoOCAoQCxg/IgYiIiIiIiIQuQoo3AsSRzBFAiBC871fskieS/DmKRoPI703gDFb31Ledu15zviB0RrzVAIhANMQXTnfQCQhoyUfMvjKb0soDtDSgwndSxeLId3JxZSZ";
+
+    /// Validates signatures of a real path segment protobuf message using the provided public
+    /// keys.
+    #[test]
+    fn validate_real_path_segment() {
+        use base64::Engine;
+
+        let path_segment = BASE64_STANDARD
+            .decode(PATH_SEGMENT_BASE64)
+            .expect("failed to decode path segment");
+        let path_segment =
+            scion_protobuf::control_plane::v1::PathSegment::decode(&path_segment[..])
+                .expect("failed to decode path segment protobuf");
+        let path_segment: PathSegment = path_segment
+            .try_into()
+            .expect("failed to convert path segment");
+
+        let key_1 = BASE64_STANDARD
+            .decode(PUB_KEY_1_BASE64_DER)
+            .expect("failed to decode public key 1");
+        let key_1 = p256::ecdsa::VerifyingKey::from_public_key_der(&key_1)
+            .expect("failed to parse public key 1");
+
+        let entry_1 = path_segment.as_entries.first().expect("missing entry 1");
+
+        entry_1
+            .validate_signature(|_: &[u8]| Ok(key_1), &path_segment)
+            .expect("failed to validate entry 1 signature");
+
+        let key_2 = BASE64_STANDARD
+            .decode(PUB_KEY_2_BASE64_DER)
+            .expect("failed to decode public key 2");
+        let key_2 = p256::ecdsa::VerifyingKey::from_public_key_der(&key_2)
+            .expect("failed to parse public key 2");
+
+        let entry_2 = path_segment.as_entries.get(1).expect("missing entry 2");
+
+        entry_2
+            .validate_signature(|_: &[u8]| Ok(key_2), &path_segment)
+            .expect("failed to validate entry 2 signature");
+    }
+
+    #[test]
+    fn roundtrip_validation() {
+        let path_segment = PathSegment::new(DateTime::from_timestamp_nanos(0), 0, vec![]);
+        let sign_key_1 = p256::ecdsa::SigningKey::random(&mut OsRng);
+        let sign_key_2 = p256::ecdsa::SigningKey::random(&mut OsRng);
+
+        let mut entry1 = ASEntry {
+            local: IsdAsn::new(Isd(1), Asn(1)),
+            next: IsdAsn::new(Isd(1), Asn(2)),
+            mtu: 1500,
+            hop_entry: HopEntry {
+                ingress_mtu: 1500,
+                hop_field: SegmentHopField {
+                    exp_time: 10,
+                    cons_ingress: 1,
+                    cons_egress: 2,
+                    mac: [0; 6],
+                },
+            },
+            peer_entries: vec![],
+            extensions: vec![],
+            unsigned_extensions: vec![],
+            signed: SignedMessage {
+                header_and_body: vec![],
+                signature: vec![],
+            },
+        };
+
+        let sign = entry1
+            .signature(&sign_key_1, None, SystemTime::now(), &path_segment)
+            .unwrap();
+        entry1.signed = sign;
+
+        let path_segment = path_segment.add_as_entry(entry1);
+
+        let mut entry2 = ASEntry {
+            local: IsdAsn::new(Isd(1), Asn(2)),
+            next: IsdAsn::new(Isd(1), Asn(3)),
+            mtu: 1500,
+            hop_entry: HopEntry {
+                ingress_mtu: 1500,
+                hop_field: SegmentHopField {
+                    exp_time: 10,
+                    cons_ingress: 2,
+                    cons_egress: 3,
+                    mac: [0; 6],
+                },
+            },
+            peer_entries: vec![],
+            extensions: vec![],
+            unsigned_extensions: vec![],
+            signed: SignedMessage {
+                header_and_body: vec![],
+                signature: vec![],
+            },
+        };
+
+        let sign = entry2
+            .signature(&sign_key_2, None, SystemTime::now(), &path_segment)
+            .unwrap();
+        entry2.signed = sign;
+
+        let path_segment = path_segment.add_as_entry(entry2);
+
+        // Validate signatures
+        for entry in &path_segment.as_entries {
+            let key_provider = |_: &[u8]| {
+                if entry.local == IsdAsn::new(Isd(1), Asn(1)) {
+                    Ok(*sign_key_1.verifying_key())
+                } else if entry.local == IsdAsn::new(Isd(1), Asn(2)) {
+                    Ok(*sign_key_2.verifying_key())
+                } else {
+                    panic!("unknown ISD-AS")
+                }
+            };
+            entry
+                .validate_signature(key_provider, &path_segment)
+                .unwrap();
+        }
+    }
 }

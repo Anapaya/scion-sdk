@@ -14,12 +14,16 @@ categories = ["network-programming"]
 # Local Dependencies
 dhsd = { workspace = true }
 scion-sdk-observability = { workspace = true }
+scion-sdk-scion-connect-rpc = { workspace = true }
+scion-sdk-quic-scion = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
+scion-sdk-trc = { workspace = true }
 scion-sdk-utils = { workspace = true }
 
 sciparse = { workspace = true }
 scion-proto = { workspace = true }
 scion-protobuf = { workspace = true }
+
 snap-control = { workspace = true }
 snap-dataplane = { workspace = true }
 snap-tokens = { workspace = true }
@@ -29,7 +33,6 @@ endhost-api-models = { workspace = true }
 
 endhost-api-discovery-api = { workspace = true }
 endhost-api-discovery-models = { workspace = true }
-
 
 # General Dependencies
 async-trait = { workspace = true }
@@ -55,7 +58,7 @@ serde = { workspace = true }
 serde_with = { workspace = true, features = ["base64"] }
 serde_json = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
-sha2 = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -67,6 +70,7 @@ utoipa = { workspace = true, features = ["yaml", "time"] }
 utoipa-axum = { workspace = true }
 utoipa-redoc = { workspace = true, features = ["axum"] }
 x25519-dalek = { workspace = true }
+x509-cert = { workspace = true }
 
 [dev-dependencies]
 endhost-api-client = { workspace = true }

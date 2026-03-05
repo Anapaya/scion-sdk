@@ -32,11 +32,12 @@ use utoipa::ToSchema;
 
 use crate::{
     endhost_api::{EndhostApiId, EndhostApiState},
-    network::scion::topology::dto::ScionTopologyDto,
+    network::scion::{topology::dto::ScionTopologyDto, trust_store::TrustStore},
     state::{
         DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL, RouterId,
+        control_service::ControlServiceState,
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryStateDto},
-        external_as::ExternalAsStateDto,
+        external_as::dto::ExternalAsStateDto,
         snap::SnapId,
     },
 };
@@ -70,6 +71,10 @@ pub struct SystemStateDto {
     pub topology: Option<ScionTopologyDto>,
     /// The list of external ASes, keyed by ISD-AS.
     pub external_ases: BTreeMap<IsdAsn, ExternalAsStateDto>,
+    /// The state of the control service for each ISD-AS
+    pub control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
+    /// Trust store containing the TRCs and AS certificates for each ISD-AS.
+    pub trust_store: TrustStore,
 }
 
 fn default_snaptun_keepalive_interval() -> Duration {
