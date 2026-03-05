@@ -18,7 +18,7 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ana_gotatun::{
@@ -27,6 +27,7 @@ use ana_gotatun::{
     x25519::{self},
 };
 use bytes::{Bytes, BytesMut};
+use scion_sdk_utils::backoff::ExponentialBackoff;
 use tokio::{select, task::JoinHandle, time::Interval};
 use tracing::instrument;
 use zerocopy::IntoBytes as _;
@@ -47,9 +48,9 @@ pub enum SnapTunnelDriverError {
     /// Receive queue closed.
     #[error("receive queue closed")]
     ReceiveQueueClosed,
-    /// Initial handshake timed out.
-    #[error("initial handshake timed out")]
-    InitialHandshakeTimeout,
+    /// Connection expired.
+    #[error("connection expired")]
+    ConnectionExpired,
     /// Error receiving a Wireguard packet.
     /// This will never be WireGuardError::ConnectionExpired.
     #[error("error receiving a Wireguard packet: {0:?}")]
@@ -58,6 +59,8 @@ pub enum SnapTunnelDriverError {
 
 struct SnapTunnelDriver {
     pub tunn: Arc<Mutex<Tunn>>,
+    pub static_private: x25519::StaticSecret,
+    pub peer_public: x25519::PublicKey,
     pub underlay_socket: Arc<tokio::net::UdpSocket>,
     pub dataplane_address: SocketAddr,
     pub update_timers_interval: Interval,
@@ -68,7 +71,8 @@ struct SnapTunnelDriver {
 
 impl SnapTunnelDriver {
     fn new(
-        tunn: Arc<Mutex<Tunn>>,
+        static_private: x25519::StaticSecret,
+        peer_public: x25519::PublicKey,
         underlay_socket: Arc<tokio::net::UdpSocket>,
         dataplane_address: SocketAddr,
         packet_sender: async_channel::Sender<BytesMut>,
@@ -79,7 +83,13 @@ impl SnapTunnelDriver {
             Duration::from_millis(250),
         );
         Self {
-            tunn,
+            tunn: Arc::new(Mutex::new(Self::create_tunn(
+                static_private.clone(),
+                peer_public,
+                dataplane_address,
+            ))),
+            static_private,
+            peer_public,
             underlay_socket,
             dataplane_address,
             update_timers_interval,
@@ -90,7 +100,7 @@ impl SnapTunnelDriver {
     }
 
     #[instrument(name = "st-client", skip(self), fields(socket_addr= ?self.local_sockaddr))]
-    async fn initial_connection(&mut self) -> Result<SocketAddr, SnapTunnelDriverError> {
+    async fn initiate_connection(&mut self) -> Result<SocketAddr, SnapTunnelDriverError> {
         let handshake_init = self.tunn.lock().unwrap().format_handshake_initiation(false);
         if let Some(wg_init) = handshake_init
             && let Err(e) = self
@@ -107,7 +117,9 @@ impl SnapTunnelDriver {
         loop {
             self.drive_once().await?;
             if let Some(sockaddr) = self.tunn.lock().unwrap().get_initiator_remote_sockaddr() {
-                self.local_sockaddr = Some(sockaddr);
+                if self.local_sockaddr.is_none() {
+                    self.local_sockaddr = Some(sockaddr);
+                }
                 tracing::debug!(local_addr=?sockaddr, "handshake completed, local address assigned");
                 return Ok(sockaddr);
             }
@@ -116,14 +128,38 @@ impl SnapTunnelDriver {
 
     #[instrument(name = "st-client", skip(self), fields(socket_addr= ?self.local_sockaddr))]
     async fn main_loop(mut self) {
+        let local_sockaddr = self
+            .local_sockaddr
+            .expect("local address must be set before main_loop()");
         loop {
-            let result = self.drive_once().await;
-            if let Err(ref e) = result {
-                tracing::error!(err=?e, "error driving tunnel");
-            }
-            if let Err(SnapTunnelDriverError::ReceiveQueueClosed) = result {
-                tracing::info!("receive queue closed, snap tunnel driver shutting down");
-                return;
+            match self.drive_once().await {
+                Err(SnapTunnelDriverError::ReceiveQueueClosed) => {
+                    tracing::info!("receive queue closed, snap tunnel driver shutting down");
+                    return;
+                }
+                Err(SnapTunnelDriverError::ConnectionExpired) => {
+                    loop {
+                        let mut backoff = BackoffState::new();
+                        // reset tunnel
+                        *self.tunn.lock().expect("poison") = Self::create_tunn(
+                            self.static_private.clone(),
+                            self.peer_public,
+                            self.dataplane_address,
+                        );
+                        match self.initiate_connection().await {
+                            Ok(addr) if addr == local_sockaddr => break,
+                            Ok(addr) => {
+                                tracing::error!(expected_addr=?local_sockaddr, new_addr=?addr, "local socket address changed");
+                            }
+                            Err(err) => {
+                                tracing::error!(?err, "error driving tunnel");
+                            }
+                        }
+                        backoff.backoff().await;
+                    }
+                }
+                Err(ref e) => tracing::error!(err=?e, "error driving tunnel"),
+                _ => {}
             }
         }
     }
@@ -134,12 +170,14 @@ impl SnapTunnelDriver {
     async fn drive_once(&mut self) -> Result<(), SnapTunnelDriverError> {
         let mut buf = self.pool.get();
         select! {
+            // bias to ensure that high receive load cannot starve the timer
+            biased;
             _ = self.update_timers_interval.tick() => {
                 let p = match self.tunn.lock().unwrap().update_timers() {
                     Ok(Some(wg)) => { Some(wg) },
                     Ok(None) => None,
                     Err(WireGuardError::ConnectionExpired) => {
-                        return Err(SnapTunnelDriverError::InitialHandshakeTimeout);
+                        return Err(SnapTunnelDriverError::ConnectionExpired);
                     }
                     Err(e) => {
                         // At the time of writing, update_timers does not return any error
@@ -217,6 +255,23 @@ impl SnapTunnelDriver {
         }
         Ok(())
     }
+
+    fn create_tunn(
+        static_private: x25519::StaticSecret,
+        peer_public: x25519::PublicKey,
+        dataplane_address: SocketAddr,
+    ) -> Tunn {
+        let local_public = x25519::PublicKey::from(&static_private);
+        Tunn::new(
+            static_private,
+            peer_public,
+            None,
+            None,
+            0,
+            Arc::new(RateLimiter::new(&local_public, HANDSHAKE_RATE_LIMIT)),
+            dataplane_address,
+        )
+    }
 }
 
 /// Error when receiving a packet from the SNAP tunnel connection.
@@ -270,28 +325,19 @@ impl SnapTunnel {
         receive_queue_capacity: usize,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     ) -> Result<Self, SnapTunnelDriverError> {
-        let local_public = x25519::PublicKey::from(&static_private);
-        let tunn = Arc::new(Mutex::new(Tunn::new(
-            static_private,
-            peer_public,
-            None,
-            None,
-            0,
-            Arc::new(RateLimiter::new(&local_public, HANDSHAKE_RATE_LIMIT)),
-            dataplane_address,
-        )));
         let (packet_sender, packet_receiver) = async_channel::bounded(receive_queue_capacity);
         let mut driver = SnapTunnelDriver::new(
-            tunn.clone(),
+            static_private,
+            peer_public,
             underlay_socket.clone(),
             dataplane_address,
             packet_sender,
             pool.clone(),
         );
-        let socket_addr = driver.initial_connection().await?;
+        let socket_addr = driver.initiate_connection().await?;
         Ok(Self {
             _guard: guard,
-            tunn,
+            tunn: driver.tunn.clone(),
             underlay_socket,
             dataplane_address,
             local_sockaddr: socket_addr,
@@ -302,6 +348,7 @@ impl SnapTunnel {
     }
 
     /// Send a packet to the remote server.
+    // xxx(dsd): during a connection reset, packets will be silently dropped.
     #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= packet.len()))]
     pub async fn send(&self, packet: Packet) -> io::Result<()> {
         let encapsulated_packet = self.tunn.lock().unwrap().handle_outgoing_packet(packet);
@@ -401,6 +448,39 @@ impl SnapTunnel {
     /// Check if the socket is writable.
     pub async fn writable(&self) -> io::Result<()> {
         self.underlay_socket.writable().await
+    }
+}
+
+struct BackoffState {
+    last: Instant,
+    exp_backoff: ExponentialBackoff,
+    attempt: usize,
+}
+
+impl BackoffState {
+    fn new() -> Self {
+        Self {
+            last: Instant::now(),
+            exp_backoff: ExponentialBackoff::new(
+                5.0, 180.0, // max 3 mins
+                1.3, 0.5,
+            ),
+            attempt: 0,
+        }
+    }
+
+    fn backoff(&mut self) -> impl Future<Output = ()> {
+        let now = Instant::now();
+        let until_next = (self.last + self.exp_backoff.duration(self.attempt as u32))
+            .checked_duration_since(now);
+        self.attempt += 1;
+        self.last = now;
+
+        async move {
+            if let Some(d) = until_next {
+                tokio::time::sleep(d).await;
+            }
+        }
     }
 }
 
