@@ -769,7 +769,8 @@ pub struct DirectedScionLink {
 }
 
 /// Link type of a SCION link
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum ScionLinkType {
     /// ASes are Peers without any parent-child relationship.
     Peer,

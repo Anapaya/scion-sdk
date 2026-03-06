@@ -160,9 +160,12 @@ impl ExternalAsService {
                     }
                 };
 
-                let socket = UdpSocket::bind(listen_addr)
-                    .await
-                    .context("error binding udp listener for External AS API")?;
+                let socket = UdpSocket::bind(listen_addr).await.with_context(|| {
+                    format!(
+                        "error binding udp listener for External AS API at address {}",
+                        listen_addr
+                    )
+                })?;
 
                 // Update IoConfig with the actual address
                 io_config.set_external_as_interface_addr(
