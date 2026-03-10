@@ -28,7 +28,7 @@ use derive_more::Display;
 use dhsd::DhsdSecret;
 use ipnet::IpNet;
 use pem::Pem;
-use scion_proto::address::IsdAsn;
+use scion_proto::address::{IsdAsn, ServiceAddr};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use serde::{Deserialize, Serialize};
 use snap_dataplane::state::Id;
@@ -306,6 +306,21 @@ impl SharedPocketScionState {
             .context("error adding receiver")?;
 
         Ok(())
+    }
+
+    /// Adds a mapping from the given ISD-AS and ServiceAddr to the given transport and socket
+    /// address.
+    pub fn add_svc_mapping(
+        &self,
+        ia: IsdAsn,
+        dst_svc: ServiceAddr,
+        transport: String,
+        socket_addr: SocketAddr,
+    ) -> anyhow::Result<()> {
+        let mut state = self.system_state.write().unwrap();
+        state
+            .sim_receivers
+            .add_svc_mapping(ia, dst_svc, transport, socket_addr)
     }
 }
 

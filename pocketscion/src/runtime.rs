@@ -473,6 +473,11 @@ impl PocketScionRuntime {
             .router(router_id)
             .and_then(|_| self.io_config.router_socket_addr(router_id))
     }
+
+    /// Returns a handle to the shared state of the PocketSCION runtime.
+    pub fn state(&self) -> SharedPocketScionState {
+        self.state.clone()
+    }
 }
 impl PocketScionRuntime {
     /// Dispatches a packet through PocketScions Network simulation.
