@@ -20,9 +20,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use chacha20::ChaCha20Rng;
 use http::Request;
-use rand::{RngCore, SeedableRng, rng};
-use rand_chacha::ChaChaRng;
+use rand::{Rng, SeedableRng, rng};
 use tower_http::{
     LatencyUnit,
     classify::{ServerErrorsAsFailures, SharedClassifier},
@@ -304,13 +304,13 @@ pub fn info_trace_layer() -> TraceLayer<SharedClassifier<ServerErrorsAsFailures>
 /// Random span generator.
 #[derive(Clone)]
 pub struct RandomSpans {
-    counter: Arc<Mutex<ChaChaRng>>,
+    counter: Arc<Mutex<ChaCha20Rng>>,
 }
 
 impl RandomSpans {
     fn new(seed: u64) -> Self {
         Self {
-            counter: Arc::new(Mutex::new(ChaChaRng::seed_from_u64(seed))),
+            counter: Arc::new(Mutex::new(ChaCha20Rng::seed_from_u64(seed))),
         }
     }
 }

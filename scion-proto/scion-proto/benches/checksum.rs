@@ -17,7 +17,7 @@
 //! Comparison between different checksum implementations.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use rand::{SeedableRng, TryRngCore};
+use rand::{SeedableRng, TryRng};
 use rand_xorshift::XorShiftRng;
 use scion_proto::packet::ChecksumDigest;
 

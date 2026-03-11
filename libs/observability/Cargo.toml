@@ -13,7 +13,7 @@ axum = { workspace = true }
 http = { workspace = true }
 prometheus = { workspace = true }
 rand = { workspace = true }
-rand_chacha = { workspace = true }
+chacha20 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

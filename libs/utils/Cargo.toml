@@ -26,7 +26,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
-rand_chacha = { workspace = true }
+chacha20 = { workspace = true }
 
 [lints]
 workspace = true

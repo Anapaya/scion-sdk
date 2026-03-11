@@ -346,7 +346,7 @@ fn hash<D: Digest>(msg: &[u8], data: impl IntoIterator<Item: AsRef<[u8]>>) -> Ve
 mod test {
     use ecdsa::signature::rand_core::OsRng;
     use prost::Message;
-    use rand::Rng;
+    use rand::RngExt as _;
 
     use super::*;
 

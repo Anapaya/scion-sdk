@@ -30,7 +30,7 @@ zerocopy = { workspace = true }
 ed25519-dalek = { workspace = true }
 pem = { workspace = true }
 rcgen = { workspace = true }
-mockall = "0.13"
+mockall = "0.14"
 tokio-util = { workspace = true }
 test-log = { workspace = true }
 
