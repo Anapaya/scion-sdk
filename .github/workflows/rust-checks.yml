@@ -3,7 +3,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   PROTOC_VERSION: "34.0"
-  NIGHTLY_VERSION: nightly-2025-11-06
+  NIGHTLY_VERSION: nightly-2026-03-12
   RUST_BACKTRACE: "1"
   workspace: .
 concurrency:
