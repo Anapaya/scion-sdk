@@ -49,7 +49,6 @@ pub mod dto;
 /// - Manages tasks associated with the External AS
 pub struct ExternalAsService {
     /// IsdAsn of the External AS.
-    #[expect(unused)]
     isd_as: IsdAsn,
     /// External AS is a core AS
     #[expect(unused)]
@@ -225,7 +224,8 @@ impl ExternalAsHandler for ExternalAsService {
         else {
             // Simulation should not send incorrect packets
             tracing::warn!(
-                "Received packet from AS {from}, to AS {to}, no matching interface found. Dropping packet.",
+                extern_as = %self.isd_as,
+                "no matching external AS interface was configured ({from} -> {to}) . Dropping packet.",
             );
             return;
         };

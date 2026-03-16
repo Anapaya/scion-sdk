@@ -246,7 +246,7 @@ impl LocalNetworkSimulation<'_> {
                     Some(adapter) => {
                         adapter.handle_incoming_packet(
                             ScionGlobalInterfaceId {
-                                isd_as: pkt_source_as,
+                                isd_as: self.local_as,
                                 if_id: sim_egress_interface_id,
                             },
                             ScionGlobalInterfaceId {
