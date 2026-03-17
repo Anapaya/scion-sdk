@@ -1,0 +1,28 @@
+[package]
+name = "anapaya-aa-client"
+version = "0.4.0"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Client for the Anapaya AA (Auth/n Auth/z) service"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking", "Anapaya"]
+
+[dependencies]
+anapaya-aa-protobuf = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+jsonwebtoken = { workspace = true }
+reqwest = { workspace = true }
+scion-sdk-reqwest-connect-rpc = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+mockall = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

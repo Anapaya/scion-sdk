@@ -117,6 +117,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "anapaya-aa-client"
+version = "0.4.0"
+dependencies = [
+ "anapaya-aa-protobuf",
+ "anyhow",
+ "async-trait",
+ "jsonwebtoken",
+ "mockall",
+ "reqwest",
+ "scion-sdk-reqwest-connect-rpc",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "anapaya-aa-protobuf"
+version = "0.4.0"
+dependencies = [
+ "prost",
+]
+
+[[package]]
 name = "anapaya-quinn"
 version = "0.11.9-ana.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

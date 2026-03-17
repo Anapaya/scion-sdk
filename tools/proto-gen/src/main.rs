@@ -82,6 +82,14 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec!["--experimental_allow_proto3_optional"],
             use_tonic: false,
         },
+        CompileConfig {
+            name: "anapaya-aa",
+            out_dir: "anapaya-aa/anapaya-aa-protobuf/src/proto",
+            proto_dirs: vec!["anapaya-aa/anapaya-aa-protobuf/protobuf"],
+            extern_includes: vec![],
+            protoc_args: vec![],
+            use_tonic: false,
+        },
     ];
 
     match cli.command {

@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "endhost-api/*",
     "endhost-api-discovery/*",
+    "anapaya-aa/*",
     "hsd-api/*",
     "libs/*",
     "pocketscion",
@@ -34,6 +35,8 @@ endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", vers
 # hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.2" }
 # hsd-api-client = { path = "hsd-api/hsd-api-client", version = "0.3" }
 hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.4.0" }
+
+anapaya-aa-protobuf = { path = "anapaya-aa/anapaya-aa-protobuf", version = "0.4.0" }
 
 scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.4.0" }
 # scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
