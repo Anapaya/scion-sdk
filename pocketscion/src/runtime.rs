@@ -146,6 +146,8 @@ impl PocketScionRuntimeBuilder {
         let snap_token_decoding_key =
             DecodingKey::from_ed_pem(pem::encode(&pstate.snap_token_public_key()).as_bytes())
                 .unwrap();
+        let snap_token_verifier =
+            snap_control::server::SnapTokenVerifier::new(snap_token_decoding_key);
 
         let mut snap_authz_map: BTreeMap<SnapId, Arc<IdentityRegistry>> = Default::default();
 
@@ -174,7 +176,7 @@ impl PocketScionRuntimeBuilder {
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
             let snap_resolver = pstate.snap_resolver(snap_id, io_config.clone());
             let identity_registry = Arc::new(IdentityRegistry::new());
-            let decoding_key = snap_token_decoding_key.clone();
+            let token_verifier = snap_token_verifier.clone();
 
             let local_ases = snap_state.isd_ases();
 
@@ -191,7 +193,7 @@ impl PocketScionRuntimeBuilder {
                         segment_lister,
                         snap_resolver,
                         identity_registry,
-                        decoding_key,
+                        token_verifier,
                         snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
                     )
                     .await

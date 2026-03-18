@@ -17,27 +17,27 @@ use std::{
     fmt::Display,
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
-    time::SystemTime,
 };
 
 use axum::body::Body;
 use http::{Request, Response};
-use jsonwebtoken::DecodingKey;
-use scion_sdk_token_validator::validator::{TokenValidator, Validator};
 use snap_tokens::AnyClaims;
 use thiserror::Error;
 use tower::{BoxError, Layer, Service};
 
+use crate::server::token_verifier::SnapTokenVerifier;
+
 #[derive(Clone)]
 pub(crate) struct AuthMiddlewareLayer {
-    validator: Validator<AnyClaims>,
+    verifier: Arc<SnapTokenVerifier>,
 }
 
 impl AuthMiddlewareLayer {
-    pub(crate) fn new(dec: DecodingKey) -> Self {
+    pub(crate) fn new(verifier: SnapTokenVerifier) -> Self {
         Self {
-            validator: Validator::new(dec, Some(&["snap"])),
+            verifier: Arc::new(verifier),
         }
     }
 }
@@ -46,19 +46,19 @@ impl<S> Layer<S> for AuthMiddlewareLayer {
     type Service = AuthMiddleware<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        AuthMiddleware::new(inner, self.validator.clone())
+        AuthMiddleware::new(inner, self.verifier.clone())
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct AuthMiddleware<S> {
     inner: S,
-    validator: Validator<AnyClaims>,
+    verifier: Arc<SnapTokenVerifier>,
 }
 
 impl<S> AuthMiddleware<S> {
-    pub(crate) fn new(inner: S, validator: Validator<AnyClaims>) -> Self {
-        Self { inner, validator }
+    pub(crate) fn new(inner: S, verifier: Arc<SnapTokenVerifier>) -> Self {
+        Self { inner, verifier }
     }
 }
 
@@ -85,24 +85,27 @@ where
             }
         };
 
-        match self.validator.validate(SystemTime::now(), token.as_str()) {
-            Ok(token_claims) => {
-                match token_claims {
-                    AnyClaims::V0(claims) => {
-                        request.extensions_mut().insert(claims);
+        let verifier = self.verifier.clone();
+        let mut inner = self.inner.clone();
+        Box::pin(async move {
+            match verifier.verify(&token).await {
+                Ok(token_claims) => {
+                    match token_claims {
+                        AnyClaims::V0(claims) => {
+                            request.extensions_mut().insert(claims);
+                        }
+                        AnyClaims::V1(claims) => {
+                            request.extensions_mut().insert(claims);
+                        }
                     }
-                    AnyClaims::V1(claims) => {
-                        request.extensions_mut().insert(claims);
-                    }
+                    inner.call(request).await.map_err(Into::into)
                 }
-                let mut inner = self.inner.clone();
-                Box::pin(async move { inner.call(request).await.map_err(Into::into) })
+                Err(err) => {
+                    tracing::debug!(%err, "Invalid Token");
+                    Ok(build_unauthorized_response(err))
+                }
             }
-            Err(err) => {
-                tracing::debug!(%err, "Invalid Token");
-                Box::pin(async { Ok(build_unauthorized_response(err)) })
-            }
-        }
+        })
     }
 }
 
