@@ -13,9 +13,11 @@
 // limitations under the License.
 //! SCION stack builder.
 
-use std::{borrow::Cow, net, sync::Arc, time::Duration};
+use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 
 use endhost_api_client::client::CrpcEndhostApiClient;
+use futures::{StreamExt, stream::FuturesUnordered};
+use rand::seq::IndexedRandom;
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_reqwest_connect_rpc::token_source::{TokenSource, static_token::StaticTokenSource};
 use scion_sdk_utils::backoff::ExponentialBackoff;
@@ -167,47 +169,97 @@ impl ScionStackBuilder {
             udp,
         } = self;
 
-        let mut endhost_apis = endhost_api_source
+        // We concurrently connect to a capped number of endhost APIs use the one that responds
+        // first. Randomly select up to two APIs from up to five API groups returned.
+        let endhost_apis = endhost_api_source
             .endhost_apis()
             .await?
             .into_iter()
-            .filter(|group| !group.apis.is_empty());
+            .filter(|group| !group.apis.is_empty())
+            .take(5);
 
-        let api_group = endhost_apis.next().ok_or(EndhostApiSourceError {
-            error: anyhow::anyhow!("Endhost API discovery returned empty list"),
-            // Likely not transient, since it indicates a misconfiguration on client or server side.
-            transient: false,
-        })?;
-
-        // TODO: Failover between apis, should be implemented in the CRPC client.
-        let endhost_api_url = api_group
-            .apis
-            .first()
-            .expect("API group with no APIs should have been filtered out")
-            .address
-            .clone();
-
-        let endhost_api_client = {
-            let mut client = CrpcEndhostApiClient::new(&endhost_api_url)
-                .map_err(BuildScionStackError::EndhostApiClientSetupError)?;
-
-            if let Some(token_source) = endhost_api_token_source.or(auth_token_source.clone()) {
-                client.use_token_source(token_source);
+        let endhost_api_urls = {
+            let mut rng = rand::rng();
+            let mut urls = vec![];
+            for g in endhost_apis {
+                for url in g.apis.sample(&mut rng, 2) {
+                    urls.push(url.clone());
+                }
             }
-
-            Arc::new(client)
+            urls
         };
+        if endhost_api_urls.is_empty() {
+            return Err(BuildScionStackError::EndhostApiSourceError(
+                EndhostApiSourceError {
+                    error: anyhow::anyhow!("Endhost API discovery returned no APIs"),
+                    // Likely not transient, since it indicates a misconfiguration on client or
+                    // server side.
+                    transient: false,
+                },
+            ));
+        }
 
-        // XXX(bunert): Add support for statically configured underlays.
+        // Try instantiating a client and listing underlays for each selected API.
+        // If any succeeds, use that client and the discovered underlays.
+        // Otherwise return an error collecting all per-API failures.
+        let token_source: Option<Arc<dyn TokenSource>> =
+            endhost_api_token_source.or(auth_token_source.clone());
+        let mut client_setup_errors: Vec<(Url, ApiAttemptError)> = Vec::new();
+        let mut underlay_discovery_futures = FuturesUnordered::new();
+        for url in endhost_api_urls {
+            let api_url = url.address;
 
-        let underlay_discovery = PeriodicUnderlayDiscovery::new(
-            endhost_api_client.clone(),
-            udp.udp_next_hop_resolver_fetch_interval,
-            // TODO(uniquefine): make this configurable.
-            ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
-        )
-        .await
-        .map_err(BuildScionStackError::UnderlayDiscoveryError)?;
+            let mut client = match CrpcEndhostApiClient::new(&api_url) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::debug!(error=%e, url=%api_url, "Failed to create endhost API client");
+                    client_setup_errors.push((api_url, ApiAttemptError::ClientSetup(e)));
+                    continue;
+                }
+            };
+
+            if let Some(ts) = token_source.clone() {
+                client.use_token_source(ts);
+            }
+            let client = Arc::new(client);
+
+            underlay_discovery_futures.push(async move {
+                let discovery = PeriodicUnderlayDiscovery::new(
+                    client.clone(),
+                    udp.udp_next_hop_resolver_fetch_interval,
+                    // TODO(uniquefine): make this configurable.
+                    ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
+                )
+                .await;
+
+                (api_url, client, discovery)
+            });
+        }
+
+        let (api_url, endhost_api_client, underlay_discovery) = {
+            let mut errors = client_setup_errors;
+            let mut success = None;
+            while let Some((url, client, discovery_result)) =
+                underlay_discovery_futures.next().await
+            {
+                match discovery_result {
+                    Ok(discovery) => {
+                        success = Some((url, client, discovery));
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            error = %e,
+                            url = %url,
+                            "Failed to set up underlay discovery for endhost API"
+                        );
+                        errors.push((url, ApiAttemptError::UnderlayDiscovery(e)));
+                    }
+                }
+            }
+            success.ok_or_else(|| AllEndhostApisFailed(errors))
+        }
+        .map_err(BuildScionStackError::AllEndhostApisFailed)?;
 
         // Use the endhost API URL to resolve the local IP addresses for the UDP underlay
         // sockets.
@@ -217,7 +269,7 @@ impl ScionStackBuilder {
             Some(ips) => Arc::new(ips),
             None => {
                 Arc::new(
-                    TargetAddrLocalIpResolver::new(endhost_api_url.clone())
+                    TargetAddrLocalIpResolver::new(api_url.clone())
                         .map_err(BuildUdpScionStackError::LocalIpResolutionError)?,
                 )
             }
@@ -252,17 +304,12 @@ pub enum BuildScionStackError {
     /// Discovery returned no underlay or no underlay was provided.
     #[error("no underlay available: {0}")]
     UnderlayUnavailable(Cow<'static, str>),
-    /// Error making the underlay discovery request to the endhost API.
-    /// E.g. because the endhost API is not reachable.
-    /// This error is only returned if the underlay is not statically configured.
-    #[error("underlay discovery request error: {0:#}")]
-    UnderlayDiscoveryError(CrpcClientError),
-    /// Failed to find a usable endhost API.
+    /// All endhost APIs failed during client setup or underlay discovery.
+    #[error(transparent)]
+    AllEndhostApisFailed(#[from] AllEndhostApisFailed),
+    /// Failed to retrieve any endhost APIs from the discovery source.
     #[error("endhost api source error: {0:#}")]
     EndhostApiSourceError(#[from] EndhostApiSourceError),
-    /// Error setting up the endhost API client.
-    #[error("endhost API client setup error: {0:#}")]
-    EndhostApiClientSetupError(anyhow::Error),
     /// Error building the SNAP SCION stack.
     /// This error is only returned if a SNAP underlay is used.
     #[error(transparent)]
@@ -296,6 +343,37 @@ pub enum BuildUdpScionStackError {
     /// Error resolving the local IP addresses.
     #[error("local IP resolution error: {0:#}")]
     LocalIpResolutionError(anyhow::Error),
+}
+
+/// Error returned when every attempted endhost API fails.
+///
+/// Formats as a single-line summary suitable for use in structured logs.
+#[derive(Debug)]
+pub struct AllEndhostApisFailed(pub Vec<(Url, ApiAttemptError)>);
+
+impl fmt::Display for AllEndhostApisFailed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "all {} endhost API(s) failed", self.0.len())?;
+        let mut sep = ": ";
+        for (url, err) in &self.0 {
+            write!(f, "{sep}{url} ({err})")?;
+            sep = "; ";
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for AllEndhostApisFailed {}
+
+/// Error for a single endhost API connection attempt.
+#[derive(thiserror::Error, Debug)]
+pub enum ApiAttemptError {
+    /// The API client could not be instantiated (e.g. invalid URL scheme).
+    #[error("client setup: {0:#}")]
+    ClientSetup(anyhow::Error),
+    /// Underlay discovery against the API failed (e.g. server unreachable).
+    #[error("underlay discovery: {0:#}")]
+    UnderlayDiscovery(CrpcClientError),
 }
 
 /// Preferred underlay type (if available).
