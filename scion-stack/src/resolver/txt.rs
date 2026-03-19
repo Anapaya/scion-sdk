@@ -93,14 +93,32 @@ impl ScionTxtDnsResolver {
 
     /// Create a builder for configuring resolver options.
     ///
-    /// The builder is initialized from the system DNS configuration and can be
-    /// adjusted before calling `ScionTxtDnsResolver::from_builder`.
+    /// On Linux/macOS the builder is initialized from the system DNS
+    /// configuration (`/etc/resolv.conf`). On Android and iOS, which do not
+    /// expose `/etc/resolv.conf`, Google Public DNS is used as a fallback.
+    ///
+    /// The returned builder can be adjusted before calling
+    /// `ScionTxtDnsResolver::from_builder`.
     ///
     /// # Errors
     ///
-    /// Returns `TxtResolverError` if system configuration cannot be loaded.
+    /// Returns `TxtResolverError` if system configuration cannot be loaded
+    /// (non-Android/iOS platforms only).
     pub fn builder() -> Result<ResolverBuilder<TokioConnectionProvider>, TxtResolverError> {
-        Ok(TokioResolver::builder_tokio()?)
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            use hickory_resolver::config::ResolverConfig;
+            // Android and iOS do not have /etc/resolv.conf.
+            // Fall back to Google Public DNS for SCION TXT record resolution.
+            Ok(TokioResolver::builder_with_config(
+                ResolverConfig::google(),
+                TokioConnectionProvider::default(),
+            ))
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            Ok(TokioResolver::builder_tokio()?)
+        }
     }
 }
 
@@ -132,6 +150,14 @@ pub enum TxtResolverError {
     /// DNS resolver configuration failed.
     #[error("dns resolver configuration failed: {0}")]
     DnsConfig(#[from] hickory_resolver::ResolveError),
+}
+
+impl PartialEq for TxtResolverError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::DnsConfig(a), Self::DnsConfig(b)) => a.to_string() == b.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]

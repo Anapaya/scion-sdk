@@ -37,8 +37,8 @@ pub struct QuicConfig {
     pub application_protos: Vec<Vec<u8>>,
     /// Whether to verify the server certificate.
     pub verify_peer: bool,
-    /// Optional path to CA certificates file.
-    pub ca_certs_path: Option<String>,
+    /// Optional path to CA certificates directory.
+    pub ca_certs_directory: Option<String>,
     /// Initial max data.
     pub initial_max_data: u64,
     /// Initial max stream data for bidirectional local streams.
@@ -61,7 +61,7 @@ impl Default for QuicConfig {
             max_udp_payload_size: DEFAULT_MAX_UDP_PAYLOAD_SIZE,
             application_protos: vec![b"h3".to_vec()],
             verify_peer: true,
-            ca_certs_path: None,
+            ca_certs_directory: None,
             initial_max_data: 10_000_000,
             initial_max_stream_data_bidi_local: 1_000_000,
             initial_max_stream_data_bidi_remote: 1_000_000,
@@ -89,6 +89,10 @@ impl QuicConfig {
                 .map(|p| p.as_slice())
                 .collect::<Vec<_>>(),
         )?;
+
+        if let Some(ca_certs_dir) = &self.ca_certs_directory {
+            config.load_verify_locations_from_directory(ca_certs_dir)?;
+        }
 
         config.set_max_idle_timeout(self.idle_timeout.as_millis() as u64);
         config.set_max_recv_udp_payload_size(self.max_udp_payload_size);
@@ -145,8 +149,8 @@ impl QuicConfigBuilder {
     }
 
     /// Sets the path to CA certificates file for verification.
-    pub fn ca_certs_path(mut self, path: impl Into<String>) -> Self {
-        self.config.ca_certs_path = Some(path.into());
+    pub fn ca_certs_dir(mut self, path: impl Into<String>) -> Self {
+        self.config.ca_certs_directory = Some(path.into());
         self
     }
 

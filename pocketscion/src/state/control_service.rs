@@ -412,7 +412,7 @@ impl ControlService {
         let quic_config = QuicConfig {
             // Peer validation is disabled in general
             verify_peer: false,
-            ca_certs_path: Some(
+            ca_certs_directory: Some(
                 cert_chain_path
                     .to_str()
                     .context("Certificate path should be valid UTF-8 string")?
