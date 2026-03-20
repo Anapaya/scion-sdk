@@ -22,5 +22,5 @@
 pub mod client;
 pub mod refresher;
 
-pub use client::{AaAuthClient, CrpcAaAuthClient};
+pub use client::{AaAuthClient, AuthResult, CrpcAaAuthClient};
 pub use refresher::{ApiKeyTokenRefresher, ApiKeyTokenRefresherError};

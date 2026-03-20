@@ -13,10 +13,25 @@ pub struct AuthenticateByKeyRequest {
     #[prost(int32, tag = "3")]
     pub requested_validity: i32,
 }
+/// Metadata returned alongside the authentication response.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Metadata {
+    /// URL of the endhost API discovery service scoped to the authenticated user.
+    /// When present and non-empty, the client should use this URL to discover
+    /// authorised endhost APIs instead of the global discovery service at
+    /// <https://discovery.scion.anapaya.net.>
+    #[prost(string, optional, tag = "1")]
+    pub endhost_api_discovery_url: ::core::option::Option<
+        ::prost::alloc::string::String,
+    >,
+}
 /// Response containing the signed SNAP token.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AuthenticateByKeyResponse {
     /// The signed JWT SNAP token.
     #[prost(string, tag = "1")]
     pub snap_token: ::prost::alloc::string::String,
+    /// Optional metadata provided by the AA service.
+    #[prost(message, optional, tag = "2")]
+    pub metadata: ::core::option::Option<Metadata>,
 }

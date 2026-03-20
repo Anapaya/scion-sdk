@@ -118,6 +118,7 @@ reqwest = { version = "0.13", features = [
     "http2",
     "json",
     "form",
+    "rustls",
 ], default-features = false }
 ring = "0.17.14"
 rustls = { version = "0.23", features = [

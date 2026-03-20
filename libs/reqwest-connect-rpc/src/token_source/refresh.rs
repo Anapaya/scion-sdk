@@ -37,6 +37,7 @@ pub struct RefreshTokenSourceBuilder<T: TokenRefresher> {
     refresh_threshold: Duration,
     refresh_timeout: Duration,
     min_token_lifetime: Duration,
+    initial_token: Option<TokenWithExpiry>,
 }
 impl<T: TokenRefresher> RefreshTokenSourceBuilder<T> {
     /// Creates a new builder for a [RefreshTokenSource].
@@ -52,7 +53,18 @@ impl<T: TokenRefresher> RefreshTokenSourceBuilder<T> {
             refresh_threshold: DEFAULT_REFRESH_THRESHOLD,
             refresh_timeout: DEFAULT_REFRESH_TIMEOUT,
             min_token_lifetime: DEFAULT_MIN_TOKEN_LIFETIME,
+            initial_token: None,
         }
+    }
+
+    /// Seed the token source with an already-fetched token.
+    ///
+    /// When set, the background task publishes this token immediately on startup
+    /// without calling [`TokenRefresher::refresh`] first.  The normal refresh
+    /// loop then takes over before the token expires.
+    pub fn with_initial_token(mut self, token: String, expires_at: Instant) -> Self {
+        self.initial_token = Some(TokenWithExpiry { token, expires_at });
+        self
     }
 
     /// Minimum lifetime a token must have to be considered valid when returned by `get_token`.
@@ -86,7 +98,8 @@ impl<T: TokenRefresher> RefreshTokenSourceBuilder<T> {
             self.token_refresher,
             self.refresh_retry_delay,
             self.refresh_threshold,
-            self.refresh_timeout,
+            self.min_token_lifetime,
+            self.initial_token,
         )
     }
 }
@@ -122,12 +135,14 @@ impl RefreshTokenSource {
     /// * `refresh_threshold` - Duration before the token's expiry when a refresh should be
     ///   attempted.
     /// * `refresh_timeout` - Duration to wait for a refresh to complete when `get_token` is called.
+    /// * `initial_token` - Optional pre-fetched token to publish immediately on startup.
     pub fn new(
         name: String,
         token_refresher: impl TokenRefresher,
         refresh_retry_delay: Duration,
         refresh_threshold: Duration,
         min_token_lifetime: Duration,
+        initial_token: Option<TokenWithExpiry>,
     ) -> Self {
         let (watch_tx, watch_rx) = tokio::sync::watch::channel(None);
         let inner = RefreshTokenSourceTask {
@@ -137,6 +152,7 @@ impl RefreshTokenSource {
             refresh_threshold,
             min_token_lifetime,
             token_refresher: Box::new(token_refresher),
+            initial_token,
         };
 
         let task_handle = inner.run();
@@ -187,13 +203,30 @@ struct RefreshTokenSourceTask {
     #[allow(clippy::type_complexity)]
     token_refresher: Box<dyn TokenRefresher>,
     min_token_lifetime: Duration,
+    initial_token: Option<TokenWithExpiry>,
 }
 
 impl RefreshTokenSourceTask {
     fn run(self) -> RefreshingTokenSourceTaskHandle {
         let handle = tokio::spawn(async move {
             let mut fail_count = 0;
-            let mut current_token: Option<TokenWithExpiry> = None;
+            // If an initial token was provided, publish it immediately and seed
+            // current_token so that the background loop sleeps until near-expiry.
+            let mut current_token: Option<TokenWithExpiry> = if let Some(tok) = self.initial_token {
+                let token_ttl_secs = tok
+                    .expires_at
+                    .saturating_duration_since(Instant::now())
+                    .as_secs();
+                tracing::info!(
+                    name = %self.name,
+                    token_ttl_secs,
+                    "Published initial token without calling refresh"
+                );
+                self.watch_tx.send_replace(Some(Ok(tok.token.clone())));
+                Some(tok)
+            } else {
+                None
+            };
             loop {
                 // Determine when to next refresh the token.
                 let token_expiry = match current_token {
@@ -297,5 +330,99 @@ where
 {
     async fn refresh(&self) -> Result<TokenWithExpiry, TokenSourceError> {
         (self)().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::{Duration, Instant},
+    };
+
+    use tokio::sync::Notify;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn initial_token_is_published_without_calling_refresh() {
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let refresh_count_clone = Arc::clone(&refresh_count);
+
+        let source = RefreshTokenSource::builder("test", move || {
+            refresh_count_clone.fetch_add(1, Ordering::SeqCst);
+            let token = TokenWithExpiry {
+                token: "refreshed-token".to_string(),
+                expires_at: Instant::now() + Duration::from_secs(3600),
+            };
+            async move { Ok::<_, TokenSourceError>(token) }
+        })
+        .with_initial_token(
+            "initial-token".to_string(),
+            // Far-future expiry: the refresh loop's sleep_until is 1 hour away.
+            Instant::now() + Duration::from_secs(3600),
+        )
+        // Use a large threshold so even with the 1h expiry the refresh fires far
+        // in the future (expires_at - threshold ≈ 60 min - 60 s = ~59 min away).
+        .refresh_threshold(Duration::from_secs(60))
+        .build();
+
+        // Yield once so the background task runs to its first sleep_until.
+        tokio::task::yield_now().await;
+
+        // The watch should already hold the initial token.
+        let mut rx = source.watch();
+        let borrow = rx.borrow_and_update();
+        match borrow.as_ref() {
+            Some(Ok(token)) => assert_eq!(token, "initial-token"),
+            other => panic!("expected initial token, got {other:?}"),
+        }
+        drop(borrow);
+
+        assert_eq!(
+            refresh_count.load(Ordering::SeqCst),
+            0,
+            "refresh() should not be called when an initial token is provided"
+        );
+    }
+
+    #[tokio::test]
+    async fn initial_token_expiry_triggers_refresh() {
+        let notify = Arc::new(Notify::new());
+        let notify_clone = Arc::clone(&notify);
+
+        let _source = RefreshTokenSource::builder("test", move || {
+            notify_clone.notify_one();
+            let token = TokenWithExpiry {
+                token: "refreshed-token".to_string(),
+                expires_at: Instant::now() + Duration::from_secs(3600),
+            };
+            async move { Ok::<_, TokenSourceError>(token) }
+        })
+        .with_initial_token(
+            "initial-token".to_string(),
+            // Expire very soon so the background task wakes up quickly.
+            Instant::now() + Duration::from_millis(10),
+        )
+        // Zero threshold: sleep until exactly the expiry instant (10 ms from now).
+        .refresh_threshold(Duration::ZERO)
+        .build();
+
+        // Yield once so the background task starts and sleeps until the 10 ms deadline.
+        tokio::task::yield_now().await;
+
+        // Wait for refresh() to be called.  500 ms gives a 50× margin over the 10 ms sleep.
+        tokio::time::timeout(Duration::from_millis(500), notify.notified())
+            .await
+            .expect("refresh() should be called after the initial token expires");
+        // Assert that the initial token was replaced by the refreshed token.
+        let token = tokio::time::timeout(Duration::from_millis(500), _source.get_token())
+            .await
+            .expect("get_token() should not timeout")
+            .expect("get_token() should succeed");
+        assert_eq!(token, "refreshed-token");
     }
 }

@@ -14,7 +14,7 @@
 
 //! Client for the Anapaya AA (Auth/n Auth/z) AuthService.
 
-use anapaya_aa_protobuf::v1::{AuthenticateByKeyRequest, AuthenticateByKeyResponse};
+use anapaya_aa_protobuf::v1::{AuthenticateByKeyRequest, AuthenticateByKeyResponse, Metadata};
 use scion_sdk_reqwest_connect_rpc::client::{CrpcClient, CrpcClientError};
 
 /// Anapaya AA base path.
@@ -24,11 +24,19 @@ pub const AUTH_SERVICE: &str = "AuthService";
 /// Authenticate by key endpoint.
 pub const AUTHENTICATE_BY_KEY: &str = "/AuthenticateByKey";
 
+/// Result of a successful `authenticate_by_key` call.
+pub struct AuthResult {
+    /// The signed SNAP token returned by the AA.
+    pub snap_token: String,
+    /// Optional metadata from the AA service, carrying e.g. a user-scoped discovery URL.
+    pub metadata: Option<Metadata>,
+}
+
 /// Trait for the AA authentication client, enabling mock injection in tests.
 #[cfg_attr(test, mockall::automock)]
 #[async_trait::async_trait]
 pub trait AaAuthClient: Send + Sync {
-    /// Authenticates a client using an API key and returns a SNAP token.
+    /// Authenticates a client using an API key and returns an [`AuthResult`].
     ///
     /// # Parameters
     /// - `api_key`: The API key credential for authentication.
@@ -40,7 +48,7 @@ pub trait AaAuthClient: Send + Sync {
         api_key: String,
         device_id: String,
         requested_validity: i32,
-    ) -> Result<String, CrpcClientError>;
+    ) -> Result<AuthResult, CrpcClientError>;
 }
 
 /// Connect-RPC client for the Anapaya AA `AuthService`.
@@ -71,7 +79,7 @@ impl AaAuthClient for CrpcAaAuthClient {
         api_key: String,
         device_id: String,
         requested_validity: i32,
-    ) -> Result<String, CrpcClientError> {
+    ) -> Result<AuthResult, CrpcClientError> {
         let resp = self
             .client
             .unary_request::<AuthenticateByKeyRequest, AuthenticateByKeyResponse>(
@@ -84,6 +92,9 @@ impl AaAuthClient for CrpcAaAuthClient {
             )
             .await?;
 
-        Ok(resp.snap_token)
+        Ok(AuthResult {
+            snap_token: resp.snap_token,
+            metadata: resp.metadata,
+        })
     }
 }

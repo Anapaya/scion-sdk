@@ -28,8 +28,6 @@ use endhost_api_discovery_models::{EndhostApiGroup, EndhostApiInfo};
 use snap_control::reexport::TokenSource;
 use url::Url;
 
-use crate::aa_client::AAClient;
-
 /// Re-exports of Endhost API discovery models from `endhost_api_discovery_models`
 pub mod models {
     pub use endhost_api_discovery_models::*;
@@ -55,68 +53,6 @@ pub trait EndhostApiSource: Send + Sync + 'static {
     async fn endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError>;
 }
 
-/// Fetches Endhost API discovery information from the AA and returns the available Endhost APIs.
-pub struct AAEndhostApiSource {
-    client: Arc<AAClient>,
-    fallback: Option<Box<dyn EndhostApiSource>>,
-}
-
-impl AAEndhostApiSource {
-    /// Creates a new `AAEndhostApiSource`
-    pub fn new(client: Arc<AAClient>) -> Self {
-        Self {
-            client,
-            fallback: None,
-        }
-    }
-
-    /// Adds a fallback Endhost API source to use if AA-based discovery fails.
-    pub fn with_fallback(mut self, fallback: Box<dyn EndhostApiSource>) -> Self {
-        self.fallback = Some(fallback);
-        self
-    }
-}
-
-#[async_trait::async_trait]
-impl EndhostApiSource for AAEndhostApiSource {
-    /// Returns the available Endhost APIs.
-    async fn endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError> {
-        let discovery_apis = self
-            .client
-            .get_endhost_api_discovery_apis()
-            .await
-            .map_err(|e| {
-                EndhostApiSourceError {
-                    error: e.context("Failed to get Endhost API discovery APIs from AA"),
-                    transient: true,
-                }
-            })?;
-
-        if discovery_apis.is_empty() {
-            return Err(EndhostApiSourceError {
-                error: anyhow::anyhow!("AA returned empty list of Endhost API discovery APIs"),
-                // XXX(ake): An empty list likely indicates a misconfiguration that won't be
-                // resolved by retrying
-                transient: false,
-            });
-        }
-
-        match discover_endhost_apis(discovery_apis, None).await {
-            Ok(apis) => Ok(apis),
-            Err(e) => {
-                tracing::warn!(error = ?e, "Endhost API discovery through AA failed");
-                if let Some(fallback) = &self.fallback {
-                    // If discovery through AA fails, try the fallback source if configured
-                    fallback.endhost_apis().await
-                } else {
-                    // If no fallback is configured, return the original error
-                    Err(e)
-                }
-            }
-        }
-    }
-}
-
 /// A static list of Endhost API discovery services which the stack can use to discover Endhost
 /// APIs.
 pub struct StaticEndhostApiDiscovery {
@@ -124,7 +60,7 @@ pub struct StaticEndhostApiDiscovery {
 }
 
 impl StaticEndhostApiDiscovery {
-    const GLOBAL_DISCOVERY_APIS: &[&'static str] = &["https://scion-discovery.anapaya.net"];
+    const GLOBAL_DISCOVERY_APIS: &[&'static str] = &["https://discovery.scion.anapaya.net"];
 
     /// Creates a new `StaticEndhostApiDiscovery` with the given list of discovery API URLs.
     pub fn new(discovery_apis: Vec<Url>) -> Self {

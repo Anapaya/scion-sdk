@@ -34,8 +34,19 @@ message AuthenticateByKeyRequest {
   int32 requested_validity = 3;
 }
 
+// Metadata returned alongside the authentication response.
+message Metadata {
+  // URL of the endhost API discovery service scoped to the authenticated user.
+  // When present and non-empty, the client should use this URL to discover
+  // authorised endhost APIs instead of the global discovery service at
+  // https://discovery.scion.anapaya.net.
+  optional string endhost_api_discovery_url = 1;
+}
+
 // Response containing the signed SNAP token.
 message AuthenticateByKeyResponse {
   // The signed JWT SNAP token.
   string snap_token = 1;
+  // Optional metadata provided by the AA service.
+  optional Metadata metadata = 2;
 }

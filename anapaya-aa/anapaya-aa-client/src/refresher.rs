@@ -32,6 +32,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use anapaya_aa_protobuf::v1::Metadata;
 use async_trait::async_trait;
 use scion_sdk_reqwest_connect_rpc::token_source::{
     TokenSourceError,
@@ -110,12 +111,16 @@ impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
             requested_validity: 0, // use default TTL
         }
     }
-}
 
-#[async_trait]
-impl<C: AaAuthClient + 'static> TokenRefresher for ApiKeyTokenRefresher<C> {
-    async fn refresh(&self) -> Result<TokenWithExpiry, TokenSourceError> {
-        let snap_token = self
+    /// Fetches a fresh SNAP token and returns it together with the optional
+    /// [`Metadata`] from the AA response.
+    ///
+    /// Use this instead of [`TokenRefresher::refresh`] when you need the
+    /// metadata (e.g. the endhost API discovery URL) from the bootstrap call.
+    pub async fn refresh_with_metadata(
+        &self,
+    ) -> Result<(TokenWithExpiry, Option<Metadata>), TokenSourceError> {
+        let result = self
             .client
             .authenticate_by_key(
                 self.api_key.clone(),
@@ -125,6 +130,7 @@ impl<C: AaAuthClient + 'static> TokenRefresher for ApiKeyTokenRefresher<C> {
             .await
             .map_err(ApiKeyTokenRefresherError::RpcError)?;
 
+        let snap_token = result.snap_token;
         let expires_at =
             expires_at_from_token(&snap_token).map_err(|e| Box::new(e) as TokenSourceError)?;
 
@@ -136,10 +142,21 @@ impl<C: AaAuthClient + 'static> TokenRefresher for ApiKeyTokenRefresher<C> {
             "Fetched new SNAP token via API key"
         );
 
-        Ok(TokenWithExpiry {
-            token: snap_token,
-            expires_at,
-        })
+        Ok((
+            TokenWithExpiry {
+                token: snap_token,
+                expires_at,
+            },
+            result.metadata,
+        ))
+    }
+}
+
+#[async_trait]
+impl<C: AaAuthClient + 'static> TokenRefresher for ApiKeyTokenRefresher<C> {
+    async fn refresh(&self) -> Result<TokenWithExpiry, TokenSourceError> {
+        let (token_with_expiry, _metadata) = self.refresh_with_metadata().await?;
+        Ok(token_with_expiry)
     }
 }
 
@@ -148,7 +165,7 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crate::client::MockAaAuthClient;
+    use crate::client::{AuthResult, MockAaAuthClient};
 
     /// Create a signed HS256 JWT with the given `exp` Unix timestamp.
     ///
@@ -232,7 +249,12 @@ mod tests {
         mock_client
             .expect_authenticate_by_key()
             .once()
-            .returning(move |_, _, _| Ok(snap_token_clone.clone()));
+            .returning(move |_, _, _| {
+                Ok(AuthResult {
+                    snap_token: snap_token_clone.clone(),
+                    metadata: None,
+                })
+            });
 
         let refresher =
             ApiKeyTokenRefresher::new(mock_client, "test-api-key".into(), "test-device".into());
@@ -256,10 +278,8 @@ mod tests {
     #[tokio::test]
     async fn refresh_propagates_rpc_error() {
         let mut mock_client = MockAaAuthClient::new();
-        mock_client
-            .expect_authenticate_by_key()
-            .once()
-            .returning(|_, _, _| {
+        mock_client.expect_authenticate_by_key().once().returning(
+            |_, _, _| -> Result<AuthResult, _> {
                 Err(
                     scion_sdk_reqwest_connect_rpc::client::CrpcClientError::ConnectionError {
                         context: "test: connection refused".into(),
@@ -269,7 +289,8 @@ mod tests {
                         )),
                     },
                 )
-            });
+            },
+        );
 
         let refresher =
             ApiKeyTokenRefresher::new(mock_client, "test-api-key".into(), "test-device".into());
