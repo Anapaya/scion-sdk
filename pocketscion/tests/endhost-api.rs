@@ -31,6 +31,7 @@ use url::Url;
 #[test_log::test(tokio::test)]
 #[timeout(10_000)]
 async fn should_have_working_eh_api() -> anyhow::Result<()> {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let mut state = SharedPocketScionState::new(SystemTime::now());
 
     let ia1 = IsdAsn::from_str("1-1")?;

@@ -41,6 +41,7 @@ scion-sdk-axum-connect-rpc = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
+scion-sdk-utils = { workspace = true }
 snap-tokens = { workspace = true }
 snap-tun = { workspace = true }
 

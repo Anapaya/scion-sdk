@@ -55,7 +55,6 @@ use pocketscion::{
     state::SharedPocketScionState,
 };
 use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
-use scion_sdk_utils::test::install_rustls_crypto_provider;
 use scion_stack::{
     quic::{QuinnConn, ScionQuinnConn},
     scionstack::ScionStackBuilder,
@@ -79,7 +78,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let stat_tracker = Stats::default();
 
-    install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     // Config
     let cfg = ExampleConfig {

@@ -30,6 +30,7 @@ use url::Url;
 #[tokio::test]
 #[timeout(10_000)]
 async fn should_successfully_connect_with_endhost_api_discovery() -> anyhow::Result<()> {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let server_ia = IsdAsn::from_str("1-1")?;
     let client_ia = IsdAsn::from_str("2-1")?;
 

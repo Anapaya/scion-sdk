@@ -25,7 +25,7 @@ use test_log::test;
 /// Test that after the token expires, packets are dropped.
 #[test(tokio::test)]
 async fn token_expiry_causes_send_failure() {
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let ps_handle = minimal_topology(UnderlayType::Snap).await;
 
@@ -99,7 +99,7 @@ async fn token_expiry_causes_send_failure() {
 /// Tests that an updated token with longer expiration time extends the session.
 #[test(tokio::test)]
 async fn updated_token_extends_session() {
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let ps_handle = minimal_topology(UnderlayType::Snap).await;
 

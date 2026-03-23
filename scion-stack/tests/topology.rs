@@ -30,6 +30,7 @@ use snap_tokens::v0::dummy_snap_token;
 #[tokio::test]
 #[timeout(10_000)]
 async fn should_send_receive_with_topology() -> anyhow::Result<()> {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let server_ia = IsdAsn::from_str("1-3")?;
     let client_ia = IsdAsn::from_str("2-3")?;
 

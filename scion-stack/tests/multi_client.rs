@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn multi_client() {
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let ps_handle = minimal_topology(UnderlayType::Snap).await;
 

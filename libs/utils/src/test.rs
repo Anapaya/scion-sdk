@@ -21,7 +21,7 @@ use anapaya_quinn::{
     rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer},
 };
 use ed25519_dalek::pkcs8::EncodePrivateKey;
-use rustls::{crypto::CryptoProvider, pki_types::PrivateKeyDer};
+use rustls::pki_types::PrivateKeyDer;
 
 /// Generate a self-signed certificate with keys derived deterministically from
 /// a fixed seed.
@@ -69,15 +69,4 @@ pub fn generate_cert(
     server_config.transport_config(Arc::new(transport_config));
 
     (cert_der, server_config)
-}
-
-/// Installs the `ring` crypto provider for rustls.
-pub fn install_rustls_crypto_provider() {
-    use std::sync::Once;
-
-    // Ensure this is only run once per process.
-    static START: Once = Once::new();
-    START.call_once(|| {
-        CryptoProvider::install_default(rustls::crypto::ring::default_provider()).unwrap();
-    });
 }

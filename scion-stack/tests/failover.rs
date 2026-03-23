@@ -227,7 +227,7 @@ async fn verify_quic_bidirectional_communication(
 ///       +-----------------------+
 #[test(tokio::test)]
 async fn should_quic_failover_on_link_error() {
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 

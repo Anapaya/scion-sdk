@@ -217,7 +217,7 @@ impl RefreshTokenSourceTask {
                     .expires_at
                     .saturating_duration_since(Instant::now())
                     .as_secs();
-                tracing::info!(
+                tracing::debug!(
                     name = %self.name,
                     token_ttl_secs,
                     "Published initial token without calling refresh"

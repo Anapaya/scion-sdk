@@ -27,7 +27,7 @@ use scion_sdk_axum_connect_rpc::{
     extractor::ConnectRpc,
 };
 use scion_sdk_token_validator::validator::Token;
-use snap_tokens::v0::SnapTokenClaims;
+use snap_tokens::AnyClaims;
 use x25519_dalek::PublicKey;
 
 use crate::{
@@ -188,7 +188,7 @@ pub fn nest_snap_control_api(
 
 async fn get_snap_data_plane_address_handler(
     State(rendezvous_hasher): State<Arc<dyn SnapDataPlaneResolver>>,
-    _snap_token: Extension<SnapTokenClaims>,
+    _snap_token: Extension<AnyClaims>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     ConnectRpc(_request): ConnectRpc<GetSnapDataPlaneRequest>,
 ) -> Result<ConnectRpc<GetSnapDataPlaneResponse>, CrpcError> {
@@ -204,7 +204,7 @@ async fn get_snap_data_plane_address_handler(
 
 async fn register_snaptun_identity_handler(
     State(identity_registry): State<Arc<dyn SnapTunIdentityRegistry>>,
-    snap_token: Extension<SnapTokenClaims>,
+    snap_token: Extension<AnyClaims>,
     ConnectInfo(_): ConnectInfo<std::net::SocketAddr>,
     ConnectRpc(request): ConnectRpc<RegisterSnapTunIdentityRequest>,
 ) -> Result<ConnectRpc<RegisterSnapTunIdentityResponse>, CrpcError> {
@@ -241,7 +241,7 @@ async fn register_snaptun_identity_handler(
         })?)
     };
 
-    let pssid = &snap_token.pssid.to_string();
+    let pssid = &snap_token.pssid();
     if !identity_registry.register(
         Instant::now(),
         pssid,

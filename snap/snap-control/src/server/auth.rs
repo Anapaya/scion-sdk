@@ -23,7 +23,6 @@ use std::{
 
 use axum::body::Body;
 use http::{Request, Response};
-use snap_tokens::AnyClaims;
 use thiserror::Error;
 use tower::{BoxError, Layer, Service};
 
@@ -90,14 +89,7 @@ where
         Box::pin(async move {
             match verifier.verify(&token).await {
                 Ok(token_claims) => {
-                    match token_claims {
-                        AnyClaims::V0(claims) => {
-                            request.extensions_mut().insert(claims);
-                        }
-                        AnyClaims::V1(claims) => {
-                            request.extensions_mut().insert(claims);
-                        }
-                    }
+                    request.extensions_mut().insert(token_claims);
                     inner.call(request).await.map_err(Into::into)
                 }
                 Err(err) => {

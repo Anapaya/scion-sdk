@@ -37,6 +37,7 @@ use test_log::test;
 #[test(tokio::test)]
 #[timeout(10_000)]
 async fn should_receive_scmp_messages() -> anyhow::Result<()> {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let server_ia: IsdAsn = "1-1".parse().unwrap();
 
     let mut state = SharedPocketScionState::new(SystemTime::now());

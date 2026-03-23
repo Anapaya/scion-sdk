@@ -47,6 +47,7 @@ use tokio::{net::UdpSocket, task::yield_now, time::timeout};
 #[test_log::test(tokio::test)]
 #[timeout(10_000)]
 async fn external_as_should_work() -> anyhow::Result<()> {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let mut state = SharedPocketScionState::new(SystemTime::now());
 
     let external_as_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await?);

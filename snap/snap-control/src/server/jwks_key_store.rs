@@ -379,6 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_hit_avoids_second_fetch() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let kid = "test-kid-2";
         let (url, counter) = start_jwks_server(test_jwks_json(kid), None).await;
         let (store, _ct) = make_store(url);
@@ -391,6 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_kid_returns_none_after_fetch() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let (url, _) = start_jwks_server(test_jwks_json("other-kid"), None).await;
         let (store, _ct) = make_store(url);
 
@@ -400,6 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_failure_returns_none() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
         // Use a port that is not listening.
         let url: Url = "http://127.0.0.1:19999/.well-known/jwks.json"
             .parse()
@@ -412,6 +415,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_requests_for_same_kid_trigger_single_fetch() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let kid = "test-kid-concurrent";
         // Add a delay so all concurrent callers are waiting on the watch when
         // the single background fetch completes.
@@ -446,6 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn periodic_refresh_fetches_on_interval() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let kid = "refresh-kid";
         let (url, counter) = start_jwks_server(test_jwks_json(kid), None).await;
         let ct = CancellationToken::new();

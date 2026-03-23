@@ -118,7 +118,9 @@ reqwest = { version = "0.13", features = [
     "http2",
     "json",
     "form",
-    "rustls",
+    # Don't use the "rustls" feature to avoid pulling in aws-lc-rs dependency,
+    # we explicitly depend on "ring" instead.
+    "rustls-no-provider",
 ], default-features = false }
 ring = "0.17.14"
 rustls = { version = "0.23", features = [
