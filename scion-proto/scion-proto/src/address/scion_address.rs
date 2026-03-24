@@ -18,6 +18,7 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use serde::{Deserialize, Serialize};
+use utoipa::{PartialSchema, ToSchema};
 
 use super::{AddressParseError, HostAddr, IsdAsn, ServiceAddr, error::AddressKind};
 use crate::packet::AddressInfo;
@@ -27,6 +28,7 @@ use crate::packet::AddressInfo;
 /// SCION network addresses consist of an ISD-AS number, and either an [IPv4 address][`Ipv4Addr`],
 /// an [IPv6 address][`Ipv6Addr`], or a [SCION service address][`ServiceAddr`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+
 pub enum ScionAddr {
     /// An IPv4 network address
     V4(ScionAddrV4),
@@ -157,6 +159,32 @@ impl core::str::FromStr for ScionAddr {
     }
 }
 
+impl Serialize for ScionAddr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScionAddr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl PartialSchema for ScionAddr {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        String::schema()
+    }
+}
+impl ToSchema for ScionAddr {}
+
 macro_rules! scion_address {
     (
         $(#[$outer:meta])*
@@ -226,6 +254,33 @@ macro_rules! scion_address {
                     .ok_or(AddressParseError($kind))
             }
         }
+
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                self.to_string().serialize(serializer)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                s.parse().map_err(serde::de::Error::custom)
+            }
+        }
+
+
+        impl PartialSchema for $name {
+            fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+                String::schema()
+            }
+        }
+        impl ToSchema for $name {}
     };
 }
 
@@ -235,7 +290,6 @@ scion_address! {
     /// SCION IPv4 addresses consist of a SCION ISD-AS number and an IPv4 address.
     ///
     /// See [`ScionAddr`] for a type encompassing SCION IPv4, IPv6, and Service addresses.
-    #[derive(serde::Serialize, Deserialize)]
     pub struct ScionAddrV4 {host: Ipv4Addr, kind: AddressKind::ScionV4};
 }
 
@@ -245,7 +299,6 @@ scion_address! {
     /// SCION IPv6 addresses consist of a SCION ISD-AS number and an IPv6 address.
     ///
     /// See [`ScionAddr`] for a type encompassing SCION IPv4, IPv6, and Service addresses.
-    #[derive(Serialize, Deserialize)]
     pub struct ScionAddrV6 {host: Ipv6Addr, kind: AddressKind::ScionV6};
 }
 

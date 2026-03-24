@@ -14,7 +14,7 @@
 
 //! External AS DTOs
 
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,13 +26,11 @@ use crate::util::{BtreeMapError, map_btree, map_btree_fallible};
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ExternalAsStateDto {
     pub(crate) interfaces: BTreeMap<u16, ExternalAsInterfaceDto>,
-    pub(crate) beacon_interval: Option<Duration>,
 }
 
 impl From<ExternalAsState> for ExternalAsStateDto {
     fn from(value: ExternalAsState) -> Self {
         ExternalAsStateDto {
-            beacon_interval: value.beacon_interval,
             interfaces: map_btree(value.interfaces, |iface_state| iface_state.into()),
         }
     }
@@ -43,7 +41,6 @@ impl TryFrom<ExternalAsStateDto> for ExternalAsState {
 
     fn try_from(value: ExternalAsStateDto) -> Result<Self, Self::Error> {
         Ok(ExternalAsState {
-            beacon_interval: value.beacon_interval,
             interfaces: map_btree_fallible(value.interfaces, |iface_state| iface_state.try_into())?,
         })
     }

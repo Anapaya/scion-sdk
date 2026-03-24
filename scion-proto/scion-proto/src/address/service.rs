@@ -18,6 +18,8 @@ use std::{
     str::FromStr,
 };
 
+use serde::{Deserialize, Serialize};
+
 use super::{AddressParseError, HostAddr, HostType, error::AddressKind};
 
 /// A SCION service address.
@@ -148,6 +150,25 @@ impl Display for ServiceAddr {
         }
 
         Ok(())
+    }
+}
+
+impl Serialize for ServiceAddr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ServiceAddr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        ServiceAddr::from_str(&s).map_err(serde::de::Error::custom)
     }
 }
 

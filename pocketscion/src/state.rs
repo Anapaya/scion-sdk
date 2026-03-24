@@ -28,7 +28,7 @@ use derive_more::Display;
 use dhsd::DhsdSecret;
 use ipnet::IpNet;
 use pem::Pem;
-use scion_proto::address::{IsdAsn, ServiceAddr};
+use scion_proto::address::{IsdAsn, ScionAddr, ServiceAddr};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use serde::{Deserialize, Serialize};
 use snap_dataplane::state::Id;
@@ -51,13 +51,13 @@ use crate::{
         scion::{
             segment::registry::SegmentRegistry,
             topology::{FastTopologyLookup, ScionTopology},
-            trust_store::TrustStore,
         },
     },
     state::{
         control_service::ControlServiceState,
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryState},
         external_as::ExternalAsState,
+        network_forwarder::NetworkForwarderState,
         snap::{SnapId, SnapState},
     },
     util::{map_btree, map_btree_fallible},
@@ -67,7 +67,8 @@ pub mod control_service;
 pub mod endhost_api_discovery;
 pub mod endhost_segment_lister;
 pub mod external_as;
-pub mod network_sim_socket;
+pub mod network_forwarder;
+pub mod sim_network_stack;
 pub mod simulation_dispatcher;
 pub mod snap;
 
@@ -342,7 +343,7 @@ pub struct SystemState {
     external_ases: BTreeMap<IsdAsn, ExternalAsState>,
     extern_as_handlers: ExternalAsRegistry,
     control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
-    trust_store: TrustStore,
+    network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
 }
 
 impl SystemState {
@@ -363,8 +364,8 @@ impl SystemState {
             endhost_api_discovery_api: Default::default(),
             external_ases: Default::default(),
             extern_as_handlers: Default::default(),
+            network_forwarders: Default::default(),
             control_service_states: Default::default(),
-            trust_store: Default::default(),
         }
     }
 
@@ -422,7 +423,7 @@ impl From<&SystemState> for SystemStateDto {
                 .collect(),
             external_ases: map_btree(system_state.external_ases.clone(), Into::into),
             control_service_states: system_state.control_service_states.clone(),
-            trust_store: system_state.trust_store.clone(),
+            network_forwarders: system_state.network_forwarders.clone(),
         }
     }
 }
@@ -490,7 +491,7 @@ impl TryFrom<SystemStateDto> for SystemState {
             external_ases,
             extern_as_handlers: Default::default(),
             control_service_states: dto.control_service_states,
-            trust_store: dto.trust_store,
+            network_forwarders: dto.network_forwarders,
         })
     }
 }

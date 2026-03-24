@@ -15,12 +15,12 @@
 
 use std::{
     collections::BTreeMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock, RwLockReadGuard},
 };
 
 use anyhow::{Context, Ok};
-use scion_proto::address::IsdAsn;
+use scion_proto::address::{IsdAsn, ScionAddr};
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::ControlPlaneIoConfig;
 use snap_dataplane::tunnel_gateway::state::TunnelGatewayIoConfig;
@@ -48,6 +48,8 @@ pub struct IoConfig {
     endhost_api_discovery_apis: BTreeMap<EndhostApiDiscoveryApiId, SocketAddr>,
     /// Listen Socket for External ASes, keyed by (ISD-AS, interface ID)
     external_ases: BTreeMap<(IsdAsn, u16), SocketAddr>,
+    /// Listen Socket for Network Forwarders
+    network_forwarders: BTreeMap<ScionAddr, SocketAddr>,
 }
 
 impl AsRef<IoConfig> for RwLockReadGuard<'_, IoConfig> {
@@ -76,6 +78,9 @@ impl TryFrom<IoConfigDto> for IoConfig {
         let external_ases = map_btree_fallible(value.external_ases, |v| v.parse())
             .context("invalid external AS API socket address")?;
 
+        let network_forwarders = map_btree_fallible(value.network_forwarders, |v| v.parse())
+            .context("invalid network forwarder socket address")?;
+
         Ok(Self {
             snaps,
             router_sockets,
@@ -86,6 +91,7 @@ impl TryFrom<IoConfigDto> for IoConfig {
             endhost_apis,
             endhost_api_discovery_apis: endhost_discovery_apis,
             external_ases,
+            network_forwarders,
         })
     }
 }
@@ -101,6 +107,7 @@ impl From<&IoConfig> for IoConfigDto {
                 v.to_string()
             }),
             external_ases: map_btree_ref(&config.external_ases, |v| v.to_string()),
+            network_forwarders: map_btree_ref(&config.network_forwarders, |v| v.to_string()),
         }
     }
 }
@@ -308,6 +315,25 @@ impl SharedPocketScionIoConfig {
             .unwrap()
             .external_ases
             .insert((isd_asn, interface_id), addr);
+    }
+
+    /// Gets the socket address for a network forwarder, identified by the SCION address.
+    pub fn network_forwarder_addr(&self, isd_asn: IsdAsn, ip_addr: IpAddr) -> Option<SocketAddr> {
+        self.state
+            .read()
+            .unwrap()
+            .network_forwarders
+            .get(&ScionAddr::new(isd_asn, ip_addr.into()))
+            .cloned()
+    }
+
+    /// Sets the socket address for a network forwarder
+    pub fn set_network_forwarder_addr(&self, isd_asn: IsdAsn, ip_addr: IpAddr, addr: SocketAddr) {
+        self.state
+            .write()
+            .unwrap()
+            .network_forwarders
+            .insert(ScionAddr::new(isd_asn, ip_addr.into()), addr);
     }
 }
 

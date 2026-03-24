@@ -256,10 +256,6 @@ components:
       required:
       - interfaces
       properties:
-        beacon_interval:
-          type:
-          - string
-          - 'null'
         interfaces:
           type: object
           additionalProperties:
@@ -333,6 +329,7 @@ components:
       - endhost_apis
       - endhost_discovery_apis
       - external_ases
+      - network_forwarders
       properties:
         auth_server:
           $ref: '#/components/schemas/IoAuthServerConfigDto'
@@ -384,6 +381,13 @@ components:
             - type: integer
               format: int32
               minimum: 0
+        network_forwarders:
+          type: object
+          description: Listening Sockets for Network Forwarders
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
         router_sockets:
           type: object
           description: The list of SCION router sockets.
@@ -537,6 +541,39 @@ components:
         trc:
           $ref: '#/components/schemas/StoreTrc'
           description: The TRC of this ISD
+    NetworkForwarderState:
+      type: object
+      description: |-
+        Serializable state of a network forwarder stored in the system state. This is used to create a
+        [NetworkForwarder] when the app starts up.
+      required:
+      - local_as
+      - sim_addr
+      - queue_size
+      - forward_addr
+      properties:
+        forward_addr:
+          type: string
+          description: |-
+            The peer to send/receive packets to/from on the real network. The forwarder will only
+            accept packets from this address on the real network, and will forward packets to this
+            address on the real network.
+        local_as:
+          $ref: '#/components/schemas/IsdAsn'
+          description: |-
+            The AS number to listen for packets from the network simulation. The forwarder will only
+            accept packets from this AS on the network simulation, and will forward packets to this AS
+            on the network simulation.
+        queue_size:
+          type: integer
+          description: The maximum number of packets that can be queued for the sim socket.
+          minimum: 0
+        sim_addr:
+          type: string
+          description: |-
+            The IP address to listen for packets from the network simulation. The forwarder will only
+            accept packets to this address from the network simulation, and will forward packets as
+            this address on the network simulation.
     ReadyState:
       type: string
       description: PocketSCION ready state.
@@ -746,7 +783,7 @@ components:
       - endhost_api_discovery_api
       - external_ases
       - control_service_states
-      - trust_store
+      - network_forwarders
       properties:
         auth_server_state:
           $ref: '#/components/schemas/AuthServerStateDto'
@@ -815,6 +852,15 @@ components:
             examples:
             - 1-ff00:0:110
             pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
+        network_forwarders:
+          type: object
+          description: |-
+            The list of network forwarders, keyed by the SCION address of the forwarder on the network
+            simulation.
+          additionalProperties:
+            $ref: '#/components/schemas/NetworkForwarderState'
+          propertyNames:
+            type: string
         root_secret:
           type:
           - string
@@ -849,9 +895,6 @@ components:
         topology:
           $ref: '#/components/schemas/ScionTopologyDto'
           description: Scion Topology used for routing
-        trust_store:
-          $ref: '#/components/schemas/TrustStore'
-          description: Trust store containing the TRCs and AS certificates for each ISD-AS.
     TokenExchangerConfigDto:
       type: object
       description: Token exchanger configuration.

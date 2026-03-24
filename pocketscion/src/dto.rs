@@ -24,7 +24,7 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use scion_proto::address::IsdAsn;
+use scion_proto::address::{IsdAsn, ScionAddr};
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::dto::IoControlPlaneConfigDto;
 use snap_dataplane::tunnel_gateway::state::dto::IoDataPlaneConfigDto;
@@ -32,12 +32,13 @@ use utoipa::ToSchema;
 
 use crate::{
     endhost_api::{EndhostApiId, EndhostApiState},
-    network::scion::{topology::dto::ScionTopologyDto, trust_store::TrustStore},
+    network::scion::topology::dto::ScionTopologyDto,
     state::{
         DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL, RouterId,
         control_service::ControlServiceState,
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryStateDto},
         external_as::dto::ExternalAsStateDto,
+        network_forwarder::NetworkForwarderState,
         snap::SnapId,
     },
 };
@@ -73,8 +74,9 @@ pub struct SystemStateDto {
     pub external_ases: BTreeMap<IsdAsn, ExternalAsStateDto>,
     /// The state of the control service for each ISD-AS
     pub control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
-    /// Trust store containing the TRCs and AS certificates for each ISD-AS.
-    pub trust_store: TrustStore,
+    /// The list of network forwarders, keyed by the SCION address of the forwarder on the network
+    /// simulation.
+    pub network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
 }
 
 fn default_snaptun_keepalive_interval() -> Duration {
@@ -130,6 +132,8 @@ pub struct IoConfigDto {
     pub endhost_discovery_apis: BTreeMap<EndhostApiDiscoveryApiId, String>,
     /// Listening Sockets for External ASes, keyed by (ISD-AS, interface ID)
     pub external_ases: BTreeMap<(IsdAsn, u16), String>,
+    /// Listening Sockets for Network Forwarders
+    pub network_forwarders: BTreeMap<ScionAddr, String>,
 }
 
 /// The I/O configuration of the Auth server.

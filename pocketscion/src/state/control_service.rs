@@ -16,6 +16,7 @@
 
 use std::{
     collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
     net::Ipv6Addr,
     path::PathBuf,
     str::FromStr,
@@ -25,21 +26,21 @@ use std::{
 
 use anyhow::{Context, bail};
 use bytes::Bytes;
-use ipnet::Ipv6Net;
 use scion_proto::{
     address::{IsdAsn, ScionAddr, ServiceAddr, SocketAddr},
-    packet::{ByEndpoint, ScionPacketUdp},
+    packet::ScionPacketUdp,
     path::DataPlanePath,
 };
 use scion_protobuf::control_plane::v1::{
     BeaconRequest, BeaconResponse, ServiceResolutionRequest, ServiceResolutionResponse,
 };
-use scion_sdk_quic_scion::{quic::config::QuicConfig, socket::GenericScionUdpSocket};
+use scion_sdk_quic_scion::quic::config::QuicConfig;
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
 use sciparse::{core::encode::WireEncode, path::onehop::model::OneHopPath};
 use serde::{Deserialize, Serialize};
 use tokio::{task, time::timeout};
 use tracing::instrument;
+use url::Url;
 use utoipa::ToSchema;
 
 use crate::{
@@ -53,7 +54,7 @@ use crate::{
     state::{
         SharedPocketScionState,
         control_service::beaconing::InterfaceBeaconState,
-        network_sim_socket::{NetSimPathProvider, NetSimRawSocket},
+        sim_network_stack::{NetSimPathProvider, NetSimStack},
     },
 };
 
@@ -65,11 +66,11 @@ pub struct ControlService {
     isd_asn: IsdAsn,
     /// Shared state of the PocketSCION instance
     app_state: SharedPocketScionState,
-    /// Socket to send and receive messages to the network simulator
-    net_sim_socket: Arc<NetSimRawSocket<ManualPathProvider>>,
+    /// Network Simulator Socket for communication with the network simulator
+    net_stack: NetSimStack,
     /// Since the CRPC client requires certificates to be stored in files, we need to create temp
     /// files for all certs used
-    certificate_temp_dir: Mutex<CertificateTempDir>,
+    certificate_temp_dir: CertificateTempDir,
 }
 
 impl ControlService {
@@ -93,32 +94,34 @@ impl ControlService {
         // Note: We are currently just hardcoding a address and port for the socket
         let ip = Ipv6Addr::from_str("fd3a:9b6c:1f20:0002::")
             .expect("Failed to parse hardcoded Control Service IP address");
-        let sockaddr = SocketAddr::new(ScionAddr::new(isd_asn, ip.into()), 12345);
+        let stack = NetSimStack::bind(app_state.clone(), isd_asn, ip.into(), 100)?;
 
-        let (sock, receiver) =
-            NetSimRawSocket::new(app_state.clone(), sockaddr, ManualPathProvider::default())?;
-
-        app_state.add_sim_receiver(isd_asn, Ipv6Net::from(ip).into(), Arc::new(receiver)).with_context(|| {
-            format!(
-                "Failed to add Control Service receiver for ISD-AS {} and address {} to shared state",
-                isd_asn, ip
+        // Add CS svc address mapping
+        // XXX: this is currently not used, but will allow remote ASes to resolve the CS address
+        let server_port = 3000;
+        app_state
+            .add_svc_mapping(
+                isd_asn,
+                ServiceAddr::CONTROL,
+                "QUIC".to_string(),
+                std::net::SocketAddr::new(ip.into(), server_port),
             )
-        })?;
-
-        tracing::info!(
-            isd_asn = %isd_asn,
-            virt_addr = %sock.local_addr(),
-            "Control Service started",
-        );
+            .context("Failed to add Control Service address mapping to shared state")?;
 
         let svc = Arc::new(ControlService {
             isd_asn,
             app_state,
-            net_sim_socket: Arc::new(sock),
-            certificate_temp_dir: Mutex::new(CertificateTempDir::new()?),
+            net_stack: stack,
+            certificate_temp_dir: CertificateTempDir::new()?,
         });
 
         task::spawn(svc.clone().start_beaconing());
+
+        tracing::info!(
+            isd_asn = %isd_asn,
+            virt_addr = %ip,
+            "Control Service started",
+        );
 
         Ok(svc)
     }
@@ -161,7 +164,7 @@ impl ControlService {
                             .expect("Interface should have a direction from its AS in topology")
                             .to;
 
-                        let (peer_as, svc_addr, path) = match self
+                        let (dst_as, svc_addr, path) = match self
                             .resolve_svc_addr(our_interface, ServiceAddr::CONTROL)
                             .await
                         {
@@ -191,14 +194,76 @@ impl ControlService {
                             "Sending beacons on interface",
                         );
 
+                        let crpc_client = {
+                            let dst_cert_chain: Vec<StoreCertificateDer> = {
+                                let state_guard = self.app_state.system_state.read().unwrap();
+                                let Some(certs) = state_guard
+                                    .topology
+                                    .as_ref()
+                                    .expect(
+                                        "Topology must be available in system state for beaconing",
+                                    )
+                                    .trust_store
+                                    .ca_certs(&dst_as.isd())
+                                else {
+                                    tracing::warn!(
+                                        interface = %our_interface,
+                                        peer_as = %dst_as,
+                                        "No certificate chain found for peer AS in trust store, skipping sending beacons on this interface",
+                                    );
+
+                                    self.app_state
+                                        .get_control_service_state(self.isd_asn)
+                                        .expect("Control Service state must exist for own ISD-AS")
+                                        .mark_send_result(&our_interface, false, SystemTime::now());
+
+                                    continue;
+                                };
+
+                                certs
+                                    .values()
+                                    .flat_map(|ca| {
+                                        vec![ca.root.cert.clone(), ca.intermediary.cert.clone()]
+                                    })
+                                    .collect()
+                            };
+
+                            match ControlServiceCrpcClient::connect(
+                                Duration::from_secs(10),
+                                &self.net_stack,
+                                dst_as,
+                                svc_addr,
+                                path,
+                                &dst_cert_chain,
+                                &self.certificate_temp_dir,
+                            )
+                            .await
+                            {
+                                Ok(client) => client,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        interface = %our_interface,
+                                        peer_as = %dst_as,
+                                        error = ?e,
+                                        "Failed to create CRPC client for control service in peer AS, skipping sending beacons on this interface",
+                                    );
+
+                                    self.app_state
+                                        .get_control_service_state(self.isd_asn)
+                                        .expect("Control Service state must exist for own ISD-AS")
+                                        .mark_send_result(&our_interface, false, SystemTime::now());
+
+                                    continue;
+                                }
+                            }
+                        };
+
                         for beacon_req in beacon_reqs {
-                            // XXX(ake): As long as we allocate the port of the socket on creation,
-                            // we can not parallelize any request
-                            match self
-                                .send_beacon(peer_as, svc_addr, path.clone(), beacon_req)
+                            match crpc_client
+                                .beacon_request(Duration::from_secs(5), beacon_req)
                                 .await
                             {
-                                Ok(()) => {}
+                                Ok(_) => {}
                                 Err(e) => {
                                     tracing::warn!(
                                         interface = %our_interface,
@@ -213,7 +278,7 @@ impl ControlService {
 
                         tracing::info!(
                             interface = %our_interface,
-                            peer_as = %peer_as,
+                            peer_as = %dst_as,
                             num_beacons,
                             all_succeeded = all_successes,
                             "Finished sending beacons on interface",
@@ -261,6 +326,10 @@ impl ControlService {
     ) -> anyhow::Result<(IsdAsn, std::net::SocketAddr, DataPlanePath)> {
         // Service Address is resolved through a UDP Packet with the Service Resolution Request in
         // the payload.
+        let sock = self
+            .net_stack
+            .bind_udp(0)
+            .context("Failed to bind UDP socket for service resolution")?;
 
         let (this_as, peer_as_if) = {
             let state_guard = self.app_state.system_state.read().unwrap();
@@ -312,16 +381,6 @@ impl ControlService {
             0, // Port is not relevant for service resolution request
         );
 
-        let pkt = ScionPacketUdp::new(
-            ByEndpoint {
-                source: self.net_sim_socket.local_addr(),
-                destination,
-            },
-            path,
-            Bytes::from_owner(prost::Message::encode_to_vec(&payload)),
-        )
-        .context("Failed to construct service resolution request packet")?;
-
         tracing::debug!(
             out_if = %egress_interface,
             peer_as = %peer_as_if.isd_as,
@@ -329,16 +388,20 @@ impl ControlService {
             "Sending service resolution request",
         );
 
-        self.net_sim_socket
-            .send(pkt.into(), ScionNetworkTime::now());
+        let payload = Bytes::from_owner(prost::Message::encode_to_vec(&payload));
+
+        match sock.try_send(destination, path, payload, ScionNetworkTime::now()) {
+            Ok(_) => {}
+            Err(e) => {
+                bail!("Failed to send service resolution request packet: {e}");
+            }
+        }
 
         // Wait for response and parse it as Service Resolution Response
 
-        let res_pkt: ScionPacketUdp = timeout(Duration::from_secs(10), self.net_sim_socket.recv())
+        let res_pkt: ScionPacketUdp = timeout(Duration::from_secs(10), sock.recv())
             .await
-            .context("Failed to receive service resolution response from network simulator")??
-            .try_into()
-            .context("Failed to parse received packet as SCION UDP packet")?;
+            .context("Failed to receive service resolution response from network simulator")??;
 
         let res: ServiceResolutionResponse = prost::Message::decode(&res_pkt.payload()[..])
             .context("Failed to decode service resolution response payload")?;
@@ -377,112 +440,52 @@ impl ControlService {
             "Resolved service address",
         );
 
+        drop(sock);
+        self.net_stack.clean();
+
         Ok((peer_as_if.isd_as, svc_sock_addr, path))
-    }
-
-    /// Sends a beacon request to the control service in the External AS through the network
-    /// simulator, using the given dataplane path to reach the service.
-    pub async fn send_beacon(
-        &self,
-        dst_ia: IsdAsn,
-        service_addr: std::net::SocketAddr,
-        path: DataPlanePath,
-        beacon_req: BeaconRequest,
-    ) -> anyhow::Result<()> {
-        let dst_cert_chain: Vec<StoreCertificateDer> = self
-            .app_state
-            .system_state()
-            .topology
-            .as_ref()
-            .expect("must be available")
-            .trust_store
-            .ca_certs(&dst_ia.isd())
-            .context("Failed to get CA certificate for destination ISD from topology trust store")?
-            .values()
-            .flat_map(|ca| vec![ca.root.cert.clone(), ca.intermediary.cert.clone()])
-            .collect();
-
-        let cert_chain_path = self
-            .certificate_temp_dir
-            .lock()
-            .unwrap()
-            .get_cert_dir(dst_ia, dst_cert_chain)
-            .context("Failed to get certificate path for destination ISD-AS")?;
-
-        let quic_config = QuicConfig {
-            // Peer validation is disabled in general
-            verify_peer: false,
-            ca_certs_directory: Some(
-                cert_chain_path
-                    .to_str()
-                    .context("Certificate path should be valid UTF-8 string")?
-                    .to_string(),
-            ),
-            ..Default::default()
-        };
-
-        // Set the path to be used in the packet
-        self.net_sim_socket.path_provider().set_path(path);
-
-        let crpc_client = CrpcClient::with_quic_config(
-            SocketAddr::new(
-                ScionAddr::new(dst_ia, service_addr.ip().into()),
-                service_addr.port(),
-            ),
-            self.net_sim_socket.clone(),
-            None, // XXX: Peer validation is disabled
-            None,
-            quic_config,
-        )
-        .await?;
-
-        const BEACON_SERVICE_PATH: &str = "/proto.control_plane.v1.SegmentCreationService/Beacon";
-
-        let mut url = addr_to_http_url(service_addr);
-        url.set_path(BEACON_SERVICE_PATH);
-
-        crpc_client
-            .unary_request::<BeaconRequest, BeaconResponse>(http::Method::POST, url, beacon_req)
-            .await?;
-
-        Ok(())
     }
 }
 
 struct CertificateTempDir {
-    existing: HashMap<IsdAsn, PathBuf>,
+    existing: Mutex<HashMap<u64, PathBuf>>,
     temp_dir: tempfile::TempDir,
 }
 impl CertificateTempDir {
     fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            existing: HashMap::new(),
+            existing: Mutex::new(HashMap::new()),
             temp_dir: tempfile::tempdir()
                 .context("Failed to create temporary directory for certificates")?,
         })
     }
 
-    pub fn get_cert_dir(
-        &mut self,
-        isd_asn: IsdAsn,
-        cert_chain: Vec<StoreCertificateDer>,
+    // Creates or gets a temporary file for the given certificate chain, returning the path to the
+    // file. The file is created in a temporary directory that is deleted when the
+    // CertificateTempDir is dropped. If a file for the given certificate chain already exists, the
+    // existing path is returned.
+    pub fn get_or_create_cert_file(
+        &self,
+        cert_chain: &[StoreCertificateDer],
     ) -> anyhow::Result<PathBuf> {
-        if let Some(path) = self.existing.get(&isd_asn) {
+        let mut hasher = DefaultHasher::new();
+        cert_chain.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let mut existing_guard = self.existing.lock().unwrap();
+        if let Some(path) = existing_guard.get(&hash) {
             Ok(path.clone())
         } else {
-            let path =
-                self.temp_dir
-                    .path()
-                    .join(format!("ISD{}-AS{}.crt", isd_asn.isd(), isd_asn.asn()));
+            let path = self.temp_dir.path().join(format!("chain-{}.crt", hash));
 
             let cert_chain = cert_chain
-                .into_iter()
+                .iter()
                 .map(|cert| cert.to_pem())
                 .collect::<Vec<_>>()
                 .join("\n");
 
             std::fs::write(&path, cert_chain)?;
-            self.existing.insert(isd_asn, path.clone());
+            existing_guard.insert(hash, path.clone());
 
             Ok(path)
         }
@@ -575,6 +578,8 @@ impl ControlServiceState {
     }
 }
 
+/// A simple implementation of a path provider for the network simulator that allows manually
+/// setting the path to be returned.
 #[derive(Debug, Default)]
 struct ManualPathProvider {
     pub path: Mutex<Option<DataPlanePath>>,
@@ -660,5 +665,100 @@ impl SharedPocketScionState {
             .context("Control Service state for ISD-AS not found")?;
 
         f(control_service_state)
+    }
+}
+
+// CRPC Client, connected to a Control Service
+
+struct ControlServiceCrpcClient {
+    client: CrpcClient,
+    base_url: Url,
+}
+impl ControlServiceCrpcClient {
+    pub async fn connect(
+        timeout: Duration,
+        network_stack: &NetSimStack,
+        dst_ia: IsdAsn,
+        dst_addr: std::net::SocketAddr,
+        path: DataPlanePath,
+        cert_chain: &[StoreCertificateDer],
+        cert_temp_dir: &CertificateTempDir,
+    ) -> anyhow::Result<ControlServiceCrpcClient> {
+        // Create cert chain file for destination AS
+        let _ = cert_temp_dir
+            .get_or_create_cert_file(cert_chain)
+            .context("Failed to get certificate path for destination ISD-AS")?;
+
+        let quic_config = QuicConfig {
+            // Peer validation is disabled in general
+            verify_peer: false,
+            ca_certs_directory: Some(
+                cert_temp_dir
+                    .temp_dir
+                    .path()
+                    .to_str()
+                    .context("Failed to convert certificate temp directory path to string")?
+                    .to_owned(),
+            ),
+            ..Default::default()
+        };
+
+        let socket = network_stack
+            .bind_udp(0)
+            .context("Failed to bind UDP socket for CRPC client")?
+            .into_path_aware(ManualPathProvider::default());
+
+        // Set the path to be used in the packet
+        socket.path_provider.set_path(path);
+
+        let socket = Arc::new(socket);
+
+        let client_fut = CrpcClient::with_quic_config(
+            SocketAddr::new(
+                ScionAddr::new(dst_ia, dst_addr.ip().into()),
+                dst_addr.port(),
+            ),
+            socket,
+            None, // XXX: Peer validation is disabled
+            None,
+            quic_config,
+        );
+
+        let client = match tokio::time::timeout(timeout, client_fut).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(e)) => bail!("Failed to create CRPC client: {e}"),
+            Err(_) => bail!("Timed out while creating CRPC client"),
+        };
+
+        let url = addr_to_http_url(dst_addr);
+
+        Ok(Self {
+            client,
+            base_url: url,
+        })
+    }
+
+    /// Sends a beacon request to the control service in the External AS through the network
+    pub async fn beacon_request(
+        &self,
+        timeout: Duration,
+        beacon_req: BeaconRequest,
+    ) -> anyhow::Result<BeaconResponse> {
+        const BEACON_SERVICE_PATH: &str = "/proto.control_plane.v1.SegmentCreationService/Beacon";
+
+        let mut url = self.base_url.clone();
+        url.set_path(BEACON_SERVICE_PATH);
+
+        let req = self.client.unary_request::<BeaconRequest, BeaconResponse>(
+            http::Method::POST,
+            url,
+            beacon_req,
+        );
+
+        match tokio::time::timeout(timeout, req).await {
+            Ok(Ok(res)) => Ok(res),
+            Ok(Err(e)) => bail!("Failed to send beacon request through CRPC client: {e}"),
+            Err(_) => bail!("Timed out while sending beacon request through CRPC client"),
+        }
     }
 }

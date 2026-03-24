@@ -16,7 +16,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, SystemTime},
@@ -57,6 +57,8 @@ use crate::{
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryService},
         endhost_segment_lister::StateEndhostSegmentLister,
         external_as::ExternalAsService,
+        network_forwarder::NetworkForwarder,
+        sim_network_stack::NetSimStack,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
         snap::{SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL, SnapId},
     },
@@ -366,6 +368,48 @@ impl PocketScionRuntimeBuilder {
             task_set.spawn_cancellable_task(async move { router_socket.run().await });
         }
 
+        // Start Network Forwarders
+        for (sci_addr, forwarder_state) in pstate.network_forwarders() {
+            let listen_addr = io_config
+                .network_forwarder_addr(sci_addr.isd_asn(), forwarder_state.sim_addr)
+                .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)));
+
+            if sci_addr.local_address().unwrap() != forwarder_state.sim_addr {
+                return Err(io::Error::other(format!(
+                    "SCION address {sci_addr} does not match the simulation address {sim_addr} configured for the forwarder",
+                    sim_addr = forwarder_state.sim_addr
+                )).into());
+            }
+
+            let forwarder = NetworkForwarder::bind(
+                pstate.clone(),
+                forwarder_state.local_as,
+                forwarder_state.sim_addr,
+                forwarder_state.queue_size,
+                listen_addr,
+                forwarder_state.forward_addr,
+            )
+            .await
+            .map_err(|e| {
+                io::Error::other(format!(
+                    "Failed to start network forwarder for {sci_addr}: {e}"
+                ))
+            })?;
+
+            // update the listen address in the io config in case it was not set
+            io_config.set_network_forwarder_addr(
+                sci_addr.isd_asn(),
+                forwarder_state.sim_addr,
+                forwarder.listen_addr(),
+            );
+
+            // Start the forwarder
+            task_set.spawn_cancellable_task(async move {
+                forwarder.run().await;
+                Ok(())
+            });
+        }
+
         ready_state.store(true, std::sync::atomic::Ordering::Relaxed);
 
         // Only start the mgmt API when everything else is ready.
@@ -476,11 +520,18 @@ impl PocketScionRuntime {
             .and_then(|_| self.io_config.router_socket_addr(router_id))
     }
 
+    /// Returns the listening socket address of the network forwarder registered at the given AS and
+    /// IP, if it exists.
+    pub fn network_forwarder_addr(&self, isd_asn: IsdAsn, ip: IpAddr) -> Option<SocketAddr> {
+        self.io_config.network_forwarder_addr(isd_asn, ip)
+    }
+
     /// Returns a handle to the shared state of the PocketSCION runtime.
     pub fn state(&self) -> SharedPocketScionState {
         self.state.clone()
     }
 }
+
 impl PocketScionRuntime {
     /// Dispatches a packet through PocketScions Network simulation.
     ///
@@ -499,6 +550,19 @@ impl PocketScionRuntime {
     ) {
         self.state
             .dispatch_to_network_sim(local_as, local_interface, now, packet);
+    }
+
+    /// Binds a socket to the given address and registers it as a simulation receiver for the given
+    /// AS.
+    ///
+    /// See [NetSimStack] for more details.
+    pub fn bind_sim_network_stack(
+        &self,
+        local_as: IsdAsn,
+        bind_addr: IpAddr,
+        queue_size: usize,
+    ) -> anyhow::Result<NetSimStack> {
+        NetSimStack::bind(self.state.clone(), local_as, bind_addr, queue_size)
     }
 }
 

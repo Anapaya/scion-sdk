@@ -80,7 +80,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
     state.set_topology(topo);
 
     // Setup external AS
-    state.add_external_as(ia2, None)?;
+    state.add_external_as(ia2)?;
     state.add_external_as_interface(ia2, 2, external_as_socket.local_addr()?)?;
 
     // Add network target to internal AS

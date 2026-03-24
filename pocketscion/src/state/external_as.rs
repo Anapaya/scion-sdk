@@ -14,7 +14,6 @@
 
 //! External AS allows clients to discover Endhost APIs available to them
 
-use core::time;
 use std::{
     collections::{BTreeMap, HashMap},
     io,
@@ -337,7 +336,6 @@ impl ExternalAsLink {
 #[derive(Debug, Clone)]
 pub struct ExternalAsState {
     interfaces: BTreeMap<u16, ExternalAsInterfaceState>,
-    beacon_interval: Option<time::Duration>,
 }
 
 /// Serializable State for an External AS interface stored in ExternalAsState
@@ -352,11 +350,7 @@ pub struct ExternalAsInterfaceState {
 
 impl SharedPocketScionState {
     /// Adds a new External AS to the System state with the given IAs
-    pub fn add_external_as(
-        &mut self,
-        isd_asn: IsdAsn,
-        beacon_interval: Option<time::Duration>,
-    ) -> anyhow::Result<()> {
+    pub fn add_external_as(&mut self, isd_asn: IsdAsn) -> anyhow::Result<()> {
         let mut sstate = self.system_state.write().unwrap();
         let is_external = sstate
             .topology
@@ -383,7 +377,6 @@ impl SharedPocketScionState {
             isd_asn,
             ExternalAsState {
                 interfaces: BTreeMap::new(),
-                beacon_interval,
             },
         );
 
