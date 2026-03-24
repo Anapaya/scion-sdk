@@ -15,6 +15,7 @@
 
 pub mod backoff;
 pub mod io;
+pub mod panic_hook;
 pub mod rangeset;
 pub mod rustls;
 pub mod task_handler;
