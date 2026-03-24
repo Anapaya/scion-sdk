@@ -62,8 +62,8 @@ impl<T: TokenRefresher> RefreshTokenSourceBuilder<T> {
     /// When set, the background task publishes this token immediately on startup
     /// without calling [`TokenRefresher::refresh`] first.  The normal refresh
     /// loop then takes over before the token expires.
-    pub fn with_initial_token(mut self, token: String, expires_at: Instant) -> Self {
-        self.initial_token = Some(TokenWithExpiry { token, expires_at });
+    pub fn with_initial_token(mut self, token: TokenWithExpiry) -> Self {
+        self.initial_token = Some(token);
         self
     }
 
@@ -360,11 +360,10 @@ mod tests {
             };
             async move { Ok::<_, TokenSourceError>(token) }
         })
-        .with_initial_token(
-            "initial-token".to_string(),
-            // Far-future expiry: the refresh loop's sleep_until is 1 hour away.
-            Instant::now() + Duration::from_secs(3600),
-        )
+        .with_initial_token(TokenWithExpiry {
+            token: "initial-token".to_string(),
+            expires_at: Instant::now() + Duration::from_secs(3600),
+        })
         // Use a large threshold so even with the 1h expiry the refresh fires far
         // in the future (expires_at - threshold ≈ 60 min - 60 s = ~59 min away).
         .refresh_threshold(Duration::from_secs(60))
@@ -402,11 +401,11 @@ mod tests {
             };
             async move { Ok::<_, TokenSourceError>(token) }
         })
-        .with_initial_token(
-            "initial-token".to_string(),
+        .with_initial_token(TokenWithExpiry {
+            token: "initial-token".to_string(),
             // Expire very soon so the background task wakes up quickly.
-            Instant::now() + Duration::from_millis(10),
-        )
+            expires_at: Instant::now() + Duration::from_millis(10),
+        })
         // Zero threshold: sleep until exactly the expiry instant (10 ms from now).
         .refresh_threshold(Duration::ZERO)
         .build();
