@@ -4628,9 +4628,9 @@ dependencies = [
 
 [[package]]
 name = "squiche"
-version = "0.24.8-ana.1"
+version = "0.24.8-ana.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0078be5491f97d471879d26bf6ed7760939a4251fbb120af30f534dba38c7ce3"
+checksum = "b9b3a10ebd259b95baf43360d91c0a3ed80f81927e88cd411283feb8ab1189c8"
 dependencies = [
  "cmake",
  "either",

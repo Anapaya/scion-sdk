@@ -135,7 +135,7 @@ serde_with = "3.14"
 serde_yaml_ng = "0.10"
 sha2 = "0.10"
 socket2 = "0.6.1"
-squiche = "0.24.8-ana.1"
+squiche = "0.24.8-ana.2"
 tempfile = "3.23"
 test-log = { version = "0.2", features = ["trace"] }
 thiserror = "2.0"
