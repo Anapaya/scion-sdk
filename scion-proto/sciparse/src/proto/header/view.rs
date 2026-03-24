@@ -24,7 +24,7 @@ use std::fmt::Debug;
 
 use crate::{
     core::{
-        layout::Layout,
+        layout::{BitRange, Layout},
         read::unchecked_bit_range_be_read,
         view::{
             View, ViewConversionError,
@@ -39,7 +39,7 @@ use crate::{
     },
     scion::{
         address::host_addr::{HostAddressSizeError, WireHostAddr, WireHostAddrType},
-        identifier::{asn::Asn, isd::Isd},
+        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
     },
 };
 
@@ -67,6 +67,14 @@ impl ScionHeaderView {
             unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::HEADER_LEN_RNG) as u16
                 * 4
         }
+    }
+
+    /// Returns the path type bit range
+    /// TODO(uniquefine): create constructors for SCMP messages that make this function
+    /// unnecessary.
+    #[inline]
+    pub fn path_type_range(&self) -> BitRange {
+        CommonHeaderLayout::PATH_TYPE_RNG
     }
 
     /// Returns the path type
@@ -199,6 +207,20 @@ impl ScionHeaderView {
 }
 // Address header
 impl ScionHeaderView {
+    /// Returns the destination ISD-AS identifier.
+    #[inline]
+    pub fn dst_ia(&self) -> IsdAsn {
+        // SAFETY: buffer size is checked on construction
+        let val = unsafe {
+            unchecked_bit_range_be_read::<u64>(
+                &self.0,
+                AddressHeaderLayout::DST_IA_RNG.shift(CommonHeaderLayout::SIZE_BYTES),
+            )
+        };
+
+        IsdAsn::from_u64(val)
+    }
+
     /// Returns the destination ISD
     pub fn dst_isd(&self) -> Isd {
         // SAFETY: buffer size is checked on construction
@@ -223,6 +245,20 @@ impl ScionHeaderView {
         };
 
         Asn(val)
+    }
+
+    /// Returns the source ISD-AS identifier.
+    #[inline]
+    pub fn src_ia(&self) -> IsdAsn {
+        // SAFETY: buffer size is checked on construction
+        let val = unsafe {
+            unchecked_bit_range_be_read::<u64>(
+                &self.0,
+                AddressHeaderLayout::SRC_IA_RNG.shift(CommonHeaderLayout::SIZE_BYTES),
+            )
+        };
+
+        IsdAsn::from_u64(val)
     }
 
     /// Returns the source ISD
@@ -268,16 +304,26 @@ impl ScionHeaderView {
         WireHostAddr::from_parts(self.dst_addr_type(), raw)
     }
 
+    /// Returns the source host address range in the buffer.
+    /// If you need to read the host address, use [src_host_addr](Self::src_host_addr) instead,
+    /// which also checks that the address type and length match.
+    /// TODO(uniquefine): create constructors for SCMP messages that make this function
+    /// unnecessary.
+    #[inline]
+    pub fn src_host_addr_range(&self) -> BitRange {
+        let src_len = self.src_addr_type().size();
+        let dst_len = self.dst_addr_type().size();
+        AddressHeaderLayout::new(src_len, dst_len)
+            .src_host_addr_range()
+            .shift(CommonHeaderLayout::SIZE_BYTES)
+    }
+
     /// Attempts to return the destination host address
     ///
     /// If the address type and length do not match, an error is returned.
     #[inline]
     pub fn src_host_addr(&self) -> Result<WireHostAddr, HostAddressSizeError> {
-        let src_len = self.src_addr_type().size();
-        let dst_len = self.dst_addr_type().size();
-        let range = AddressHeaderLayout::new(src_len, dst_len)
-            .src_host_addr_range()
-            .shift(CommonHeaderLayout::SIZE_BYTES);
+        let range = self.src_host_addr_range();
 
         // SAFETY: buffer size is checked on construction
         let raw = unsafe { self.0.get_unchecked(range.aligned_byte_range()) };

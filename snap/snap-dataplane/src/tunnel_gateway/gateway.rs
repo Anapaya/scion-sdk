@@ -25,13 +25,16 @@ use ana_gotatun::{
     packet::{Packet, WgKind},
     x25519,
 };
-use bytes::Bytes;
-use scion_proto::{
-    address::{EndhostAddr, HostAddr, IsdAsn, ScionAddr},
-    packet::{ByEndpoint, ScionPacketScmp, ScmpEncodeError, layout::ScionPacketOffset},
-    path::DataPlanePath,
-    scmp::{ParameterProblemCode, ScmpMessage, ScmpParameterProblem},
-    wire_encoding::WireEncodeVec,
+use sciparse::{
+    address::{addr::ScionAddr, host_addr::ScionHostAddr},
+    core::{
+        encode::{EncodeError, WireEncode},
+        view::View as _,
+    },
+    header::model::{AddressHeader, Path},
+    identifier::isd_asn::IsdAsn,
+    packet::model::ScionPacket,
+    payload::scmp::{self, types::ScmpParameterProblemCode},
 };
 use snap_tun::server::{SnapTunAuthorization, SnapTunServer};
 use tokio::{net::UdpSocket, sync::mpsc::Receiver, time::interval};
@@ -100,7 +103,7 @@ where
             SnapTunServer::new(self.static_server_secret, rate_limiter, self.authz);
         let mut timer = interval(Duration::from_millis(250));
         let socket = self.socket;
-        let local_addr = HostAddr::from(
+        let local_addr = ScionHostAddr::from(
             socket
                 .local_addr()
                 .map(|s| s.ip())
@@ -147,32 +150,35 @@ where
                             },
                             TunnResult::WriteToTunnel(packet) => {
                             match inbound_datagram_check(&packet[..], from.ip()) {
-                                Ok(pkt) => {
-                                    self.dispatcher.try_dispatch(pkt);
+                                Ok(view) => {
+                                    self.dispatcher.try_dispatch(view);
                                 }
                                 Err(e) => {
                                     tracing::debug!(err=%e, "Inbound datagram check failed");
                                     // Use the first assigned address for the SCMP reply.
-                                    let (mut temp_buf, mut target_buf) = (self.pool.get(), self.pool.get());
-                                    if Self::create_scmp_error(
+                                    let mut target_buf =  self.pool.get();
+                                    match Self::create_scmp_error(
                                         e,
-                                        Bytes::copy_from_slice(&packet[..]),
                                         local_addr,
                                         // XXX: the SNAP generating SCMP errors
                                         // is a bit bogus, as the SNAP
                                         // technically is not a node in the
                                         // SCION-network.
-                                        EndhostAddr::new(IsdAsn::from(0), from.ip()),
-                                        &mut temp_buf,
+                                        ScionAddr::new(IsdAsn::WILDCARD, from.ip().into()),
                                         &mut target_buf
                                     ) {
+                                        Ok(n) => {
                                         // XXX: `handle_outgoing_packet`
                                         // allocates a new packet for the
                                         // response (see comment in impl)
+                                        target_buf.truncate(n);
                                         let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(target_buf, from) else {continue};
                                         Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(out_pkt), from);
+                                    },
+                                        Err(e) => {
+                                            tracing::error!(err=?e, "Failed to create SCMP error packet");
+                                        }
                                     }
-
                                 }
                             }
                             },
@@ -220,181 +226,58 @@ where
 
     fn create_scmp_error(
         err: PacketPolicyError,
-        data: Bytes,
-        local_addr: HostAddr,
-        dst_addr: EndhostAddr,
-        temp_buf: &mut Packet,
+        local_addr: ScionHostAddr,
+        dst_addr: ScionAddr,
         target_buf: &mut Packet,
-    ) -> bool {
-        let scmp_message = match create_inbound_scmp_error(err, data) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!(error=%e, "Error creating SCMP message");
-                return false;
-            }
-        };
-
-        // Create AS-local empty path for SCMP packet
-        let path = DataPlanePath::EmptyPath;
-
-        let endpoint = ByEndpoint {
-            source: ScionAddr::new(dst_addr.isd_asn(), local_addr),
-            destination: dst_addr.into(),
-        };
-
-        let scmp_packet = match ScionPacketScmp::new(endpoint, path, scmp_message) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(error=%e, "Error creating SCMP packet");
-                return false;
-            }
-        };
-
-        // XXX(dsd): WHY?
-        wire_encode(&scmp_packet, temp_buf, target_buf);
-        true
+    ) -> Result<usize, EncodeError> {
+        let scmp_message = create_inbound_scmp_error(err);
+        let scmp_packet_model = ScionPacket::new_from_parts(
+            AddressHeader {
+                src_ia: dst_addr.isd_asn(),
+                src_host_addr: local_addr.into(),
+                dst_ia: dst_addr.isd_asn(),
+                dst_host_addr: dst_addr.host().into(),
+            },
+            Path::Empty,
+            &scmp_message,
+        );
+        scmp_packet_model.encode(target_buf)
     }
 }
 
-fn create_inbound_scmp_error(
-    err: PacketPolicyError,
-    offending_packet: Bytes,
-) -> Result<ScmpMessage, ScmpEncodeError> {
-    let scmp_message = match err {
-        PacketPolicyError::InvalidCommonHeader(_error) => {
-            ScmpMessage::from(ScmpParameterProblem::new(
-                ParameterProblemCode::InvalidCommonHeader,
+fn create_inbound_scmp_error(err: PacketPolicyError) -> scmp::model::ScmpMessage {
+    match err {
+        PacketPolicyError::MalformedPacket(offending_packet, _) => {
+            scmp::model::ScmpParameterProblem::new(
+                ScmpParameterProblemCode::InvalidCommonHeader,
                 0,
-                offending_packet,
-            ))
+                offending_packet.to_vec(),
+            )
+            .into()
         }
-        PacketPolicyError::InvalidAddressHeader(_error) => {
-            ScmpMessage::from(ScmpParameterProblem::new(
-                ParameterProblemCode::InvalidAddressHeader,
-                ScionPacketOffset::address_header().base().bytes(),
-                offending_packet,
-            ))
+        PacketPolicyError::InvalidSourceAddress(offending_packet_view) => {
+            scmp::model::ScmpParameterProblem::new(
+                ScmpParameterProblemCode::InvalidSourceAddress,
+                offending_packet_view
+                    .header()
+                    .src_host_addr_range()
+                    .containing_byte_range()
+                    .start as u16,
+                offending_packet_view.as_bytes().to_vec(),
+            )
+            .into()
         }
-        PacketPolicyError::InvalidSourceAddress => {
-            ScmpMessage::from(ScmpParameterProblem::new(
-                ParameterProblemCode::InvalidSourceAddress,
-                ScionPacketOffset::address_header()
-                    .src_host_addr(&offending_packet)
-                    .bytes(),
-                offending_packet,
-            ))
+        PacketPolicyError::InvalidPathType(offending_packet_view, _type) => {
+            scmp::model::ScmpParameterProblem::new(
+                ScmpParameterProblemCode::UnknownPathType,
+                offending_packet_view
+                    .header()
+                    .path_type_range()
+                    .containing_byte_range()
+                    .start as u16,
+                offending_packet_view.as_bytes().to_vec(),
+            )
+            .into()
         }
-        PacketPolicyError::InvalidPathType(_type) => {
-            ScmpMessage::from(ScmpParameterProblem::new(
-                ParameterProblemCode::UnknownPathType,
-                ScionPacketOffset::common_header().path_type().bytes(),
-                offending_packet,
-            ))
-        }
-        PacketPolicyError::InvalidPath(_error, offset) => {
-            ScmpMessage::from(ScmpParameterProblem::new(
-                ParameterProblemCode::InvalidPath,
-                offset,
-                offending_packet,
-            ))
-        }
-        PacketPolicyError::InconsistentPathLength(offset) => {
-            ScmpMessage::from(ScmpParameterProblem::new(
-                ParameterProblemCode::InvalidPath,
-                offset,
-                offending_packet,
-            ))
-        }
-        PacketPolicyError::PacketEmptyOrTruncated(offset) => {
-            ScmpMessage::from(ScmpParameterProblem::new(
-                ParameterProblemCode::InvalidPacketSize,
-                offset,
-                offending_packet,
-            ))
-        }
-    };
-
-    Ok(scmp_message)
-}
-
-// XXX(dsd): This function exists to avoid unnecessary vec-allocations when
-// dealing with the scion-proto API.
-//
-// # Arguments
-// * `packet`: the packet to be serialized
-// * `temp_buf`: a temporary buffer that is used for internal packet assembly
-// * `target_buf`: the buffer that will contain the final result
-#[inline]
-pub(crate) fn wire_encode<W, const N: usize>(
-    packet: &W,
-    temp_buf: &mut Packet,
-    target_buf: &mut Packet,
-) where
-    W: WireEncodeVec<N>,
-{
-    temp_buf.truncate(0);
-    let parts = packet.encode_with_unchecked(temp_buf.buf_mut());
-
-    let mut n = 0;
-    parts.iter().for_each(|x| {
-        target_buf.as_mut()[n..(n + x.len())].copy_from_slice(x);
-        n += x.len();
-    });
-    target_buf.truncate(n);
-}
-
-#[cfg(test)]
-mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
-
-    use ana_gotatun::packet::PacketBufPool;
-    use bytes::Bytes;
-    use scion_proto::{
-        address::{HostAddr, IsdAsn, ScionAddr},
-        packet::{ByEndpoint, ScionPacketScmp},
-        path::DataPlanePath,
-        scmp::{ScmpEchoRequest, ScmpMessage},
-        wire_encoding::WireDecode,
-    };
-
-    use crate::tunnel_gateway::gateway::wire_encode;
-
-    #[test]
-    fn wire_encode_decode_scion_packet_scmp_succeeds() {
-        let pool = PacketBufPool::<2048>::new(2);
-
-        // 1. Build a simple SCMP echo request message
-        let echo = ScmpEchoRequest::new(42, 7, Bytes::copy_from_slice(b"hello"));
-        let msg: ScmpMessage = echo.into();
-
-        // 2. Build trivial endhost addresses (loopback, arbitrary ports) Adjust IA / address
-        //    constructors as needed for your test setup.
-        let src_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-        let dst_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
-        let src = ScionAddr::new(IsdAsn::from(0), HostAddr::from(src_ip));
-        let dst = ScionAddr::new(IsdAsn::from(0), HostAddr::from(dst_ip));
-
-        let endhosts = ByEndpoint {
-            source: src,
-            destination: dst,
-        };
-
-        // 3. Use an empty standard path (or a suitable path for your tests)
-        let path = DataPlanePath::EmptyPath; // or DataPlanePath::Standard(...)
-
-        // 4. Build the SCMP packet (this also sets the checksum correctly)
-        let packet =
-            ScionPacketScmp::new(endhosts, path, msg).expect("failed to build SCMP packet");
-
-        let mut buf = pool.get();
-        buf.truncate(0);
-        let mut second_buf = pool.get();
-        wire_encode(&packet, &mut buf, &mut second_buf);
-
-        let decoded = ScionPacketScmp::decode(&mut second_buf.as_ref())
-            .expect("failed to decode SCMP packet");
-
-        assert_eq!(packet.headers.common, decoded.headers.common);
-        assert_eq!(packet.message, decoded.message);
     }
 }

@@ -33,20 +33,22 @@ use sciparse::{
     core::view::{View, ViewConversionError},
     header::model::AddressHeader,
     identifier::isd_asn::IsdAsn,
-    payload::scmp::{
-        encode::ScmpWireEncode,
-        layout::{
-            SCMP_ERROR_MAX_PACKET_SIZE, ScmpDestinationUnreachableLayout,
-            ScmpExternalInterfaceDownLayout, ScmpInternalConnectivityDownLayout,
-            ScmpPacketTooBigLayout, ScmpParameterProblemLayout,
+    payload::{
+        encode::PayloadEncode,
+        scmp::{
+            layout::{
+                SCMP_ERROR_MAX_PACKET_SIZE, ScmpDestinationUnreachableLayout,
+                ScmpExternalInterfaceDownLayout, ScmpInternalConnectivityDownLayout,
+                ScmpPacketTooBigLayout, ScmpParameterProblemLayout,
+            },
+            model::{
+                ScmpDestinationUnreachable, ScmpEchoReply, ScmpEchoRequest,
+                ScmpExternalInterfaceDown, ScmpInternalConnectivityDown, ScmpMessage,
+                ScmpPacketTooBig, ScmpParameterProblem, ScmpTracerouteReply, ScmpTracerouteRequest,
+            },
+            types::{ScmpDestinationUnreachableCode, ScmpParameterProblemCode},
+            view::{ScmpMessageView, ScmpMessageViewMut, ScmpPayloadView},
         },
-        model::{
-            ScmpDestinationUnreachable, ScmpEchoReply, ScmpEchoRequest, ScmpExternalInterfaceDown,
-            ScmpInternalConnectivityDown, ScmpMessage, ScmpPacketTooBig, ScmpParameterProblem,
-            ScmpTracerouteReply, ScmpTracerouteRequest,
-        },
-        types::{ScmpDestinationUnreachableCode, ScmpParameterProblemCode},
-        view::{ScmpMessageView, ScmpMessageViewMut, ScmpPayloadView},
     },
 };
 
@@ -261,9 +263,10 @@ impl ValidScmpMessageOptions {
                 data,
             } => {
                 let model = ScmpEchoRequest::new(*identifier, *sequence_number, data.clone());
-                let required = model.required_size();
+                let required = model.required_size(HEADER_AND_EXTENSIONS_SIZE);
                 let mut buf = vec![0u8; required];
-                let encoded_len = model.encode(&mut buf, &address_header)?;
+                let encoded_len =
+                    model.encode(&mut buf, &address_header, HEADER_AND_EXTENSIONS_SIZE)?;
                 prop_assert_eq!(encoded_len, buf.len());
                 Ok((model.into(), buf))
             }
@@ -273,9 +276,10 @@ impl ValidScmpMessageOptions {
                 data,
             } => {
                 let model = ScmpEchoReply::new(*identifier, *sequence_number, data.clone());
-                let required = model.required_size();
+                let required = model.required_size(HEADER_AND_EXTENSIONS_SIZE);
                 let mut buf = vec![0u8; required];
-                let encoded_len = model.encode(&mut buf, &address_header)?;
+                let encoded_len =
+                    model.encode(&mut buf, &address_header, HEADER_AND_EXTENSIONS_SIZE)?;
                 prop_assert_eq!(encoded_len, buf.len());
                 Ok((model.into(), buf))
             }
@@ -284,9 +288,10 @@ impl ValidScmpMessageOptions {
                 sequence_number,
             } => {
                 let model = ScmpTracerouteRequest::new(*identifier, *sequence_number);
-                let required = model.required_size();
+                let required = model.required_size(HEADER_AND_EXTENSIONS_SIZE);
                 let mut buf = vec![0u8; required];
-                let encoded_len = model.encode(&mut buf, &address_header)?;
+                let encoded_len =
+                    model.encode(&mut buf, &address_header, HEADER_AND_EXTENSIONS_SIZE)?;
                 buf.truncate(encoded_len);
                 Ok((model.into(), buf))
             }
@@ -302,9 +307,10 @@ impl ValidScmpMessageOptions {
                     IsdAsn::from_u64(*isd_asn),
                     *interface_id,
                 );
-                let required = model.required_size();
+                let required = model.required_size(HEADER_AND_EXTENSIONS_SIZE);
                 let mut buf = vec![0u8; required];
-                let encoded_len = model.encode(&mut buf, &address_header)?;
+                let encoded_len =
+                    model.encode(&mut buf, &address_header, HEADER_AND_EXTENSIONS_SIZE)?;
                 prop_assert_eq!(encoded_len, buf.len());
                 Ok((model.into(), buf))
             }
@@ -319,6 +325,7 @@ fn exec_every_view_function(view: &mut ScmpPayloadView) {
     let _ = view.message_type();
     let _ = view.code();
     let _ = view.checksum();
+    let _ = view.dst_port();
 
     match view.message() {
         ScmpMessageView::DestinationUnreachable(v) => {

@@ -4195,9 +4195,11 @@ version = "0.0.0"
 dependencies = [
  "aes",
  "bitflags",
+ "bytes",
  "cmac",
  "proptest",
  "proptest-derive",
+ "scion-proto",
  "thiserror 2.0.18",
  "tinyvec",
 ]
@@ -4534,6 +4536,7 @@ dependencies = [
  "scion-proto",
  "scion-sdk-observability",
  "scion-sdk-utils",
+ "sciparse",
  "serde",
  "snap-tun",
  "test-log",

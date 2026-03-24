@@ -15,25 +15,30 @@
 //! SCMP message models.
 
 use crate::{
-    core::{encode::EncodeError, layout::Layout as _, write::unchecked_bit_range_be_write},
+    core::{
+        encode::InvalidStructureError, layout::Layout as _, write::unchecked_bit_range_be_write,
+    },
     header::model::AddressHeader,
     identifier::isd_asn::IsdAsn,
-    payload::scmp::{
-        SCMP_PROTOCOL_NUMBER,
-        encode::ScmpWireEncode,
-        layout::{
-            ScmpDestinationUnreachableLayout, ScmpEchoReplyLayout, ScmpEchoRequestLayout,
-            ScmpExternalInterfaceDownLayout, ScmpInternalConnectivityDownLayout,
-            ScmpPacketTooBigLayout, ScmpParameterProblemLayout, ScmpTracerouteReplyLayout,
-            ScmpTracerouteRequestLayout, ScmpUnknownMessageLayout,
-        },
-        types::{ScmpDestinationUnreachableCode, ScmpMessageType, ScmpParameterProblemCode},
-        view::{
-            ScmpDestinationUnreachableMessageView, ScmpEchoReplyMessageView,
-            ScmpEchoRequestMessageView, ScmpExternalInterfaceDownMessageView,
-            ScmpInternalConnectivityDownMessageView, ScmpMessageView, ScmpPacketTooBigMessageView,
-            ScmpParameterProblemMessageView, ScmpTracerouteReplyMessageView,
-            ScmpTracerouteRequestMessageView, ScmpUnknownMessageView,
+    payload::{
+        ProtocolNumber,
+        encode::PayloadEncode,
+        scmp::{
+            layout::{
+                ScmpDestinationUnreachableLayout, ScmpEchoReplyLayout, ScmpEchoRequestLayout,
+                ScmpExternalInterfaceDownLayout, ScmpInternalConnectivityDownLayout,
+                ScmpPacketTooBigLayout, ScmpParameterProblemLayout, ScmpTracerouteReplyLayout,
+                ScmpTracerouteRequestLayout, ScmpUnknownMessageLayout,
+            },
+            types::{ScmpDestinationUnreachableCode, ScmpMessageType, ScmpParameterProblemCode},
+            view::{
+                ScmpDestinationUnreachableMessageView, ScmpEchoReplyMessageView,
+                ScmpEchoRequestMessageView, ScmpExternalInterfaceDownMessageView,
+                ScmpInternalConnectivityDownMessageView, ScmpMessageView,
+                ScmpPacketTooBigMessageView, ScmpParameterProblemMessageView,
+                ScmpTracerouteReplyMessageView, ScmpTracerouteRequestMessageView,
+                ScmpUnknownMessageView,
+            },
         },
     },
     scion::checksum::ChecksumDigest,
@@ -172,19 +177,34 @@ impl ScmpMessage {
         }
     }
 }
-impl ScmpWireEncode for ScmpMessage {
+impl PayloadEncode for &ScmpMessage {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
-        match self {
-            Self::DestinationUnreachable(x) => x.required_size(header_and_extensions_size),
-            Self::PacketTooBig(x) => x.required_size(header_and_extensions_size),
-            Self::ParameterProblem(x) => x.required_size(header_and_extensions_size),
-            Self::ExternalInterfaceDown(x) => x.required_size(header_and_extensions_size),
-            Self::InternalConnectivityDown(x) => x.required_size(header_and_extensions_size),
-            Self::EchoRequest(x) => x.required_size(),
-            Self::EchoReply(x) => x.required_size(),
-            Self::TracerouteRequest(x) => x.required_size(),
-            Self::TracerouteReply(x) => x.required_size(),
-            Self::Unknown(x) => x.required_size(),
+        match *self {
+            ScmpMessage::DestinationUnreachable(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::PacketTooBig(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::ParameterProblem(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::ExternalInterfaceDown(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::InternalConnectivityDown(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::EchoRequest(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::EchoReply(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::TracerouteRequest(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::TracerouteReply(x) => x.required_size(header_and_extensions_size),
+            ScmpMessage::Unknown(x) => x.required_size(header_and_extensions_size),
+        }
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        match *self {
+            ScmpMessage::DestinationUnreachable(x) => x.wire_valid(),
+            ScmpMessage::PacketTooBig(x) => x.wire_valid(),
+            ScmpMessage::ParameterProblem(x) => x.wire_valid(),
+            ScmpMessage::ExternalInterfaceDown(x) => x.wire_valid(),
+            ScmpMessage::InternalConnectivityDown(x) => x.wire_valid(),
+            ScmpMessage::EchoRequest(x) => x.wire_valid(),
+            ScmpMessage::EchoReply(x) => x.wire_valid(),
+            ScmpMessage::TracerouteRequest(x) => x.wire_valid(),
+            ScmpMessage::TracerouteReply(x) => x.wire_valid(),
+            ScmpMessage::Unknown(x) => x.wire_valid(),
         }
     }
 
@@ -195,29 +215,55 @@ impl ScmpWireEncode for ScmpMessage {
         header_and_extensions_size: usize,
     ) -> usize {
         unsafe {
-            match self {
-                Self::DestinationUnreachable(x) => {
+            match *self {
+                ScmpMessage::DestinationUnreachable(x) => {
                     x.encode_unchecked(buf, address_header, header_and_extensions_size)
                 }
-                Self::PacketTooBig(x) => {
+                ScmpMessage::PacketTooBig(x) => {
                     x.encode_unchecked(buf, address_header, header_and_extensions_size)
                 }
-                Self::ParameterProblem(x) => {
+                ScmpMessage::ParameterProblem(x) => {
                     x.encode_unchecked(buf, address_header, header_and_extensions_size)
                 }
-                Self::ExternalInterfaceDown(x) => {
+                ScmpMessage::ExternalInterfaceDown(x) => {
                     x.encode_unchecked(buf, address_header, header_and_extensions_size)
                 }
-                Self::InternalConnectivityDown(x) => {
+                ScmpMessage::InternalConnectivityDown(x) => {
                     x.encode_unchecked(buf, address_header, header_and_extensions_size)
                 }
-                Self::EchoRequest(x) => x.encode_unchecked(buf, address_header),
-                Self::EchoReply(x) => x.encode_unchecked(buf, address_header),
-                Self::TracerouteRequest(x) => x.encode_unchecked(buf, address_header),
-                Self::TracerouteReply(x) => x.encode_unchecked(buf, address_header),
-                Self::Unknown(x) => x.encode_unchecked(buf, address_header),
+                ScmpMessage::EchoRequest(x) => {
+                    x.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
+                ScmpMessage::EchoReply(x) => {
+                    x.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
+                ScmpMessage::TracerouteRequest(x) => {
+                    x.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
+                ScmpMessage::TracerouteReply(x) => {
+                    x.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
+                ScmpMessage::Unknown(x) => {
+                    x.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
             }
         }
+    }
+}
+impl PayloadEncode for ScmpMessage {
+    fn required_size(&self, header_and_extensions_size: usize) -> usize {
+        (&self).required_size(header_and_extensions_size)
+    }
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        (&self).wire_valid()
+    }
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
+        unsafe { (&self).encode_unchecked(buf, address_header, header_and_extensions_size) }
     }
 }
 impl From<ScmpErrorMessage> for ScmpMessage {
@@ -285,7 +331,7 @@ impl ScmpErrorMessage {
     }
 }
 
-impl ScmpWireEncode for ScmpErrorMessage {
+impl PayloadEncode for ScmpErrorMessage {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         match self {
             Self::DestinationUnreachable(m) => m.required_size(header_and_extensions_size),
@@ -293,6 +339,16 @@ impl ScmpWireEncode for ScmpErrorMessage {
             Self::ParameterProblem(m) => m.required_size(header_and_extensions_size),
             Self::ExternalInterfaceDown(m) => m.required_size(header_and_extensions_size),
             Self::InternalConnectivityDown(m) => m.required_size(header_and_extensions_size),
+        }
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        match self {
+            Self::DestinationUnreachable(x) => x.wire_valid(),
+            Self::PacketTooBig(x) => x.wire_valid(),
+            Self::ParameterProblem(x) => x.wire_valid(),
+            Self::ExternalInterfaceDown(x) => x.wire_valid(),
+            Self::InternalConnectivityDown(x) => x.wire_valid(),
         }
     }
 
@@ -363,13 +419,22 @@ impl ScmpInformationalMessage {
         }
     }
 }
-impl ScmpWireEncode for ScmpInformationalMessage {
-    fn required_size(&self, _header_and_extensions_size: usize) -> usize {
+impl PayloadEncode for ScmpInformationalMessage {
+    fn required_size(&self, header_and_extensions_size: usize) -> usize {
         match self {
-            Self::EchoRequest(m) => m.required_size(),
-            Self::EchoReply(m) => m.required_size(),
-            Self::TracerouteRequest(m) => m.required_size(),
-            Self::TracerouteReply(m) => m.required_size(),
+            Self::EchoRequest(m) => m.required_size(header_and_extensions_size),
+            Self::EchoReply(m) => m.required_size(header_and_extensions_size),
+            Self::TracerouteRequest(m) => m.required_size(header_and_extensions_size),
+            Self::TracerouteReply(m) => m.required_size(header_and_extensions_size),
+        }
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        match self {
+            Self::EchoRequest(x) => x.wire_valid(),
+            Self::EchoReply(x) => x.wire_valid(),
+            Self::TracerouteRequest(x) => x.wire_valid(),
+            Self::TracerouteReply(x) => x.wire_valid(),
         }
     }
 
@@ -377,14 +442,22 @@ impl ScmpWireEncode for ScmpInformationalMessage {
         &self,
         buf: &mut [u8],
         address_header: &AddressHeader,
-        _header_and_extensions_size: usize,
+        header_and_extensions_size: usize,
     ) -> usize {
         unsafe {
             match self {
-                Self::EchoRequest(m) => m.encode_unchecked(buf, address_header),
-                Self::EchoReply(m) => m.encode_unchecked(buf, address_header),
-                Self::TracerouteRequest(m) => m.encode_unchecked(buf, address_header),
-                Self::TracerouteReply(m) => m.encode_unchecked(buf, address_header),
+                Self::EchoRequest(m) => {
+                    m.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
+                Self::EchoReply(m) => {
+                    m.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
+                Self::TracerouteRequest(m) => {
+                    m.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
+                Self::TracerouteReply(m) => {
+                    m.encode_unchecked(buf, address_header, header_and_extensions_size)
+                }
             }
         }
     }
@@ -463,13 +536,17 @@ impl ScmpDestinationUnreachable {
         }
     }
 }
-impl ScmpWireEncode for ScmpDestinationUnreachable {
+impl PayloadEncode for ScmpDestinationUnreachable {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpDestinationUnreachableLayout::from_offending_packet_length(
             self.offending_packet.len(),
             header_and_extensions_size,
         )
         .size_bytes()
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
     }
 
     unsafe fn encode_unchecked(
@@ -503,7 +580,7 @@ impl ScmpWireEncode for ScmpDestinationUnreachable {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
+                ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
             )
             .checksum();
@@ -530,13 +607,17 @@ impl ScmpPacketTooBig {
         }
     }
 }
-impl ScmpWireEncode for ScmpPacketTooBig {
+impl PayloadEncode for ScmpPacketTooBig {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpPacketTooBigLayout::from_offending_packet_length(
             self.offending_packet.len(),
             header_and_extensions_size,
         )
         .size_bytes()
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
     }
 
     unsafe fn encode_unchecked(
@@ -571,7 +652,7 @@ impl ScmpWireEncode for ScmpPacketTooBig {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
+                ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
             )
             .checksum();
@@ -604,13 +685,17 @@ impl ScmpParameterProblem {
         }
     }
 }
-impl ScmpWireEncode for ScmpParameterProblem {
+impl PayloadEncode for ScmpParameterProblem {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpParameterProblemLayout::from_offending_packet_length(
             self.offending_packet.len(),
             header_and_extensions_size,
         )
         .size_bytes()
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
     }
 
     unsafe fn encode_unchecked(
@@ -645,7 +730,7 @@ impl ScmpWireEncode for ScmpParameterProblem {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
+                ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
             )
             .checksum();
@@ -675,13 +760,17 @@ impl ScmpExternalInterfaceDown {
         }
     }
 }
-impl ScmpWireEncode for ScmpExternalInterfaceDown {
+impl PayloadEncode for ScmpExternalInterfaceDown {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpExternalInterfaceDownLayout::from_offending_packet_length(
             self.offending_packet.len(),
             header_and_extensions_size,
         )
         .size_bytes()
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
     }
 
     unsafe fn encode_unchecked(
@@ -716,7 +805,7 @@ impl ScmpWireEncode for ScmpExternalInterfaceDown {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
+                ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
             )
             .checksum();
@@ -749,13 +838,17 @@ impl ScmpInternalConnectivityDown {
         }
     }
 }
-impl ScmpWireEncode for ScmpInternalConnectivityDown {
+impl PayloadEncode for ScmpInternalConnectivityDown {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpInternalConnectivityDownLayout::from_offending_packet_length(
             self.offending_packet.len(),
             header_and_extensions_size,
         )
         .size_bytes()
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
     }
 
     unsafe fn encode_unchecked(
@@ -799,7 +892,7 @@ impl ScmpWireEncode for ScmpInternalConnectivityDown {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
+                ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
             )
             .checksum();
@@ -872,19 +965,23 @@ impl ScmpEchoRequest {
         }
     }
 }
-impl ScmpEchoRequest {
+impl PayloadEncode for ScmpEchoRequest {
     /// Returns the required size of the SCMP EchoRequest message.
-    pub fn required_size(&self) -> usize {
+    /// _header and extensions size is ignored for this message.
+    fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpEchoRequestLayout::from_data_length(self.data.len()).size_bytes()
     }
 
-    /// Encodes the SCMP EchoRequest message into the provided buffer.
-    ///
-    /// Returns the number of bytes written.
-    ///
-    /// ## SAFETY
-    /// The buffer must be at least `self.required_size()` bytes long.
-    pub unsafe fn encode_unchecked(&self, buf: &mut [u8], address_header: &AddressHeader) -> usize {
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
         use ScmpEchoRequestLayout as L;
         unsafe {
             unchecked_bit_range_be_write::<u8>(
@@ -905,26 +1002,13 @@ impl ScmpEchoRequest {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
-                &buf[0..self.required_size()],
+                ProtocolNumber::Scmp.into(),
+                &buf[0..self.required_size(header_and_extensions_size)],
             )
             .checksum();
             unchecked_bit_range_be_write::<u16>(buf, L::CHECKSUM_RNG, checksum);
-            self.required_size()
+            self.required_size(header_and_extensions_size)
         }
-    }
-
-    /// Encodes the SCMP EchoRequest message into the provided buffer.
-    pub fn encode(
-        &self,
-        buf: &mut [u8],
-        address_header: &AddressHeader,
-    ) -> Result<usize, EncodeError> {
-        let required_size = self.required_size();
-        if buf.len() < required_size {
-            return Err(EncodeError::BufferTooSmall(required_size));
-        }
-        Ok(unsafe { self.encode_unchecked(buf, address_header) })
     }
 }
 
@@ -945,19 +1029,23 @@ impl ScmpEchoReply {
         }
     }
 }
-impl ScmpEchoReply {
+impl PayloadEncode for ScmpEchoReply {
     /// Returns the required size of the SCMP EchoReply message.
-    pub fn required_size(&self) -> usize {
+    /// _header and extensions size is ignored for this message.
+    fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpEchoReplyLayout::from_data_length(self.data.len()).size_bytes()
     }
 
-    /// Encodes the SCMP EchoReply message into the provided buffer.
-    ///
-    /// Returns the number of bytes written.
-    ///
-    /// ## SAFETY
-    /// The buffer must be at least `self.required_size()` bytes long.
-    pub unsafe fn encode_unchecked(&self, buf: &mut [u8], address_header: &AddressHeader) -> usize {
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
         use ScmpEchoReplyLayout as L;
         unsafe {
             unchecked_bit_range_be_write::<u8>(buf, L::TYPE_RNG, ScmpMessageType::EchoReply.into());
@@ -974,26 +1062,13 @@ impl ScmpEchoReply {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
-                &buf[0..self.required_size()],
+                ProtocolNumber::Scmp.into(),
+                &buf[0..self.required_size(header_and_extensions_size)],
             )
             .checksum();
             unchecked_bit_range_be_write::<u16>(buf, L::CHECKSUM_RNG, checksum);
-            self.required_size()
+            self.required_size(header_and_extensions_size)
         }
-    }
-
-    /// Encodes the SCMP EchoReply message into the provided buffer.
-    pub fn encode(
-        &self,
-        buf: &mut [u8],
-        address_header: &AddressHeader,
-    ) -> Result<usize, EncodeError> {
-        let required_size = self.required_size();
-        if buf.len() < required_size {
-            return Err(EncodeError::BufferTooSmall(required_size));
-        }
-        Ok(unsafe { self.encode_unchecked(buf, address_header) })
     }
 }
 
@@ -1010,19 +1085,23 @@ impl ScmpTracerouteRequest {
         }
     }
 }
-impl ScmpTracerouteRequest {
+impl PayloadEncode for ScmpTracerouteRequest {
     /// Returns the required size of the SCMP TracerouteRequest message.
-    pub fn required_size(&self) -> usize {
+    /// _header and extensions size is ignored for this message.
+    fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpTracerouteRequestLayout.size_bytes()
     }
 
-    /// Encodes the SCMP TracerouteRequest message into the provided buffer.
-    ///
-    /// Returns the number of bytes written.
-    ///
-    /// ## SAFETY
-    /// The buffer must be at least `self.required_size()` bytes long.
-    pub unsafe fn encode_unchecked(&self, buf: &mut [u8], address_header: &AddressHeader) -> usize {
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
         use ScmpTracerouteRequestLayout as L;
         unsafe {
             unchecked_bit_range_be_write::<u8>(
@@ -1041,26 +1120,13 @@ impl ScmpTracerouteRequest {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
-                &buf[0..self.required_size()],
+                ProtocolNumber::Scmp.into(),
+                &buf[0..self.required_size(header_and_extensions_size)],
             )
             .checksum();
             unchecked_bit_range_be_write::<u16>(buf, L::CHECKSUM_RNG, checksum);
-            self.required_size()
+            self.required_size(header_and_extensions_size)
         }
-    }
-
-    /// Encodes the SCMP TracerouteRequest message into the provided buffer.
-    pub fn encode(
-        &self,
-        buf: &mut [u8],
-        address_header: &AddressHeader,
-    ) -> Result<usize, EncodeError> {
-        let required_size = self.required_size();
-        if buf.len() < required_size {
-            return Err(EncodeError::BufferTooSmall(required_size));
-        }
-        Ok(unsafe { self.encode_unchecked(buf, address_header) })
     }
 }
 
@@ -1084,19 +1150,23 @@ impl ScmpTracerouteReply {
         }
     }
 }
-impl ScmpTracerouteReply {
+impl PayloadEncode for ScmpTracerouteReply {
     /// Returns the required size of the SCMP TracerouteReply message.
-    pub fn required_size(&self) -> usize {
+    /// _header and extensions size is ignored for this message.
+    fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpTracerouteReplyLayout.size_bytes()
     }
 
-    /// Encodes the SCMP TracerouteReply message into the provided buffer.
-    ///
-    /// Returns the number of bytes written.
-    ///
-    /// ## SAFETY
-    /// The buffer must be at least `self.required_size()` bytes long.
-    pub unsafe fn encode_unchecked(&self, buf: &mut [u8], address_header: &AddressHeader) -> usize {
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
         use ScmpTracerouteReplyLayout as L;
         unsafe {
             unchecked_bit_range_be_write::<u8>(
@@ -1114,26 +1184,13 @@ impl ScmpTracerouteReply {
             // Calculate and set the checksum.
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
-                &buf[0..self.required_size()],
+                ProtocolNumber::Scmp.into(),
+                &buf[0..self.required_size(header_and_extensions_size)],
             )
             .checksum();
             unchecked_bit_range_be_write::<u16>(buf, L::CHECKSUM_RNG, checksum);
-            self.required_size()
+            self.required_size(header_and_extensions_size)
         }
-    }
-
-    /// Encodes the SCMP TracerouteReply message into the provided buffer.
-    pub fn encode(
-        &self,
-        buf: &mut [u8],
-        address_header: &AddressHeader,
-    ) -> Result<usize, EncodeError> {
-        let required_size = self.required_size();
-        if buf.len() < required_size {
-            return Err(EncodeError::BufferTooSmall(required_size));
-        }
-        Ok(unsafe { self.encode_unchecked(buf, address_header) })
     }
 }
 
@@ -1166,22 +1223,26 @@ impl ScmpMessageUnknown {
         }
     }
 }
-impl ScmpMessageUnknown {
+impl PayloadEncode for ScmpMessageUnknown {
     /// Returns the required size of the SCMP Unknown message.
-    pub fn required_size(&self) -> usize {
+    /// _header and extensions size is ignored for this message.
+    fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpUnknownMessageLayout::from_message_specific_data_length(
             self.message_specific_data.len(),
         )
         .size_bytes()
     }
 
-    /// Encodes the SCMP Unknown message into the provided buffer.
-    ///
-    /// Returns the number of bytes written.
-    ///
-    /// ## SAFETY
-    /// The buffer must be at least `self.required_size()` bytes long.
-    pub unsafe fn encode_unchecked(&self, buf: &mut [u8], address_header: &AddressHeader) -> usize {
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        Ok(())
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
         use ScmpUnknownMessageLayout as L;
 
         unsafe {
@@ -1200,27 +1261,14 @@ impl ScmpMessageUnknown {
 
             let checksum = ChecksumDigest::with_pseudoheader(
                 address_header,
-                SCMP_PROTOCOL_NUMBER,
-                &buf[0..layout.size_bytes()],
+                ProtocolNumber::Scmp.into(),
+                &buf[0..self.required_size(header_and_extensions_size)],
             )
             .checksum();
             unchecked_bit_range_be_write::<u16>(buf, L::CHECKSUM_RNG, checksum);
 
-            layout.size_bytes()
+            self.required_size(header_and_extensions_size)
         }
-    }
-
-    /// Encodes the SCMP Unknown message into the provided buffer.
-    pub fn encode(
-        &self,
-        buf: &mut [u8],
-        address_header: &AddressHeader,
-    ) -> Result<usize, EncodeError> {
-        let required_size = self.required_size();
-        if buf.len() < required_size {
-            return Err(EncodeError::BufferTooSmall(required_size));
-        }
-        Ok(unsafe { self.encode_unchecked(buf, address_header) })
     }
 }
 impl From<ScmpMessageUnknown> for ScmpMessage {

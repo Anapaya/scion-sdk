@@ -12,25 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCMP-specific encoding trait.
+//! SCION packet payload encoding trait.
 //!
-//! This trait mirrors the encoding pattern used by the SCMP models in this
-//! module: a size computation that depends on the SCION header and extensions
-//! size, and an unchecked encoder that requires the caller to provide a
-//! sufficiently large buffer.
+//! This trait mirrors the [crate::core::encode::WireEncode] trait but allows payload encodings to
+//! depend on the total size of the SCION packet and contents of the SCION
+//! address header.
 
 use crate::{core::encode::EncodeError, header::model::AddressHeader};
 
-/// Allows encoding SCMP models to wire format.
+/// Allows encoding scion packet payload models to wire format.
 ///
 /// Implementors are responsible for correctly reporting the number of bytes
 /// that will be written and for upholding the safety requirements of
 /// `encode_unchecked`.
-pub trait ScmpWireEncode {
+pub trait PayloadEncode {
     /// Returns the size required for the wire encoding.
     ///
     /// The `header_and_extensions_size` parameter is the size in bytes of the
-    /// SCION header and all extensions that precede the SCMP payload.
+    /// SCION header and all extensions that precede the payload.
     ///
     /// ## Safety
     /// This size must be correct, it is used to validate buffer sizes in
@@ -71,5 +70,39 @@ pub trait ScmpWireEncode {
 
         // SAFETY: buffer length is checked above.
         Ok(unsafe { self.encode_unchecked(buf, address_header, header_and_extensions_size) })
+    }
+
+    /// Validates that all fields in the structure are valid for encoding.
+    ///
+    /// Note: This only checks the minimal set of fields required for encoding, do not expect
+    /// comprehensive validation.
+    ///
+    /// Returns Ok(()) if valid, otherwise a static error reference.
+    fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError>;
+}
+
+/// Encodes a slice of bytes as the payload disregarding the address header and header and
+/// extensions size.
+impl PayloadEncode for &[u8] {
+    fn required_size(&self, _header_and_extensions_size: usize) -> usize {
+        self.len()
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        _address_header: &AddressHeader,
+        _header_and_extensions_size: usize,
+    ) -> usize {
+        // SAFETY: we know the buffer is large enough.
+        // See the comment on [`PayloadEncode::encode_unchecked`].
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.as_ptr(), buf.as_mut_ptr(), self.len());
+        }
+        self.len()
+    }
+
+    fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
+        Ok(())
     }
 }

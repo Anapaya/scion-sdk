@@ -13,7 +13,8 @@
 // limitations under the License.
 //! Dispatchers sending packets into the [NetworkSimulator]
 
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
+use scion_proto::{address::IsdAsn, packet::ScionPacketRaw, wire_encoding::WireDecode};
+use sciparse::{core::view::View, packet::view::ScionPacketView};
 use snap_dataplane::dispatcher::Dispatcher;
 
 use crate::{
@@ -39,7 +40,15 @@ impl AsNetSimDispatcher {
 }
 
 impl Dispatcher for AsNetSimDispatcher {
-    fn try_dispatch(&self, packet: ScionPacketRaw) {
+    fn try_dispatch(&self, packet: &ScionPacketView) {
+        // TODO(uniquefine): migrate NetworkSimulator to ScionPacketView
+        let packet = match ScionPacketRaw::decode(&mut packet.as_bytes()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(error=%e, "AsNetSimDispatcher: failed to decode ScionPacketView");
+                return;
+            }
+        };
         let network_time = ScionNetworkTime::now();
         self.app_state
             .dispatch_to_network_sim(self.local_as, 0, network_time, packet);
@@ -60,7 +69,15 @@ impl NetSimDispatcher {
 }
 
 impl Dispatcher for NetSimDispatcher {
-    fn try_dispatch(&self, packet: ScionPacketRaw) {
+    fn try_dispatch(&self, packet: &ScionPacketView) {
+        // TODO(uniquefine): migrate NetworkSimulator to ScionPacketView
+        let packet = match ScionPacketRaw::decode(&mut packet.as_bytes()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(error=%e, "NetSimDispatcher: failed to decode ScionPacketView");
+                return;
+            }
+        };
         let network_time = ScionNetworkTime::now();
 
         self.app_state.dispatch_to_network_sim(

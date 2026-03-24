@@ -13,8 +13,9 @@
 // limitations under the License.
 //! PocketSCION network receivers.
 
-use scion_proto::packet::ScionPacketRaw;
-use snap_dataplane::dispatcher::Dispatcher;
+use scion_proto::{packet::ScionPacketRaw, wire_encoding::WireEncodeVec};
+use sciparse::{core::view::View, packet::view::ScionPacketView};
+use snap_dataplane::{dispatcher::Dispatcher, tunnel_gateway::dispatcher::TunnelGatewayDispatcher};
 
 pub mod router_socket;
 
@@ -27,8 +28,19 @@ pub trait Receiver: Sync + Send {
     fn receive_packet(&self, packet: ScionPacketRaw);
 }
 
-impl<T: Dispatcher> Receiver for T {
+impl Receiver for TunnelGatewayDispatcher {
     fn receive_packet(&self, packet: ScionPacketRaw) {
-        self.try_dispatch(packet);
+        // XXX(uniquefine):
+        // Encode the owned packet back to bytes and wrap in a zero-copy view for dispatch.
+        // This conversion is an acknowledged temporary seam: the network simulator still passes
+        // ScionPacketRaw, so we must re-encode here. A follow-up will migrate NetworkSimulator to
+        // pass ScionPacketView directly.
+        let bytes = packet.encode_to_bytes_vec().concat();
+        match ScionPacketView::from_slice(&bytes) {
+            Ok((view, _)) => self.try_dispatch(view),
+            Err(e) => {
+                tracing::debug!(error=?e, "TunnelGatewayDispatcher: failed to parse ScionPacketRaw as view");
+            }
+        }
     }
 }

@@ -24,14 +24,19 @@ use crate::{
         },
     },
     identifier::isd_asn::IsdAsn,
-    payload::scmp::{
-        layout::{
-            ScmpDestinationUnreachableLayout, ScmpEchoReplyLayout, ScmpEchoRequestLayout,
-            ScmpExternalInterfaceDownLayout, ScmpInternalConnectivityDownLayout, ScmpMessageLayout,
-            ScmpPacketTooBigLayout, ScmpParameterProblemLayout, ScmpTracerouteReplyLayout,
-            ScmpTracerouteRequestLayout, ScmpUnknownMessageLayout,
+    packet::view::ScionPacketView,
+    payload::{
+        ProtocolNumber,
+        scmp::{
+            layout::{
+                ScmpDestinationUnreachableLayout, ScmpEchoReplyLayout, ScmpEchoRequestLayout,
+                ScmpExternalInterfaceDownLayout, ScmpInternalConnectivityDownLayout,
+                ScmpMessageLayout, ScmpPacketTooBigLayout, ScmpParameterProblemLayout,
+                ScmpTracerouteReplyLayout, ScmpTracerouteRequestLayout, ScmpUnknownMessageLayout,
+            },
+            types::{ScmpDestinationUnreachableCode, ScmpMessageType, ScmpParameterProblemCode},
         },
-        types::{ScmpDestinationUnreachableCode, ScmpMessageType, ScmpParameterProblemCode},
+        udp::view::UdpDatagramView,
     },
 };
 
@@ -188,6 +193,36 @@ impl ScmpPayloadView {
                     ScmpUnknownMessageView::from_mut_slice_unchecked(&mut self.0)
                 })
             }
+        }
+    }
+
+    /// Extracts a destination port from this SCMP message.
+    ///
+    /// - Informational messages: returns the identifier field.
+    /// - Error messages: parses the offending packet as UDP and returns its source port.
+    /// - Unknown error messages: returns `None`.
+    pub fn dst_port(&self) -> Option<u16> {
+        let udp_src_port = |offending_packet: &[u8]| {
+            let (inner, _) = ScionPacketView::from_slice(offending_packet).ok()?;
+            if <u8 as Into<ProtocolNumber>>::into(inner.header().next_header())
+                != ProtocolNumber::Udp
+            {
+                return None;
+            }
+            let (udp, _) = UdpDatagramView::from_slice(inner.payload()).ok()?;
+            Some(udp.src_port())
+        };
+        match self.message() {
+            ScmpMessageView::EchoRequest(v) => Some(v.identifier()),
+            ScmpMessageView::EchoReply(v) => Some(v.identifier()),
+            ScmpMessageView::TracerouteRequest(v) => Some(v.identifier()),
+            ScmpMessageView::TracerouteReply(v) => Some(v.identifier()),
+            ScmpMessageView::DestinationUnreachable(v) => udp_src_port(v.offending_packet()),
+            ScmpMessageView::PacketTooBig(v) => udp_src_port(v.offending_packet()),
+            ScmpMessageView::ParameterProblem(v) => udp_src_port(v.offending_packet()),
+            ScmpMessageView::ExternalInterfaceDown(v) => udp_src_port(v.offending_packet()),
+            ScmpMessageView::InternalConnectivityDown(v) => udp_src_port(v.offending_packet()),
+            ScmpMessageView::UnknownMessage(_) => None,
         }
     }
 }

@@ -17,7 +17,7 @@
 
 use std::{
     fmt::Display,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     str::FromStr,
 };
 
@@ -93,9 +93,36 @@ impl ScionSocketAddr {
         }
     }
 
+    /// Create a SCION Socket Address from a SCION Address and a port number
+    pub const fn from_scion_addr(scion_addr: ScionAddr, port: u16) -> Self {
+        match scion_addr {
+            ScionAddr::V4(addr) => {
+                Self::V4(ScionSocketAddrV4 {
+                    isd_asn: addr.isd_asn,
+                    host: addr.host,
+                    port,
+                })
+            }
+            ScionAddr::V6(addr) => {
+                Self::V6(ScionSocketAddrV6 {
+                    isd_asn: addr.isd_asn,
+                    host: addr.host,
+                    port,
+                })
+            }
+            ScionAddr::Svc(addr) => {
+                Self::Svc(ScionSocketAddrSvc {
+                    isd_asn: addr.isd_asn,
+                    host: addr.host,
+                    port,
+                })
+            }
+        }
+    }
+
     /// Returns a [SocketAddr] from the SCION Socket Address if it is an IPv4 or IPv6 address.
     /// Returns None if it is a Service Address.
-    pub const fn to_socket_addr(&self) -> Option<SocketAddr> {
+    pub const fn socket_addr(&self) -> Option<SocketAddr> {
         match self {
             ScionSocketAddr::V4(addr) => {
                 Some(SocketAddr::V4(std::net::SocketAddrV4::new(
@@ -111,8 +138,18 @@ impl ScionSocketAddr {
         }
     }
 
+    /// Returns an [IpAddr] if the SCION Socket Address is an IPv4 or IPv6 address.
+    /// Returns None if it is a Service Address.
+    pub const fn ip(&self) -> Option<IpAddr> {
+        match self {
+            ScionSocketAddr::V4(addr) => Some(IpAddr::V4(addr.host)),
+            ScionSocketAddr::V6(addr) => Some(IpAddr::V6(addr.host)),
+            ScionSocketAddr::Svc(_) => None,
+        }
+    }
+
     /// Returns a [ScionAddr] from the SCION Socket Address
-    pub const fn to_scion_addr(&self) -> ScionAddr {
+    pub const fn scion_addr(&self) -> ScionAddr {
         match self {
             ScionSocketAddr::V4(addr) => {
                 ScionAddr::V4(crate::scion::address::addr::ScionAddrV4 {
@@ -201,6 +238,17 @@ impl Display for ScionSocketAddr {
             ScionSocketAddr::V6(addr) => addr.fmt(f),
             ScionSocketAddr::Svc(addr) => addr.fmt(f),
         }
+    }
+}
+impl FromStr for ScionSocketAddr {
+    type Err = AddressParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ScionSocketAddrSvc::from_str(s)
+            .map(Self::Svc)
+            .or_else(|_| ScionSocketAddrV4::from_str(s).map(Self::V4))
+            .or_else(|_| ScionSocketAddrV6::from_str(s).map(Self::V6))
+            .map_err(|_| AddressParseError::Socket)
     }
 }
 impl_from!(ScionSocketAddrV4, ScionSocketAddr, |v| Self::V4(v));

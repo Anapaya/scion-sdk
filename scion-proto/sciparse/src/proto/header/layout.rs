@@ -371,8 +371,10 @@ impl AddressHeaderLayout {
 
     gen_bitrange_const!(DST_ISD_RNG, 0, 16);
     gen_bitrange_const!(DST_AS_RNG, 16, 48);
+    gen_bitrange_const!(DST_IA_RNG, 0, 64);
     gen_bitrange_const!(SRC_ISD_RNG, 64, 16);
     gen_bitrange_const!(SRC_AS_RNG, 80, 48);
+    gen_bitrange_const!(SRC_IA_RNG, 64, 64);
 
     const FIXED_SIZE_BITS: usize = 128;
 

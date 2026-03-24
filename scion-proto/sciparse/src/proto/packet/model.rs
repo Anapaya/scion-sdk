@@ -17,77 +17,110 @@
 use crate::{
     core::{
         encode::{InvalidStructureError, WireEncode},
-        view::ViewConversionError,
+        view::{View, ViewConversionError},
     },
-    header::model::ScionPacketHeader,
+    header::{
+        model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
+        view::ScionHeaderView,
+    },
     packet::view::ScionPacketView,
+    payload::{
+        ProtocolNumber, encode::PayloadEncode, scmp::model::ScmpMessage, udp::model::UdpDatagram,
+    },
 };
 
+/// Raw SCION packet
+pub type ScionPacketRaw = ScionPacket<Vec<u8>>;
+/// Raw SCION packet with referenced payload
+pub type ScionPacketRawRef<'a> = ScionPacket<&'a [u8]>;
+/// UDP SCION packet
+pub type ScionPacketUdp = ScionPacket<UdpDatagram>;
+/// SCMP SCION packet
+pub type ScionPacketScmp = ScionPacket<ScmpMessage>;
+/// SCMP SCION packet with referenced payload
+pub type ScionPacketScmpRef<'a> = ScionPacket<&'a ScmpMessage>;
+
 /// A Complete SCION Packet
-pub struct ScionPacket {
+pub struct ScionPacket<T: PayloadEncode> {
     /// SCION Packet Header
     pub header: ScionPacketHeader,
     /// Payload
-    pub payload: Vec<u8>,
+    pub payload: T,
 }
-impl ScionPacket {
-    /// Constructs a `ScionPacket` from a `ScionHeaderView` and payload slice
-    pub fn from_view(view: &ScionPacketView) -> Self {
-        ScionPacket {
-            header: ScionPacketHeader::from_view(view.header()),
-            payload: view.payload().to_vec(),
-        }
-    }
-
-    /// Attempts to construct a `ScionPacket` from a byte slice
-    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
-        let (header, rest) = ScionPacketHeader::from_slice(buf)?;
-        let (payload, rest) = rest
-            .split_at_checked(header.common.payload_size as usize)
-            .ok_or(ViewConversionError::BufferTooSmall {
-                at: "Payload",
-                required: header.common.payload_size as usize,
-                actual: rest.len(),
-            })?;
-
-        Ok((
-            ScionPacket {
-                header,
-                payload: payload.to_vec(),
-            },
-            rest,
-        ))
+impl<T: PayloadEncode> ScionPacket<T> {
+    /// Constructs a `ScionPacket` from a `ScionPacketHeader` and a payload
+    pub fn new(header: ScionPacketHeader, payload: T) -> Self {
+        Self { header, payload }
     }
 }
-impl WireEncode for ScionPacket {
+impl<T: PayloadEncode> WireEncode for ScionPacket<T> {
     fn required_size(&self) -> usize {
-        self.header.required_size() + self.payload.len()
+        self.header.required_size() + self.payload.required_size(self.header.required_size())
     }
 
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         self.header.wire_valid()?;
-
-        if self.payload.len() != self.header.common.payload_size as usize {
-            return Err("Payload size does not match header's payload_size field".into());
-        }
-
+        self.payload.wire_valid()?;
         Ok(())
     }
 
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         let header_size = self.header.required_size();
+        let payload_size = self.payload.required_size(header_size);
 
         unsafe {
             // Encode header
             {
                 let header_buf = buf.get_unchecked_mut(0..header_size);
-                self.header.encode_unchecked(header_buf);
+                self.header
+                    .encode_unchecked(header_buf, payload_size as u16);
             }
             // Encode payload
-            buf.get_unchecked_mut(header_size..(header_size + self.payload.len()))
-                .copy_from_slice(&self.payload);
+            let payload_buf = buf.get_unchecked_mut(header_size..(header_size + payload_size));
+            self.payload
+                .encode_unchecked(payload_buf, &self.header.address, header_size);
         }
 
         self.required_size()
+    }
+}
+
+impl<'a> ScionPacket<&'a [u8]> {
+    /// Constructs a `ScionPacket` from a `ScionHeaderView` and payload slice
+    pub fn from_view(view: &'a ScionPacketView) -> Self {
+        Self {
+            header: ScionPacketHeader::from_view(view.header()),
+            payload: view.payload(),
+        }
+    }
+
+    /// Attempts to construct a `ScionPacket` from a byte slice
+    pub fn from_slice(buf: &'a [u8]) -> Result<(Self, &'a [u8]), ViewConversionError> {
+        let payload_size = ScionHeaderView::from_slice(buf)?.0.payload_len();
+        let (header, rest) = ScionPacketHeader::from_slice(buf)?;
+        let (payload, rest) = rest.split_at_checked(payload_size as usize).ok_or(
+            ViewConversionError::BufferTooSmall {
+                at: "Payload",
+                required: payload_size as usize,
+                actual: rest.len(),
+            },
+        )?;
+
+        Ok((ScionPacket { header, payload }, rest))
+    }
+}
+impl<'a> ScionPacket<&'a ScmpMessage> {
+    /// Constructs a `ScionPacket` from the given parts, inferring header fields as needed.
+    pub fn new_from_parts(address: AddressHeader, path: Path, payload: &'a ScmpMessage) -> Self {
+        let header = ScionPacketHeader {
+            common: CommonHeader {
+                traffic_class: 0,
+                flow_id: 0,
+                next_header: ProtocolNumber::Scmp.into(),
+            },
+            address,
+            path,
+        };
+        Self { header, payload }
     }
 }

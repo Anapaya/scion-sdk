@@ -118,7 +118,7 @@ impl TryFrom<WireHostAddr> for ScionHostAddr {
     type Error = &'static str;
     fn try_from(value: WireHostAddr) -> Result<Self, Self::Error> {
         value
-            .to_scion_host_addr()
+            .scion_host_addr()
             .ok_or("Can't convert WireHostAddr::Unknown to ScionHostAddr")
     }
 }
@@ -307,7 +307,7 @@ impl WireHostAddr {
     }
 
     /// Returns an `IpAddr` if the address is IPv4 or IPv6.
-    pub fn to_ip(&self) -> Option<IpAddr> {
+    pub fn ip(&self) -> Option<IpAddr> {
         match self {
             WireHostAddr::V4(v4) => Some(IpAddr::V4(*v4)),
             WireHostAddr::V6(v6) => Some(IpAddr::V6(*v6)),
@@ -316,7 +316,7 @@ impl WireHostAddr {
     }
 
     /// Returns the service address bytes if the address is a service address.
-    pub fn to_service(&self) -> Option<ServiceAddr> {
+    pub fn service(&self) -> Option<ServiceAddr> {
         match self {
             WireHostAddr::Svc(svc) => Some(*svc),
             _ => None,
@@ -325,7 +325,7 @@ impl WireHostAddr {
 
     /// Returns the address as a [ScionHostAddr] if it is a recognized address type (IPv4, IPv6, or
     /// service). Returns None if the address type is unknown.
-    pub fn to_scion_host_addr(&self) -> Option<ScionHostAddr> {
+    pub fn scion_host_addr(&self) -> Option<ScionHostAddr> {
         match self {
             WireHostAddr::V4(v4) => Some(ScionHostAddr::V4(*v4)),
             WireHostAddr::V6(v6) => Some(ScionHostAddr::V6(*v6)),

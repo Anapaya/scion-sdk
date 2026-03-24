@@ -16,7 +16,7 @@
 
 use crate::{
     core::{
-        encode::{InvalidStructureError, WireEncode},
+        encode::{EncodeError, InvalidStructureError, WireEncode},
         layout::Layout,
         view::{View, ViewConversionError},
         write::unchecked_bit_range_be_write,
@@ -72,19 +72,38 @@ impl ScionPacketHeader {
         (self.required_size() / 4) as u8
     }
 }
-impl WireEncode for ScionPacketHeader {
-    fn required_size(&self) -> usize {
+// Wire Encode (needs size, so can't use trait)
+impl ScionPacketHeader {
+    /// Returns the size required for the wire encoding.
+    ///
+    /// ## Safety
+    /// This size must be correct, it is used to validate buffer sizes in `encode`.
+    /// If this size is smaller than the actual encoded size, undefined behavior will occur.
+    pub fn required_size(&self) -> usize {
         CommonHeaderLayout::SIZE_BYTES + self.address.required_size() + self.path.required_size()
     }
 
-    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+    /// Validates that all fields in the structure are valid for encoding.
+    ///
+    /// Note: This only checks the minimal set of fields required for encoding, do not expect
+    /// comprehensive validation.
+    ///
+    /// Returns Ok(()) if valid, otherwise a static error reference.
+    pub fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         self.common.valid()?;
         self.address.wire_valid()?;
         self.path.wire_valid()?;
         Ok(())
     }
 
-    unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
+    /// Writes the wire encoding into the provided buffer.
+    ///
+    /// Returns the number of bytes written.
+    ///
+    /// ## SAFETY
+    /// 1. The buffer must be at least `self.required_size()` bytes long
+    /// 2. The structure must be valid for encoding, i.e., `self.valid()` must return `Ok(())`
+    pub unsafe fn encode_unchecked(&self, buf: &mut [u8], payload_size: u16) -> usize {
         unsafe {
             use CommonHeaderLayout as CHL;
             // Encode common header
@@ -94,6 +113,7 @@ impl WireEncode for ScionPacketHeader {
                 self.path.path_type(),
                 self.address.dst_addr_type(),
                 self.address.src_addr_type(),
+                payload_size,
             );
 
             // Encode address header
@@ -109,6 +129,24 @@ impl WireEncode for ScionPacketHeader {
 
         self.required_size()
     }
+
+    /// Writes the wire encoding into the provided buffer.
+    ///
+    /// Returns the number of bytes written on success, or `Err(usize)` of the required size if the
+    /// buffer is too small or the packet.
+    ///
+    /// The buffer must be at least `self.required_size()` bytes long.
+    pub fn encode(&self, buf: &mut [u8], payload_size: u16) -> Result<usize, EncodeError> {
+        self.wire_valid()?;
+
+        let required_size = self.required_size();
+        if buf.len() < required_size {
+            return Err(EncodeError::BufferTooSmall(required_size));
+        }
+
+        // SAFETY: buffer length is checked above
+        Ok(unsafe { self.encode_unchecked(buf, payload_size) })
+    }
 }
 
 /// Represents the common header of a SCION packet
@@ -122,8 +160,6 @@ pub struct CommonHeader {
     ///
     /// Indicates the type of header that follows the SCION header. E.g., UDP, TCP, etc.
     pub next_header: u8,
-    /// Payload size in bytes
-    pub payload_size: u16,
 }
 
 impl CommonHeader {
@@ -134,7 +170,6 @@ impl CommonHeader {
             traffic_class: view.traffic_class(),
             flow_id: view.flow_id(),
             next_header: view.next_header(),
-            payload_size: view.payload_len(),
         }
     }
 }
@@ -155,7 +190,6 @@ impl CommonHeader {
     }
 
     const VERSION: u8 = 0;
-    /// TODO(uniquefine): write a safe version of this function.
     /// Encodes the `CommonHeader` into the provided buffer
     /// # Safety
     /// - The implementation may use unchecked indexing operations and relies on the caller to
@@ -167,6 +201,7 @@ impl CommonHeader {
         path_type: PathType,
         dst_addr_type: WireHostAddrType,
         src_addr_type: WireHostAddrType,
+        payload_size: u16,
     ) -> usize {
         unsafe {
             use CommonHeaderLayout as CHL;
@@ -176,7 +211,7 @@ impl CommonHeader {
             unchecked_bit_range_be_write(buf, CHL::FLOW_ID_RNG, self.flow_id);
             unchecked_bit_range_be_write(buf, CHL::NEXT_HEADER_RNG, self.next_header);
             unchecked_bit_range_be_write(buf, CHL::HEADER_LEN_RNG, header_len_units);
-            unchecked_bit_range_be_write(buf, CHL::PAYLOAD_LEN_RNG, self.payload_size);
+            unchecked_bit_range_be_write(buf, CHL::PAYLOAD_LEN_RNG, payload_size);
             unchecked_bit_range_be_write::<u8>(buf, CHL::PATH_TYPE_RNG, path_type.into());
             let dst_addr_info: u8 = dst_addr_type.into();
             unchecked_bit_range_be_write::<u8>(buf, CHL::DST_ADDR_INFO_RNG, dst_addr_info);

@@ -20,7 +20,7 @@ use std::net::Ipv4Addr;
 
 use sciparse::{
     address::host_addr::WireHostAddr,
-    core::{encode::WireEncode, view::View},
+    core::view::View,
     header::{
         layout::ScionHeaderLayout,
         model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
@@ -39,7 +39,6 @@ fn main() {
             traffic_class: 1,
             flow_id: 2,
             next_header: 3,
-            payload_size: 4,
         },
         address: AddressHeader {
             dst_ia: IsdAsn::new(Isd(2), Asn(141)),
@@ -86,7 +85,7 @@ fn main() {
     println!("Required size: {}", header.required_size());
 
     let mut buf = vec![0u8; header.required_size()];
-    header.encode(&mut buf).unwrap();
+    header.encode(&mut buf, 4).unwrap();
 
     let mut output = String::new();
     let layout = ScionHeaderLayout::from_slice(&buf).unwrap();

@@ -12,13 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCMP (SCION Control Message Protocol) payload views, layouts, and models.
+//! SCION interface identifier
 
-/// Layout definitions for SCMP messages (bit ranges and sizes).
-pub mod layout;
-/// SCMP payload models.
-pub mod model;
-/// Types and enums used by SCMP messages (e.g. codes and message types).
-pub mod types;
-/// Zero-copy views over SCMP messages and headers.
-pub mod view;
+use crate::scion::identifier::isd_asn::IsdAsn;
+
+/// SCION interface with the AS's ISD-ASN and the interface's ID.
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct PathInterface {
+    /// The ISD-ASN of the AS where the interface is located
+    pub isd_asn: IsdAsn,
+    /// The AS-local interface ID
+    pub id: u16,
+}
+
+impl PathInterface {
+    /// Creates a new [`PathInterface`] with the given [`IsdAsn`] and interface ID.
+    pub const fn new(isd_asn: IsdAsn, id: u16) -> Self {
+        PathInterface { isd_asn, id }
+    }
+}

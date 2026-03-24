@@ -16,15 +16,12 @@
 use std::net::SocketAddr;
 
 use ana_gotatun::packet::Packet;
-use scion_proto::packet::classify_scion_packet;
+use sciparse::{core::view::View, packet::view::ScionPacketView};
 use tokio::sync::mpsc::{Receiver, Sender, channel, error::TrySendError};
 
 use crate::{
     dispatcher::Dispatcher,
-    tunnel_gateway::{
-        gateway::{PacketPool, wire_encode},
-        metrics::TunnelGatewayDispatcherMetrics,
-    },
+    tunnel_gateway::{gateway::PacketPool, metrics::TunnelGatewayDispatcherMetrics},
 };
 
 const OUTBOUND_QUEUE_SIZE: usize = 1024;
@@ -69,10 +66,8 @@ impl TunnelGatewayDispatcher {
 }
 
 impl Dispatcher for TunnelGatewayDispatcher {
-    fn try_dispatch(&self, packet: scion_proto::packet::ScionPacketRaw) {
-        // Classify so we can get the port (if any)
-        // XXX: Another packet duplication that should disappear.
-        let classification = match classify_scion_packet(packet.clone()) {
+    fn try_dispatch(&self, packet: &ScionPacketView) {
+        let classification = match packet.classify() {
             Ok(c) => c,
             Err(e) => {
                 self.metrics.invalid_packets_errors.inc();
@@ -81,21 +76,23 @@ impl Dispatcher for TunnelGatewayDispatcher {
             }
         };
 
-        let Some(dest_addr) = classification.destination() else {
-            self.metrics.invalid_packets_errors.inc();
-            tracing::debug!("Could not deduce destination socket address after classification");
-            return;
+        let sock_addr = match classification
+            .dst_socket_addr()
+            .and_then(|a| a.socket_addr())
+        {
+            Some(addr) => addr,
+            None => {
+                self.metrics.invalid_packets_errors.inc();
+                tracing::debug!("Could not deduce destination socket address from packet");
+                return;
+            }
         };
 
-        let Some(sock_addr) = dest_addr.local_address() else {
-            self.metrics.invalid_packets_errors.inc();
-            tracing::debug!("Found invalid service address");
-            return;
-        };
-
+        let raw_bytes = packet.as_bytes();
         let mut pooled_packet = self.pool.get();
-        let mut temp_buf = self.pool.get();
-        wire_encode(&packet, &mut temp_buf, &mut pooled_packet);
+        pooled_packet.as_mut()[..raw_bytes.len()].copy_from_slice(raw_bytes);
+        pooled_packet.truncate(raw_bytes.len());
+
         match self.outbound_queue.try_send((sock_addr, pooled_packet)) {
             Ok(_) => self.metrics.dispatch_queue_size.inc(),
             Err(TrySendError::Closed(_)) => self.metrics.closed_dispatch_queue_errors.inc(),

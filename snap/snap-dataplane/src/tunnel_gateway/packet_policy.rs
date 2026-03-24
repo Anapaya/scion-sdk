@@ -18,106 +18,73 @@
 
 use std::net::IpAddr;
 
-use bytes::{Buf, Bytes};
-use scion_proto::{
-    address::EndhostAddr,
-    packet::{self, AddressHeader, CommonHeader, ScionHeaders, ScionPacketRaw},
-    path::{DataPlanePath, PathType},
-    wire_encoding::{WireDecode, WireDecodeWithContext, WireEncodeVec},
+use sciparse::{
+    core::view::{View, ViewConversionError},
+    packet::view::ScionPacketView,
+    path::standard::types::PathType,
 };
 use thiserror::Error;
 
 /// Enforce policies for the inbound SCION packet.
 ///
+/// Returns a zero-copy view over `datagram` on success; the view's lifetime is
+/// tied to the input slice so no allocation is required.
+///
 /// The policies that are currently enforced are:
-/// - The packet (SCION common header, address header, data plane path) can be decoded correctly.
-/// - The SCION source address is set.
-/// - The data plane path is a standard path.
-/// - The SCION source address matches the expected source socket address (IP part only).
-pub fn inbound_datagram_check(
-    mut datagram: &[u8],
+/// - The packet (SCION common header, address header, data plane path) can be parsed correctly.
+/// - The SCION source address is an IP address that matches `expected_ip`.
+/// - The data plane path is a standard or empty path.
+pub fn inbound_datagram_check<'a>(
+    datagram: &'a [u8],
     expected_ip: IpAddr,
-) -> Result<ScionPacketRaw, PacketPolicyError> {
-    let common_header = match CommonHeader::decode(&mut datagram) {
-        Ok(headers) => headers,
-        Err(err) => return Err(PacketPolicyError::InvalidCommonHeader(err)),
-    };
-
-    let mut header_data = datagram.take(common_header.remaining_header_length());
-    let address_header =
-        match AddressHeader::decode_with_context(&mut header_data, common_header.address_info) {
-            Ok(headers) => headers,
-            Err(err) => return Err(PacketPolicyError::InvalidAddressHeader(err)),
-        };
+) -> Result<&'a ScionPacketView, PacketPolicyError<'a>> {
+    let (view, _) = ScionPacketView::from_slice(datagram)
+        .map_err(|e| PacketPolicyError::MalformedPacket(datagram, e))?;
 
     // Check if the SCION source address matches the expected socket address (IP part).
-    match address_header.source() {
-        Some(packet_source_addr) => {
-            let packet_source_addr = match EndhostAddr::try_from(packet_source_addr) {
-                Ok(addr) => addr,
-                Err(_) => {
-                    return Err(PacketPolicyError::InvalidSourceAddress);
-                }
-            };
-            if packet_source_addr.local_address() != expected_ip {
-                return Err(PacketPolicyError::InvalidSourceAddress);
-            }
-        }
-        None => return Err(PacketPolicyError::InvalidSourceAddress),
+    let src_ip = view
+        .header()
+        .src_host_addr()
+        .ok()
+        .and_then(|w| w.ip())
+        .ok_or(PacketPolicyError::InvalidSourceAddress(view))?;
+    if src_ip != expected_ip {
+        return Err(PacketPolicyError::InvalidSourceAddress(view));
     }
 
-    let path_offset: u16 = (CommonHeader::LENGTH + address_header.total_length()) as u16;
-    let mut path_bytes = header_data.copy_to_bytes(header_data.remaining());
-    let context = (common_header.path_type, path_bytes.len());
-
-    let dp_path = match DataPlanePath::decode_with_context(&mut path_bytes, context) {
-        Ok(path) => path,
-        Err(err) => return Err(PacketPolicyError::InvalidPath(err, path_offset)),
-    };
-
-    // Check if the data plane path is supported
-    match &dp_path {
-        scion_proto::path::DataPlanePath::Standard(_)
-        | scion_proto::path::DataPlanePath::EmptyPath => {}
-        // Disallow unsupported path types
-        _ => return Err(PacketPolicyError::InvalidPathType(common_header.path_type)),
+    // Only standard and empty paths are supported.
+    match view.header().path_type() {
+        PathType::Scion | PathType::Empty => {}
+        pt => return Err(PacketPolicyError::InvalidPathType(view, pt)),
     }
 
-    if path_bytes.has_remaining() {
-        Err(PacketPolicyError::InconsistentPathLength(path_offset))
-    } else if datagram.remaining() < common_header.payload_size() {
-        Err(PacketPolicyError::PacketEmptyOrTruncated(path_offset))
-    } else {
-        let payload_start = datagram.len() - common_header.payload_size();
-        let payload: Bytes = datagram[payload_start..].to_vec().into();
-
-        Ok(ScionPacketRaw {
-            headers: ScionHeaders {
-                common: common_header,
-                address: address_header,
-                path: dp_path,
-            },
-            payload,
-        })
-    }
+    Ok(view)
 }
 
-#[derive(Debug, Error)]
-pub enum PacketPolicyError {
-    #[error("packet with invalid common header: {0}")]
-    InvalidCommonHeader(packet::DecodeError),
-    #[error("packet with invalid address header: {0}")]
-    InvalidAddressHeader(packet::DecodeError),
-    #[error("packet with invalid data plane path (offset: {1}): {0}")]
-    InvalidPath(packet::DecodeError, u16),
-    #[error("packet with invalid path type: {0:?}")]
-    InvalidPathType(PathType),
-    #[error("packet with inconsistent path length (offset: {0})")]
-    InconsistentPathLength(u16),
-    #[error("packet is empty or truncated (offset: {0})")]
-    PacketEmptyOrTruncated(u16),
+#[derive(Error)]
+pub enum PacketPolicyError<'a> {
+    #[error("malformed packet: {1}")]
+    MalformedPacket(&'a [u8], ViewConversionError),
+    #[error("packet with invalid path type: {1:?}")]
+    InvalidPathType(&'a ScionPacketView, PathType),
     #[error("packet does not have a valid source address")]
-    InvalidSourceAddress,
+    InvalidSourceAddress(&'a ScionPacketView),
+}
+
+impl std::fmt::Debug for PacketPolicyError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PacketPolicyError::MalformedPacket(_, e) => {
+                f.debug_tuple("MalformedPacket").field(e).finish()
+            }
+            PacketPolicyError::InvalidPathType(_, pt) => {
+                f.debug_tuple("InvalidPathType").field(pt).finish()
+            }
+            PacketPolicyError::InvalidSourceAddress(_) => {
+                f.debug_tuple("InvalidSourceAddress").finish()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -126,11 +93,12 @@ mod tests {
 
     use bytes::{BufMut, Bytes, BytesMut};
     use scion_proto::{
-        address::{Asn, Isd, IsdAsn, ScionAddr},
+        address::{Asn, EndhostAddr, Isd, IsdAsn, ScionAddr},
         packet::{ByEndpoint, FlowId, ScionPacketRaw},
         path::{DataPlanePath, encoded::EncodedStandardPath},
-        wire_encoding::WireEncodeVec,
+        wire_encoding::{WireDecode, WireEncodeVec},
     };
+    use sciparse::core::view::View;
     use test_log::test;
 
     use super::*;
@@ -183,7 +151,7 @@ mod tests {
 
         let res = inbound_datagram_check(&packet, source_addrs[0].local_address());
         assert!(res.is_ok());
-        assert_eq!(packet, res.unwrap().encode_to_bytes_vec().concat());
+        assert_eq!(&packet[..], res.unwrap().as_bytes());
     }
 
     #[test]
@@ -192,10 +160,7 @@ mod tests {
         let datagram: &[u8; 4] = &[1, 2, 3, 4];
 
         let res = inbound_datagram_check(datagram, source_addrs[0].local_address());
-        assert!(matches!(
-            res,
-            Err(PacketPolicyError::InvalidCommonHeader(_))
-        ));
+        assert!(matches!(res, Err(PacketPolicyError::MalformedPacket(..))));
     }
 
     #[test]
@@ -209,6 +174,9 @@ mod tests {
         );
 
         let res = inbound_datagram_check(&packet, wrong_source_addrs.local_address());
-        assert!(matches!(res, Err(PacketPolicyError::InvalidSourceAddress)));
+        assert!(matches!(
+            res,
+            Err(PacketPolicyError::InvalidSourceAddress(_))
+        ));
     }
 }

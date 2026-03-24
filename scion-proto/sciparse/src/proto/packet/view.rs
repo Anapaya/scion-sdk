@@ -18,9 +18,11 @@
 
 use std::mem::transmute;
 
+use super::classify::{ClassifiedPacketView, ClassifyError};
 use crate::{
     core::view::{View, ViewConversionError},
     header::{layout::ScionHeaderLayout, view::ScionHeaderView},
+    payload::{ProtocolNumber, scmp::view::ScmpPayloadView, udp::view::UdpDatagramView},
 };
 
 /// A view over a complete SCION packet
@@ -105,6 +107,40 @@ impl ScionPacketView {
         unsafe {
             let header_len = ScionHeaderView::from_slice_unchecked(&self.0).header_len() as usize;
             self.0.get_unchecked_mut(header_len..)
+        }
+    }
+
+    /// Classifies this packet by inspecting its `next_header` field.
+    ///
+    /// For UDP packets the destination port is read from the UDP header.
+    /// For SCMP packets the destination port is deduced from the message type:
+    /// - informational messages (echo request/reply, traceroute request/reply): identifier field
+    /// - error messages: source port of the quoted inner UDP datagram (if parseable)
+    ///
+    /// Returns [`ClassifiedPacketView::Other`] only for unknown `next_header` values. SCMP packets
+    /// are always classified as [`ClassifiedPacketView::Scmp`], with `dst_port` set to `None` when
+    /// no port can be deduced. Never allocates.
+    pub fn classify(&self) -> Result<ClassifiedPacketView<'_>, ClassifyError> {
+        match self.header().next_header().into() {
+            ProtocolNumber::Udp => {
+                let payload = self.payload();
+                let (udp, _) =
+                    UdpDatagramView::from_slice(payload).map_err(ClassifyError::MalformedUdp)?;
+                Ok(ClassifiedPacketView::Udp {
+                    packet: self,
+                    dst_port: udp.dst_port(),
+                })
+            }
+            ProtocolNumber::Scmp => {
+                let payload = self.payload();
+                let (scmp, _) =
+                    ScmpPayloadView::from_slice(payload).map_err(ClassifyError::MalformedScmp)?;
+                Ok(ClassifiedPacketView::Scmp {
+                    packet: self,
+                    dst_port: scmp.dst_port(),
+                })
+            }
+            _ => Ok(ClassifiedPacketView::Other(self)),
         }
     }
 }

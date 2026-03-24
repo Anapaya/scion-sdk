@@ -13,6 +13,8 @@ tinyvec = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
+scion-proto = { workspace = true }
+bytes = { workspace = true }
 
 [lints]
 workspace = true

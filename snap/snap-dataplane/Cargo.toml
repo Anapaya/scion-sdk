@@ -25,10 +25,13 @@ tracing = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
 
 # Local dependencies
-scion-proto = { workspace = true }
+sciparse = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-utils = { workspace = true }
 snap-tun = { workspace = true }
+
+[dev-dependencies]
+scion-proto = { workspace = true }
 
 [lints]
 workspace = true

@@ -32,13 +32,14 @@ use proptest::{
 use proptest_derive::Arbitrary;
 use sciparse::{
     core::{
-        encode::{EncodeError, WireEncode},
+        encode::EncodeError,
         view::{View, ViewConversionError},
     },
     header::{
         model::ScionPacketHeader,
         view::{ScionHeaderView, ScionPathViewMut},
     },
+    identifier::isd_asn::IsdAsn,
     path::standard::view::{HopFieldView, InfoFieldView},
 };
 use tinyvec::ArrayVec;
@@ -71,7 +72,9 @@ fn valid_headers_should_roudtrip_correctly() {
             }
 
             let mut buf = vec![0u8; initial.required_size()];
-            initial.encode(&mut buf).expect("Writing to buffer failed");
+            initial
+                .encode(&mut buf, header_opts.payload_len)
+                .expect("Writing to buffer failed");
 
             let (view, rst) =
                 ScionHeaderView::from_mut_slice(&mut buf).expect("Creating view failed");
@@ -116,12 +119,13 @@ fn encoding_invalid_headers_must_not_panic() {
         invalid_opts: header_manipulation::InvalidLoadedHeaderOptions,
     ) -> Result<(), proptest::prelude::TestCaseError> {
         let unwind = catch_unwind(|| {
+            let payload_len = invalid_opts.payload_len();
             let header = invalid_opts.into_header();
 
             let required_size = header.required_size();
             let mut buf = vec![0u8; required_size];
 
-            match header.encode(&mut buf) {
+            match header.encode(&mut buf, payload_len) {
                 Ok(_) => {
                     prop_assert!(false, "Invalid header encoding succeeded unexpectedly",);
                 }
@@ -310,10 +314,14 @@ fn exec_every_view_function(
     }
 
     // Address header - immutable functions
-    let _ = view.dst_isd();
-    let _ = view.dst_as();
-    let _ = view.src_isd();
-    let _ = view.src_as();
+    let dst_isd = view.dst_isd();
+    let dst_as = view.dst_as();
+    let dst_ia = view.dst_ia();
+    prop_assert_eq!(dst_ia, IsdAsn::new(dst_isd, dst_as));
+    let src_isd = view.src_isd();
+    let src_as = view.src_as();
+    let src_ia = view.src_ia();
+    prop_assert_eq!(src_ia, IsdAsn::new(src_isd, src_as));
     let _ = view.dst_host_addr();
     let _ = view.src_host_addr();
 
@@ -487,7 +495,6 @@ mod valid {
                 traffic_class: self.traffic_class,
                 flow_id: self.flow_id,
                 next_header: self.next_header,
-                payload_size: self.payload_len,
             };
 
             let address = AddressHeader {
@@ -774,6 +781,9 @@ mod header_manipulation {
     }
 
     impl InvalidLoadedHeaderOptions {
+        pub fn payload_len(&self) -> u16 {
+            self.base.payload_len
+        }
         pub fn into_header(self) -> ScionPacketHeader {
             let mut header = self.base.to_header();
 
@@ -950,7 +960,6 @@ mod header_manipulation {
 /// Strategic manipulation of important header fields on the wire format
 mod wire_manipulation {
     use proptest::prelude::{Arbitrary, BoxedStrategy};
-    use sciparse::core::encode::WireEncode;
 
     use super::*;
     use crate::valid::ValidHeaderOptions;
@@ -987,7 +996,9 @@ mod wire_manipulation {
 
             // Encode header
             let mut buf = vec![0u8; header.required_size()];
-            header.encode(&mut buf).expect("Writing to buffer failed");
+            header
+                .encode(&mut buf, options.payload_len)
+                .expect("Writing to buffer failed");
 
             let (view, rest) =
                 ScionHeaderView::from_mut_slice(&mut buf).expect("Creating view failed");

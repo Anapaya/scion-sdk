@@ -448,6 +448,32 @@ impl HopFieldView {
 
         HopFieldMac(mac)
     }
+
+    /// Returns the ingress interface in the direction the packet is travelling.
+    ///
+    /// Reads `cons_ingress` when the `CONS_DIR` flag is set on `info_field`, and
+    /// `cons_egress` otherwise (reversed segment).
+    #[inline]
+    pub fn ingress_interface(&self, info_field: &InfoFieldView) -> u16 {
+        if info_field.flags().contains(InfoFieldFlags::CONS_DIR) {
+            self.cons_ingress()
+        } else {
+            self.cons_egress()
+        }
+    }
+
+    /// Returns the egress interface in the direction the packet is travelling.
+    ///
+    /// Reads `cons_egress` when the `CONS_DIR` flag is set on `info_field`, and
+    /// `cons_ingress` otherwise (reversed segment).
+    #[inline]
+    pub fn egress_interface(&self, info_field: &InfoFieldView) -> u16 {
+        if info_field.flags().contains(InfoFieldFlags::CONS_DIR) {
+            self.cons_egress()
+        } else {
+            self.cons_ingress()
+        }
+    }
 }
 // Mutable
 impl HopFieldView {
