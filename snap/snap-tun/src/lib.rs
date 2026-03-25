@@ -16,6 +16,7 @@
 pub mod cert_validator;
 pub mod client;
 pub mod server;
+pub mod udp_batch;
 
 // Public for testing purposes only
 #[doc(hidden)]

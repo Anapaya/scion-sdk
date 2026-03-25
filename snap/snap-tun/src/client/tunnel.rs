@@ -33,8 +33,10 @@ use tracing::instrument;
 use zerocopy::IntoBytes as _;
 
 use super::{PACKET_BUF_POOL_SIZE, TunnelGuard};
+use crate::udp_batch::{QueuePacketError, RecvBatchError, UdpBatchReceiver, UdpBatchSender};
 
 const HANDSHAKE_RATE_LIMIT: u64 = 20;
+const RECEIVE_BATCH_SIZE: usize = 64;
 
 /// Error when sending or receiving packets on the SNAP tunnel.
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +69,8 @@ struct SnapTunnelDriver {
     pub packet_sender: async_channel::Sender<BytesMut>,
     pub local_sockaddr: Option<SocketAddr>,
     pub pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
+    pub receiver: UdpBatchReceiver<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
+    pub sender: UdpBatchSender<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
 }
 
 impl SnapTunnelDriver {
@@ -77,12 +81,19 @@ impl SnapTunnelDriver {
         dataplane_address: SocketAddr,
         packet_sender: async_channel::Sender<BytesMut>,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
-    ) -> Self {
+    ) -> io::Result<Self> {
         let update_timers_interval = tokio::time::interval_at(
             tokio::time::Instant::now() + Duration::from_millis(250),
             Duration::from_millis(250),
         );
-        Self {
+        let receiver = UdpBatchReceiver::<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>::new(
+            underlay_socket.as_ref(),
+            &pool,
+        )?;
+        let sender = UdpBatchSender::<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>::new(
+            underlay_socket.as_ref(),
+        )?;
+        Ok(Self {
             tunn: Arc::new(Mutex::new(Self::create_tunn(
                 static_private.clone(),
                 peer_public,
@@ -95,8 +106,10 @@ impl SnapTunnelDriver {
             update_timers_interval,
             packet_sender,
             local_sockaddr: None,
+            receiver,
+            sender,
             pool,
-        }
+        })
     }
 
     #[instrument(name = "st-client", skip(self), fields(socket_addr= ?self.local_sockaddr))]
@@ -168,7 +181,6 @@ impl SnapTunnelDriver {
     /// the error. This method is called periodically by the main loop to update the timers and
     /// receive packets.
     async fn drive_once(&mut self) -> Result<(), SnapTunnelDriverError> {
-        let mut buf = self.pool.get();
         select! {
             // bias to ensure that high receive load cannot starve the timer
             biased;
@@ -190,65 +202,116 @@ impl SnapTunnelDriver {
                     return Err(SnapTunnelDriverError::SendIoError(e));
                 }
             },
-            recv = self.underlay_socket.recv_from(buf.as_mut()) => {
-                let (n, sender_addr) = match recv {
-                    Ok((n, sender_addr)) => (n, sender_addr),
-                    Err(e) => {
-                        return Err(SnapTunnelDriverError::ReceiveIoError(e));
-                    }
-                };
+            recv = self.receiver.recv_batch(&self.underlay_socket, &self.pool, |buf, sender_addr| {
                 if sender_addr != self.dataplane_address {
-                    return Ok(())
+                    return Ok(());
                 }
-                buf.truncate(n);
                 let Ok(wg) = buf.try_into_wg() else {
                     tracing::debug!("received packet that is not a valid WireGuard packet, ignoring");
                     return Ok(());
                 };
-                // Process the packet and release the lock before accessing it again
                 let result = self.tunn.lock().unwrap().handle_incoming_packet(wg);
-                let ps = match result {
-                    TunnResult::Done => None,
+                match result {
+                    TunnResult::Done => {}
                     TunnResult::Err(e) => {
                         return Err(SnapTunnelDriverError::WireguardError(e));
                     }
                     TunnResult::WriteToNetwork(p) => {
-                        // Send all queued packets to the network.
-                        let queued_packets = self.tunn.lock().unwrap().get_queued_packets().collect::<Vec<_>>();
-                        let packets = std::iter::once(p).chain(queued_packets.into_iter());
-                        Some(packets)
-
+                        if let Err(error) = self
+                            .sender
+                            .try_queue_packet(to_bytes(p), self.dataplane_address)
+                        {
+                            match error {
+                                QueuePacketError::Full { packet, target } => {
+                                    let err = self.sender.try_flush_best_effort(&self.underlay_socket);
+                                    if let Err(ref flush_err) = err
+                                        && flush_err.kind() != io::ErrorKind::WouldBlock
+                                    {
+                                        return Err(SnapTunnelDriverError::SendIoError(io::Error::new(
+                                            flush_err.kind(),
+                                            flush_err.to_string(),
+                                        )));
+                                    }
+                                    if self.sender.try_queue_packet(packet, target).is_err() {
+                                        tracing::debug!(?target, "dropping outbound packet because batched sender remains full");
+                                    }
+                                }
+                                QueuePacketError::PacketTooLarge {
+                                    packet_len,
+                                    max_packet_size,
+                                    ..
+                                } => {
+                                    return Err(SnapTunnelDriverError::SendIoError(io::Error::new(
+                                        io::ErrorKind::InvalidInput,
+                                        format!(
+                                            "outbound packet length {packet_len} exceeds batched sender max of {max_packet_size}"
+                                        ),
+                                    )));
+                                }
+                            }
+                        }
+                        for queued in self.tunn.lock().unwrap().get_queued_packets() {
+                            if let Err(error) = self
+                                .sender
+                                .try_queue_packet(to_bytes(queued), self.dataplane_address)
+                            {
+                                match error {
+                                    QueuePacketError::Full { packet, target } => {
+                                        let err = self.sender.try_flush_best_effort(&self.underlay_socket);
+                                        if let Err(ref flush_err) = err
+                                            && flush_err.kind() != io::ErrorKind::WouldBlock
+                                        {
+                                            return Err(SnapTunnelDriverError::SendIoError(io::Error::new(
+                                                flush_err.kind(),
+                                                flush_err.to_string(),
+                                            )));
+                                        }
+                                        if self.sender.try_queue_packet(packet, target).is_err() {
+                                            tracing::debug!(?target, "dropping queued outbound packet because batched sender remains full");
+                                        }
+                                    }
+                                    QueuePacketError::PacketTooLarge {
+                                        packet_len,
+                                        max_packet_size,
+                                        ..
+                                    } => {
+                                        return Err(SnapTunnelDriverError::SendIoError(io::Error::new(
+                                            io::ErrorKind::InvalidInput,
+                                            format!(
+                                                "queued outbound packet length {packet_len} exceeds batched sender max of {max_packet_size}"
+                                            ),
+                                        )));
+                                    }
+                                }
+                            }
+                        }
                     }
                     TunnResult::WriteToTunnel(mut p) => {
                         let buf = p.buf_mut().to_owned();
-
-                        // Ignore empty packets, they are keepalive packets.
                         if !buf.is_empty() {
                             match self.packet_sender.try_send(buf) {
-                                Ok(()) => {},
+                                Ok(()) => {}
                                 Err(async_channel::TrySendError::Full(_)) => {
                                     tracing::debug!("receive channel is full, dropping packet");
                                 }
                                 Err(_) => {
-                                    // The channel is closed. Stop the task.
                                     return Err(SnapTunnelDriverError::ReceiveQueueClosed);
                                 }
                             }
                         }
-                        None
                     }
-                };
-                if let Some(packets) = ps {
-                    // We try to send all packets in the queue and return the last error that occurs.
-                    // This could hide errors if multiple errors occur.
-                    let mut err = None;
-                    for p in packets {
-                        if let Err(e) = self.underlay_socket.send_to(to_bytes(p).as_bytes(), self.dataplane_address).await {
-                            err = Some(e);
-                        }
+                }
+                Ok(())
+            }) => {
+                match recv {
+                    Ok(()) => {
+                        self.sender.flush(&self.underlay_socket).await?;
                     }
-                    if let Some(e) = err {
-                        return Err(SnapTunnelDriverError::SendIoError(e));
+                    Err(RecvBatchError::Io(e)) => {
+                        return Err(SnapTunnelDriverError::ReceiveIoError(e));
+                    }
+                    Err(RecvBatchError::Handler(e)) => {
+                        return Err(e);
                     }
                 }
             }
@@ -333,7 +396,7 @@ impl SnapTunnel {
             dataplane_address,
             packet_sender,
             pool.clone(),
-        );
+        )?;
         let socket_addr = driver.initiate_connection().await?;
         Ok(Self {
             _guard: guard,

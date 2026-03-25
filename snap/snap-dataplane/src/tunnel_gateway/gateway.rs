@@ -36,7 +36,10 @@ use sciparse::{
     packet::model::ScionPacket,
     payload::scmp::{self, types::ScmpParameterProblemCode},
 };
-use snap_tun::server::{SnapTunAuthorization, SnapTunServer};
+use snap_tun::{
+    server::{SnapTunAuthorization, SnapTunServer},
+    udp_batch::{QueuePacketError, RecvBatchError, UdpBatchReceiver, UdpBatchSender},
+};
 use tokio::{net::UdpSocket, sync::mpsc::Receiver, time::interval};
 use tokio_util::sync::CancellationToken;
 
@@ -48,10 +51,15 @@ use crate::{
     },
 };
 
-// XXX(dsd): Assume jumbo frames up to 9KiB = 9216 Bytes.
-pub(crate) type PacketPool = ana_gotatun::packet::PacketBufPool<9216>;
+// The size of the buffer for receiving and sending packets. This should be large
+// enough to accommodate jumbo frames, which can be up to 9 KiB = 9216 Bytes.
+pub(crate) const PACKET_BUF_SIZE: usize = 9216;
+// The batch size for receiving and sending packets.
+pub(crate) const BATCH_SIZE: usize = 64;
 // Assuming a packet size of 1 KiB, 50*1024*1024 Bytes = 50 MiB ~= 500 Mbps.
 pub(crate) const PACKET_PER_SEC_LIMIT: u64 = 50 * 1024;
+
+pub(crate) type PacketPool = ana_gotatun::packet::PacketBufPool<PACKET_BUF_SIZE>;
 
 /// The tunnel gateway.
 pub struct TunnelGateway<A, D> {
@@ -111,79 +119,94 @@ where
         );
         let server_task = async move {
             let mut send_to_network: VecDeque<WgKind> = Default::default();
+            let mut receiver: UdpBatchReceiver<BATCH_SIZE, PACKET_BUF_SIZE> =
+                match UdpBatchReceiver::new(&socket, &self.pool) {
+                    Ok(receiver) => receiver,
+                    Err(err) => {
+                        tracing::error!(err=?err, "could not initialize batched UDP receiver");
+                        return;
+                    }
+                };
+            let mut sender = match UdpBatchSender::<BATCH_SIZE, PACKET_BUF_SIZE>::new(&socket) {
+                Ok(sender) => sender,
+                Err(err) => {
+                    tracing::error!(err=?err, "could not initialize batched UDP sender");
+                    return;
+                }
+            };
             loop {
-                let mut in_pkt = self.pool.get();
-
                 tokio::select! {
-                    recv_res = socket.recv_from(in_pkt.as_mut()) => {
-                        let (n, from) = match recv_res {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::error!(err=?e, "i/o error on udp socket recv_from()");
-                                continue;
-                            }
-                        };
-
-                        in_pkt.truncate(n);
-
+                    recv_res = receiver.recv_batch(&socket, &self.pool, |in_pkt, from| {
                         let res = snaptun_srv.handle_incoming_packet(in_pkt, from, &mut send_to_network);
 
-                        // first, process whatever needs to be returned
                         while let Some(pkt) = send_to_network.pop_front() {
-                            Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(pkt), from);
+                            Self::try_queue_batched_packet(
+                                &socket,
+                                &mut sender,
+                                Self::wg_kind_to_bytes(pkt),
+                                from,
+                            );
                         }
 
                         match res {
-                            TunnResult::Done => continue,
+                            TunnResult::Done => {},
                             TunnResult::Err(wire_guard_error) => {
                                 tracing::error!(err=?wire_guard_error, "wireguard error on incoming packet");
                             },
                             TunnResult::WriteToNetwork(_wg_kind) => {
-                                // This variant is not expected for inbound packets. The gateway expects
-                                // `Done`, `Err`, or `WriteToTunnel` from `handle_incoming_packet`.
-                                // Log and drop the packet so we can diagnose protocol/state issues
-                                // without crashing the process.
                                 tracing::error!(
                                     "unexpected TunnResult::WriteToNetwork for incoming packet; \
                                      expected Done, Err, or WriteToTunnel; dropping packet"
                                 );
                             },
                             TunnResult::WriteToTunnel(packet) => {
-                            match inbound_datagram_check(&packet[..], from.ip()) {
-                                Ok(view) => {
-                                    self.dispatcher.try_dispatch(view);
-                                }
-                                Err(e) => {
-                                    tracing::debug!(err=%e, "Inbound datagram check failed");
-                                    // Use the first assigned address for the SCMP reply.
-                                    let mut target_buf =  self.pool.get();
-                                    match Self::create_scmp_error(
-                                        e,
-                                        local_addr,
-                                        // XXX: the SNAP generating SCMP errors
-                                        // is a bit bogus, as the SNAP
-                                        // technically is not a node in the
-                                        // SCION-network.
-                                        ScionAddr::new(IsdAsn::WILDCARD, from.ip().into()),
-                                        &mut target_buf
-                                    ) {
-                                        Ok(n) => {
-                                        // XXX: `handle_outgoing_packet`
-                                        // allocates a new packet for the
-                                        // response (see comment in impl)
-                                        target_buf.truncate(n);
-                                        let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(target_buf, from) else {continue};
-                                        Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(out_pkt), from);
-                                    },
-                                        Err(e) => {
-                                            tracing::error!(err=?e, "Failed to create SCMP error packet");
+                                match inbound_datagram_check(&packet[..], from.ip()) {
+                                    Ok(view) => {
+                                        self.dispatcher.try_dispatch(view);
+                                    }
+                                    Err(e) => {
+                                        tracing::debug!(err=%e, "Inbound datagram check failed");
+                                        // Use the first assigned address for the SCMP reply.
+                                        let mut target_buf =  self.pool.get();
+                                        match Self::create_scmp_error(
+                                            e,
+                                            local_addr,
+                                            // XXX: the SNAP generating SCMP errors is a bit bogus,
+                                            // as the SNAP technically is not a node in the
+                                            // SCION-network.
+                                            ScionAddr::new(IsdAsn::WILDCARD, from.ip().into()),
+                                            &mut target_buf
+                                        ) {
+                                            Ok(n) => {
+                                            // XXX: `handle_outgoing_packet` allocates a new packet
+                                            // for the response (see comment in impl)
+                                            target_buf.truncate(n);
+                                            if let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(target_buf, from) {
+                                                Self::try_queue_batched_packet(
+                                                    &socket,
+                                                    &mut sender,
+                                                    Self::wg_kind_to_bytes(out_pkt),
+                                                    from,
+                                                );
+                                            }
+                                            },
+                                            Err(e) => {
+                                                tracing::error!(err=?e, "Failed to create SCMP error packet");
+                                            }
                                         }
                                     }
                                 }
                             }
-                            },
                         }
-
+                        Ok(())
+                    }) => {
+                        match recv_res {
+                            Ok(()) => Self::try_flush_batch_log_err(&socket, &mut sender),
+                            Err(RecvBatchError::Io(e)) => {
+                                tracing::error!(err=?e, "i/o error on batched udp recv");
+                            }
+                            Err(RecvBatchError::Handler(())) => {}
+                        }
                     },
                     outbound = self.outbound_queue.recv() => {
                         let Some((target, packet)) = outbound else {
@@ -191,8 +214,27 @@ where
                             break;
                         };
 
-                        let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(packet, target) else {continue};
-                        Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(out_pkt), target);
+                        if let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(packet, target) {
+                            Self::try_queue_batched_packet(
+                                &socket,
+                                &mut sender,
+                                Self::wg_kind_to_bytes(out_pkt),
+                                target,
+                            );
+                        }
+                        while !sender.is_full() {
+                            let Ok((target, packet)) = self.outbound_queue.try_recv() else {
+                                break;
+                            };
+                            let Some(out_pkt) = snaptun_srv.handle_outgoing_packet(packet, target) else { continue };
+                            Self::try_queue_batched_packet(
+                                &socket,
+                                &mut sender,
+                                Self::wg_kind_to_bytes(out_pkt),
+                                target,
+                            );
+                        }
+                        Self::try_flush_batch_log_err(&socket, &mut sender);
                     }
                     _ = timer.tick() => {
                         // Update timers inside SnapTun server.
@@ -221,6 +263,52 @@ where
     fn try_send_log_err(socket: &UdpSocket, data: &[u8], target: SocketAddr) {
         if let Err(e) = socket.try_send_to(data, target) {
             tracing::error!(data_len=data.len(), err=?e, ?target, "could not send to network");
+        }
+    }
+
+    fn try_flush_batch_log_err(
+        socket: &UdpSocket,
+        sender: &mut UdpBatchSender<BATCH_SIZE, PACKET_BUF_SIZE>,
+    ) {
+        if let Err(e) = sender.try_flush_best_effort(socket) {
+            tracing::error!(err=?e, "could not flush batched udp packets to network");
+        }
+    }
+
+    fn try_queue_batched_packet(
+        socket: &UdpSocket,
+        sender: &mut UdpBatchSender<BATCH_SIZE, PACKET_BUF_SIZE>,
+        packet: Packet,
+        target: SocketAddr,
+    ) {
+        if let Err(error) = sender.try_queue_packet(packet, target) {
+            match error {
+                QueuePacketError::Full { packet, target } => {
+                    let err = sender.try_flush_best_effort(socket);
+                    if let Err(ref flush_err) = err
+                        && flush_err.kind() != std::io::ErrorKind::WouldBlock
+                    {
+                        tracing::error!(err=?flush_err, "could not flush batched udp packets to network");
+                    }
+                    if sender.try_queue_packet(packet, target).is_err() {
+                        tracing::debug!(
+                            ?target,
+                            "dropping outbound packet because batched sender remains full"
+                        );
+                    }
+                }
+                QueuePacketError::PacketTooLarge {
+                    packet_len,
+                    max_packet_size,
+                    ..
+                } => {
+                    tracing::debug!(
+                        packet_len,
+                        max_packet_size,
+                        "dropping outbound packet because it exceeds the batched sender max"
+                    );
+                }
+            }
         }
     }
 

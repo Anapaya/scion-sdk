@@ -104,6 +104,7 @@ proptest-derive = "0.8"
 prost = "0.14"
 prost-build = "0.14"
 prost-types = "0.14"
+quinn-udp = "0.5.14"
 # We maintain our own fork of quinn. If you want to update the dependency,
 # follow the instructions in the documentation.
 anapaya-quinn = { version = "0.11.9-ana.0" }
