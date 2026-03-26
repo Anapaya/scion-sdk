@@ -65,6 +65,7 @@ struct SnapTunnelDriver {
     pub peer_public: x25519::PublicKey,
     pub underlay_socket: Arc<tokio::net::UdpSocket>,
     pub dataplane_address: SocketAddr,
+    pub persistent_keepalive_seconds: Option<u16>,
     pub update_timers_interval: Interval,
     pub packet_sender: async_channel::Sender<BytesMut>,
     pub local_sockaddr: Option<SocketAddr>,
@@ -79,6 +80,7 @@ impl SnapTunnelDriver {
         peer_public: x25519::PublicKey,
         underlay_socket: Arc<tokio::net::UdpSocket>,
         dataplane_address: SocketAddr,
+        persistent_keepalive_seconds: Option<u16>,
         packet_sender: async_channel::Sender<BytesMut>,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     ) -> io::Result<Self> {
@@ -98,11 +100,13 @@ impl SnapTunnelDriver {
                 static_private.clone(),
                 peer_public,
                 dataplane_address,
+                persistent_keepalive_seconds,
             ))),
             static_private,
             peer_public,
             underlay_socket,
             dataplane_address,
+            persistent_keepalive_seconds,
             update_timers_interval,
             packet_sender,
             local_sockaddr: None,
@@ -158,6 +162,7 @@ impl SnapTunnelDriver {
                             self.static_private.clone(),
                             self.peer_public,
                             self.dataplane_address,
+                            self.persistent_keepalive_seconds,
                         );
                         match self.initiate_connection().await {
                             Ok(addr) if addr == local_sockaddr => break,
@@ -323,13 +328,14 @@ impl SnapTunnelDriver {
         static_private: x25519::StaticSecret,
         peer_public: x25519::PublicKey,
         dataplane_address: SocketAddr,
+        persistent_keepalive_seconds: Option<u16>,
     ) -> Tunn {
         let local_public = x25519::PublicKey::from(&static_private);
         Tunn::new(
             static_private,
             peer_public,
             None,
-            None,
+            persistent_keepalive_seconds,
             0,
             Arc::new(RateLimiter::new(&local_public, HANDSHAKE_RATE_LIMIT)),
             dataplane_address,
@@ -386,6 +392,7 @@ impl SnapTunnel {
         underlay_socket: Arc<tokio::net::UdpSocket>,
         dataplane_address: SocketAddr,
         receive_queue_capacity: usize,
+        persistent_keepalive_seconds: Option<u16>,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     ) -> Result<Self, SnapTunnelDriverError> {
         let (packet_sender, packet_receiver) = async_channel::bounded(receive_queue_capacity);
@@ -394,6 +401,7 @@ impl SnapTunnel {
             peer_public,
             underlay_socket.clone(),
             dataplane_address,
+            persistent_keepalive_seconds,
             packet_sender,
             pool.clone(),
         )?;

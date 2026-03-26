@@ -32,6 +32,11 @@ use ana_gotatun::{
 /// Size of the packet buffer pool used for SNAP tunnels.
 /// This represents the maximum packet size that can be handled.
 pub const PACKET_BUF_POOL_SIZE: usize = 65535;
+
+/// Use a default value of 10 seconds for Persistent keepalive seconds for SNAP tunnels.
+/// This should be short enough to keep NAT mappings alive.
+pub const PERSISTENT_KEEPALIVE_SECONDS: u16 = 10;
+
 use scion_sdk_reqwest_connect_rpc::{client::CrpcClientError, token_source::TokenSource};
 use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
 use tokio::task::{AbortHandle, JoinSet};
@@ -268,6 +273,7 @@ impl SnapTunEndpoint {
             underlay_socket,
             dataplane_address,
             receive_queue_capacity,
+            Some(PERSISTENT_KEEPALIVE_SECONDS),
             pool,
         )
         .await?)
