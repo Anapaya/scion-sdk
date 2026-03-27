@@ -99,7 +99,7 @@ impl QuicConnection {
             tokio::task::yield_now().await;
         }
 
-        tracing::info!("QUIC connection established to {}", remote);
+        tracing::debug!(?remote, "QUIC connection established");
 
         Ok(Self {
             conn,
@@ -251,7 +251,7 @@ impl QuicConnectionDriver {
 
                 // Handle QUIC Timers.
                 _ = tokio::time::sleep(timeout) => {
-                    tracing::debug!("QUIC timeout elapsed");
+                    tracing::trace!("QUIC timeout elapsed");
                     let mut conn = self.conn.lock().await;
                     conn.on_timeout();
                 }
@@ -322,13 +322,13 @@ impl QuicConnectionDriver {
             {
                 let conn = self.conn.lock().await;
                 if conn.is_closed() {
-                    tracing::info!(stats=?conn.stats(),"Connection closed, shutting down driver");
+                    tracing::debug!(stats=?conn.stats(),"Connection closed, shutting down driver");
                     break;
                 }
             }
         }
 
-        tracing::info!("QUIC connection driver shutting down");
+        tracing::debug!("QUIC connection driver shutting down");
     }
 }
 

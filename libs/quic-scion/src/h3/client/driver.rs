@@ -101,7 +101,7 @@ impl H3Connection {
                 .map_err(H3SendRequestError::SendRequestError)?
         };
 
-        tracing::info!(
+        tracing::debug!(
             stream_id,
             method = %request.method,
             path = %request.path,
@@ -208,7 +208,7 @@ impl H3Driver {
             {
                 let conn = self.h3_conn.quic_conn.conn.lock().await;
                 if conn.is_closed() {
-                    tracing::warn!(stats=?conn.stats(),"Connection closed, shutting down H3 driver");
+                    tracing::debug!(stats=?conn.stats(),"Connection closed, shutting down H3 driver");
                     break;
                 }
             }

@@ -176,8 +176,13 @@ impl EndhostApiClient for CrpcEndhostApiClient {
                     }
                 },
             )
-            .inspect(|resp| {
-                tracing::debug!(%resp, "Listed segments");
+            .inspect(|resp: &SegmentsPage| {
+                tracing::debug!(
+                    core=?resp.segments.core_segments.len(),
+                    down=?resp.segments.down_segments.len(),
+                    up=?resp.segments.up_segments.len(),
+                    "Listed segments"
+                );
             })
     }
 }
