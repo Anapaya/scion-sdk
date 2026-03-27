@@ -116,6 +116,7 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
     ///
     /// If the rate limiter signals that the server is under load, at most one
     /// packet is added to the queue.
+    #[tracing::instrument(skip_all, fields(remote = %from))]
     pub fn handle_incoming_packet(
         &mut self,
         packet: Packet,
@@ -127,10 +128,14 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
         let parsed_packet = match self.rate_limiter.verify_packet(from.ip(), packet) {
             Ok(p) => p,
             Err(TunnResult::WriteToNetwork(c)) => {
+                tracing::debug!(remote = ?from, "rate limiter issued cookie reply");
                 send_to_network.push_back(c);
                 return TunnResult::Done;
             }
-            Err(e) => return e,
+            Err(e) => {
+                tracing::debug!(remote = ?from, err = ?e, "rate limiter rejected packet");
+                return e;
+            }
         };
 
         use std::collections::hash_map::Entry;
@@ -146,17 +151,23 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                 //
                 // Will fix later.
                 if !self.authz.is_authorized(now, peer_static.as_bytes()) {
+                    tracing::debug!(remote = ?from, "rejected packet from unauthorized peer");
                     return TunnResult::Err(WireGuardError::UnexpectedPacket);
                 }
                 Self::handle_incoming_and_drain_queue(send_to_network, p, tunn)
             }
             (e, WgKind::HandshakeInit(wg_init)) => {
-                let peer =
-                    match parse_handshake_anon(&self.static_private, &self.static_public, &wg_init)
-                    {
-                        Ok(v) => v,
-                        Err(e) => return TunnResult::from(e),
-                    };
+                let peer = match parse_handshake_anon(
+                    &self.static_private,
+                    &self.static_public,
+                    &wg_init,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::debug!(remote = ?from, err = ?e, "failed to parse handshake init");
+                        return TunnResult::from(e);
+                    }
+                };
 
                 // TODO(dsd): if the socket is occupied, and tunnel.identity !=
                 // peer.identity, then send a cookie and abort
@@ -164,8 +175,10 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                 // TODO(dsd): extend ana-gotatun::Tunn such that peer static
                 // identity can be retrieved
                 if !self.authz.is_authorized(now, &peer.peer_static_public) {
+                    tracing::debug!(remote = ?from, "rejected handshake from unauthorized peer");
                     return TunnResult::Err(WireGuardError::UnexpectedPacket);
                 }
+                tracing::debug!(remote = ?from, "accepted new handshake, inserting tunnel");
                 let peer_static = x25519::PublicKey::from(peer.peer_static_public);
                 let mut tunn = Tunn::new(
                     self.static_private.clone(),
@@ -184,12 +197,16 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                 e.insert_entry((peer_static, tunn));
                 res
             }
-            (_, _p) => TunnResult::Err(WireGuardError::InvalidPacket),
+            (_, _p) => {
+                tracing::debug!(remote = ?from, "received unexpected packet kind for new entry");
+                TunnResult::Err(WireGuardError::InvalidPacket)
+            }
         }
     }
 
     /// Handles an outgoing packet sent through the tunnel identified by the
     /// remote socket address `to`.
+    #[tracing::instrument(skip_all, fields(remote = %to))]
     pub fn handle_outgoing_packet(&mut self, packet: Packet, to: SocketAddr) -> Option<WgKind> {
         let Some((_, tunn)) = self.active_tunnels.get_mut(&to) else {
             tracing::error!(to=?to, "No tunnel for outgoing packet found.");
