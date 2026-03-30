@@ -13,7 +13,7 @@
 // limitations under the License.
 //! ScionTopology Data Transfer Objects
 
-use std::any::type_name;
+use std::{any::type_name, collections::BTreeMap};
 
 use anyhow::Context;
 use scion_proto::address::IsdAsn;
@@ -25,7 +25,7 @@ use utoipa::{
 };
 
 use crate::network::scion::{
-    topology::{ScionAs, ScionLink, ScionTopology},
+    topology::{ScionAs, ScionLink, ScionRouter, ScionTopology},
     trust_store::TrustStore,
 };
 
@@ -35,6 +35,7 @@ pub struct ScionTopologyDto {
     trust_store: TrustStore,
     as_list: Vec<ScionAsDto>,
     links: Vec<ScionLinkDto>,
+    routers: BTreeMap<IsdAsn, Vec<ScionRouter>>,
 }
 
 impl TryFrom<ScionTopologyDto> for ScionTopology {
@@ -59,6 +60,13 @@ impl TryFrom<ScionTopologyDto> for ScionTopology {
         topo.set_trust_store(value.trust_store)
             .context("Topology trust store misconfigured")?;
 
+        for (isd_as, routers) in value.routers {
+            for router in routers {
+                topo.add_router(isd_as, router)
+                    .context("error adding router to topology")?;
+            }
+        }
+
         Ok(topo)
     }
 }
@@ -80,6 +88,7 @@ impl From<ScionTopology> for ScionTopologyDto {
             as_list: registered_ases,
             links,
             trust_store: topo.trust_store,
+            routers: topo.router_map,
         }
     }
 }

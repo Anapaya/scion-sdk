@@ -15,12 +15,10 @@
 //!
 //! Simulates a specific routers dispatching or SCMP request behaviour
 
-use std::net::Ipv4Addr;
-
 use anyhow::{Context, bail};
 use bytes::Bytes;
 use scion_proto::{
-    address::{IsdAsn, ScionAddr, ScionAddrV4, SocketAddr},
+    address::{IsdAsn, ScionAddr, SocketAddr},
     packet::{
         ByEndpoint, ScionPacketRaw, ScionPacketScmp, ScionPacketUdp, classify_scion_packet,
         layout::ScionPacketOffset,
@@ -42,12 +40,19 @@ use tracing::info_span;
 
 use crate::network::{
     local::{external_as_registry::ExternalAsRegistry, receiver_registry::NetworkReceiverRegistry},
-    scion::{routing::LocalAsRoutingAction, topology::ScionGlobalInterfaceId},
+    scion::{
+        routing::LocalAsRoutingAction,
+        topology::{ScionGlobalInterfaceId, ScionRouter},
+    },
 };
 
 /// A local network simulation.
 pub struct LocalNetworkSimulation<'input> {
+    /// The router for which this simulation is running
+    router: &'input ScionRouter,
+    /// The AS for which this simulation is running
     local_as: IsdAsn,
+    /// The interface for which this simulation is running
     local_if_id: u16,
     /// Dispatchers available to the simulation.
     receivers: &'input NetworkReceiverRegistry,
@@ -62,12 +67,14 @@ impl LocalNetworkSimulation<'_> {
         local_if_id: u16,
         receivers: &'input NetworkReceiverRegistry,
         external_ases: &'input ExternalAsRegistry,
+        router: &'input ScionRouter,
     ) -> LocalNetworkSimulation<'input> {
         LocalNetworkSimulation {
             local_if_id,
             local_as,
             receivers,
             external_ases,
+            router,
         }
     }
 }
@@ -199,25 +206,36 @@ impl LocalNetworkSimulation<'_> {
 
         let reply: Option<ScionPacketRaw> = match action {
             LocalAsRoutingAction::ForwardLocal { target_address: _ } => {
+                // TODO: Should inspect the target address and see if it is meant for this router.
                 match self.dispatch(packet.clone()) {
                     None => None,
                     Some(DispatchEffect::ScmpReply(scmp_reply)) => {
-                        maybe_create_scmp_reply(self.local_as, scmp_reply.into(), packet)
-                            .context("error creating SCMP reply after dispatching")?
-                            .map(Into::into)
+                        maybe_create_scmp_reply(
+                            self.local_as,
+                            self.router,
+                            scmp_reply.into(),
+                            packet,
+                        )
+                        .context("error creating SCMP reply after dispatching")?
+                        .map(Into::into)
                     }
                     // XXX: this is used for SVC resolution, this is usually not done in the router,
                     // but the control service, for simplicity we do it here.
                     Some(DispatchEffect::OtherReply { payload }) => {
-                        create_udp_reply(self.local_as, payload, packet)
+                        create_udp_reply(self.local_as, self.router, payload, packet)
                             .context("error creating UDP reply after dispatching")?
                             .into()
                     }
                 }
             }
             LocalAsRoutingAction::SendSCMPErrorResponse(scmp_error_message) => {
-                maybe_create_scmp_reply(self.local_as, scmp_error_message.into(), packet)?
-                    .map(Into::into)
+                maybe_create_scmp_reply(
+                    self.local_as,
+                    self.router,
+                    scmp_error_message.into(),
+                    packet,
+                )?
+                .map(Into::into)
             }
             LocalAsRoutingAction::IngressSCMPHandleRequest { interface_id } => {
                 debug_assert_eq!(
@@ -298,6 +316,8 @@ impl LocalNetworkSimulation<'_> {
         egress: bool,
         packet: ScionPacketRaw,
     ) -> anyhow::Result<Option<ScionPacketScmp>> {
+        // TODO: SCMP should inspect the dst address to determine if the packet is meant for this
+        // router.
         let _s = info_span!(
             "loc-scmp",
             local = %self.local_as,
@@ -317,6 +337,7 @@ impl LocalNetworkSimulation<'_> {
                 tracing::trace!("Handling SCMP echo request");
                 maybe_create_scmp_reply(
                     self.local_as,
+                    self.router,
                     ScmpMessage::EchoReply(ScmpEchoReply::new(
                         scmp_echo_request.identifier,
                         scmp_echo_request.sequence_number,
@@ -329,6 +350,7 @@ impl LocalNetworkSimulation<'_> {
                 tracing::trace!("Handling SCMP traceroute request");
                 maybe_create_scmp_reply(
                     self.local_as,
+                    self.router,
                     ScmpMessage::TracerouteReply(ScmpTracerouteReply::new(
                         scmp_traceroute_request.identifier,
                         scmp_traceroute_request.sequence_number,
@@ -349,6 +371,7 @@ impl LocalNetworkSimulation<'_> {
 
 fn create_udp_reply(
     local_as: IsdAsn,
+    router: &ScionRouter,
     payload: Vec<u8>,
     respond_to: ScionPacketRaw,
 ) -> anyhow::Result<ScionPacketRaw> {
@@ -361,12 +384,7 @@ fn create_udp_reply(
         .source()
         .context("UDP packet has no source socket address")?;
     let endhosts = ByEndpoint::<SocketAddr> {
-        // XXX(ake): This would be set to the IP of the router socket, we however do not simulate
-        // these
-        source: SocketAddr::new(
-            ScionAddrV4::new(local_as, Ipv4Addr::new(0, 0, 0, 0)).into(),
-            0,
-        ),
+        source: SocketAddr::new(ScionAddr::new(local_as, router.ip.into()), 0),
         destination: packet_src,
     };
 
@@ -408,6 +426,7 @@ fn create_udp_reply(
 /// If the packet is a SCMP Error Message, no response is created.
 fn maybe_create_scmp_reply(
     local_as: IsdAsn,
+    router: &ScionRouter,
     scmp: ScmpMessage,
     respond_to: ScionPacketRaw,
 ) -> anyhow::Result<Option<ScionPacketScmp>> {
@@ -434,9 +453,7 @@ fn maybe_create_scmp_reply(
     // Note: if src address is a multicast address, this should not generate a response.
 
     let endhosts = ByEndpoint::<ScionAddr> {
-        // XXX(ake): This would be set to the IP of the router socket, we however do not simulate
-        // these
-        source: ScionAddr::V4(ScionAddrV4::new(local_as, Ipv4Addr::new(0, 0, 0, 0))),
+        source: ScionAddr::new(local_as, router.ip.into()),
         destination: packet_src,
     };
 

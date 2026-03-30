@@ -17,6 +17,7 @@ use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
     fmt::{Display, Formatter},
     hash::Hash,
+    net::IpAddr,
     str::FromStr,
 };
 
@@ -36,6 +37,7 @@ pub struct ScionTopology {
     pub(crate) trust_store: TrustStore,
     pub(crate) as_map: BTreeMap<IsdAsn, ScionAs>,
     pub(crate) link_map: BTreeMap<ScionLinkId, ScionLink>,
+    pub(crate) router_map: BTreeMap<IsdAsn, Vec<ScionRouter>>,
 }
 
 impl ScionTopology {
@@ -45,6 +47,7 @@ impl ScionTopology {
             trust_store: TrustStore::new(),
             as_map: Default::default(),
             link_map: Default::default(),
+            router_map: Default::default(),
         }
     }
 
@@ -241,6 +244,34 @@ impl ScionTopology {
 
         Ok(self)
     }
+
+    /// Add a new router to the topology, associated with the given AS.
+    ///
+    /// Adding routers is optional, if no routers are added to an AS, it is assumed that the AS has
+    /// a single router managing all interfaces.
+    pub fn add_router(&mut self, isd_as: IsdAsn, router: ScionRouter) -> anyhow::Result<&mut Self> {
+        if !self.as_map.contains_key(&isd_as) {
+            bail!("AS '{}' does not exist", isd_as);
+        }
+
+        let routers = self.router_map.entry(isd_as).or_default();
+
+        // No other router should have the same interface IDs assigned
+        for existing_router in routers.iter() {
+            if existing_router.interfaces.collides(&router.interfaces) {
+                bail!(
+                    "Router for AS '{}' has conflicting interface IDs with an existing router, existing router: {:?}, new router: {:?}",
+                    isd_as,
+                    existing_router.interfaces,
+                    router.interfaces
+                );
+            }
+        }
+
+        routers.push(router);
+
+        Ok(self)
+    }
 }
 // Accessor functions
 impl ScionTopology {
@@ -276,6 +307,36 @@ impl ScionTopology {
             link.id.lower.if_id == interface_id && link.id.lower.isd_as == *isd_as
                 || link.id.higher.if_id == interface_id && link.id.higher.isd_as == *isd_as
         })
+    }
+
+    /// Returns the ScionRouter for the given AS and ingress interface ID.
+    ///
+    /// If no router is found for the given AS a fallback router is returned.
+    pub fn get_router(&self, isd_as: &IsdAsn, ingress_interface: u16) -> &ScionRouter {
+        static FALLBACK_ROUTER: ScionRouter = ScionRouter {
+            interfaces: ScionRouterInterface::Fallback,
+            ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+        };
+
+        let mut fallback = &FALLBACK_ROUTER;
+        for router in self.router_map.get(isd_as).into_iter().flatten() {
+            match router.interfaces {
+                // If the router is a fallback router, store it as a potential fallback if no better
+                // match is found
+                ScionRouterInterface::Fallback => {
+                    fallback = router;
+                }
+                // If the router has specific interface IDs assigned, check if it matches the
+                // ingress interface
+                ScionRouterInterface::Ids(ref ids) => {
+                    if ids.contains(&ingress_interface) {
+                        return router;
+                    }
+                }
+            }
+        }
+
+        fallback
     }
 }
 // Visualization
@@ -801,6 +862,59 @@ impl ScionLinkType {
             ScionLinkType::Parent => ScionLinkType::Child,
             ScionLinkType::Child => ScionLinkType::Parent,
             ScionLinkType::Core => ScionLinkType::Core,
+        }
+    }
+}
+
+/// Representation of a SCION Router, which can be associated with an AS in the topology.
+#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ScionRouter {
+    /// The interface IDs of the router within the AS.
+    pub interfaces: ScionRouterInterface,
+    /// The IP address of the router.
+
+    #[schema(value_type = String, example = "192.168.1.1")]
+    pub ip: IpAddr,
+}
+impl ScionRouter {
+    /// Creates a new SCION router with the given interface IDs and IP address.
+    pub fn new(interfaces: Vec<u16>, ip: IpAddr) -> Self {
+        Self {
+            interfaces: ScionRouterInterface::Ids(interfaces),
+            ip,
+        }
+    }
+
+    /// Creates a new SCION router with the given IP address and no associated interfaces.
+    ///
+    /// This router can be used as a default router for an AS, which is used if no other router is
+    /// explicitly associated with the ingress interface.
+    pub fn new_fallback(ip: IpAddr) -> Self {
+        Self {
+            interfaces: ScionRouterInterface::Fallback,
+            ip,
+        }
+    }
+}
+
+/// Defines the interfaces associated with a SCION router.
+#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub enum ScionRouterInterface {
+    /// The router is not explicitly associated with any interface, and should be used as a fallback
+    /// for the AS unless another router is explicitly assigned.
+    Fallback,
+    /// The router is associated with the given interface IDs.
+    Ids(Vec<u16>),
+}
+impl ScionRouterInterface {
+    /// Checks if the interface id collides with this interface id.
+    pub fn collides(&self, other: &ScionRouterInterface) -> bool {
+        match (self, other) {
+            (ScionRouterInterface::Fallback, ScionRouterInterface::Fallback) => true,
+            (ScionRouterInterface::Ids(ids), ScionRouterInterface::Ids(other_ids)) => {
+                ids.iter().any(|id| other_ids.contains(id))
+            }
+            _ => false,
         }
     }
 }

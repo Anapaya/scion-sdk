@@ -26,7 +26,7 @@ use crate::network::{
     scion::{
         routing::{LocalAsRoutingAction, ScionNetworkTime, spec::SpecRoutingLogic},
         simulator::{ScionNetworkSim, ScionNetworkSimOutput},
-        topology::ScionTopology,
+        topology::{ScionRouter, ScionRouterInterface, ScionTopology},
     },
 };
 
@@ -112,12 +112,20 @@ impl NetworkSimulator<'_> {
                 }
             };
 
+            let router = self
+                .topology
+                .map(|topo| {
+                    topo.get_router(&routing_output.at_as, routing_output.at_ingress_interface)
+                })
+                .unwrap_or(&FALLBACK_ROUTER);
+
             // Simulate Local Handling
             if let Some(reply) = LocalNetworkSimulation::new(
                 routing_output.at_as,
                 routing_output.at_ingress_interface,
                 self.network_receivers,
                 self.external_ases,
+                router,
             )
             .handle_local_routing_action(routing_output.action, packet)
             .context("local simulation failed")?
@@ -147,15 +155,26 @@ impl NetworkSimulator<'_> {
         local_router_if: u16,
         packet: ScionPacketRaw,
     ) -> Option<DispatchEffect> {
+        let router = self
+            .topology
+            .map(|topo| topo.get_router(&local_as, local_router_if))
+            .unwrap_or(&FALLBACK_ROUTER);
+
         LocalNetworkSimulation::new(
             local_as,
             local_router_if,
             self.network_receivers,
             self.external_ases,
+            router,
         )
         .dispatch(packet)
     }
 }
+
+static FALLBACK_ROUTER: ScionRouter = ScionRouter {
+    interfaces: ScionRouterInterface::Fallback,
+    ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+};
 
 #[cfg(test)]
 mod test {

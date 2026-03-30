@@ -704,6 +704,41 @@ components:
           $ref: '#/components/schemas/IsdAsn'
           description: ISD-AS number of the AS the interface belongs to.
       example: 1-1#0
+    ScionRouter:
+      type: object
+      description: Representation of a SCION Router, which can be associated with an AS in the topology.
+      required:
+      - interfaces
+      - ip
+      properties:
+        interfaces:
+          $ref: '#/components/schemas/ScionRouterInterface'
+          description: The interface IDs of the router within the AS.
+        ip:
+          type: string
+          description: The IP address of the router.
+          example: 192.168.1.1
+    ScionRouterInterface:
+      oneOf:
+      - type: string
+        description: |-
+          The router is not explicitly associated with any interface, and should be used as a fallback
+          for the AS unless another router is explicitly assigned.
+        enum:
+        - Fallback
+      - type: object
+        description: The router is associated with the given interface IDs.
+        required:
+        - Ids
+        properties:
+          Ids:
+            type: array
+            items:
+              type: integer
+              format: int32
+              minimum: 0
+            description: The router is associated with the given interface IDs.
+      description: Defines the interfaces associated with a SCION router.
     ScionTopologyDto:
       type: object
       description: Human readable ScionTopology
@@ -711,6 +746,7 @@ components:
       - trust_store
       - as_list
       - links
+      - routers
       properties:
         as_list:
           type: array
@@ -720,6 +756,30 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/pocketscion::network::scion::topology::dto::ScionLinkDto'
+        routers:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/ScionRouter'
+          propertyNames:
+            type: string
+            description: |-
+              The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
+
+              # Examples
+
+              ```
+              # use scion_proto::address::IsdAsn;
+              #
+              # fn main() -> Result<(), Box<dyn std::error::Error>> {
+              assert_eq!(IsdAsn(0x1_ff00_0000_0110), "1-ff00:0:110".parse()?);
+              # Ok(())
+              # }
+              ```
+            examples:
+            - 1-ff00:0:110
+            pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
         trust_store:
           $ref: '#/components/schemas/TrustStore'
     Snap:
