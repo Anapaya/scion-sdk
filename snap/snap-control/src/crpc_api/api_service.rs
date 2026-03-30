@@ -241,15 +241,15 @@ async fn register_snaptun_identity_handler(
         })?)
     };
 
-    let pssid = &snap_token.pssid();
+    let key = &snap_token.jti();
     if !identity_registry.register(
         Instant::now(),
-        pssid,
+        key,
         *initiator_identity.as_bytes(),
         psk_share,
         lifetime,
     ) {
-        tracing::info!(pssid, "re-registered identity");
+        tracing::info!(key, "re-registered identity");
     }
     Ok(ConnectRpc(RegisterSnapTunIdentityResponse {
         // XXX(uniquefine): PSK is not yet supported.

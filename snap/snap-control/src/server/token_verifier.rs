@@ -131,6 +131,7 @@ mod tests {
         let claims = SnapTokenClaims {
             pssid: v0::Pssid::new(),
             exp: 1, // far in the past
+            jti: "test".to_string(),
         };
         jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key).unwrap()
     }
@@ -253,6 +254,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            jti: "test".to_string(),
         };
         let bad_token =
             jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &different_key).unwrap();

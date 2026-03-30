@@ -81,6 +81,8 @@ pub struct SnapTokenClaims {
     pub pssid: Pssid,
     /// The expiration time of the JWT, represented as a Unix timestamp.
     pub exp: u64,
+    /// JWT ID. Uniquely identifies this JWT token.
+    pub jti: String,
 }
 
 impl Token for SnapTokenClaims {
@@ -164,6 +166,7 @@ fn insecure_snap_token(uuid: Uuid, expiry: u64) -> String {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs(),
+        jti: uuid.to_string(),
     };
     jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key).unwrap()
 }
@@ -216,6 +219,7 @@ mod tests {
         let claims = SnapTokenClaims {
             pssid: Pssid(Uuid::new_v4()),
             exp: expiry,
+            jti: "test".to_string(),
         };
 
         let token = encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key).unwrap();

@@ -278,6 +278,7 @@ impl TokenExchange for TokenExchangeImpl {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            jti: uuid::Uuid::new_v4().to_string(),
         };
 
         let snap_token_enc_key =

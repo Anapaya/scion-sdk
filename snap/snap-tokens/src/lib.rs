@@ -80,6 +80,14 @@ impl AnyClaims {
             AnyClaims::V0(c) => c.pssid.to_string(),
         }
     }
+
+    /// Returns the JWT ID.
+    pub fn jti(&self) -> String {
+        match self {
+            AnyClaims::V1(c) => c.jti.clone(),
+            AnyClaims::V0(c) => c.jti.clone(),
+        }
+    }
 }
 
 impl Token for AnyClaims {
