@@ -16,6 +16,8 @@
 
 use std::{fmt::Debug, ops::Deref, time::Duration};
 
+use serde::{Deserialize, Serialize};
+
 /// Path types used in SCION packets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -59,7 +61,8 @@ impl From<PathType> for u8 {
 }
 
 /// MAC (Message Authentication Code) used in HopFields.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(transparent)]
 pub struct HopFieldMac(pub [u8; 6]);
 impl HopFieldMac {
     /// Creates a new HopFieldMac from the given byte array.
@@ -170,3 +173,12 @@ impl HopFieldFlags {
 // https://datatracker.ietf.org/doc/html/draft-dekater-scion-dataplane#name-hop-field
 /// Expiration Duration per ExpTime unit on a HopField.
 pub const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
+
+/// Converts the ExpTime value from a HopField to a Duration.
+///
+/// One unit of ExpTime corresponds to [EXP_TIME_UNIT] (5m38.5s).\
+/// The lowest possible expiration time is [EXP_TIME_UNIT] (when `exp_time` is 0).\
+/// The highest possible expiration time is 256 * [EXP_TIME_UNIT] (when `exp_time` is 255).
+pub fn exp_time_to_duration(exp_time: u8) -> Duration {
+    EXP_TIME_UNIT.saturating_mul(exp_time as u32 + 1)
+}

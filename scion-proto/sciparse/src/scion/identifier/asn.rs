@@ -16,9 +16,11 @@
 //! SCION Autonomous System (AS) identifier
 
 use std::{
-    fmt::{Display, Formatter},
+    fmt::{Debug, Display, Formatter},
     str::FromStr,
 };
+
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::{
     core::{macros::impl_from, read::FromUnalignedRead},
@@ -26,7 +28,9 @@ use crate::{
 };
 
 /// A 48-bit SCION autonomous system (AS) number.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 #[repr(transparent)]
 pub struct Asn(pub u64);
 impl Asn {
@@ -76,6 +80,11 @@ impl Asn {
     /// account.
     pub fn matches_any_in<'a>(&self, collection: impl IntoIterator<Item = &'a Asn>) -> bool {
         collection.into_iter().any(|other| self.matches(*other))
+    }
+}
+impl Debug for Asn {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        <Self as Display>::fmt(self, f)
     }
 }
 impl Display for Asn {

@@ -21,6 +21,7 @@ use std::{
     str::FromStr,
 };
 
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 use tinyvec::ArrayVec;
 
 use crate::{
@@ -32,7 +33,9 @@ use crate::{
 };
 
 /// Host Address for SCION packets. Conceptually [IpAddr] plus SCION specific address types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub enum ScionHostAddr {
     /// IPv4 address.
     V4(Ipv4Addr),

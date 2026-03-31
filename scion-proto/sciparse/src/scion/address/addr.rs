@@ -21,6 +21,8 @@ use std::{
     str::FromStr,
 };
 
+use serde_with::{DeserializeFromStr, SerializeDisplay};
+
 use crate::{
     core::macros::impl_from,
     scion::{
@@ -37,7 +39,9 @@ use crate::{
 ///
 /// See [`ScionSocketAddr`](crate::address::socket_addr::ScionSocketAddr) for ([IsdAsn],
 /// [HostAddr](crate::address::host_addr::ScionHostAddr) and Port).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub enum ScionAddr {
     /// IPv4 SCION address
     V4(ScionAddrV4),
@@ -130,7 +134,9 @@ impl_from!(ScionSocketAddr, ScionAddr, |v| {
 /// An IPv4 SCION network address combining [IsdAsn] and [Ipv4Addr]
 ///
 /// See also [ScionAddr] for the enum combining all address types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct ScionAddrV4 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -168,7 +174,9 @@ impl TryFrom<ScionAddr> for ScionAddrV4 {
 /// An IPv6 SCION network address combining [IsdAsn] and [Ipv6Addr]
 ///
 /// See also [ScionAddr] for the enum combining all address types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct ScionAddrV6 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -206,7 +214,9 @@ impl TryFrom<ScionAddr> for ScionAddrV6 {
 /// A Service SCION network address combining [IsdAsn] and [ServiceAddr]
 ///
 /// See also [ScionAddr] for the enum combining all address types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct ScionAddrSvc {
     /// ISD-AS number
     pub isd_asn: IsdAsn,

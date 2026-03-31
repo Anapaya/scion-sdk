@@ -20,6 +20,8 @@ use std::{
     str::FromStr,
 };
 
+use serde_with::{DeserializeFromStr, SerializeDisplay};
+
 use crate::{
     core::{macros::impl_from, read::FromUnalignedRead, write::IntoUnalignedWrite},
     scion::{
@@ -29,7 +31,9 @@ use crate::{
 };
 
 /// The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
-#[derive(Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 #[repr(transparent)]
 pub struct IsdAsn(pub u64);
 impl IsdAsn {

@@ -16,9 +16,11 @@
 //! SCION Isolation Domain (ISD) identifier
 
 use std::{
-    fmt::{Display, Formatter},
+    fmt::{Debug, Display, Formatter},
     str::FromStr,
 };
+
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::{
     core::{macros::impl_from, read::FromUnalignedRead},
@@ -30,7 +32,9 @@ use crate::{
 /// See [this table][anapaya-assignments] for current ISD network assignments.
 ///
 /// [anapaya-assignments]: https://docs.anapaya.net/en/latest/resources/isd-as-assignments/
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 #[repr(transparent)]
 pub struct Isd(pub u16);
 impl Isd {
@@ -67,6 +71,11 @@ impl Isd {
     /// account.
     pub fn matches_any_in<'a>(&self, collection: impl IntoIterator<Item = &'a Isd>) -> bool {
         collection.into_iter().any(|other| self.matches(*other))
+    }
+}
+impl Debug for Isd {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        <Self as Display>::fmt(self, f)
     }
 }
 impl Display for Isd {

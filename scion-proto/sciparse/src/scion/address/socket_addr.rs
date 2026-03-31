@@ -21,6 +21,8 @@ use std::{
     str::FromStr,
 };
 
+use serde_with::{DeserializeFromStr, SerializeDisplay};
+
 use crate::{
     core::macros::impl_from,
     scion::{
@@ -36,7 +38,9 @@ use crate::{
 /// SCION address combining [IsdAsn], [ScionHostAddr] and a Port
 /// See [ScionAddr](crate::address::addr::ScionAddr) for ([IsdAsn] and [ScionHostAddr]
 /// without Port).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub enum ScionSocketAddr {
     /// IPv4 SCION Socket Address
     V4(ScionSocketAddrV4),
@@ -256,7 +260,9 @@ impl_from!(ScionSocketAddrV6, ScionSocketAddr, |v| Self::V6(v));
 impl_from!(ScionSocketAddrSvc, ScionSocketAddr, |v| Self::Svc(v));
 
 /// SCION IPv4 Socket Address combining [IsdAsn], [Ipv4Addr] and a Port
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct ScionSocketAddrV4 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -306,7 +312,9 @@ impl Display for ScionSocketAddrV4 {
 }
 
 /// SCION IPv6 Socket Address combining [IsdAsn], [Ipv6Addr] and a Port
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct ScionSocketAddrV6 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -345,7 +353,9 @@ impl Display for ScionSocketAddrV6 {
 }
 
 /// SCION Service Socket Address combining [IsdAsn], [ServiceAddr] and a Port
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+)]
 pub struct ScionSocketAddrSvc {
     /// ISD-AS number
     pub isd_asn: IsdAsn,

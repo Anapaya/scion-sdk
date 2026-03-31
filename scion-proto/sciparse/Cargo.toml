@@ -5,16 +5,25 @@ edition = { workspace = true }
 
 [dependencies]
 aes = { workspace = true }
-cmac = { workspace = true }
-thiserror = { workspace = true }
 bitflags = { workspace = true }
+cmac = { workspace = true }
+ecdsa = { workspace = true }
+p256 = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+scion-protobuf = { workspace = true }
+serde = { workspace = true }
+serde_with = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
 tinyvec = { workspace = true }
 
 [dev-dependencies]
+base64 = { workspace = true }
+bytes = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
 scion-proto = { workspace = true }
-bytes = { workspace = true }
 
 [lints]
 workspace = true

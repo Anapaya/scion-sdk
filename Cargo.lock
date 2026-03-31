@@ -4194,12 +4194,21 @@ name = "sciparse"
 version = "0.0.0"
 dependencies = [
  "aes",
+ "base64 0.22.1",
  "bitflags",
  "bytes",
  "cmac",
+ "ecdsa",
+ "p256",
  "proptest",
  "proptest-derive",
+ "prost",
+ "prost-types",
  "scion-proto",
+ "scion-protobuf",
+ "serde",
+ "serde_with",
+ "sha2",
  "thiserror 2.0.18",
  "tinyvec",
 ]
