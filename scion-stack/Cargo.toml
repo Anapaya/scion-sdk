@@ -44,6 +44,7 @@ x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 derive_more = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 hickory-server = { workspace = true }
 mockall = { workspace = true }
 ntest = { workspace = true }

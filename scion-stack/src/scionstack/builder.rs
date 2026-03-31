@@ -13,10 +13,11 @@
 // limitations under the License.
 //! SCION stack builder.
 
+mod priority_connect;
+
 use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 
 use endhost_api_client::client::CrpcEndhostApiClient;
-use futures::{StreamExt, stream::FuturesUnordered};
 use rand::seq::IndexedRandom;
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_reqwest_connect_rpc::token_source::{TokenSource, static_token::StaticTokenSource};
@@ -37,6 +38,9 @@ use crate::{
 };
 
 const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_secs(600);
+const DEFAULT_ENDHOST_API_DISCOVERY_MAX_GROUPS: usize = 5;
+const DEFAULT_ENDHOST_API_DISCOVERY_APIS_PER_GROUP: usize = 2;
+const DEFAULT_ENDHOST_API_DISCOVERY_PER_GROUP_DELAY: Duration = Duration::from_millis(500);
 
 /// Builder for creating a [ScionStack].
 ///
@@ -62,6 +66,7 @@ pub struct ScionStackBuilder {
     auth_token_source: Option<Arc<dyn TokenSource>>,
     endhost_api_source: Arc<dyn EndhostApiSource>,
     preferred_underlay: PreferredUnderlay,
+    endhost_api_discovery: EndhostApiDiscoveryConfig,
     snap: SnapUnderlayConfig,
     udp: UdpUnderlayConfig,
 }
@@ -77,6 +82,7 @@ impl ScionStackBuilder {
             auth_token_source: None,
             endhost_api_source: Arc::new(StaticEndhostApiDiscovery::global()),
             preferred_underlay: PreferredUnderlay::Udp,
+            endhost_api_discovery: EndhostApiDiscoveryConfig::default(),
             snap: SnapUnderlayConfig::default(),
             udp: UdpUnderlayConfig::default(),
         }
@@ -142,6 +148,40 @@ impl ScionStackBuilder {
         self
     }
 
+    /// Set the maximum number of API groups to probe during endhost API
+    /// discovery.
+    ///
+    /// Groups are ordered by priority; only the first `max_groups` non-empty
+    /// groups returned by the discovery source are considered. Defaults to 5.
+    pub fn with_endhost_api_discovery_max_groups(mut self, max_groups: usize) -> Self {
+        self.endhost_api_discovery.max_groups = max_groups;
+        self
+    }
+
+    /// Set the maximum number of APIs to probe per group during endhost API
+    /// discovery.
+    ///
+    /// APIs are selected at random within each group. Setting this to a higher
+    /// value increases redundancy at the cost of additional concurrent
+    /// connections. Defaults to 2.
+    pub fn with_endhost_api_discovery_apis_per_group(mut self, apis_per_group: usize) -> Self {
+        self.endhost_api_discovery.apis_per_group = apis_per_group;
+        self
+    }
+
+    /// Set the delay before APIs in group `k` begin connecting, measured from
+    /// the start of discovery.
+    ///
+    /// Group `k` starts after `k × per_group_delay` **or** as soon as group
+    /// `k-1` is fully exhausted, whichever comes first. A shorter delay reduces
+    /// time-to-connect when a high-priority group is slow, at the cost of
+    /// additional concurrent connections to lower-priority groups. Defaults to
+    /// 500 ms.
+    pub fn with_endhost_api_discovery_per_group_delay(mut self, per_group_delay: Duration) -> Self {
+        self.endhost_api_discovery.per_group_delay = per_group_delay;
+        self
+    }
+
     /// Set SNAP underlay specific configuration for the SCION stack.
     pub fn with_snap_underlay_config(mut self, config: SnapUnderlayConfig) -> Self {
         self.snap = config;
@@ -165,30 +205,33 @@ impl ScionStackBuilder {
             auth_token_source,
             endhost_api_source,
             preferred_underlay,
+            endhost_api_discovery,
             snap,
             udp,
         } = self;
 
-        // We concurrently connect to a capped number of endhost APIs use the one that responds
-        // first. Randomly select up to two APIs from up to five API groups returned.
-        let endhost_apis = endhost_api_source
-            .endhost_apis()
-            .await?
-            .into_iter()
-            .filter(|group| !group.apis.is_empty())
-            .take(5);
-
-        let endhost_api_urls = {
+        // Race a random sample of APIs from each of the first N groups,
+        // staggered by group priority. Group k starts after k *
+        // per_group_delay or when group k-1 is fully exhausted, whichever
+        // comes first.
+        let api_groups = endhost_api_source.endhost_apis().await?;
+        let api_groups: Vec<Vec<Url>> = {
             let mut rng = rand::rng();
-            let mut urls = vec![];
-            for g in endhost_apis {
-                for url in g.apis.sample(&mut rng, 2) {
-                    urls.push(url.clone());
-                }
-            }
-            urls
+            api_groups
+                .into_iter()
+                .map(|g| g.apis.into_iter().map(|a| a.address).collect::<Vec<_>>())
+                .filter(|group| !group.is_empty())
+                .take(endhost_api_discovery.max_groups)
+                .map(|group: Vec<Url>| {
+                    group
+                        .sample(&mut rng, endhost_api_discovery.apis_per_group)
+                        .cloned()
+                        .collect()
+                })
+                .collect()
         };
-        if endhost_api_urls.is_empty() {
+
+        if api_groups.is_empty() {
             return Err(BuildScionStackError::EndhostApiSourceError(
                 EndhostApiSourceError {
                     error: anyhow::anyhow!("Endhost API discovery returned no APIs"),
@@ -199,67 +242,39 @@ impl ScionStackBuilder {
             ));
         }
 
-        // Try instantiating a client and listing underlays for each selected API.
-        // If any succeeds, use that client and the discovered underlays.
-        // Otherwise return an error collecting all per-API failures.
         let token_source: Option<Arc<dyn TokenSource>> =
             endhost_api_token_source.or(auth_token_source.clone());
-        let mut client_setup_errors: Vec<(Url, ApiAttemptError)> = Vec::new();
-        let mut underlay_discovery_futures = FuturesUnordered::new();
-        for url in endhost_api_urls {
-            let api_url = url.address;
-
-            let mut client = match CrpcEndhostApiClient::new(&api_url) {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::debug!(error=%e, url=%api_url, "Failed to create endhost API client");
-                    client_setup_errors.push((api_url, ApiAttemptError::ClientSetup(e)));
-                    continue;
+        let discover_underlays = move |url: Url| {
+            let token_source = token_source.clone();
+            let url = url.clone();
+            async move {
+                let mut client =
+                    CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::ClientSetup)?;
+                if let Some(token_source) = &token_source {
+                    client.use_token_source(token_source.clone());
                 }
-            };
-
-            if let Some(ts) = token_source.clone() {
-                client.use_token_source(ts);
-            }
-            let client = Arc::new(client);
-
-            underlay_discovery_futures.push(async move {
+                let client = Arc::new(client);
                 let discovery = PeriodicUnderlayDiscovery::new(
                     client.clone(),
                     udp.udp_next_hop_resolver_fetch_interval,
-                    // TODO(uniquefine): make this configurable.
                     ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
                 )
-                .await;
-
-                (api_url, client, discovery)
-            });
-        }
-
-        let (api_url, endhost_api_client, underlay_discovery) = {
-            let mut errors = client_setup_errors;
-            let mut success = None;
-            while let Some((url, client, discovery_result)) =
-                underlay_discovery_futures.next().await
-            {
-                match discovery_result {
-                    Ok(discovery) => {
-                        success = Some((url, client, discovery));
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            error = %e,
-                            url = %url,
-                            "Failed to set up underlay discovery for endhost API"
-                        );
-                        errors.push((url, ApiAttemptError::UnderlayDiscovery(e)));
-                    }
-                }
+                .await
+                .map_err(ApiAttemptError::UnderlayDiscovery)?;
+                Ok((client, discovery))
             }
-            success.ok_or_else(|| AllEndhostApisFailed(errors))
-        }
-        .map_err(BuildScionStackError::AllEndhostApisFailed)?;
+        };
+
+        let (api_url, (endhost_api_client, underlay_discovery)) =
+            priority_connect::try_priority_groups(
+                api_groups,
+                discover_underlays,
+                endhost_api_discovery.per_group_delay,
+            )
+            .await
+            .map_err(|errors| {
+                BuildScionStackError::AllEndhostApisFailed(AllEndhostApisFailed(errors))
+            })?;
         tracing::info!(%api_url, "Successfully selected endhost API");
 
         // Use the endhost API URL to resolve the local IP addresses for the UDP underlay
@@ -375,6 +390,30 @@ pub enum ApiAttemptError {
     /// Underlay discovery against the API failed (e.g. server unreachable).
     #[error("underlay discovery: {0:#}")]
     UnderlayDiscovery(CrpcClientError),
+}
+
+/// Configuration for endhost API discovery during stack building.
+///
+/// Controls how many API groups and endpoints are probed in parallel, and
+/// how long to wait before falling through to the next priority group.
+pub struct EndhostApiDiscoveryConfig {
+    /// Maximum number of API groups to consider, in priority order.
+    max_groups: usize,
+    /// Maximum number of APIs to probe per group, selected at random.
+    apis_per_group: usize,
+    /// Delay before group `k` begins connecting (`k × per_group_delay`),
+    /// unless the previous group is exhausted sooner.
+    per_group_delay: Duration,
+}
+
+impl Default for EndhostApiDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            max_groups: DEFAULT_ENDHOST_API_DISCOVERY_MAX_GROUPS,
+            apis_per_group: DEFAULT_ENDHOST_API_DISCOVERY_APIS_PER_GROUP,
+            per_group_delay: DEFAULT_ENDHOST_API_DISCOVERY_PER_GROUP_DELAY,
+        }
+    }
 }
 
 /// Preferred underlay type (if available).
