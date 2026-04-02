@@ -134,7 +134,11 @@ impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
         let expires_at =
             expires_at_from_token(&snap_token).map_err(|e| Box::new(e) as TokenSourceError)?;
 
+        // Assuming signed, JWT-token, the signature should provide a unique
+        // identifier for the token.
+        let token_sig = snap_token.rsplit('.').next().unwrap_or("");
         tracing::debug!(
+            token_sig,
             expires_at_secs = expires_at
                 .checked_duration_since(Instant::now())
                 .map(|d| d.as_secs())

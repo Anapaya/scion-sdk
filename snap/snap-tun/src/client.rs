@@ -121,6 +121,8 @@ impl SnapTunEndpointState {
     /// Task to register the endpoints identity with all control planes
     async fn identity_registration_loop(&self, token_source: Arc<dyn TokenSource>) {
         let mut watch = token_source.watch();
+        // drop first bogus update, as initial registration is done in add_tunnel()
+        let _ = watch.borrow_and_update();
         loop {
             // register the identity with all managed control planes.
             let control_planes = self
@@ -147,6 +149,13 @@ impl SnapTunEndpointState {
                     "token source watch channel closed, stopping identity registration loop"
                 );
                 return;
+            }
+            let r = watch.borrow();
+            if let Some(Ok(r)) = &*r {
+                // assume token is a JWT-token, the signature is a unique
+                // identifier for this token.
+                let token_sig = r.rsplit('.').next().unwrap_or("");
+                tracing::debug!(token_sig, "token renewal in registration loop");
             }
         }
     }

@@ -945,3 +945,9 @@ pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
     ) -> Poll<std::io::Result<(SocketAddr, Bytes, Path)>>;
     fn local_addr(&self) -> SocketAddr;
 }
+
+impl Drop for ScionStack {
+    fn drop(&mut self) {
+        tracing::warn!("ScionStack was dropped");
+    }
+}
