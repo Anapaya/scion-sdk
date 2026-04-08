@@ -14,17 +14,21 @@
 
 //! Zero-copy UDP datagram view.
 
-use std::mem::transmute;
+use std::{cmp::min, mem::transmute};
 
 use crate::{
-    core::view::{
-        View, ViewConversionError,
-        macros::{gen_field_read, gen_field_write},
+    core::{
+        read::unchecked_bit_range_be_read,
+        view::{
+            View, ViewConversionError,
+            macros::{gen_field_read, gen_field_write},
+        },
     },
     payload::udp::layout::UdpDatagramLayout,
 };
 
 /// A zero-copy view over a UDP datagram (header + payload).
+/// The view is valid if the buffer can hold at least the 8 byte UDP header.
 #[repr(transparent)]
 pub struct UdpDatagramView([u8]);
 
@@ -38,7 +42,9 @@ impl View for UdpDatagramView {
                 actual: buf.len(),
             });
         }
-        Ok(buf.len())
+        let header_len: u16 =
+            unsafe { unchecked_bit_range_be_read(buf, UdpDatagramLayout::LENGTH_RNG) };
+        Ok(min(buf.len(), header_len as usize))
     }
 
     #[inline]
@@ -60,6 +66,17 @@ impl View for UdpDatagramView {
     }
 
     #[inline]
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    #[inline]
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+        // SAFETY: repr(transparent) over [u8], identical fat pointer layout
+        unsafe { transmute(self) }
+    }
+
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -77,6 +94,9 @@ impl UdpDatagramView {
     gen_field_write!(set_checksum, UdpDatagramLayout::CHECKSUM_RNG, u16);
 
     /// Returns the UDP payload (bytes after the 8-byte header).
+    ///
+    /// Note: The returned slice is as long as the underlying buffer permits
+    /// irrespective of the length field in the UDP header.
     #[inline]
     pub fn payload(&self) -> &[u8] {
         // SAFETY: On construction we check that the buffer is larger than
@@ -85,6 +105,9 @@ impl UdpDatagramView {
     }
 
     /// Returns a mutable slice of the UDP payload.
+    ///
+    /// Note: The returned slice is as long as the underlying buffer permits
+    /// irrespective of the length field in the UDP header.
     #[inline]
     pub fn payload_mut(&mut self) -> &mut [u8] {
         // SAFETY: On construction we check that the buffer is larger than

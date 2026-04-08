@@ -106,3 +106,28 @@ impl PayloadEncode for &[u8] {
         Ok(())
     }
 }
+
+/// Encodes a vector of bytes as the payload disregarding the address header and header and
+/// extensions size.
+impl PayloadEncode for Vec<u8> {
+    fn required_size(&self, header_and_extensions_size: usize) -> usize {
+        self.as_slice().required_size(header_and_extensions_size)
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
+        // SAFETY: See the implementation for &[u8], which this delegates to.
+        unsafe {
+            self.as_slice()
+                .encode_unchecked(buf, address_header, header_and_extensions_size)
+        }
+    }
+
+    fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
+        self.as_slice().wire_valid()
+    }
+}

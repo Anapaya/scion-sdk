@@ -24,7 +24,7 @@ use crate::{
         },
     },
     identifier::isd_asn::IsdAsn,
-    packet::view::ScionPacketView,
+    packet::view::ScionRawPacketView,
     payload::{
         ProtocolNumber,
         scmp::{
@@ -203,7 +203,7 @@ impl ScmpPayloadView {
     /// - Unknown error messages: returns `None`.
     pub fn dst_port(&self) -> Option<u16> {
         let udp_src_port = |offending_packet: &[u8]| {
-            let (inner, _) = ScionPacketView::from_slice(offending_packet).ok()?;
+            let (inner, _) = ScionRawPacketView::from_slice(offending_packet).ok()?;
             if <u8 as Into<ProtocolNumber>>::into(inner.header().next_header())
                 != ProtocolNumber::Udp
             {

@@ -75,7 +75,11 @@ impl PayloadEncode for UdpDatagram {
         unsafe {
             unchecked_bit_range_be_write::<u16>(buf, L::SRC_PORT_RNG, self.src_port);
             unchecked_bit_range_be_write::<u16>(buf, L::DST_PORT_RNG, self.dst_port);
-            unchecked_bit_range_be_write::<u16>(buf, L::LENGTH_RNG, self.payload.len() as u16);
+            unchecked_bit_range_be_write::<u16>(
+                buf,
+                L::LENGTH_RNG,
+                (L::HEADER_SIZE_BYTES + self.payload.len()) as u16,
+            );
             unchecked_bit_range_be_write::<u16>(buf, L::CHECKSUM_RNG, 0u16);
 
             let payload_buf = buf.get_unchecked_mut(

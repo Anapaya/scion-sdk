@@ -140,6 +140,16 @@ impl View for OneHopPathView {
         &self.0
     }
 
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+        // SAFETY: repr(transparent) over [u8; N]
+        let sized: Box<[u8; OneHopPathLayout::SIZE_BYTES]> = unsafe { transmute(self) };
+        sized
+    }
+
     unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
         // SAFETY: see View trait documentation
         let sized: &[u8; OneHopPathLayout::SIZE_BYTES] =

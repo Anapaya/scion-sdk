@@ -335,6 +335,18 @@ impl View for InfoFieldView {
     }
 
     #[inline]
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    #[inline]
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+        // SAFETY: repr(transparent) over [u8; N]
+        let sized: Box<[u8; InfoFieldLayout::SIZE_BYTES]> = unsafe { transmute(self) };
+        sized
+    }
+
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -413,6 +425,18 @@ impl View for HopFieldView {
         let sized: Box<[u8; HopFieldLayout::SIZE_BYTES]> =
             unsafe { buf.try_into().unwrap_unchecked() };
         unsafe { transmute(sized) }
+    }
+
+    #[inline]
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    #[inline]
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+        // SAFETY: repr(transparent) over [u8; N]
+        let sized: Box<[u8; HopFieldLayout::SIZE_BYTES]> = unsafe { transmute(self) };
+        sized
     }
 
     #[inline]

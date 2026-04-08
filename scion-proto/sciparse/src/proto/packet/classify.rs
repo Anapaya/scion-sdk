@@ -19,8 +19,9 @@
 //! an owned representation.
 
 use crate::{
-    address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn,
-    packet::view::ScionPacketView,
+    address::socket_addr::ScionSocketAddr,
+    identifier::isd_asn::IsdAsn,
+    packet::view::{ScionPacketView, ScionRawPacketView, ScionScmpPacketView, ScionUdpPacketView},
 };
 
 /// The result of classifying a SCION packet by its payload protocol.
@@ -32,27 +33,13 @@ use crate::{
 /// Use [`ClassifiedPacketView::dst_socket_addr`] to obtain the destination [`ScionSocketAddr`].
 pub enum ClassifiedPacketView<'a> {
     /// A SCION/UDP packet.  `dst_port` is taken from the UDP header.
-    Udp {
-        /// The underlying packet view.
-        packet: &'a ScionPacketView,
-        /// Destination port from the UDP header.
-        /// XXX(uniquefine): drop this when the view type above is replaced with a next_header
-        /// aware view.
-        dst_port: u16,
-    },
+    Udp(&'a ScionUdpPacketView),
     /// A SCION/SCMP packet.
     ///
     /// For informational messages (echo, traceroute) the identifier field is used as the port.
     /// For error messages the source port of the quoted inner UDP datagram is used when it can be
     /// parsed.
-    Scmp {
-        /// The underlying packet view.
-        packet: &'a ScionPacketView,
-        /// Deduced destination port, if one can be derived from the SCMP message.
-        /// XXX(uniquefine): drop this when the view type above is replaced with a next_header
-        /// aware view.
-        dst_port: Option<u16>,
-    },
+    Scmp(&'a ScionScmpPacketView),
     /// A SCION packet whose payload protocol is neither UDP nor SCMP.
     Other(&'a ScionPacketView),
 }
@@ -65,9 +52,9 @@ impl<'a> ClassifiedPacketView<'a> {
     /// [`ClassifiedPacketView::Other`] variant, and when the destination host address cannot be
     /// parsed.
     pub fn dst_socket_addr(&self) -> Option<ScionSocketAddr> {
-        let (packet, dst_port) = match self {
-            ClassifiedPacketView::Udp { packet, dst_port } => (packet, *dst_port),
-            ClassifiedPacketView::Scmp { packet, dst_port } => (packet, (*dst_port)?),
+        let (packet, dst_port): (&ScionRawPacketView, u16) = match self {
+            ClassifiedPacketView::Udp(udp) => ((*udp).into(), udp.udp().dst_port()),
+            ClassifiedPacketView::Scmp(scmp) => ((*scmp).into(), scmp.scmp().dst_port()?),
             ClassifiedPacketView::Other(_) => return None,
         };
 
@@ -159,8 +146,8 @@ mod tests {
         let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
         let classified = view.classify().unwrap();
         match &classified {
-            ClassifiedPacketView::Scmp { dst_port, .. } => {
-                assert_eq!(Some(54321), *dst_port);
+            ClassifiedPacketView::Scmp(scmp) => {
+                assert_eq!(Some(54321), scmp.scmp().dst_port());
             }
             _ => panic!("expected Scmp variant"),
         }
@@ -204,8 +191,8 @@ mod tests {
         let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
         let classified = view.classify().unwrap();
         match &classified {
-            ClassifiedPacketView::Scmp { dst_port, .. } => {
-                assert!(dst_port.is_some());
+            ClassifiedPacketView::Scmp(scmp) => {
+                assert!(scmp.scmp().dst_port().is_some());
             }
             _ => panic!("expected Scmp variant"),
         }
@@ -237,8 +224,8 @@ mod tests {
         let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
         let classified = view.classify().unwrap();
         match &classified {
-            ClassifiedPacketView::Scmp { dst_port, .. } => {
-                assert!(dst_port.is_none());
+            ClassifiedPacketView::Scmp(scmp) => {
+                assert!(scmp.scmp().dst_port().is_none());
             }
             _ => panic!("expected Scmp variant"),
         }

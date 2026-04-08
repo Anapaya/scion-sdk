@@ -27,6 +27,21 @@
 //!
 //! Thanks to this, mutability and ownership is fully handled by Rust's built-in types.
 //!
+//! ### Correctness
+//!
+//! Views only guarantee that the access to the buffers is safe and doesn't exceed the buffer
+//! bounds.
+//!
+//! They do not guarantee that the fields of the view are semantically correct, e.g. that the
+//! next_header field on a scion udp packet view actually contains the value for udp.
+//!
+//! Checking and upholding the semantic correctness of the fields is the responsibility of the
+//! caller.
+//! If valid data is required, the caller is responsible for checking the respective fields of the
+//! view.
+//! The same applies to mutating fields of the view, the caller is responsible for ensuring
+//! that a mutation does not semantically invalidate the view.
+//!
 //! ### Safety
 //!
 //! Core invariant needing to be upheld is that the buffer which the view points to, is large enough
@@ -55,7 +70,6 @@ use crate::core::layout::LayoutParseError;
 /// A view must implement methods to check the required size of the buffer
 pub trait View {
     /// Asserts that the buffer has the required size for the view.
-    /// Returns the range of bytes used by the view in the buffer.
     ///
     /// If the buffer is too small, returns a ViewConversionError.
     ///
@@ -115,6 +129,16 @@ pub trait View {
 
     /// Returns the underlying byte representation of the view
     fn as_bytes(&self) -> &[u8];
+
+    /// Returns the underlying mutable byte representation of the view
+    ///
+    /// # Safety
+    /// The caller must ensure that the buffer is not mutated in a way that would invalidate the
+    /// view. e.g. by changing the fields that have an effect on `has_required_size`.
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8];
+
+    /// Returns the underlying byte representation of the view as a boxed slice.
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]>;
 
     /// Converts the view into an owned boxed slice
     #[inline]
@@ -274,6 +298,15 @@ pub(crate) mod macros {
 
                 fn as_bytes(&self) -> &[u8] {
                     &self.0
+                }
+
+                unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+                    &mut self.0
+                }
+
+                fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+                    // SAFETY: repr(transparent) over [u8], identical fat pointer layout
+                    unsafe { std::mem::transmute(self) }
                 }
 
                 unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
