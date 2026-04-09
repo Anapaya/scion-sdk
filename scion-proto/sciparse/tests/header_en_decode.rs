@@ -80,7 +80,7 @@ fn valid_headers_should_roudtrip_correctly() {
             helpers::header::exec_every_view_function(view)?;
 
             // Reconstruct header from view
-            let reconstructed = ScionPacketHeader::from_view(view);
+            let reconstructed = ScionPacketHeader::from_view(view)?;
 
             prop_assert_eq!(initial, reconstructed);
 

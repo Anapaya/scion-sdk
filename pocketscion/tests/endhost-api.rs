@@ -80,7 +80,7 @@ async fn should_have_working_eh_api() -> anyhow::Result<()> {
     let eh_client = CrpcEndhostApiClient::new(&Url::parse(&format!("http://{eh_addr}"))?)?;
 
     let underlays = eh_client
-        .list_underlays(ia1)
+        .list_underlays(ia1.into())
         .await
         .context("endhost api client failed")?;
     println!("{underlays:?}");
@@ -88,7 +88,7 @@ async fn should_have_working_eh_api() -> anyhow::Result<()> {
     assert_eq!(underlays.snap_underlay.len(), 1);
 
     let page = eh_client
-        .list_segments(ia1, ia2, 256, "".to_string())
+        .list_segments(ia1.into(), ia2.into(), 256, "".to_string())
         .await
         .context("error listing segments")?;
 

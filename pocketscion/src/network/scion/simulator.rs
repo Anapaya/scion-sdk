@@ -152,8 +152,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
 
         let current_forwarding_key = current_as
             .forwarding_key()
-            .expect("Simulated ASes always have a forwarding key")
-            .into();
+            .expect("Simulated ASes always have a forwarding key");
 
         Ok(Self {
             topology,
@@ -272,7 +271,6 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
                 self.current_forwarding_key = partner_as
                     .forwarding_key()
                     .expect("simulated ASes always have a forwarding key")
-                    .into()
             }
         } else {
             // If the decision is not to forward to the next hop, we can finalize the iteration

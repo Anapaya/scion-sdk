@@ -294,7 +294,7 @@ fn valid_packets_should_roundtrip_correctly() {
                     helpers::scmp::exec_every_view_function(scmp_view);
 
                     let message_view = scmp_view.message();
-                    let reconstructed = ScmpMessage::from_view(message_view);
+                    let reconstructed = ScmpMessage::from_view(&message_view);
                     prop_assert_eq!(expected_scmp, reconstructed);
 
                     prop_assert!(

@@ -12,7 +12,7 @@ keywords = ["SCION", "networking"]
 # Local Dependencies
 endhost-api-models = { workspace = true }
 endhost-api-protobuf = { workspace = true }
-scion-proto = { workspace = true }
+sciparse = { workspace = true }
 scion-sdk-axum-connect-rpc = { workspace = true }
 
 # Global Dependencies

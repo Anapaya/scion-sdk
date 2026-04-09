@@ -14,7 +14,7 @@
 //! Segment listing utilities
 
 use anyhow::{Ok, bail};
-use scion_proto::address::{Isd, IsdAsn};
+use sciparse::identifier::{isd::Isd, isd_asn::IsdAsn};
 
 /// Helper enum to represent the target of a segment listing request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

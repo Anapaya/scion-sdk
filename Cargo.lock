@@ -1267,8 +1267,8 @@ dependencies = [
  "axum",
  "endhost-api-models",
  "endhost-api-protobuf",
- "scion-proto",
  "scion-sdk-axum-connect-rpc",
+ "sciparse",
  "tokio",
  "tracing",
 ]
@@ -1283,8 +1283,8 @@ dependencies = [
  "endhost-api-models",
  "endhost-api-protobuf",
  "reqwest",
- "scion-proto",
  "scion-sdk-reqwest-connect-rpc",
+ "sciparse",
  "tracing",
  "url",
 ]
@@ -1330,7 +1330,7 @@ name = "endhost-api-models"
 version = "0.4.0"
 dependencies = [
  "async-trait",
- "scion-proto",
+ "sciparse",
  "serde",
  "url",
 ]
@@ -1341,8 +1341,8 @@ version = "0.4.0"
 dependencies = [
  "endhost-api-models",
  "prost",
- "scion-proto",
  "scion-protobuf",
+ "sciparse",
  "url",
 ]
 
@@ -4201,6 +4201,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "tinyvec",
+ "utoipa",
 ]
 
 [[package]]
@@ -4502,12 +4503,12 @@ dependencies = [
  "prost",
  "prost-build",
  "reqwest",
- "scion-proto",
  "scion-sdk-axum-connect-rpc",
  "scion-sdk-observability",
  "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-token-validator",
  "scion-sdk-utils",
+ "sciparse",
  "serde",
  "serde_json",
  "snap-tokens",

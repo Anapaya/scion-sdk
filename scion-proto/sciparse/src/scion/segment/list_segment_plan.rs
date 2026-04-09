@@ -17,7 +17,7 @@
 //! Plan of segment lookups against SCION control services to be performed
 //! when looking up segments from a source to a destination.
 
-use crate::address::{Asn, Isd, IsdAsn};
+use crate::identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn};
 
 /// Plan to look up segments from a source to a destination ISD-AS
 /// by splitting the request into up, core, and down segments requests

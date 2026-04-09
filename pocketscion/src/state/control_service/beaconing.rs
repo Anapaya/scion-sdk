@@ -309,8 +309,8 @@ impl BeaconGen {
         let peer_as = link.to;
 
         let link_segment = LinkSegment {
-            start_as: sending_as_interface.isd_as,
-            end_as: peer_as.isd_as,
+            start_as: sending_as_interface.isd_as.into(),
+            end_as: peer_as.isd_as.into(),
             links: VecDeque::from_iter([link]),
         };
 

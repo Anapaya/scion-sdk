@@ -141,7 +141,7 @@ impl TestPathContextTopologyExt for TestPathContext {
                 };
 
                 topology
-                    .add_as(scion_as.with_forwarding_key(hop.forwarding_key.into()))
+                    .add_as(scion_as.with_forwarding_key(hop.forwarding_key))
                     .expect("Should not fail to add AS");
 
                 // Update previous AS

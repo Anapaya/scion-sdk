@@ -16,7 +16,11 @@
 
 use crate::{
     checksum::ChecksumDigest,
-    core::{encode::InvalidStructureError, write::unchecked_bit_range_be_write},
+    core::{
+        encode::InvalidStructureError,
+        view::{View, ViewConversionError},
+        write::unchecked_bit_range_be_write,
+    },
     header::model::AddressHeader,
     payload::{
         ProtocolNumber,
@@ -35,7 +39,6 @@ pub struct UdpDatagram {
     /// The payload.
     pub payload: Vec<u8>,
 }
-
 impl UdpDatagram {
     /// Creates a new UDP message.
     pub fn new(src_port: u16, dst_port: u16, payload: Vec<u8>) -> Self {
@@ -44,6 +47,17 @@ impl UdpDatagram {
             dst_port,
             payload,
         }
+    }
+
+    /// Attempts to parse a UDP message from a byte slice.
+    ///
+    /// This method does not validate the checksum of the UDP datagram.
+    ///
+    /// Returns the parsed UDP datagram and the remaining byte slice after the UDP datagram, or an
+    /// error if parsing fails.
+    pub fn from_slice(data: &[u8]) -> Result<(UdpDatagram, &[u8]), ViewConversionError> {
+        let (view, rest) = UdpDatagramView::from_slice(data)?;
+        Ok((Self::from_view(view), rest))
     }
 
     /// Creates a new UDP message from a view.
@@ -55,7 +69,6 @@ impl UdpDatagram {
         }
     }
 }
-
 impl PayloadEncode for UdpDatagram {
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         UdpDatagramLayout::HEADER_SIZE_BYTES + self.payload.len()

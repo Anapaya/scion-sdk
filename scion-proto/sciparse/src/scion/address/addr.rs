@@ -22,6 +22,7 @@ use std::{
 };
 
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use utoipa::{PartialSchema, ToSchema, openapi::Type};
 
 use crate::{
     core::macros::impl_from,
@@ -130,6 +131,19 @@ impl_from!(ScionAddrSvc, ScionAddr, |v| ScionAddr::Svc(v));
 impl_from!(ScionSocketAddr, ScionAddr, |v| {
     ScionAddr::new(v.isd_asn(), v.host())
 });
+impl PartialSchema for ScionAddr {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .examples([
+                "1-ff00:0:110,192.0.2.1",
+                "1-ff00:0:110,2001:db8::1",
+                "1-ff00:0:110,CS",
+            ])
+            .schema_type(Type::String)
+            .into()
+    }
+}
+impl ToSchema for ScionAddr {}
 
 /// An IPv4 SCION network address combining [IsdAsn] and [Ipv4Addr]
 ///
@@ -170,6 +184,15 @@ impl TryFrom<ScionAddr> for ScionAddrV4 {
         }
     }
 }
+impl PartialSchema for ScionAddrV4 {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .examples(["1-ff00:0:110,192.0.2.1"])
+            .schema_type(Type::String)
+            .into()
+    }
+}
+impl ToSchema for ScionAddrV4 {}
 
 /// An IPv6 SCION network address combining [IsdAsn] and [Ipv6Addr]
 ///
@@ -210,6 +233,15 @@ impl TryFrom<ScionAddr> for ScionAddrV6 {
         }
     }
 }
+impl PartialSchema for ScionAddrV6 {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .examples(["1-ff00:0:110,2001:db8::1"])
+            .schema_type(Type::String)
+            .into()
+    }
+}
+impl ToSchema for ScionAddrV6 {}
 
 /// A Service SCION network address combining [IsdAsn] and [ServiceAddr]
 ///
@@ -250,6 +282,15 @@ impl TryFrom<ScionAddr> for ScionAddrSvc {
         }
     }
 }
+impl PartialSchema for ScionAddrSvc {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .examples(["1-ff00:0:110,CS", "1-ff00:0:110,DS"])
+            .schema_type(Type::String)
+            .into()
+    }
+}
+impl ToSchema for ScionAddrSvc {}
 
 fn format_scion_addr<T: Display>(
     isd_asn: IsdAsn,

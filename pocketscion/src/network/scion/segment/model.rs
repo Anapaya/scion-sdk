@@ -21,16 +21,13 @@ use std::{
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use p256::pkcs8::DecodePrivateKey;
-use scion_proto::{
-    address::IsdAsn,
-    path::{
-        ASEntry, HopEntry, PathSegment, PeerEntry, SegmentHopField,
-        crypto::{ForwardingKey, calculate_hop_mac, mac_chaining_step},
-        signed_message::SignedMessage,
-    },
-};
 use scion_protobuf::control_plane::v1::VerificationKeyId;
 use scion_sdk_trc::trc::der_int_to_u64;
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    path::standard::types::HopFieldMac,
+    segment::{AsEntry, HopEntry, PeerEntry, SegmentHopField, SignedPathSegment},
+};
 
 use crate::network::scion::topology::{DirectedScionLink, ScionAs, ScionLinkType, ScionTopology};
 
@@ -67,7 +64,7 @@ impl LinkSegment {
         }
     }
 
-    /// Converts [LinkSegment] into a [PathSegment].
+    /// Converts [LinkSegment] into a [SignedPathSegment].
     ///
     /// * `timestamp` is the time when the segment was created.
     /// * `segment_id` is a random number identifying the segment.
@@ -80,19 +77,20 @@ impl LinkSegment {
         segment_id: u16,
         hop_entry_expiry: u8,
         skip_tail: bool,
-    ) -> anyhow::Result<PathSegment> {
-        let mut path_segment = PathSegment {
-            info: scion_proto::path::Info::new(timestamp, segment_id),
-            as_entries: Vec::with_capacity(self.links.len()),
-        };
+    ) -> anyhow::Result<SignedPathSegment> {
+        let timestamp = timestamp
+            .timestamp()
+            .try_into()
+            .context("timestamp does not fit into u32")?;
 
-        let mut accumulator = segment_id; // Beta for MAC chaining
+        let mut path_segment =
+            SignedPathSegment::with_capacity(timestamp, segment_id, self.links.len());
 
         // Iterate through all hop pairs in construction direction
         for hop in self.iter_hops(skip_tail) {
             let hop_as = topo
                 .as_map
-                .get(&hop.local_ias)
+                .get(&hop.local_ias.into())
                 .with_context(|| format!("error getting AS {} from topology", hop.local_ias))?;
 
             let (_isd_as, _is_core, forwarding_key) = match hop_as {
@@ -111,7 +109,7 @@ impl LinkSegment {
 
             let as_key_pair = topo
                 .trust_store
-                .as_key_pair(&hop.local_ias)
+                .as_key_pair(&hop.local_ias.into())
                 .with_context(|| {
                     format!(
                         "AS {} is missing an identity in the trust store",
@@ -119,28 +117,8 @@ impl LinkSegment {
                     )
                 })?;
 
-            let epoch_s = timestamp
-                .timestamp()
-                .try_into()
-                .context("error converting current time to u32")?;
-
-            let local_peer_entries = Self::create_peer_entries(
-                topo,
-                hop_entry_expiry,
-                &hop,
-                accumulator,
-                epoch_s,
-                forwarding_key.into(),
-            );
-
-            let mut entry = Self::create_unsigned_as_entry(
-                hop_entry_expiry,
-                hop,
-                accumulator,
-                epoch_s,
-                local_peer_entries,
-                forwarding_key.into(),
-            );
+            let local_peer_entries = Self::create_peer_entries(topo, hop_entry_expiry, &hop);
+            let entry = Self::create_unsigned_as_entry(hop_entry_expiry, hop, local_peer_entries);
 
             let ecdsa_key =
                 ecdsa::SigningKey::<p256::NistP256>::from_pkcs8_der(as_key_pair.key.secret_der())
@@ -168,15 +146,7 @@ impl LinkSegment {
                 trc_serial: der_int_to_u64(&trc.raw_trc_payload().id.serial_number)?,
             };
 
-            // Sign the AS entry
-            entry.signed =
-                entry.signature(&ecdsa_key, Some(key_id), timestamp.into(), &path_segment)?;
-
-            // Update accumulator with the MAC of the new hop
-            accumulator = mac_chaining_step(accumulator, entry.hop_entry.hop_field.mac);
-
-            // Add the new AS entry to the path segment
-            path_segment = path_segment.add_as_entry(entry);
+            path_segment.add_entry(entry, &ecdsa_key, Some(key_id), forwarding_key, timestamp)?;
         }
 
         Ok(path_segment)
@@ -190,31 +160,19 @@ impl LinkSegment {
     fn create_unsigned_as_entry(
         hop_entry_expiry: u8,
         hop: Hop,
-        accumulator: u16,
-        timestamp: u32,
         local_peer_entries: Vec<PeerEntry>,
-        forwarding_key: &ForwardingKey,
-    ) -> ASEntry {
-        let mac = calculate_hop_mac(
-            accumulator,
-            timestamp,
-            hop_entry_expiry,
-            hop.ingress_if,
-            hop.egress_if,
-            forwarding_key,
-        );
-
+    ) -> AsEntry {
         let hop_entry = HopEntry {
             ingress_mtu: Self::HARDCODED_MTU,
             hop_field: SegmentHopField {
                 exp_time: hop_entry_expiry,
                 cons_ingress: hop.ingress_if,
                 cons_egress: hop.egress_if,
-                mac,
+                mac: HopFieldMac::zero(),
             },
         };
 
-        ASEntry {
+        AsEntry {
             local: hop.local_ias,
             next: hop.next_ias,
             mtu: Self::HARDCODED_MTU as u32,
@@ -222,10 +180,6 @@ impl LinkSegment {
             peer_entries: local_peer_entries,
             extensions: Vec::new(),
             unsigned_extensions: Vec::new(),
-            signed: SignedMessage {
-                header_and_body: Vec::new(),
-                signature: Vec::new(),
-            },
         }
     }
 
@@ -233,14 +187,11 @@ impl LinkSegment {
         topo: &ScionTopology,
         hop_entry_expiry: u8,
         hop: &Hop,
-        accumulator: u16,
-        timestamp: u32,
-        forwarding_key: &ForwardingKey,
     ) -> Vec<PeerEntry> {
         let peer_links = topo
-            .iter_scion_links_by_as(&hop.local_ias)
+            .iter_scion_links_by_as(&hop.local_ias.into())
             .filter(|link| link.link_type == ScionLinkType::Peer)
-            .filter_map(|link| link.get_directed_from(&hop.local_ias))
+            .filter_map(|link| link.get_directed_from(&hop.local_ias.into()))
             .collect::<Vec<_>>();
 
         let mut peer_entries = Vec::with_capacity(peer_links.len());
@@ -254,24 +205,15 @@ impl LinkSegment {
             let cons_ingress = peer_lnk.from.if_id;
             let cons_egress = hop.egress_if;
 
-            let mac = calculate_hop_mac(
-                accumulator,
-                timestamp,
-                hop_entry_expiry,
-                cons_ingress,
-                cons_egress,
-                forwarding_key,
-            );
-
             peer_entries.push(PeerEntry {
-                peer: peer_lnk.to.isd_as,
+                peer: peer_lnk.to.isd_as.into(),
                 peer_interface: peer_lnk.to.if_id, // The interface connecting the peer to us
                 peer_mtu: Self::HARDCODED_MTU,
                 hop_field: SegmentHopField {
                     exp_time: hop_entry_expiry,
                     cons_ingress,
                     cons_egress,
-                    mac,
+                    mac: HopFieldMac::zero(),
                 },
             });
         }
@@ -310,24 +252,24 @@ impl Iterator for HopIter<'_> {
                 // First hop is egress only
                 Hop {
                     ingress_if: 0,
-                    local_ias: egr.from.isd_as,
+                    local_ias: egr.from.isd_as.into(),
                     egress_if: egr.from.if_id,
-                    next_ias: egr.to.isd_as,
+                    next_ias: egr.to.isd_as.into(),
                 }
             }
             (Some(ing), Some(egr)) => {
                 Hop {
                     ingress_if: ing.to.if_id,
-                    local_ias: egr.from.isd_as,
+                    local_ias: egr.from.isd_as.into(),
                     egress_if: egr.from.if_id,
-                    next_ias: egr.to.isd_as,
+                    next_ias: egr.to.isd_as.into(),
                 }
             }
             (Some(ing), None) if !self.skip_tail => {
                 // Last hop is ingress only
                 Hop {
                     ingress_if: ing.to.if_id,
-                    local_ias: ing.to.isd_as,
+                    local_ias: ing.to.isd_as.into(),
                     egress_if: 0,
                     next_ias: IsdAsn(0),
                 }
@@ -346,6 +288,9 @@ impl Iterator for HopIter<'_> {
 
 #[cfg(test)]
 mod tests {
+    use scion_proto::path::crypto::mac_chaining_step;
+    use sciparse::path::standard::mac::algo::calculate_hop_mac;
+
     use super::*;
     mod hop_iter {
         use super::*;
@@ -363,11 +308,11 @@ mod tests {
                 end_as: as_2,
                 links: VecDeque::from(vec![DirectedScionLink {
                     from: ScionGlobalInterfaceId {
-                        isd_as: as_1,
+                        isd_as: as_1.into(),
                         if_id: as_1_egress,
                     },
                     to: ScionGlobalInterfaceId {
-                        isd_as: as_2,
+                        isd_as: as_2.into(),
                         if_id: as_2_ingress,
                     },
                     link_type: ScionLinkType::Core,
@@ -410,22 +355,22 @@ mod tests {
                 links: VecDeque::from(vec![
                     DirectedScionLink {
                         from: ScionGlobalInterfaceId {
-                            isd_as: as_1,
+                            isd_as: as_1.into(),
                             if_id: as_1_egress,
                         },
                         to: ScionGlobalInterfaceId {
-                            isd_as: as_2,
+                            isd_as: as_2.into(),
                             if_id: as_2_ingress,
                         },
                         link_type: ScionLinkType::Core,
                     },
                     DirectedScionLink {
                         from: ScionGlobalInterfaceId {
-                            isd_as: as_2,
+                            isd_as: as_2.into(),
                             if_id: as_2_egress,
                         },
                         to: ScionGlobalInterfaceId {
-                            isd_as: as_3,
+                            isd_as: as_3.into(),
                             if_id: as_3_ingress,
                         },
                         link_type: ScionLinkType::Core,
@@ -463,22 +408,21 @@ mod tests {
         }
     }
 
-    fn validate_hop_macs(segment: &PathSegment, topo: &ScionTopology) {
-        let mut accumulator = segment.info.segment_id;
+    fn validate_hop_macs(segment: &SignedPathSegment, topo: &ScionTopology) {
+        let mut accumulator = segment.info().segment_id;
 
         for (i, entry) in segment.as_entries.iter().enumerate() {
             let hop = &entry.hop_entry.hop_field;
             let forwarding_key = &topo
                 .as_map
-                .get(&entry.local)
+                .get(&(entry.local).into())
                 .expect("Failed to get AS from topology")
                 .forwarding_key()
-                .expect("All ASes in the segment should be simulated")
-                .into();
+                .expect("All ASes in the segment should be simulated");
 
             let expected_mac = calculate_hop_mac(
                 accumulator,
-                segment.info.timestamp.timestamp() as u32,
+                segment.info().timestamp,
                 hop.exp_time,
                 hop.cons_ingress,
                 hop.cons_egress,
@@ -488,14 +432,14 @@ mod tests {
             for peer_entry in &entry.peer_entries {
                 let peer_mac = calculate_hop_mac(
                     accumulator,
-                    segment.info.timestamp.timestamp() as u32,
+                    segment.info().timestamp,
                     hop.exp_time,
                     peer_entry.hop_field.cons_ingress,
                     peer_entry.hop_field.cons_egress,
                     forwarding_key,
                 );
                 assert_eq!(
-                    peer_entry.hop_field.mac, peer_mac,
+                    peer_entry.hop_field.mac.0, peer_mac,
                     "At as_entry {i} MAC mismatch for peer entry {:?} at as {:?}",
                     peer_entry.peer, entry.local
                 );
@@ -503,7 +447,7 @@ mod tests {
 
             accumulator = mac_chaining_step(accumulator, expected_mac);
 
-            assert_eq!(hop.mac, expected_mac, "MAC mismatch for hop {i}");
+            assert_eq!(hop.mac.0, expected_mac, "MAC mismatch for hop {i}");
         }
     }
 
@@ -529,13 +473,13 @@ mod tests {
             let as_2_peer = IsdAsn::from_str("2-2").unwrap();
 
             let mut topo = ScionTopology::default();
-            topo.add_as(ScionAs::new_core(as1).with_forwarding_key([1; 16]))
+            topo.add_as(ScionAs::new_core(as1.into()).with_forwarding_key([1; 16]))
                 .unwrap()
-                .add_as(ScionAs::new_core(as2).with_forwarding_key([2; 16]))
+                .add_as(ScionAs::new_core(as2.into()).with_forwarding_key([2; 16]))
                 .unwrap()
-                .add_as(ScionAs::new_core(as3).with_forwarding_key([3; 16]))
+                .add_as(ScionAs::new_core(as3.into()).with_forwarding_key([3; 16]))
                 .unwrap()
-                .add_as(ScionAs::new_core(as_2_peer).with_forwarding_key([4; 16]))
+                .add_as(ScionAs::new_core(as_2_peer.into()).with_forwarding_key([4; 16]))
                 .unwrap();
 
             topo.add_link("1-1#1 core 1-2#2".parse().unwrap())
@@ -584,8 +528,8 @@ mod tests {
                 .to_path_segment(&topo.topo, timestamp, segment_id, 1, false)
                 .expect("Failed to create PathSegment");
 
-            assert_eq!(path_segment.info.timestamp, timestamp);
-            assert_eq!(path_segment.info.segment_id, segment_id);
+            assert_eq!(path_segment.info().timestamp, timestamp.timestamp() as u32);
+            assert_eq!(path_segment.info().segment_id, segment_id);
 
             assert_eq!(path_segment.as_entries.len(), 3);
 

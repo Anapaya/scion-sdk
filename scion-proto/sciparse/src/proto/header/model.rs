@@ -15,6 +15,7 @@
 //! SCION header models
 
 use crate::{
+    address::addr::ScionAddr,
     core::{
         encode::{EncodeError, InvalidStructureError, WireEncode},
         layout::Layout,
@@ -50,12 +51,12 @@ pub struct ScionPacketHeader {
 }
 impl ScionPacketHeader {
     /// Constructs a `ScionPacketHeader` from a `ScionHeaderView`
-    pub fn from_view(view: &ScionHeaderView) -> Self {
-        ScionPacketHeader {
+    pub fn from_view(view: &ScionHeaderView) -> Result<Self, ViewConversionError> {
+        Ok(ScionPacketHeader {
             common: CommonHeader::from_view(view),
-            address: AddressHeader::from_view(view),
+            address: AddressHeader::from_view(view)?,
             path: Path::from_view(&view.path()),
-        }
+        })
     }
 
     /// Attempts to construct a `ScionPacketHeader` from a byte slice
@@ -64,7 +65,7 @@ impl ScionPacketHeader {
     /// On failure, returns a `ViewConversionError`.
     pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
         let (view, rest) = ScionHeaderView::from_slice(buf)?;
-        Ok((Self::from_view(view), rest))
+        Ok((Self::from_view(view)?, rest))
     }
 
     /// Returns the size of the SCION packet header in 4-byte units used in the header length field.
@@ -237,14 +238,28 @@ pub struct AddressHeader {
     pub src_host_addr: WireHostAddr,
 }
 impl AddressHeader {
-    /// Constructs an `AddressHeader` from a `ScionHeaderView`
-    pub fn from_view(view: &ScionHeaderView) -> Self {
+    /// Constructs an `AddressHeader` from the given source and destination `ScionAddr`
+    pub fn new(src: ScionAddr, dst: ScionAddr) -> Self {
         AddressHeader {
+            dst_ia: dst.isd_asn(),
+            src_ia: src.isd_asn(),
+            dst_host_addr: dst.host().into(),
+            src_host_addr: src.host().into(),
+        }
+    }
+
+    /// Constructs an `AddressHeader` from a `ScionHeaderView`
+    pub fn from_view(view: &ScionHeaderView) -> Result<Self, ViewConversionError> {
+        Ok(AddressHeader {
             dst_ia: IsdAsn::new(view.dst_isd(), view.dst_as()),
             src_ia: IsdAsn::new(view.src_isd(), view.src_as()),
-            dst_host_addr: view.dst_host_addr().unwrap(),
-            src_host_addr: view.src_host_addr().unwrap(),
-        }
+            dst_host_addr: view
+                .dst_host_addr()
+                .map_err(|_| ViewConversionError::Other("invalid dst_host_addr"))?,
+            src_host_addr: view
+                .src_host_addr()
+                .map_err(|_| ViewConversionError::Other("invalid src_host_addr"))?,
+        })
     }
 
     /// Returns the destination address type

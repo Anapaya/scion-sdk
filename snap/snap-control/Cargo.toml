@@ -36,12 +36,12 @@ x25519-dalek = { workspace = true }
 endhost-api = { workspace = true }
 endhost-api-client = { workspace = true }
 endhost-api-models = { workspace = true }
-scion-proto = { workspace = true }
 scion-sdk-axum-connect-rpc = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
+sciparse = { workspace = true }
 snap-tokens = { workspace = true }
 snap-tun = { workspace = true }
 

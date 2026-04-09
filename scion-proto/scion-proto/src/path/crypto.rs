@@ -14,13 +14,12 @@
 
 //! Cryptographic utilities for creating and validating SCION paths.
 
-use aes::cipher::{consts::U16, generic_array::GenericArray};
 use thiserror::Error;
 
 use crate::path::{HopField, InfoField};
 
 /// 16 Byte Forwarding Key
-pub type ForwardingKey = GenericArray<u8, U16>;
+pub type ForwardingKey = [u8; 16];
 
 // https://github.com/scionproto/scion/blob/1615ae80e004f1753028a9990abd9928c8aa332d/pkg/slayers/path/mac.go#L40
 
@@ -61,7 +60,7 @@ pub fn calculate_hop_mac(
     mac_input_data[12..14].copy_from_slice(&cons_egress.to_be_bytes());
     // mac_input_data[14..16]; // 0
 
-    let mut maccer = cmac::Cmac::<aes::Aes128>::new(key);
+    let mut maccer = cmac::Cmac::<aes::Aes128>::new(key.into());
 
     maccer.update(&mac_input_data);
 

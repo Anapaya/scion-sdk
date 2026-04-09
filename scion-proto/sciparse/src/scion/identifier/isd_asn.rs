@@ -21,6 +21,7 @@ use std::{
 };
 
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use utoipa::ToSchema;
 
 use crate::{
     core::{macros::impl_from, read::FromUnalignedRead, write::IntoUnalignedWrite},
@@ -32,8 +33,18 @@ use crate::{
 
 /// The combined ISD and AS identifier of a SCION AS (sometimes abbreviated as IA).
 #[derive(
-    Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    SerializeDisplay,
+    DeserializeFromStr,
+    ToSchema,
 )]
+#[schema(examples("1-ff00:0:110"), value_type = String, pattern = r"^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$" )]
 #[repr(transparent)]
 pub struct IsdAsn(pub u64);
 impl IsdAsn {

@@ -405,7 +405,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             let _ = v.isd_asn();
             let _ = v.interface_id();
         }
-        ScmpMessageView::UnknownMessage(v) => {
+        ScmpMessageView::Unknown(v) => {
             let _ = v.message_type();
             let _ = v.code();
             let _ = v.checksum();
@@ -479,7 +479,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             v.set_isd_asn(v.isd_asn());
             v.set_interface_id(v.interface_id());
         }
-        ScmpMessageViewMut::UnknownMessage(v) => {
+        ScmpMessageViewMut::Unknown(v) => {
             v.set_message_type(v.message_type());
             v.set_code(v.code());
             v.set_checksum(v.checksum());

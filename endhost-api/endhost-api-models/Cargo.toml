@@ -10,7 +10,7 @@ keywords = ["SCION", "networking"]
 
 [dependencies]
 # Local Dependencies
-scion-proto = { workspace = true }
+sciparse = { workspace = true }
 
 # Global Dependencies
 async-trait = { workspace = true }

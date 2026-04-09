@@ -21,7 +21,10 @@
 use crate::{
     address::socket_addr::ScionSocketAddr,
     identifier::isd_asn::IsdAsn,
-    packet::view::{ScionPacketView, ScionRawPacketView, ScionScmpPacketView, ScionUdpPacketView},
+    packet::{
+        model::{ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
+        view::{ScionPacketView, ScionRawPacketView, ScionScmpPacketView, ScionUdpPacketView},
+    },
 };
 
 /// The result of classifying a SCION packet by its payload protocol.
@@ -43,7 +46,6 @@ pub enum ClassifiedPacketView<'a> {
     /// A SCION packet whose payload protocol is neither UDP nor SCMP.
     Other(&'a ScionPacketView),
 }
-
 impl<'a> ClassifiedPacketView<'a> {
     /// Returns the destination [`ScionSocketAddr`], combining the SCION destination ISD-AS and host
     /// address from the packet header with the deduced port.
@@ -60,6 +62,36 @@ impl<'a> ClassifiedPacketView<'a> {
 
         let isd_asn: IsdAsn = packet.header().dst_ia();
         let host = packet.header().dst_host_addr().ok()?.scion_host_addr()?;
+
+        Some(ScionSocketAddr::new(isd_asn, host, dst_port))
+    }
+}
+
+/// The result of classifying a SCION packet by its payload protocol.
+pub enum ClassifiedPacket {
+    /// A SCMP packet with a parsed SCMP message as payload.
+    Scmp(ScionPacketScmp),
+    /// A UDP packet with a parsed UDP datagram as payload.
+    Udp(ScionPacketUdp),
+    /// A SCION packet whose payload protocol is neither UDP nor SCMP.
+    Other(ScionPacketRaw),
+}
+impl ClassifiedPacket {
+    /// Returns the destination [`ScionSocketAddr`], combining the SCION destination ISD-AS and host
+    /// address from the packet header with the deduced port.
+    ///
+    /// Returns `None` for SCMP packets without a deduced port, for the
+    /// [`ClassifiedPacket::Other`] variant, and when the destination host address cannot be
+    /// parsed.
+    pub fn dst_socket_addr(&self) -> Option<ScionSocketAddr> {
+        let (header, dst_port) = match self {
+            ClassifiedPacket::Udp(packet) => (&packet.header, packet.payload.dst_port),
+            ClassifiedPacket::Scmp(packet) => (&packet.header, packet.payload.dst_port()?),
+            ClassifiedPacket::Other(_) => return None,
+        };
+
+        let isd_asn: IsdAsn = header.address.dst_ia;
+        let host = header.address.dst_host_addr.scion_host_addr()?;
 
         Some(ScionSocketAddr::new(isd_asn, host, dst_port))
     }
@@ -87,8 +119,11 @@ mod tests {
         wire_encoding::WireEncodeVec,
     };
 
-    use super::*;
-    use crate::core::view::View;
+    use crate::{
+        address::socket_addr::ScionSocketAddr,
+        core::view::View,
+        packet::{classify::ClassifiedPacketView, view::ScionPacketView},
+    };
 
     fn make_scion_udp_bytes(dst_port: u16) -> Vec<u8> {
         let ep = ByEndpoint {

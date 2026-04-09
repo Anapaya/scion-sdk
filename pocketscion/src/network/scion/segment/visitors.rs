@@ -131,8 +131,8 @@ impl DirectedLinks {
         let last_hop_if = self.links.back().context("links empty")?.to;
 
         Ok(LinkSegment {
-            start_as: first_hop_if.isd_as,
-            end_as: last_hop_if.isd_as,
+            start_as: first_hop_if.isd_as.into(),
+            end_as: last_hop_if.isd_as.into(),
             links: self.links,
         })
     }

@@ -42,6 +42,7 @@ use crate::{
     signed_message::{DigestAlgorithm, SignedMessage, ValidateError},
 };
 
+pub mod list_segment_plan;
 pub mod rpc;
 
 /// Trait for AS entries in a path segment, allowing for both signed and unsigned AS entries to be
@@ -690,11 +691,11 @@ impl Deref for SignedAsEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SegmentInfo {
     /// Creation timestamp.
-    timestamp: u32,
+    pub timestamp: u32,
     /// Segment identifier.
-    segment_id: u16,
+    pub segment_id: u16,
     /// Raw protobuf encoded info. This is used for signing AS entries.
-    encoded: Vec<u8>,
+    pub encoded: Vec<u8>,
 }
 impl SegmentInfo {
     /// Creates a new Info with the given timestamp and segment ID.
@@ -712,23 +713,6 @@ impl SegmentInfo {
             segment_id,
             encoded: proto_info,
         }
-    }
-
-    /// Returns the timestamp of the segment info.
-    ///
-    /// The timestamp is represented as seconds since the UNIX epoch.
-    pub fn timestamp(&self) -> u32 {
-        self.timestamp
-    }
-
-    /// Returns the segment ID of the segment info.
-    pub fn segment_id(&self) -> u16 {
-        self.segment_id
-    }
-
-    /// Returns the protobuf encoded segment info.
-    pub fn encoded(&self) -> &[u8] {
-        &self.encoded
     }
 }
 impl std::fmt::Display for SegmentInfo {
@@ -773,6 +757,7 @@ pub struct PeerEntry {
     /// The hop used for the peering link.
     pub hop_field: SegmentHopField,
 }
+
 impl std::fmt::Display for PeerEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -901,6 +886,7 @@ impl std::fmt::Display for SegmentsPage {
         )
     }
 }
+
 #[cfg(test)]
 mod tests {
 
@@ -958,14 +944,12 @@ mod tests {
 
     #[test]
     fn roundtrip_validation() {
-        use aes::cipher::generic_array::GenericArray;
-
         let timestamp: u32 = 0;
         let segment_id: u16 = 0;
         let mut path_segment = SignedPathSegment::empty(timestamp, segment_id);
         let sign_key_1 = p256::ecdsa::SigningKey::random(&mut OsRng);
         let sign_key_2 = p256::ecdsa::SigningKey::random(&mut OsRng);
-        let mac_key: ForwardingKey = GenericArray::default();
+        let mac_key: ForwardingKey = [0u8; 16];
 
         let entry1 = AsEntry {
             local: IsdAsn::new(Isd(1), Asn(1)),

@@ -62,8 +62,15 @@ impl<T> ScionPacketView<T> {
     pub fn payload(&self) -> &[u8] {
         // Safety: Buffer size is checked on construction of ScionPacketView
         unsafe {
-            let header_len = ScionHeaderView::from_slice_unchecked(&self.1).header_len() as usize;
-            self.1.get_unchecked(header_len..)
+            let header = self.header();
+            let header_len = header.header_len() as usize;
+            let payload_len = header.payload_len() as usize;
+
+            let tail_len = self.1.len().saturating_sub(header_len);
+            let truncated_payload_len = std::cmp::min(payload_len, tail_len);
+
+            self.1
+                .get_unchecked(header_len..header_len + truncated_payload_len)
         }
     }
 }
@@ -73,18 +80,11 @@ pub type ScionRawPacketView = ScionPacketView<Raw>;
 impl View for ScionRawPacketView {
     #[inline]
     fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
+        // Safety: This validates that the buffer is large enough for the header,
+        // The payload may be truncated, which is handled in the accessor
         let layout = ScionHeaderLayout::from_slice(buf)?;
 
-        let packet_len = layout.header_len + layout.payload_len;
-
-        if buf.len() < packet_len {
-            return Err(ViewConversionError::BufferTooSmall {
-                at: "Payload",
-                required: packet_len,
-                actual: buf.len(),
-            });
-        }
-
+        let packet_len = std::cmp::min(layout.header_len + layout.payload_len, buf.len());
         Ok(packet_len)
     }
 
@@ -129,8 +129,15 @@ impl ScionRawPacketView {
     pub fn payload_mut(&mut self) -> &mut [u8] {
         // Safety: Buffer size is checked on construction of ScionPacketView
         unsafe {
-            let header_len = ScionHeaderView::from_slice_unchecked(&self.1).header_len() as usize;
-            self.1.get_unchecked_mut(header_len..)
+            let header = self.header();
+            let header_len = header.header_len() as usize;
+            let payload_len = header.payload_len() as usize;
+
+            let tail_len = self.1.len().saturating_sub(header_len);
+            let truncated_payload_len = std::cmp::min(payload_len, tail_len);
+
+            self.1
+                .get_unchecked_mut(header_len..header_len + truncated_payload_len)
         }
     }
 

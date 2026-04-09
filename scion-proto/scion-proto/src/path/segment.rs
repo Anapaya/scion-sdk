@@ -44,15 +44,6 @@ const MAX_TTL: Duration = Duration::from_secs(86400);
 /// Expiration Duration per ExpTime unit on a HopField.
 pub const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
 
-/// Path segment error.
-#[derive(Debug)]
-pub enum SegmentsError {
-    /// Invalid argument.
-    InvalidArgument(String),
-    /// Internal error.
-    InternalError(String),
-}
-
 /// Segments containing up, down, and core segments along with a next page token.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Segments {
@@ -127,6 +118,34 @@ impl std::fmt::Display for SegmentsPage {
             "SegmentsPage[{}, next_page_token: {}]",
             self.segments, self.next_page_token
         )
+    }
+}
+
+impl From<sciparse::segment::SegmentsPage> for SegmentsPage {
+    fn from(value: sciparse::segment::SegmentsPage) -> Self {
+        SegmentsPage {
+            segments: Segments {
+                up_segments: value
+                    .segments
+                    .up_segments
+                    .into_iter()
+                    .map(PathSegment::from)
+                    .collect(),
+                down_segments: value
+                    .segments
+                    .down_segments
+                    .into_iter()
+                    .map(PathSegment::from)
+                    .collect(),
+                core_segments: value
+                    .segments
+                    .core_segments
+                    .into_iter()
+                    .map(PathSegment::from)
+                    .collect(),
+            },
+            next_page_token: value.next_page_token,
+        }
     }
 }
 
@@ -328,6 +347,20 @@ impl std::hash::Hash for PathSegment {
     }
 }
 
+impl From<sciparse::segment::SignedPathSegment> for PathSegment {
+    fn from(value: sciparse::segment::SignedPathSegment) -> Self {
+        PathSegment {
+            info: Info {
+                timestamp: DateTime::<Utc>::from_timestamp_secs(value.info().timestamp as i64)
+                    .expect("u32 is guaranteed to be a valid timestamp"),
+                segment_id: value.info().segment_id,
+                raw: value.info().encoded.to_vec(),
+            },
+            as_entries: value.as_entries.into_iter().map(ASEntry::from).collect(),
+        }
+    }
+}
+
 /// ASEntry is one AS Entry in a path segment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ASEntry {
@@ -476,6 +509,25 @@ impl std::fmt::Display for ASEntry {
     }
 }
 
+impl From<sciparse::segment::SignedAsEntry> for ASEntry {
+    fn from(value: sciparse::segment::SignedAsEntry) -> Self {
+        ASEntry {
+            local: value.local.into(),
+            next: value.next.into(),
+            mtu: value.mtu,
+            hop_entry: value.hop_entry.clone().into(),
+            peer_entries: value
+                .peer_entries
+                .clone()
+                .into_iter()
+                .map(|peer| peer.into())
+                .collect(),
+            extensions: value.extensions.clone(),
+            unsigned_extensions: value.unsigned_extensions.clone(),
+            signed: value.signature().clone().into(),
+        }
+    }
+}
 /// Info contains the immutable parts of a path segment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Info {
@@ -534,6 +586,15 @@ impl std::fmt::Display for HopEntry {
     }
 }
 
+impl From<sciparse::segment::HopEntry> for HopEntry {
+    fn from(value: sciparse::segment::HopEntry) -> Self {
+        HopEntry {
+            ingress_mtu: value.ingress_mtu,
+            hop_field: value.hop_field.into(),
+        }
+    }
+}
+
 /// PeerEntry defines a peering entry at a specific AS hop in a path segment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerEntry {
@@ -557,6 +618,17 @@ impl std::fmt::Display for PeerEntry {
     }
 }
 
+impl From<sciparse::segment::PeerEntry> for PeerEntry {
+    fn from(value: sciparse::segment::PeerEntry) -> Self {
+        PeerEntry {
+            peer: value.peer.into(),
+            peer_interface: value.peer_interface,
+            peer_mtu: value.peer_mtu,
+            hop_field: value.hop_field.into(),
+        }
+    }
+}
+
 /// HopField contains the information required for routing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SegmentHopField {
@@ -577,6 +649,17 @@ impl std::fmt::Display for SegmentHopField {
             "HopField[ingress: {}, egress: {}, exp_time: {}, mac: {:02x?}]",
             self.cons_ingress, self.cons_egress, self.exp_time, self.mac
         )
+    }
+}
+
+impl From<sciparse::segment::SegmentHopField> for SegmentHopField {
+    fn from(value: sciparse::segment::SegmentHopField) -> Self {
+        SegmentHopField {
+            exp_time: value.exp_time,
+            cons_ingress: value.cons_ingress,
+            cons_egress: value.cons_egress,
+            mac: value.mac.0,
+        }
     }
 }
 

@@ -255,7 +255,7 @@ impl LinkSegmentStore {
         };
 
         for segment in segments.into_iter() {
-            let bucket_id = AsPair::new(segment.start_as, segment.end_as);
+            let bucket_id = AsPair::new(segment.start_as.into(), segment.end_as.into());
 
             let all_segment_bucket = cache.all_segments.entry(bucket_id).or_default();
             let bucket_index = all_segment_bucket.len();
@@ -284,13 +284,13 @@ impl LinkSegmentStore {
 
             cache
                 .end_as_to_segment
-                .entry(segment.end_as)
+                .entry(segment.end_as.into())
                 .or_default()
                 .push(segment_id);
 
             cache
                 .start_as_to_segment
-                .entry(segment.start_as)
+                .entry(segment.start_as.into())
                 .or_default()
                 .push(segment_id);
 
@@ -592,7 +592,7 @@ mod tests {
                     .iter()
                     .map(|id| store.segment(id).unwrap())
                     .map(|s| {
-                        assert_eq!(s.end_as, ias, "Segment does not end at expected AS");
+                        assert_eq!(s.end_as, ias.into(), "Segment does not end at expected AS");
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(segments.len(), expected_count);
@@ -613,7 +613,11 @@ mod tests {
                     .iter()
                     .map(|id| store.segment(id).unwrap())
                     .map(|s| {
-                        assert_eq!(s.start_as, ias, "Segment does not start at expected AS");
+                        assert_eq!(
+                            s.start_as,
+                            ias.into(),
+                            "Segment does not start at expected AS"
+                        );
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(segments.len(), expected_count);
@@ -632,8 +636,12 @@ mod tests {
             let check = move |start: IsdAsn, end: IsdAsn, expected_count: usize| {
                 let segments = store.segments(start, end);
                 segments.iter().for_each(|s| {
-                    assert_eq!(s.start_as, start, "Segment does not start at expected AS");
-                    assert_eq!(s.end_as, end, "Segment does not end at expected AS");
+                    assert_eq!(
+                        s.start_as,
+                        start.into(),
+                        "Segment does not start at expected AS"
+                    );
+                    assert_eq!(s.end_as, end.into(), "Segment does not end at expected AS");
                 });
                 assert_eq!(segments.len(), expected_count);
             };

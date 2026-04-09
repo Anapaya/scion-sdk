@@ -17,10 +17,10 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use endhost_api_models::SegmentsDiscovery;
-use scion_proto::{
-    address::IsdAsn,
-    path::{Segments, SegmentsError, SegmentsPage},
+use endhost_api_models::{SegmentsDiscovery, SegmentsError};
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    segment::{Segments, SegmentsPage},
 };
 use snap_control::server::mock_segment_lister::MockSegmentLister;
 
@@ -43,11 +43,14 @@ impl StateEndhostSegmentLister {
     /// - `app_state` : The shared pocket SCION state
     /// - `local_ases`: The local ASes of this segment lister. Only segments from these ASes will be
     ///   listed.
-    pub fn new(app_state: SharedPocketScionState, local_ases: BTreeSet<IsdAsn>) -> Self {
+    pub fn new(
+        app_state: SharedPocketScionState,
+        local_ases: BTreeSet<scion_proto::address::IsdAsn>,
+    ) -> Self {
         Self {
             fallback: MockSegmentLister::default(),
             app_state,
-            local_ases,
+            local_ases: local_ases.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -56,8 +59,8 @@ impl StateEndhostSegmentLister {
 impl SegmentsDiscovery for StateEndhostSegmentLister {
     async fn list_segments(
         &self,
-        src: IsdAsn,
-        dst: IsdAsn,
+        src: sciparse::identifier::isd_asn::IsdAsn,
+        dst: sciparse::identifier::isd_asn::IsdAsn,
         page_size: i32,
         page_token: String,
     ) -> Result<SegmentsPage, SegmentsError> {
@@ -74,28 +77,31 @@ impl SegmentsDiscovery for StateEndhostSegmentLister {
         let Some(ref segments) = state_guard.segment_registry else {
             tracing::error!("Cannot list segments: topology store is missing");
             return Err(SegmentsError::InternalError(
-                "missing topology store".to_string(),
+                "missing topology store".into(),
             ));
         };
 
         // Select correct local as
 
         let Some(local_as) = self.local_ases.iter().find(|ia| **ia == src) else {
-            return Err(SegmentsError::InvalidArgument(format!(
-                "Can't list segments from IsdAs '{src}', allowed are {}",
-                self.local_ases
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )));
+            return Err(SegmentsError::InvalidArgument(
+                format!(
+                    "Can't list segments from IsdAs '{src}', allowed are {}",
+                    self.local_ases
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+                .into(),
+            ));
         };
 
         let resolved = match segments.endhost_list_segments(*local_as, src, dst) {
             Ok(segments) => segments,
             Err(e) => {
                 tracing::error!(error = %e, "Failed to resolve segments");
-                return Err(SegmentsError::InternalError(e.to_string()));
+                return Err(SegmentsError::InternalError(e.to_string().into()));
             }
         };
 
@@ -114,7 +120,7 @@ impl SegmentsDiscovery for StateEndhostSegmentLister {
             )
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to convert segments");
-                SegmentsError::InternalError(e.to_string())
+                SegmentsError::InternalError(e.to_string().into())
             })?;
 
         Ok(SegmentsPage {

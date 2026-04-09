@@ -73,6 +73,9 @@ pub trait View {
     ///
     /// If the buffer is too small, returns a ViewConversionError.
     ///
+    /// Returns the required size in bytes for the view if the buffer is large enough.
+    /// The returned size must be exactly the size required to hold the view.
+    ///
     /// # Important
     ///
     /// This function ensures that all view functions are safe to call after it returns Ok.

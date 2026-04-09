@@ -29,7 +29,7 @@
 //! impl UnderlayDiscovery for MyUnderlayService {
 //!     fn list_underlays(
 //!         &self,
-//!         request_as: scion_proto::address::IsdAsn,
+//!         request_as: sciparse::identifier::isd_asn::IsdAsn,
 //!     ) -> endhost_api_models::underlays::Underlays {
 //!         todo!();
 //!     }
@@ -40,12 +40,11 @@
 //! impl SegmentsDiscovery for MySegmentsService {
 //!     async fn list_segments(
 //!         &self,
-//!         request_as: scion_proto::address::IsdAsn,
-//!         dst: scion_proto::address::IsdAsn,
+//!         request_as: sciparse::identifier::isd_asn::IsdAsn,
+//!         dst: sciparse::identifier::isd_asn::IsdAsn,
 //!         page_size: i32,
 //!         page_token: String,
-//!     ) -> Result<scion_proto::path::segment::SegmentsPage, scion_proto::path::SegmentsError>
-//!     {
+//!     ) -> Result<sciparse::segment::SegmentsPage, endhost_api_models::SegmentsError> {
 //!         todo!();
 //!     }
 //! }

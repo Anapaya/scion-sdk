@@ -26,7 +26,7 @@
 //! use std::{net::SocketAddr, str::FromStr};
 //!
 //! use endhost_api_client::client::{CrpcEndhostApiClient, EndhostApiClient};
-//! use scion_proto::address::IsdAsn;
+//! use sciparse::identifier::isd_asn::IsdAsn;
 //!
 //! pub async fn get_all_udp_sockaddrs() -> anyhow::Result<Vec<SocketAddr>> {
 //!     let crpc_client =
@@ -43,7 +43,6 @@
 //!     Ok(res)
 //! }
 //! ```
-
 use std::{ops::Deref, sync::Arc};
 
 use endhost_api::routes::{
@@ -53,10 +52,13 @@ use endhost_api_models::underlays::Underlays;
 use endhost_api_protobuf::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
-use scion_proto::{address::IsdAsn, path::segment::SegmentsPage};
 use scion_sdk_reqwest_connect_rpc::{
     client::{CrpcClient, CrpcClientError},
     token_source::TokenSource,
+};
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    segment::{SegmentsPage, rpc::InvalidSegmentError},
 };
 
 /// Endhost API client trait.
@@ -167,15 +169,13 @@ impl EndhostApiClient for CrpcEndhostApiClient {
             )
             .await?
             .try_into()
-            .map_err(
-                |e: scion_proto::path::convert::segment::InvalidSegmentError| {
-                    CrpcClientError::DecodeError {
-                        context: "decoding segments".into(),
-                        source: Some(e.into()),
-                        body: None,
-                    }
-                },
-            )
+            .map_err(|e: InvalidSegmentError| {
+                CrpcClientError::DecodeError {
+                    context: "decoding segments".into(),
+                    source: Some(e.into()),
+                    body: None,
+                }
+            })
             .inspect(|resp: &SegmentsPage| {
                 tracing::debug!(
                     core=?resp.segments.core_segments.len(),

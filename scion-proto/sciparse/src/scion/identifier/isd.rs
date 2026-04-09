@@ -21,6 +21,7 @@ use std::{
 };
 
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use utoipa::ToSchema;
 
 use crate::{
     core::{macros::impl_from, read::FromUnalignedRead},
@@ -33,7 +34,16 @@ use crate::{
 ///
 /// [anapaya-assignments]: https://docs.anapaya.net/en/latest/resources/isd-as-assignments/
 #[derive(
-    Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    SerializeDisplay,
+    DeserializeFromStr,
+    ToSchema,
 )]
 #[repr(transparent)]
 pub struct Isd(pub u16);

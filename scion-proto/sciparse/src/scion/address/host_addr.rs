@@ -253,6 +253,9 @@ pub enum WireHostAddr {
 }
 impl WireHostAddr {
     /// Attempts to create an Address from the given type and byte buffer.
+    ///
+    /// If the advertised address type does not match the expected length of the byte buffer, an
+    /// error is returned.
     pub fn from_parts(
         addr_type: WireHostAddrType,
         buf: &[u8],

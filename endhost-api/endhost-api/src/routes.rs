@@ -16,12 +16,12 @@
 use std::sync::Arc;
 
 use axum::{extract::State, response::IntoResponse, routing::post};
-use endhost_api_models::{SegmentsDiscovery, UnderlayDiscovery};
+use endhost_api_models::{SegmentsDiscovery, SegmentsError, UnderlayDiscovery};
 use endhost_api_protobuf::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
-use scion_proto::{address::IsdAsn, path::SegmentsError};
 use scion_sdk_axum_connect_rpc::extractor::ConnectRpc;
+use sciparse::identifier::isd_asn::IsdAsn;
 
 /// Endhost API base path.
 pub const ENDHOST_API_V1: &str = "scion.endhost.v1";

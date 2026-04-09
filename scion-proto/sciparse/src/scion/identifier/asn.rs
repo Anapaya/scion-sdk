@@ -21,6 +21,7 @@ use std::{
 };
 
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use utoipa::ToSchema;
 
 use crate::{
     core::{macros::impl_from, read::FromUnalignedRead},
@@ -29,7 +30,16 @@ use crate::{
 
 /// A 48-bit SCION autonomous system (AS) number.
 #[derive(
-    Copy, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    SerializeDisplay,
+    DeserializeFromStr,
+    ToSchema,
 )]
 #[repr(transparent)]
 pub struct Asn(pub u64);

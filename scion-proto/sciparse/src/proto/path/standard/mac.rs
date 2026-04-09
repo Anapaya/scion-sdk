@@ -14,12 +14,10 @@
 
 //! SCION path MAC calculation and validation logic.
 
-use aes::cipher::{consts::U16, generic_array::GenericArray};
-
 use crate::path::standard::{mac::algo::calculate_hop_mac, types::HopFieldMac};
 
 /// 16 Byte Forwarding Key
-pub type ForwardingKey = GenericArray<u8, U16>;
+pub type ForwardingKey = [u8; 16];
 
 /// Allows types to provide the necessary input for MAC calculation for a hop field.
 ///
@@ -124,7 +122,7 @@ pub mod algo {
         mac_input_data[12..14].copy_from_slice(&cons_egress.to_be_bytes());
         // mac_input_data[14..16]; // 0
 
-        let mut maccer = cmac::Cmac::<aes::Aes128>::new(key);
+        let mut maccer = cmac::Cmac::<aes::Aes128>::new(key.into());
 
         maccer.update(&mac_input_data);
 

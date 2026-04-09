@@ -14,6 +14,8 @@
 
 //! SCION packet models
 
+use std::ops::Deref;
+
 use crate::{
     core::{
         encode::{InvalidStructureError, WireEncode},
@@ -23,22 +25,14 @@ use crate::{
         model::{AddressHeader, CommonHeader, Path, ScionPacketHeader},
         view::ScionHeaderView,
     },
-    packet::view::ScionPacketView,
+    packet::{
+        classify::{ClassifiedPacket, ClassifyError},
+        view::{ScionPacketView, ScionScmpPacketView, ScionUdpPacketView},
+    },
     payload::{
         ProtocolNumber, encode::PayloadEncode, scmp::model::ScmpMessage, udp::model::UdpDatagram,
     },
 };
-
-/// Raw SCION packet
-pub type ScionPacketRaw = ScionPacket<Vec<u8>>;
-/// Raw SCION packet with referenced payload
-pub type ScionPacketRawRef<'a> = ScionPacket<&'a [u8]>;
-/// UDP SCION packet
-pub type ScionPacketUdp = ScionPacket<UdpDatagram>;
-/// SCMP SCION packet
-pub type ScionPacketScmp = ScionPacket<ScmpMessage>;
-/// SCMP SCION packet with referenced payload
-pub type ScionPacketScmpRef<'a> = ScionPacket<&'a ScmpMessage>;
 
 /// A Complete SCION Packet
 pub struct ScionPacket<T: PayloadEncode> {
@@ -85,16 +79,68 @@ impl<T: PayloadEncode> WireEncode for ScionPacket<T> {
     }
 }
 
-impl<'a> ScionPacket<&'a [u8]> {
-    /// Constructs a `ScionPacket` from a `ScionHeaderView` and payload slice
-    pub fn from_view(view: &'a ScionPacketView) -> Self {
-        Self {
-            header: ScionPacketHeader::from_view(view.header()),
-            payload: view.payload(),
+/// Raw SCION packet
+pub type ScionPacketRaw = ScionPacket<Vec<u8>>;
+impl ScionPacketRaw {
+    /// Classifies the raw packet by inspecting its `next_header` field and attempting to parse the
+    /// payload accordingly.
+    ///
+    /// Returns [`ClassifiedPacket::Other`] for unknown `next_header` values, otherwise returns
+    /// a more specific variant with the parsed payload.
+    ///
+    /// If the payload cannot be parsed according to the expected protocol for the given
+    /// `next_header`, an error is returned.
+    ///
+    /// This method will truncate any data in the payload that is not part of the parsed message.
+    /// Meaning if the payload contains a valid UDP datagram followed by extra bytes, the extra
+    /// bytes will be ignored.
+    pub fn classify(self) -> Result<ClassifiedPacket, ClassifyError> {
+        match self.header.common.next_header.into() {
+            ProtocolNumber::Scmp => {
+                let (payload, _rest) = ScmpMessage::from_slice(self.payload.deref())
+                    .map_err(ClassifyError::MalformedScmp)?;
+
+                Ok(ClassifiedPacket::Scmp(ScionPacketScmp {
+                    header: self.header,
+                    payload,
+                }))
+            }
+            ProtocolNumber::Udp => {
+                let (payload, _rest) = UdpDatagram::from_slice(self.payload.deref())
+                    .map_err(ClassifyError::MalformedUdp)?;
+
+                Ok(ClassifiedPacket::Udp(ScionPacketUdp {
+                    header: self.header,
+                    payload,
+                }))
+            }
+            _ => Ok(ClassifiedPacket::Other(self.to_owned())),
         }
     }
 
-    /// Attempts to construct a `ScionPacket` from a byte slice
+    /// Constructs a [ScionPacket] from a [ScionHeaderView]
+    pub fn from_view(view: &ScionPacketView) -> Result<Self, ViewConversionError> {
+        ScionPacketRawRef::from_view(view).map(|packet_ref| packet_ref.to_owned())
+    }
+
+    /// Parses a [ScionPacket] from a byte slice, returning the packet and any remaining bytes.
+    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
+        ScionPacketRawRef::from_slice(buf).map(|(packet_ref, rest)| (packet_ref.to_owned(), rest))
+    }
+}
+
+/// Raw SCION packet with referenced payload
+pub type ScionPacketRawRef<'a> = ScionPacket<&'a [u8]>;
+impl<'a> ScionPacket<&'a [u8]> {
+    /// Constructs a [ScionPacket] from a [ScionHeaderView] and payload slice
+    pub fn from_view(view: &'a ScionPacketView) -> Result<Self, ViewConversionError> {
+        Ok(Self {
+            header: ScionPacketHeader::from_view(view.header())?,
+            payload: view.payload(),
+        })
+    }
+
+    /// Parses a [ScionPacket] from a byte slice, returning the packet and any remaining bytes.
     pub fn from_slice(buf: &'a [u8]) -> Result<(Self, &'a [u8]), ViewConversionError> {
         let payload_size = ScionHeaderView::from_slice(buf)?.0.payload_len();
         let (header, rest) = ScionPacketHeader::from_slice(buf)?;
@@ -109,8 +155,49 @@ impl<'a> ScionPacket<&'a [u8]> {
         Ok((ScionPacket { header, payload }, rest))
     }
 }
+
+// Methods for all RAW packet types
+impl<'a, BytePayload: PayloadEncode + Deref<Target = [u8]>> ScionPacket<BytePayload> {
+    /// Clones the packet, converting the payload to an owned `Vec<u8>`.
+    pub fn to_owned(self) -> ScionPacketRaw {
+        ScionPacket {
+            header: self.header,
+            payload: self.payload.to_vec(),
+        }
+    }
+
+    /// Clones the packet header, keeping the payload as a reference.
+    pub fn to_ref(&'a self) -> ScionPacketRawRef<'a> {
+        ScionPacket {
+            header: self.header.clone(),
+            payload: self.payload.deref(),
+        }
+    }
+}
+
+/// SCMP SCION packet
+pub type ScionPacketScmp = ScionPacket<ScmpMessage>;
+impl ScionPacketScmp {
+    /// Parses a `ScionPacketScmp` from a byte slice, returning the packet and any remaining bytes.
+    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
+        let (packet_ref, rest) = ScionScmpPacketView::from_slice(buf)?;
+        let packet = Self::from_view(packet_ref)?;
+        Ok((packet, rest))
+    }
+
+    /// Constructs a `ScionPacketScmp` from a `ScionScmpPacketView`
+    pub fn from_view(view: &ScionScmpPacketView) -> Result<Self, ViewConversionError> {
+        let header = ScionPacketHeader::from_view(view.header())?;
+        let payload = ScmpMessage::from_view(&view.scmp().message());
+
+        Ok(Self { header, payload })
+    }
+}
+
+/// SCMP SCION packet with referenced payload
+pub type ScionPacketScmpRef<'a> = ScionPacket<&'a ScmpMessage>;
 impl<'a> ScionPacket<&'a ScmpMessage> {
-    /// Constructs a `ScionPacket` from the given parts, inferring header fields as needed.
+    /// Constructs a [ScionPacketScmpRef] from the given parts, inferring header fields as needed.
     pub fn new_from_parts(address: AddressHeader, path: Path, payload: &'a ScmpMessage) -> Self {
         let header = ScionPacketHeader {
             common: CommonHeader {
@@ -122,5 +209,38 @@ impl<'a> ScionPacket<&'a ScmpMessage> {
             path,
         };
         Self { header, payload }
+    }
+}
+
+/// UDP SCION packet
+pub type ScionPacketUdp = ScionPacket<UdpDatagram>;
+impl ScionPacketUdp {
+    /// Constructs a [ScionPacketUdp] from the given parts, inferring header fields as needed.
+    pub fn new_from_parts(address: AddressHeader, path: Path, payload: UdpDatagram) -> Self {
+        let header = ScionPacketHeader {
+            common: CommonHeader {
+                traffic_class: 0,
+                flow_id: 0,
+                next_header: ProtocolNumber::Udp.into(),
+            },
+            address,
+            path,
+        };
+        Self { header, payload }
+    }
+
+    /// Parses a [ScionPacketUdp] from a byte slice, returning the packet and any remaining bytes.
+    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
+        let (packet_ref, rest) = ScionUdpPacketView::from_slice(buf)?;
+        let packet = Self::from_view(packet_ref)?;
+        Ok((packet, rest))
+    }
+
+    /// Constructs a [ScionPacketUdp] from a [ScionUdpPacketView]
+    pub fn from_view(view: &ScionUdpPacketView) -> Result<Self, ViewConversionError> {
+        let header = ScionPacketHeader::from_view(view.header())?;
+        let payload = UdpDatagram::from_view(view.udp());
+
+        Ok(Self { header, payload })
     }
 }

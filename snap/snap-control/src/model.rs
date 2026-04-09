@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 
 #[cfg(test)]
 use mockall::{automock, predicate::*};
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 
 /// List the available data planes.
 #[cfg_attr(test, automock)]

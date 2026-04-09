@@ -16,10 +16,14 @@
 
 use crate::{
     core::{
-        encode::InvalidStructureError, layout::Layout as _, write::unchecked_bit_range_be_write,
+        encode::InvalidStructureError,
+        layout::Layout as _,
+        view::{View, ViewConversionError},
+        write::unchecked_bit_range_be_write,
     },
     header::model::AddressHeader,
     identifier::isd_asn::IsdAsn,
+    packet::view::ScionRawPacketView,
     payload::{
         ProtocolNumber,
         encode::PayloadEncode,
@@ -35,11 +39,12 @@ use crate::{
                 ScmpDestinationUnreachableMessageView, ScmpEchoReplyMessageView,
                 ScmpEchoRequestMessageView, ScmpExternalInterfaceDownMessageView,
                 ScmpInternalConnectivityDownMessageView, ScmpMessageView,
-                ScmpPacketTooBigMessageView, ScmpParameterProblemMessageView,
+                ScmpPacketTooBigMessageView, ScmpParameterProblemMessageView, ScmpPayloadView,
                 ScmpTracerouteReplyMessageView, ScmpTracerouteRequestMessageView,
                 ScmpUnknownMessageView,
             },
         },
+        udp::view::UdpDatagramView,
     },
     scion::checksum::ChecksumDigest,
 };
@@ -104,47 +109,20 @@ pub enum ScmpMessage {
     Unknown(ScmpMessageUnknown),
 }
 impl ScmpMessage {
-    /// Get the type of the SCMP message.
-    pub fn message_type(&self) -> ScmpMessageType {
-        match self {
-            Self::DestinationUnreachable(_) => ScmpMessageType::DestinationUnreachable,
-            Self::PacketTooBig(_) => ScmpMessageType::PacketTooBig,
-            Self::ParameterProblem(_) => ScmpMessageType::ParameterProblem,
-            Self::ExternalInterfaceDown(_) => ScmpMessageType::ExternalInterfaceDown,
-            Self::InternalConnectivityDown(_) => ScmpMessageType::InternalConnectivityDown,
-            Self::EchoRequest(_) => ScmpMessageType::EchoRequest,
-            Self::EchoReply(_) => ScmpMessageType::EchoReply,
-            Self::TracerouteRequest(_) => ScmpMessageType::TracerouteRequest,
-            Self::TracerouteReply(_) => ScmpMessageType::TracerouteReply,
-            Self::Unknown(msg) => ScmpMessageType::Unknown(msg.message_type),
-        }
-    }
-
-    /// Convert the SCMP message to an informational message.
-    pub fn try_into_informational_message(self) -> Result<ScmpInformationalMessage, ScmpMessage> {
-        match self {
-            Self::EchoRequest(x) => Ok(ScmpInformationalMessage::EchoRequest(x)),
-            Self::EchoReply(x) => Ok(ScmpInformationalMessage::EchoReply(x)),
-            Self::TracerouteRequest(x) => Ok(ScmpInformationalMessage::TracerouteRequest(x)),
-            Self::TracerouteReply(x) => Ok(ScmpInformationalMessage::TracerouteReply(x)),
-            _ => Err(self),
-        }
-    }
-
-    /// Convert the SCMP message to an error message.
-    pub fn try_into_error_message(self) -> Result<ScmpErrorMessage, ScmpMessage> {
-        match self {
-            Self::DestinationUnreachable(x) => Ok(ScmpErrorMessage::DestinationUnreachable(x)),
-            Self::PacketTooBig(x) => Ok(ScmpErrorMessage::PacketTooBig(x)),
-            Self::ParameterProblem(x) => Ok(ScmpErrorMessage::ParameterProblem(x)),
-            Self::ExternalInterfaceDown(x) => Ok(ScmpErrorMessage::ExternalInterfaceDown(x)),
-            Self::InternalConnectivityDown(x) => Ok(ScmpErrorMessage::InternalConnectivityDown(x)),
-            _ => Err(self),
-        }
+    /// Attempt to parse an SCMP message from a byte slice, given the address header and size of the
+    /// header and extensions before the SCMP payload.
+    ///
+    /// Returns the parsed SCMP message and the remaining byte slice after the SCMP payload, or an
+    /// error if parsing fails.
+    ///
+    /// This method does not validate the checksum of the SCMP message.
+    pub fn from_slice(bytes: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
+        let (view, rest) = ScmpPayloadView::from_slice(bytes)?;
+        Ok((Self::from_view(&view.message()), rest))
     }
 
     /// Create a new SCMP message from a view.
-    pub fn from_view(view: ScmpMessageView) -> Self {
+    pub fn from_view(view: &ScmpMessageView) -> Self {
         match view {
             ScmpMessageView::DestinationUnreachable(view) => {
                 Self::DestinationUnreachable(ScmpDestinationUnreachable::from_view(view))
@@ -171,9 +149,77 @@ impl ScmpMessage {
             ScmpMessageView::TracerouteReply(view) => {
                 Self::TracerouteReply(ScmpTracerouteReply::from_view(view))
             }
-            ScmpMessageView::UnknownMessage(view) => {
-                Self::Unknown(ScmpMessageUnknown::from_view(view))
+            ScmpMessageView::Unknown(view) => Self::Unknown(ScmpMessageUnknown::from_view(view)),
+        }
+    }
+}
+impl ScmpMessage {
+    /// Get the type of the SCMP message.
+    pub fn message_type(&self) -> ScmpMessageType {
+        match self {
+            Self::DestinationUnreachable(_) => ScmpMessageType::DestinationUnreachable,
+            Self::PacketTooBig(_) => ScmpMessageType::PacketTooBig,
+            Self::ParameterProblem(_) => ScmpMessageType::ParameterProblem,
+            Self::ExternalInterfaceDown(_) => ScmpMessageType::ExternalInterfaceDown,
+            Self::InternalConnectivityDown(_) => ScmpMessageType::InternalConnectivityDown,
+            Self::EchoRequest(_) => ScmpMessageType::EchoRequest,
+            Self::EchoReply(_) => ScmpMessageType::EchoReply,
+            Self::TracerouteRequest(_) => ScmpMessageType::TracerouteRequest,
+            Self::TracerouteReply(_) => ScmpMessageType::TracerouteReply,
+            Self::Unknown(msg) => ScmpMessageType::Unknown(msg.message_type),
+        }
+    }
+
+    /// Extracts a destination port from this SCMP message.
+    ///
+    /// - Informational messages: returns the identifier field.
+    /// - Error messages: parses the offending packet as UDP and returns its source port.
+    /// - Unknown error messages: returns `None`.
+    pub fn dst_port(&self) -> Option<u16> {
+        let udp_src_port = |offending_packet: &[u8]| {
+            let (inner, _) = ScionRawPacketView::from_slice(offending_packet).ok()?;
+            if <u8 as Into<ProtocolNumber>>::into(inner.header().next_header())
+                != ProtocolNumber::Udp
+            {
+                return None;
             }
+            let (udp, _) = UdpDatagramView::from_slice(inner.payload()).ok()?;
+            Some(udp.src_port())
+        };
+        match self {
+            ScmpMessage::EchoRequest(v) => Some(v.identifier),
+            ScmpMessage::EchoReply(v) => Some(v.identifier),
+            ScmpMessage::TracerouteRequest(v) => Some(v.identifier),
+            ScmpMessage::TracerouteReply(v) => Some(v.identifier),
+            ScmpMessage::DestinationUnreachable(v) => udp_src_port(&v.offending_packet),
+            ScmpMessage::PacketTooBig(v) => udp_src_port(&v.offending_packet),
+            ScmpMessage::ParameterProblem(v) => udp_src_port(&v.offending_packet),
+            ScmpMessage::ExternalInterfaceDown(v) => udp_src_port(&v.offending_packet),
+            ScmpMessage::InternalConnectivityDown(v) => udp_src_port(&v.offending_packet),
+            ScmpMessage::Unknown(_) => None,
+        }
+    }
+
+    /// Convert the SCMP message to an informational message.
+    pub fn try_into_informational_message(self) -> Result<ScmpInformationalMessage, ScmpMessage> {
+        match self {
+            Self::EchoRequest(x) => Ok(ScmpInformationalMessage::EchoRequest(x)),
+            Self::EchoReply(x) => Ok(ScmpInformationalMessage::EchoReply(x)),
+            Self::TracerouteRequest(x) => Ok(ScmpInformationalMessage::TracerouteRequest(x)),
+            Self::TracerouteReply(x) => Ok(ScmpInformationalMessage::TracerouteReply(x)),
+            _ => Err(self),
+        }
+    }
+
+    /// Convert the SCMP message to an error message.
+    pub fn try_into_error_message(self) -> Result<ScmpErrorMessage, ScmpMessage> {
+        match self {
+            Self::DestinationUnreachable(x) => Ok(ScmpErrorMessage::DestinationUnreachable(x)),
+            Self::PacketTooBig(x) => Ok(ScmpErrorMessage::PacketTooBig(x)),
+            Self::ParameterProblem(x) => Ok(ScmpErrorMessage::ParameterProblem(x)),
+            Self::ExternalInterfaceDown(x) => Ok(ScmpErrorMessage::ExternalInterfaceDown(x)),
+            Self::InternalConnectivityDown(x) => Ok(ScmpErrorMessage::InternalConnectivityDown(x)),
+            _ => Err(self),
         }
     }
 }

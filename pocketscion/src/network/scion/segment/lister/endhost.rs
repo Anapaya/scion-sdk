@@ -15,10 +15,9 @@
 
 use anyhow::bail;
 use chrono::{DateTime, Utc};
-use scion_proto::{
-    address::IsdAsn,
-    control_plane::list_segment_plan::{CoreHint, Dst, ListSegmentPlan, Src},
-    path::PathSegment,
+use sciparse::segment::{
+    SignedPathSegment,
+    list_segment_plan::{CoreHint, Dst, ListSegmentPlan, Src},
 };
 
 use crate::network::scion::{
@@ -32,17 +31,17 @@ impl SegmentRegistry {
     /// `local` is the AS handling the request
     pub fn endhost_list_segments(
         &self,
-        local: IsdAsn,
-        src_as: IsdAsn,
-        dst_as: IsdAsn,
+        local: sciparse::identifier::isd_asn::IsdAsn,
+        src_as: sciparse::identifier::isd_asn::IsdAsn,
+        dst_as: sciparse::identifier::isd_asn::IsdAsn,
     ) -> anyhow::Result<SnapListSegmentsOutput<'_>> {
-        let src = Src::new(src_as, self.core_segments().is_known_as(src_as))?;
-        let dst = Dst::new(dst_as, self.core_segments().is_known_as(dst_as));
+        let src = Src::new(src_as, self.core_segments().is_known_as(src_as.into()))?;
+        let dst = Dst::new(dst_as, self.core_segments().is_known_as(dst_as.into()));
 
         let src_cores = self
             .core_segments()
             .iter_known_ases()
-            .filter(|a| a.isd() == src.isd())
+            .filter(|a| a.isd() == src.isd().into())
             .collect::<Vec<_>>();
 
         let core_hint = match src_cores.len() {
@@ -52,7 +51,7 @@ impl SegmentRegistry {
                     src_as.isd()
                 )
             }
-            1 => CoreHint::Single(*src_cores[0]),
+            1 => CoreHint::Single((*src_cores[0]).into()),
             _ => CoreHint::Multiple,
         };
 
@@ -189,13 +188,13 @@ impl SnapListSegmentsOutput<'_> {
 pub struct SnapListPathSegments {
     #[allow(unused)]
     pub(crate) expire_after: DateTime<Utc>,
-    pub(crate) up: Vec<PathSegment>,
-    pub(crate) core: Vec<PathSegment>,
-    pub(crate) down: Vec<PathSegment>,
+    pub(crate) up: Vec<SignedPathSegment>,
+    pub(crate) core: Vec<SignedPathSegment>,
+    pub(crate) down: Vec<SignedPathSegment>,
 }
 impl SnapListPathSegments {
     /// Iterator over all path segments.
-    pub fn iter_all(&self) -> impl Iterator<Item = &PathSegment> {
+    pub fn iter_all(&self) -> impl Iterator<Item = &SignedPathSegment> {
         self.up
             .iter()
             .chain(self.core.iter())
@@ -203,12 +202,12 @@ impl SnapListPathSegments {
     }
 
     /// Iterator over all core segments.
-    pub fn iter_cores(&self) -> impl Iterator<Item = &PathSegment> {
+    pub fn iter_cores(&self) -> impl Iterator<Item = &SignedPathSegment> {
         self.core.iter()
     }
 
     /// Iterator over all non-core segments.
-    pub fn iter_non_cores(&self) -> impl Iterator<Item = &PathSegment> {
+    pub fn iter_non_cores(&self) -> impl Iterator<Item = &SignedPathSegment> {
         self.up.iter().chain(self.down.iter())
     }
 }
@@ -217,6 +216,8 @@ impl SnapListPathSegments {
 mod test {
 
     use std::{collections::HashSet, panic};
+
+    use sciparse::identifier::isd_asn::IsdAsn;
 
     use super::*;
     use crate::network::scion::{

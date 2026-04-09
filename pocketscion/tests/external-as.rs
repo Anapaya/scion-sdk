@@ -69,7 +69,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
     let path1to2 = TestPathBuilder::new(addr1, addr2)
         .using_info_timestamp(network_time.inner())
         .with_hop_expiry(255)
-        .using_forwarding_key(ia1_key.into())
+        .using_forwarding_key(ia1_key)
         .core()
         .add_hop(0, 1)
         .add_hop(1, 2)

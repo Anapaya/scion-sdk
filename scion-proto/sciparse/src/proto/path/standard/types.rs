@@ -61,13 +61,20 @@ impl From<PathType> for u8 {
 }
 
 /// MAC (Message Authentication Code) used in HopFields.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct HopFieldMac(pub [u8; 6]);
 impl HopFieldMac {
     /// Creates a new HopFieldMac from the given byte array.
     pub fn new(bytes: [u8; 6]) -> Self {
         HopFieldMac(bytes)
+    }
+
+    /// Returns a HopFieldMac with all bytes set to zero.
+    ///
+    /// This can be used as a placeholder or default value when a valid MAC is not available.
+    pub fn zero() -> Self {
+        HopFieldMac([0; 6])
     }
 
     /// Returns the byte array representation of the HopFieldMac.

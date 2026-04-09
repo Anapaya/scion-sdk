@@ -80,7 +80,7 @@ impl_from_ref!(ScmpTracerouteReplyMessageView, ScmpMessageView<'a>, |v| {
     ScmpMessageView::TracerouteReply(v)
 });
 impl_from_ref!(ScmpUnknownMessageView, ScmpMessageView<'a>, |v| {
-    ScmpMessageView::UnknownMessage(v)
+    ScmpMessageView::Unknown(v)
 });
 impl ScmpPayloadView {
     gen_field_read!(
@@ -189,9 +189,7 @@ impl ScmpPayloadView {
                 })
             }
             T::Unknown(_) => {
-                V::UnknownMessage(unsafe {
-                    ScmpUnknownMessageView::from_mut_slice_unchecked(&mut self.0)
-                })
+                V::Unknown(unsafe { ScmpUnknownMessageView::from_mut_slice_unchecked(&mut self.0) })
             }
         }
     }
@@ -222,7 +220,7 @@ impl ScmpPayloadView {
             ScmpMessageView::ParameterProblem(v) => udp_src_port(v.offending_packet()),
             ScmpMessageView::ExternalInterfaceDown(v) => udp_src_port(v.offending_packet()),
             ScmpMessageView::InternalConnectivityDown(v) => udp_src_port(v.offending_packet()),
-            ScmpMessageView::UnknownMessage(_) => None,
+            ScmpMessageView::Unknown(_) => None,
         }
     }
 }
@@ -248,7 +246,7 @@ pub enum ScmpMessageView<'a> {
     /// A view over an SCMP TracerouteReply message.
     TracerouteReply(&'a ScmpTracerouteReplyMessageView),
     /// A view over an SCMP UnknownMessage message.
-    UnknownMessage(&'a ScmpUnknownMessageView),
+    Unknown(&'a ScmpUnknownMessageView),
 }
 
 /// A mutable view over an SCMP message.
@@ -272,7 +270,7 @@ pub enum ScmpMessageViewMut<'a> {
     /// A mutable view over an SCMP TracerouteReply message.
     TracerouteReply(&'a mut ScmpTracerouteReplyMessageView),
     /// A mutable view over an SCMP UnknownMessage message.
-    UnknownMessage(&'a mut ScmpUnknownMessageView),
+    Unknown(&'a mut ScmpUnknownMessageView),
 }
 
 /// A view over an SCMP DestinationUnreachable message.

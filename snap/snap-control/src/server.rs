@@ -22,8 +22,8 @@ use endhost_api_models::{
     underlays::{ScionRouter, Underlays},
 };
 use http::StatusCode;
-use scion_proto::address::IsdAsn;
 use scion_sdk_observability::info_trace_layer;
+use sciparse::identifier::isd_asn::IsdAsn;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};

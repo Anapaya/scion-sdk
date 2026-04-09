@@ -15,7 +15,7 @@
 
 use std::net::SocketAddr;
 
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 use url::Url;
 

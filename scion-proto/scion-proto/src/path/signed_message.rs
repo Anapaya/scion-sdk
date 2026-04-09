@@ -315,6 +315,15 @@ impl SignedMessage {
     }
 }
 
+impl From<sciparse::signed_message::SignedMessage> for SignedMessage {
+    fn from(value: sciparse::signed_message::SignedMessage) -> Self {
+        Self {
+            header_and_body: value.header_and_body,
+            signature: value.signature,
+        }
+    }
+}
+
 impl From<scion_protobuf::crypto::v1::SignedMessage> for SignedMessage {
     fn from(value: scion_protobuf::crypto::v1::SignedMessage) -> Self {
         Self {

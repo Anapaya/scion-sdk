@@ -1221,7 +1221,7 @@ mod tests {
                 }
             };
 
-            let ohp = OneHopPath::new(src_interface, 0, 0, src_forwarding_key.into(), 255);
+            let ohp = OneHopPath::new(src_interface, 0, 0, src_forwarding_key, 255);
 
             let mut packet = ScionPacketRaw::new(
                 ByEndpoint {
@@ -1243,7 +1243,7 @@ mod tests {
                 &mut packet,
                 0,
                 ScionNetworkTime::from_timestamp_secs(0),
-                &src_forwarding_key.into(),
+                &src_forwarding_key,
                 lookup_fn,
             )
             .unwrap();
@@ -1261,7 +1261,7 @@ mod tests {
                 &mut packet,
                 dst_interface,
                 ScionNetworkTime::from_timestamp_secs(0),
-                &dst_forwarding_key.into(),
+                &dst_forwarding_key,
                 lookup_fn,
             )
             .unwrap();
@@ -1308,7 +1308,7 @@ mod tests {
                 &mut packet,
                 0,
                 ScionNetworkTime::from_timestamp_secs(0),
-                &dst_forwarding_key.into(),
+                &dst_forwarding_key,
                 lookup_fn,
             )
             .unwrap();
@@ -1328,7 +1328,7 @@ mod tests {
                 &mut packet,
                 src_interface,
                 ScionNetworkTime::from_timestamp_secs(0),
-                &src_forwarding_key.into(),
+                &src_forwarding_key,
                 lookup_fn,
             )
             .unwrap();
@@ -1386,9 +1386,9 @@ mod tests {
             let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
-                .using_forwarding_key([3; 16].into())
+                .using_forwarding_key([3; 16])
                 .add_hop(0, 1)
-                .using_forwarding_key([1; 16].into())
+                .using_forwarding_key([1; 16])
                 .add_hop(2, 0)
                 .build(1);
 
@@ -1566,9 +1566,9 @@ mod tests {
             let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
                 .using_info_timestamp(0)
                 .up()
-                .using_forwarding_key([3; 16].into())
+                .using_forwarding_key([3; 16])
                 .add_hop(0, 1)
-                .using_forwarding_key([1; 16].into())
+                .using_forwarding_key([1; 16])
                 .add_hop(2, 0)
                 .build_with_path_modifier(1, |mut p| {
                     p.hop_fields[0].mac = [0; 6]; // Invalid MAC

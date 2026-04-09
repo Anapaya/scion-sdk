@@ -134,7 +134,7 @@ impl TestPathBuilder {
             default_timestamp: 0,
             default_hop_expiry: 255,
             segments: Vec::new(),
-            default_key: [0u8; 16].into(),
+            default_key: [0u8; 16],
         }
     }
 

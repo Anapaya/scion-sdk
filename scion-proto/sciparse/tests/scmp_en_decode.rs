@@ -59,7 +59,7 @@ fn valid_scmp_messages_should_roundtrip_correctly() {
             exec_every_view_function(view);
 
             let message_view = view.message();
-            let reconstructed = ScmpMessage::from_view(message_view);
+            let reconstructed = ScmpMessage::from_view(&message_view);
 
             prop_assert_eq!(expected, reconstructed);
 

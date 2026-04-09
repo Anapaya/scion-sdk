@@ -206,7 +206,7 @@ impl SegmentFetcher for EndhostApiSegmentFetcher {
     ) -> Result<Segments, SegmentFetchError> {
         let resp = self
             .client
-            .list_segments(src, dst, 128, "".to_string())
+            .list_segments(src.into(), dst.into(), 128, "".to_string())
             .await?;
 
         tracing::trace!(
@@ -220,8 +220,8 @@ impl SegmentFetcher for EndhostApiSegmentFetcher {
 
         let (core_segments, non_core_segments) = resp.segments.split_parts();
         Ok(Segments {
-            core_segments,
-            non_core_segments,
+            core_segments: core_segments.into_iter().map(Into::into).collect(),
+            non_core_segments: non_core_segments.into_iter().map(Into::into).collect(),
         })
     }
 }

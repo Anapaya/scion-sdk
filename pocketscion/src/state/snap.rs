@@ -198,7 +198,8 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
         let sstate = self.system_state.read().unwrap();
         let snap = sstate.snaps.get(&self.snap_id).expect("SNAP not found");
 
-        let isd_ases: Vec<IsdAsn> = snap.isd_ases().into_iter().collect();
+        let isd_ases: Vec<sciparse::identifier::isd_asn::IsdAsn> =
+            snap.isd_ases().into_iter().map(Into::into).collect();
 
         self.io_config
             .snap_data_plane_addr(self.snap_id)

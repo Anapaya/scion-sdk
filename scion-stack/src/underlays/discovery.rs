@@ -163,7 +163,7 @@ async fn discover_underlays(
     ),
     CrpcClientError,
 > {
-    let res = api_client.list_underlays(IsdAsn::WILDCARD).await?;
+    let res = api_client.list_underlays(IsdAsn::WILDCARD.into()).await?;
     let mut udp_underlays = HashMap::new();
     for underlay in res.udp_underlay.into_iter() {
         let entry = udp_underlays.entry(underlay.isd_as).or_insert(vec![]);
@@ -180,7 +180,7 @@ async fn discover_underlays(
             for interface_id in router.interfaces.iter() {
                 udp_underlay_next_hops.insert(
                     PathInterface {
-                        isd_asn: *isd_as,
+                        isd_asn: (*isd_as).into(),
                         id: *interface_id,
                     },
                     router.internal_interface,
@@ -192,11 +192,14 @@ async fn discover_underlays(
     // Create the underlays list.
     let mut underlays: Vec<(IsdAsn, UnderlayInfo)> = udp_underlays
         .into_iter()
-        .map(|(isd_as, routers)| (isd_as, UnderlayInfo::Udp(routers)))
+        .map(|(isd_as, routers)| (isd_as.into(), UnderlayInfo::Udp(routers)))
         .collect();
     for underlay in res.snap_underlay.iter() {
         for isd_as in underlay.isd_ases.iter() {
-            underlays.push((*isd_as, UnderlayInfo::Snap(underlay.address.clone())));
+            underlays.push((
+                (*isd_as).into(),
+                UnderlayInfo::Snap(underlay.address.clone()),
+            ));
         }
     }
     Ok((underlays, udp_underlay_next_hops))

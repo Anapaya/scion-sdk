@@ -363,8 +363,7 @@ impl ControlService {
                 .as_secs() as u32,
             this_as
                 .forwarding_key()
-                .expect("AS should have a forwarding key for path construction")
-                .into(),
+                .expect("AS should have a forwarding key for path construction"),
             255,
         );
 

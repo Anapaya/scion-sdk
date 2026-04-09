@@ -13,7 +13,7 @@
 // limitations under the License.
 //! Conversions between endhost API protobuf types and endhost API models.
 
-use scion_proto::path::{Segments, convert::segment::InvalidSegmentError};
+use sciparse::segment::{Segments, SegmentsPage, SignedPathSegment, rpc::InvalidSegmentError};
 
 use crate::v1::{
     ListSegmentsResponse, ListUnderlaysResponse, Router, Snap, SnapUnderlay, UdpUnderlay,
@@ -118,8 +118,8 @@ impl TryFrom<Snap> for endhost_api_models::underlays::Snap {
     }
 }
 
-impl From<scion_proto::path::segment::SegmentsPage> for ListSegmentsResponse {
-    fn from(page: scion_proto::path::segment::SegmentsPage) -> Self {
+impl From<SegmentsPage> for ListSegmentsResponse {
+    fn from(page: SegmentsPage) -> Self {
         Self {
             up_segments: page
                 .segments
@@ -144,15 +144,15 @@ impl From<scion_proto::path::segment::SegmentsPage> for ListSegmentsResponse {
     }
 }
 
-impl TryFrom<ListSegmentsResponse> for scion_proto::path::segment::SegmentsPage {
+impl TryFrom<ListSegmentsResponse> for SegmentsPage {
     type Error = InvalidSegmentError;
     fn try_from(response: ListSegmentsResponse) -> Result<Self, Self::Error> {
         let convert = |segs: Vec<_>| {
             segs.into_iter()
-                .map(scion_proto::path::PathSegment::try_from)
+                .map(SignedPathSegment::try_from)
                 .collect::<Result<_, _>>()
         };
-        Ok(scion_proto::path::segment::SegmentsPage {
+        Ok(SegmentsPage {
             segments: Segments {
                 up_segments: convert(response.up_segments)?,
                 down_segments: convert(response.down_segments)?,

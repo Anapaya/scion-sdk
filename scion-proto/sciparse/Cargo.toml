@@ -17,6 +17,7 @@ serde_with = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tinyvec = { workspace = true }
+utoipa = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }

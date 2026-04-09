@@ -13,36 +13,31 @@
 // limitations under the License.
 //! Mock segment lister for testing.
 
-use endhost_api_models::SegmentsDiscovery;
-use scion_proto::{
-    address::IsdAsn,
-    path::{Segments, SegmentsError, SegmentsPage},
-    test::graph::{Graph, default_graph},
+use std::{str::FromStr, time::SystemTime};
+
+use endhost_api_models::{SegmentsDiscovery, SegmentsError};
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    path::standard::types::HopFieldMac,
+    reexport::p256::ecdsa::SigningKey,
+    segment::{AsEntry, HopEntry, SegmentHopField, Segments, SegmentsPage, SignedPathSegment},
 };
 use tonic::async_trait;
 
 /// A mock segment lister that returns segments from the default test graph.
 /// It only supports queries from 1-ff00:0:132 to 2-ff00:0:211 and back.
 pub struct MockSegmentLister {
-    graph: Graph,
     supported_ases: (IsdAsn, IsdAsn),
-}
-
-impl MockSegmentLister {
-    pub(crate) fn new(graph: Graph) -> Self {
-        Self {
-            graph,
-            supported_ases: (
-                "1-ff00:0:132".parse().unwrap(),
-                "2-ff00:0:212".parse().unwrap(),
-            ),
-        }
-    }
 }
 
 impl Default for MockSegmentLister {
     fn default() -> Self {
-        Self::new(default_graph().unwrap())
+        Self {
+            supported_ases: (
+                IsdAsn::from_str("1-ff00:0:132").unwrap(),
+                IsdAsn::from_str("2-ff00:0:212").unwrap(),
+            ),
+        }
     }
 }
 
@@ -54,33 +49,89 @@ impl SegmentsDiscovery for MockSegmentLister {
         dst: IsdAsn,
         _page_size: i32,
         _page_token: String,
-    ) -> Result<scion_proto::path::SegmentsPage, scion_proto::path::SegmentsError> {
+    ) -> Result<SegmentsPage, SegmentsError> {
         if self.supported_ases != (src, dst) && self.supported_ases != (dst, src) {
-            return Err(SegmentsError::InvalidArgument(format!(
-                "Only queries from {} to {} and back are supported",
-                self.supported_ases.0, self.supported_ases.1
-            )));
+            return Err(SegmentsError::InvalidArgument(
+                format!(
+                    "Only queries from {} to {} and back are supported",
+                    self.supported_ases.0, self.supported_ases.1
+                )
+                .into(),
+            ));
         };
 
         Ok(SegmentsPage {
-            segments: Segments {
-                up_segments: vec![
-                    self.graph
-                        .beacon("1-ff00:0:130".parse().unwrap(), &[111, 478])
-                        .unwrap(),
-                ],
-                core_segments: vec![
-                    self.graph
-                        .beacon("2-ff00:0:210".parse().unwrap(), &[450, 502, 1])
-                        .unwrap(),
-                ],
-                down_segments: vec![
-                    self.graph
-                        .beacon("2-ff00:0:210".parse().unwrap(), &[451, 2])
-                        .unwrap(),
-                ],
-            },
-            next_page_token: "".to_string(),
+            segments: default_segments(src, dst),
+            next_page_token: String::new(),
         })
+    }
+}
+
+fn default_segments(start_as: IsdAsn, end_as: IsdAsn) -> Segments {
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+
+    let key = SigningKey::from_slice(&[0x01; 32]).unwrap();
+    let forwarding_key = [0x02u8; 16];
+
+    let mut segment = SignedPathSegment::empty(timestamp, 0);
+    segment
+        .add_entry(
+            AsEntry {
+                local: start_as,
+                next: end_as,
+                mtu: 1480,
+                hop_entry: HopEntry {
+                    ingress_mtu: 1480,
+                    hop_field: SegmentHopField {
+                        exp_time: 60,
+                        cons_ingress: 0,
+                        cons_egress: 1,
+                        mac: HopFieldMac::default(),
+                    },
+                },
+                peer_entries: vec![],
+                extensions: vec![],
+                unsigned_extensions: vec![],
+            },
+            &key,
+            None,
+            &forwarding_key,
+            timestamp,
+        )
+        .expect("default segment should be valid");
+
+    segment
+        .add_entry(
+            AsEntry {
+                local: end_as,
+                next: IsdAsn::WILDCARD,
+                mtu: 1480,
+                hop_entry: HopEntry {
+                    ingress_mtu: 1480,
+                    hop_field: SegmentHopField {
+                        exp_time: 60,
+                        cons_ingress: 1,
+                        cons_egress: 0,
+                        mac: HopFieldMac::default(),
+                    },
+                },
+                peer_entries: vec![],
+                extensions: vec![],
+                unsigned_extensions: vec![],
+            },
+            &key,
+            None,
+            &forwarding_key,
+            timestamp,
+        )
+        .expect("default segment should be valid");
+
+    Segments {
+        up_segments: vec![],
+        core_segments: vec![segment],
+        down_segments: vec![],
     }
 }
