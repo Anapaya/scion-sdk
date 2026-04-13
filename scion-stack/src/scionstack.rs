@@ -893,11 +893,18 @@ pub enum ScionSocketSendError {
     NotConnected,
 }
 
+/// Minimum size of the path buffer required by [`ScionSocketReceiveError::PathBufTooSmall`].
+///
+/// This constant can be used to allocate a correctly-sized path buffer when calling
+/// [`UdpScionSocket::recv_from_with_path`](crate::scionstack::UdpScionSocket::recv_from_with_path)
+/// or the corresponding method on [`PathUnawareUdpScionSocket`].
+pub const MIN_PATH_BUFFER_SIZE: usize = 1024;
+
 /// SCION socket receive errors.
 #[derive(Debug, thiserror::Error)]
 pub enum ScionSocketReceiveError {
     /// Path buffer too small.
-    #[error("provided path buffer is too small (at least 1024 bytes required)")]
+    #[error("provided path buffer is too small (at least {MIN_PATH_BUFFER_SIZE} bytes required)")]
     PathBufTooSmall,
     /// I/O error.
     #[error("i/o error: {0:?}")]
