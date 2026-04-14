@@ -292,7 +292,7 @@ impl WireHostAddr {
                     }
                 })?;
 
-                let svc_addr = u16::from_be_bytes([buf[2], buf[3]]);
+                let svc_addr = u16::from_be_bytes([buf[0], buf[1]]);
                 let svc_addr = ServiceAddr(svc_addr);
                 WireHostAddr::Svc(svc_addr)
             }
@@ -400,7 +400,7 @@ impl WireEncode for WireHostAddr {
             }
             WireHostAddr::Svc(addr) => {
                 let val = addr.to_u16().to_be_bytes();
-                let bytes = [0, 0, val[0], val[1]]; //TODO: Validate left padding is correct
+                let bytes = [val[0], val[1], 0, 0];
                 unsafe {
                     buf.get_unchecked_mut(..4).copy_from_slice(&bytes);
                 }
