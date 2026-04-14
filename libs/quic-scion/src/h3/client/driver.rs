@@ -90,7 +90,7 @@ impl H3Connection {
         request: H3Request,
     ) -> Result<oneshot::Receiver<H3Reply>, H3SendRequestError> {
         let headers = request.to_quiche_headers();
-        let has_body = request.body.is_some();
+        let has_body = request.body.as_ref().is_some_and(|b| !b.is_empty());
 
         let stream_id = {
             let mut conn = self.quic_conn.conn.lock().await;
