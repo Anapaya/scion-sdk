@@ -26,6 +26,7 @@ use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
 use tokio::{
     net::UdpSocket,
     task::{self},
+    time,
 };
 
 use crate::{
@@ -158,12 +159,36 @@ impl ExternalAsService {
                     }
                 };
 
-                let socket = UdpSocket::bind(listen_addr).await.with_context(|| {
-                    format!(
-                        "error binding udp listener for External AS API at address {}",
-                        listen_addr
-                    )
-                })?;
+                let socket = {
+                    const BACKOFF_DURATION_MS: u64 = 5000;
+                    const MAX_RETRIES: u32 = 100;
+
+                    let mut attempt = 0;
+                    let result = loop {
+                        let bind_error = match UdpSocket::bind(listen_addr).await {
+                            Ok(s) => break Ok(s),
+                            Err(e) => {
+                                tracing::debug!(
+                                    %listen_addr,
+                                    error = ?e,
+                                    "Failed to bind UDP socket for External AS API, retrying...",
+                                );
+                                e
+                            }
+                        };
+                        attempt += 1;
+                        if attempt >= MAX_RETRIES {
+                            break Err(bind_error);
+                        }
+                        time::sleep(time::Duration::from_millis(BACKOFF_DURATION_MS)).await;
+                    };
+                    result.with_context(|| {
+                        format!(
+                            "error binding udp listener for External AS API at address {} after {} attempts",
+                            listen_addr, MAX_RETRIES
+                        )
+                    })
+                }?;
 
                 // Update IoConfig with the actual address
                 io_config.set_external_as_interface_addr(
