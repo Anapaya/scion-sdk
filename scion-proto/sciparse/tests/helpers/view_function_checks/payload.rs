@@ -12,4 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod view_function_checks;
+//! Exhaustive exercisers for SCION payload views (UDP and SCMP).
+
+#![allow(dead_code, unused_imports)]
+
+pub mod scmp;
+pub mod udp;

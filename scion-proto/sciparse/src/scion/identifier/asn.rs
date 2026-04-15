@@ -168,6 +168,16 @@ impl FromUnalignedRead for Asn {
     }
 }
 
+#[cfg(feature = "proptest")]
+impl proptest::prelude::Arbitrary for Asn {
+    type Parameters = ();
+    type Strategy = proptest::strategy::Map<std::ops::RangeInclusive<u64>, fn(u64) -> Asn>;
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        use proptest::prelude::*;
+        (0u64..=Asn::MAX.0).prop_map(Asn::new)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

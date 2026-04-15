@@ -43,6 +43,7 @@ use crate::{
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum ScionAddr {
     /// IPv4 SCION address
     V4(ScionAddrV4),
@@ -151,6 +152,7 @@ impl ToSchema for ScionAddr {}
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct ScionAddrV4 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -200,6 +202,7 @@ impl ToSchema for ScionAddrV4 {}
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct ScionAddrV6 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -249,6 +252,7 @@ impl ToSchema for ScionAddrV6 {}
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct ScionAddrSvc {
     /// ISD-AS number
     pub isd_asn: IsdAsn,

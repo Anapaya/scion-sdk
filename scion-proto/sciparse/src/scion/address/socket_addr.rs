@@ -41,6 +41,7 @@ use crate::{
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum ScionSocketAddr {
     /// IPv4 SCION Socket Address
     V4(ScionSocketAddrV4),
@@ -263,6 +264,7 @@ impl_from!(ScionSocketAddrSvc, ScionSocketAddr, |v| Self::Svc(v));
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct ScionSocketAddrV4 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -315,6 +317,7 @@ impl Display for ScionSocketAddrV4 {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct ScionSocketAddrV6 {
     /// ISD-AS number
     pub isd_asn: IsdAsn,
@@ -356,6 +359,7 @@ impl Display for ScionSocketAddrV6 {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, SerializeDisplay, DeserializeFromStr,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct ScionSocketAddrSvc {
     /// ISD-AS number
     pub isd_asn: IsdAsn,

@@ -1,7 +1,7 @@
 use crate::core::{read::FromUnalignedRead, write::IntoUnalignedWrite};
 
 /// SCMP message types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum ScmpMessageType {
     /// Destination Unreachable message.
@@ -69,7 +69,7 @@ impl IntoUnalignedWrite for ScmpMessageType {
 }
 
 /// Destination Unreachable Codes for SCMP Destination Unreachable messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum ScmpDestinationUnreachableCode {
     /// No Route to Destination.
@@ -129,7 +129,7 @@ impl IntoUnalignedWrite for ScmpDestinationUnreachableCode {
 }
 
 /// Parameter Problem Codes for SCMP Parameter Problem messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum ScmpParameterProblemCode {
     /// Erroneous Header Field.
@@ -241,5 +241,41 @@ impl FromUnalignedRead for ScmpParameterProblemCode {
 impl IntoUnalignedWrite for ScmpParameterProblemCode {
     fn into_write_value(v: Self) -> u128 {
         u8::from(v) as u128
+    }
+}
+
+#[cfg(feature = "proptest")]
+mod ptest {
+    // note: can't use derive because of the `Unknown` variants, so we implement `Arbitrary`
+    // manually
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    impl Arbitrary for ScmpMessageType {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            any::<u8>().prop_map(ScmpMessageType::from).boxed()
+        }
+    }
+
+    impl Arbitrary for ScmpDestinationUnreachableCode {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            any::<u8>()
+                .prop_map(ScmpDestinationUnreachableCode::from)
+                .boxed()
+        }
+    }
+
+    impl Arbitrary for ScmpParameterProblemCode {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            any::<u8>().prop_map(ScmpParameterProblemCode::from).boxed()
+        }
     }
 }

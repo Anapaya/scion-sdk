@@ -138,6 +138,7 @@ impl_from!(ScionAddr, ScionHostAddr, |value| value.host());
 /// Service addresses are 16-bit values used to identify services within a SCION AS.
 /// They can be either anycast or multicast addresses.
 #[derive(Eq, PartialEq, Copy, Clone, Debug, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct ServiceAddr(pub u16);
 impl ServiceAddr {
     /// SCION daemon anycast service address (DS_A)
@@ -233,7 +234,8 @@ impl_from!(ServiceAddr, WireHostAddr, |value| {
 ///
 /// Includes the `Unknown` variant to represent address types that are not recognized by this
 /// version of the library or are invalid.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum WireHostAddr {
     /// IPv4 address.
     V4(Ipv4Addr),
@@ -242,6 +244,10 @@ pub enum WireHostAddr {
     /// Service address.
     Svc(ServiceAddr),
     /// Unknown address type. Raw bytes.
+    #[cfg_attr(
+        feature = "proptest",
+        proptest(strategy = "arbitrary_unknown_wire_host_addr()")
+    )]
     Unknown {
         /// Address type identifier.
         id: u8,
@@ -423,10 +429,31 @@ impl_from!(ScionHostAddr, WireHostAddr, |value| {
         ScionHostAddr::Svc(svc) => WireHostAddr::Svc(svc),
     }
 });
+#[cfg(feature = "proptest")]
+fn arbitrary_unknown_wire_host_addr() -> impl proptest::prelude::Strategy<Value = WireHostAddr> {
+    use proptest::prelude::*;
+
+    (
+        2u8..=3,
+        proptest::collection::vec(prop::num::u8::ANY, 4..=16),
+    )
+        .prop_map(|(id, bytes_vec)| {
+            // Take chunks of 4 bytes to keep alignment
+            let chunks = bytes_vec.chunks_exact(4);
+            let mut bytes = ArrayVec::new();
+            for chunk in chunks {
+                for &b in chunk {
+                    bytes.push(b);
+                }
+            }
+            WireHostAddr::Unknown { id, bytes }
+        })
+}
 
 /// Host Address types on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum WireHostAddrType {
     /// IPv4 address.
     IPV4 = 0b0000,
@@ -435,6 +462,10 @@ pub enum WireHostAddrType {
     /// Service address.
     Service = 0b0100,
     /// Unknown address type.
+    #[cfg_attr(
+        feature = "proptest",
+        proptest(strategy = "arbitrary_unknown_wire_host_addr_type()")
+    )]
     Unknown {
         /// Address type identifier.
         id: u8,
@@ -479,6 +510,14 @@ impl From<WireHostAddrType> for u8 {
             }
         }
     }
+}
+
+#[cfg(feature = "proptest")]
+fn arbitrary_unknown_wire_host_addr_type()
+-> impl proptest::prelude::Strategy<Value = WireHostAddrType> {
+    use proptest::prelude::*;
+    let size_strategy = prop::num::u8::ANY.prop_map(|size| ((size % 4) + 1) * 4);
+    (2u8..=3, size_strategy).prop_map(|(id, size)| WireHostAddrType::Unknown { id, size })
 }
 
 /// Error indicating a mismatch between expected and actual address sizes.

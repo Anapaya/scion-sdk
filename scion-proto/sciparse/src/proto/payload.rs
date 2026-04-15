@@ -66,3 +66,28 @@ impl From<ProtocolNumber> for u8 {
         }
     }
 }
+
+#[cfg(feature = "proptest")]
+mod ptest {
+    use ::proptest::prelude::*;
+
+    use super::*;
+
+    impl Arbitrary for ProtocolNumber {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                1 => Just(ProtocolNumber::Tcp),
+                2 => Just(ProtocolNumber::Udp),
+                1 => Just(ProtocolNumber::Hbh),
+                1 => Just(ProtocolNumber::E2e),
+                2 => Just(ProtocolNumber::Scmp),
+                1 => Just(ProtocolNumber::Bfd),
+                1 => any::<u8>().prop_map(ProtocolNumber::from)
+            ]
+            .boxed()
+        }
+    }
+}

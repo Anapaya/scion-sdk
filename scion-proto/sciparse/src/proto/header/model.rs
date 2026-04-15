@@ -23,13 +23,10 @@ use crate::{
         write::unchecked_bit_range_be_write,
     },
     header::{
-        layout::{AddressHeaderLayout, CommonHeaderLayout},
-        view::{ScionHeaderView, ScionPathView},
+        layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
+        view::ScionHeaderView,
     },
-    path::{
-        onehop::model::OneHopPath,
-        standard::{model::StandardPath, types::PathType},
-    },
+    path::{model::Path, types::PathType},
     scion::{
         address::host_addr::{WireHostAddr, WireHostAddrType},
         identifier::isd_asn::IsdAsn,
@@ -40,7 +37,7 @@ use crate::{
 ///
 /// This structure contains all the fields of a SCION packet header,
 /// including the common header, address header, and path information.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ScionPacketHeader {
     /// The common header of the SCION packet
     pub common: CommonHeader,
@@ -91,6 +88,19 @@ impl ScionPacketHeader {
     ///
     /// Returns Ok(()) if valid, otherwise a static error reference.
     pub fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        let required_size = self.required_size();
+        if !required_size.is_multiple_of(4) {
+            return Err(InvalidStructureError::from(
+                "header size must be a multiple of 4 bytes",
+            ));
+        }
+
+        if required_size > ScionHeaderLayout::MAX_SIZE_BYTES {
+            return Err(InvalidStructureError::from(
+                "header size exceeds maximum encodeable value of 1020 bytes",
+            ));
+        }
+
         self.common.valid()?;
         self.address.wire_valid()?;
         self.path.wire_valid()?;
@@ -151,7 +161,7 @@ impl ScionPacketHeader {
 }
 
 /// Represents the common header of a SCION packet
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommonHeader {
     /// Traffic class of the SCION packet
     pub traffic_class: u8,
@@ -226,7 +236,7 @@ impl CommonHeader {
 }
 
 /// Represents the address header of a SCION packet
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AddressHeader {
     /// Destination ISD
     pub dst_ia: IsdAsn,
@@ -320,102 +330,68 @@ impl WireEncode for AddressHeader {
     }
 }
 
-/// Represents the path information of a SCION packet
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Path {
-    /// Standard SCION path
-    Standard(StandardPath),
-    /// One-hop SCION path
-    OneHop(OneHopPath),
-    /// Empty path
-    Empty,
-    /// Unsupported path type with raw data
-    Unsupported {
-        /// The type of the unsupported path
-        path_type: PathType,
-        /// Raw path data
-        data: Vec<u8>,
-    },
-}
-impl Path {
-    /// Constructs a `Path` from a `ScionPathView`
-    pub fn from_view(view: &ScionPathView) -> Self {
-        match *view {
-            ScionPathView::Standard(standard_view) => {
-                Path::Standard(StandardPath::from_view(standard_view))
-            }
-            ScionPathView::OneHop(onehop_view) => Path::OneHop(OneHopPath::from_view(onehop_view)),
-            ScionPathView::Empty => Path::Empty,
-            ScionPathView::Unsupported {
-                path_type,
-                data: buf,
-            } => {
-                Path::Unsupported {
-                    path_type,
-                    data: buf.to_vec(),
-                }
-            }
-        }
-    }
-}
-impl Path {
-    /// Returns the type of the path
-    pub fn path_type(&self) -> PathType {
-        match self {
-            Path::Standard(_) => PathType::Scion,
-            Path::OneHop(_) => PathType::OneHop,
-            Path::Empty => PathType::Empty,
-            Path::Unsupported { path_type, .. } => PathType::Other((*path_type).into()),
-        }
-    }
+#[cfg(feature = "proptest")]
+mod ptest {
+    use ::proptest::prelude::*;
 
-    /// Returns a reference to the standard path if it is of that type
-    pub fn standard(&self) -> Option<&StandardPath> {
-        match self {
-            Path::Standard(path) => Some(path),
-            _ => None,
-        }
-    }
-}
-impl WireEncode for Path {
-    fn required_size(&self) -> usize {
-        match self {
-            Path::Standard(path) => path.required_size(),
-            Path::OneHop(path) => path.required_size(),
-            Path::Unsupported { data, .. } => data.len(),
-            Path::Empty => 0,
-        }
-    }
+    use super::*;
+    use crate::path::model::Path;
 
-    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
-        match self {
-            Self::Standard(standard_path) => standard_path.wire_valid()?,
-            Self::OneHop(onehop_path) => onehop_path.wire_valid()?,
-            Self::Empty => {}
-            Self::Unsupported { path_type: _, data } => {
-                if !data.len().is_multiple_of(4) {
-                    return Err("Path data must be a multiple of 4 bytes".into());
-                }
-            }
-        }
+    impl Arbitrary for ScionPacketHeader {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
 
-        Ok(())
-    }
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            let traffic_class = any::<u8>();
+            let flow_id = 0u32..=0xF_FFFFu32;
+            let next_header = any::<u8>();
 
-    unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
-        match self {
-            Path::Standard(path) => unsafe { path.encode_unchecked(buf) },
-            Path::OneHop(path) => unsafe { path.encode_unchecked(buf) },
-            Path::Empty => 0,
-            Path::Unsupported { data, .. } => {
-                let len = data.len();
+            let dst_ia = any::<IsdAsn>();
+            let src_ia = any::<IsdAsn>();
 
-                unsafe {
-                    buf.get_unchecked_mut(..len).copy_from_slice(data);
-                }
+            let dst_host_addr = any::<WireHostAddr>();
+            let src_host_addr = any::<WireHostAddr>();
 
-                len
-            }
+            let path = any::<Path>();
+
+            (
+                traffic_class,
+                flow_id,
+                next_header,
+                dst_ia,
+                src_ia,
+                dst_host_addr,
+                src_host_addr,
+                path,
+            )
+                .prop_map(
+                    |(
+                        traffic_class,
+                        flow_id,
+                        next_header,
+                        dst_ia,
+                        src_ia,
+                        dst_host_addr,
+                        src_host_addr,
+                        path,
+                    )| {
+                        Self {
+                            common: CommonHeader {
+                                traffic_class,
+                                flow_id,
+                                next_header,
+                            },
+                            address: AddressHeader {
+                                dst_ia,
+                                src_ia,
+                                dst_host_addr,
+                                src_host_addr,
+                            },
+                            path,
+                        }
+                    },
+                )
+                .boxed()
         }
     }
 }

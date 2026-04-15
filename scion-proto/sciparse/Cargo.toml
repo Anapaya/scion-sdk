@@ -19,12 +19,16 @@ thiserror = { workspace = true }
 tinyvec = { workspace = true }
 utoipa = { workspace = true }
 
+# Feature: proptest
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
+
+[features]
+default = ["proptest"]
+proptest = ["dep:proptest", "dep:proptest-derive"]
+
 [dev-dependencies]
 base64 = { workspace = true }
-bytes = { workspace = true }
-proptest = { workspace = true }
-proptest-derive = { workspace = true }
-scion-proto = { workspace = true }
 
 [lints]
 workspace = true

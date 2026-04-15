@@ -14,6 +14,8 @@
 
 //! UDP payload models.
 
+use std::fmt::Debug;
+
 use crate::{
     checksum::ChecksumDigest,
     core::{
@@ -30,7 +32,7 @@ use crate::{
 };
 
 /// A UDP message.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UdpDatagram {
     /// The source port.
     pub src_port: u16,
@@ -67,6 +69,15 @@ impl UdpDatagram {
             dst_port: view.dst_port(),
             payload: view.payload().to_vec(),
         }
+    }
+}
+impl Debug for UdpDatagram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UdpDatagram")
+            .field("src_port", &self.src_port)
+            .field("dst_port", &self.dst_port)
+            .field("payload_len", &self.payload.len())
+            .finish()
     }
 }
 impl PayloadEncode for UdpDatagram {
@@ -114,5 +125,34 @@ impl PayloadEncode for UdpDatagram {
         }
 
         self.required_size(header_and_extensions_size)
+    }
+}
+
+#[cfg(feature = "proptest")]
+mod ptest {
+    use ::proptest::prelude::*;
+
+    use super::*;
+
+    impl Arbitrary for UdpDatagram {
+        type Parameters = ();
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            (
+                any::<u16>(),
+                any::<u16>(),
+                ::proptest::collection::vec(any::<u8>(), 0..1500),
+            )
+                .prop_map(|(src_port, dst_port, payload)| {
+                    Self {
+                        src_port,
+                        dst_port,
+                        payload,
+                    }
+                })
+                .boxed()
+        }
+
+        type Strategy = BoxedStrategy<Self>;
     }
 }

@@ -44,6 +44,15 @@ impl View for UdpDatagramView {
         }
         let header_len: u16 =
             unsafe { unchecked_bit_range_be_read(buf, UdpDatagramLayout::LENGTH_RNG) };
+
+        // The length field in the UDP header includes the header size itself, so it must be at
+        // least 8 bytes. Any value smaller is invalid.
+        if header_len < UdpDatagramLayout::HEADER_SIZE_BYTES as u16 {
+            return Err(ViewConversionError::Other(
+                "UDP length field smaller than minimum header size",
+            ));
+        }
+
         Ok(min(buf.len(), header_len as usize))
     }
 

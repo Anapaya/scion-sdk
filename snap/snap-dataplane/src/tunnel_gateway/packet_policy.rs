@@ -21,7 +21,7 @@ use std::net::IpAddr;
 use sciparse::{
     core::view::{View, ViewConversionError},
     packet::view::ScionPacketView,
-    path::standard::types::PathType,
+    path::types::PathType,
 };
 use thiserror::Error;
 

@@ -20,9 +20,10 @@
 
 use crate::{
     address::socket_addr::ScionSocketAddr,
+    core::encode::WireEncode,
     identifier::isd_asn::IsdAsn,
     packet::{
-        model::{ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
+        model::{ScionRawPacket, ScionScmpPacket, ScionUdpPacket},
         view::{ScionPacketView, ScionRawPacketView, ScionScmpPacketView, ScionUdpPacketView},
     },
 };
@@ -68,13 +69,14 @@ impl<'a> ClassifiedPacketView<'a> {
 }
 
 /// The result of classifying a SCION packet by its payload protocol.
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum ClassifiedPacket {
     /// A SCMP packet with a parsed SCMP message as payload.
-    Scmp(ScionPacketScmp),
+    Scmp(ScionScmpPacket),
     /// A UDP packet with a parsed UDP datagram as payload.
-    Udp(ScionPacketUdp),
+    Udp(ScionUdpPacket),
     /// A SCION packet whose payload protocol is neither UDP nor SCMP.
-    Other(ScionPacketRaw),
+    Other(ScionRawPacket),
 }
 impl ClassifiedPacket {
     /// Returns the destination [`ScionSocketAddr`], combining the SCION destination ISD-AS and host
@@ -96,6 +98,33 @@ impl ClassifiedPacket {
         Some(ScionSocketAddr::new(isd_asn, host, dst_port))
     }
 }
+impl WireEncode for ClassifiedPacket {
+    fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
+        match self {
+            ClassifiedPacket::Udp(packet) => packet.wire_valid(),
+            ClassifiedPacket::Scmp(packet) => packet.wire_valid(),
+            ClassifiedPacket::Other(packet) => packet.wire_valid(),
+        }
+    }
+
+    unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
+        unsafe {
+            match self {
+                ClassifiedPacket::Udp(packet) => packet.encode_unchecked(buf),
+                ClassifiedPacket::Scmp(packet) => packet.encode_unchecked(buf),
+                ClassifiedPacket::Other(packet) => packet.encode_unchecked(buf),
+            }
+        }
+    }
+
+    fn required_size(&self) -> usize {
+        match self {
+            ClassifiedPacket::Udp(packet) => packet.required_size(),
+            ClassifiedPacket::Scmp(packet) => packet.required_size(),
+            ClassifiedPacket::Other(packet) => packet.required_size(),
+        }
+    }
+}
 
 /// Error returned when a SCION packet cannot be classified.
 #[derive(Debug, thiserror::Error)]
@@ -107,46 +136,56 @@ pub enum ClassifyError {
     #[error("malformed SCMP payload: {0}")]
     MalformedScmp(crate::core::view::ViewConversionError),
 }
+#[cfg(feature = "proptest")]
+mod ptest {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    impl Arbitrary for ClassifiedPacket {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                any::<ScionUdpPacket>().prop_map(ClassifiedPacket::Udp),
+                any::<ScionScmpPacket>().prop_map(ClassifiedPacket::Scmp),
+                any::<ScionRawPacket>().prop_map(ClassifiedPacket::Other),
+            ]
+            .boxed()
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use scion_proto::{
-        packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
-        path::DataPlanePath,
-        scmp::{
-            DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpEchoReply, ScmpMessage,
-        },
-        wire_encoding::WireEncodeVec,
-    };
 
     use crate::{
         address::socket_addr::ScionSocketAddr,
-        core::view::View,
-        packet::{classify::ClassifiedPacketView, view::ScionPacketView},
+        core::{encode::WireEncode, view::View},
+        packet::{
+            classify::ClassifiedPacketView,
+            model::{ScionRawPacket, ScionScmpPacket, ScionUdpPacket},
+            view::ScionPacketView,
+        },
+        path::model::Path,
+        payload::{
+            ProtocolNumber,
+            scmp::model::{ScmpDestinationUnreachable, ScmpEchoReply},
+        },
     };
-
-    fn make_scion_udp_bytes(dst_port: u16) -> Vec<u8> {
-        let ep = ByEndpoint {
-            source: "[1-ff00:0:110,10.0.0.1]:12345".parse().unwrap(),
-            destination: scion_proto::address::SocketAddr::new(
-                "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-                dst_port,
-            ),
-        };
-        ScionPacketUdp::new(
-            ep,
-            DataPlanePath::EmptyPath,
-            bytes::Bytes::from_static(b"payload"),
-        )
-        .unwrap()
-        .encode_to_bytes_vec()
-        .concat()
-        .to_vec()
-    }
 
     #[test]
     fn classify_udp_packet_succeeds() {
-        let buf = make_scion_udp_bytes(54321);
+        let buf = ScionUdpPacket::new(
+            "[1-ff00:0:110,10.0.0.1]:12345".parse().unwrap(),
+            "[1-ff00:0:111,10.0.0.2]:54321".parse().unwrap(),
+            Path::Empty,
+            b"payload".to_vec(),
+        )
+        .encode_to_vec()
+        .expect("failed to encode SCION UDP packet");
+
         let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
         let classified = view.classify().unwrap();
         match &classified {
@@ -163,21 +202,22 @@ mod tests {
 
     #[test]
     fn classify_scmp_echo_reply_with_port() {
-        let echo_reply = ScmpMessage::EchoReply(ScmpEchoReply::new(
-            54321, // identifier used as port
-            1,
-            bytes::Bytes::from_static(b"echo data"),
-        ));
-        let scmp_packet = ScionPacketScmp::new(
-            ByEndpoint {
-                source: "1-ff00:0:110,10.0.0.1".parse().unwrap(),
-                destination: "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            },
-            DataPlanePath::EmptyPath,
-            echo_reply,
-        )
-        .unwrap();
-        let buf = scmp_packet.encode_to_bytes_vec().concat().to_vec();
+        let scion_scmp_packet = ScionScmpPacket::new(
+            "1-ff00:0:110,10.0.0.1".parse().unwrap(),
+            "1-ff00:0:111,10.0.0.2".parse().unwrap(),
+            Path::Empty,
+            ScmpEchoReply::new(
+                54321, // identifier used as port
+                1,
+                b"echo data".to_vec(),
+            )
+            .into(),
+        );
+
+        let buf = scion_scmp_packet
+            .encode_to_vec()
+            .expect("failed to encode SCION SCMP packet");
+
         let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
         let classified = view.classify().unwrap();
         match &classified {
@@ -197,32 +237,29 @@ mod tests {
     #[test]
     fn classify_scmp_destination_unreachable_with_parsable_payload() {
         // Create a UDP packet that was sent in the reversed direction.
-        let quoted_udp = ScionPacketUdp::new(
-            ByEndpoint {
-                source: "[1-ff00:0:111,10.0.0.2]:54321".parse().unwrap(),
-                destination: "[1-ff00:0:110,10.0.0.1]:12345".parse().unwrap(),
-            },
-            DataPlanePath::EmptyPath,
-            bytes::Bytes::from_static(b"quoted payload"),
-        )
-        .unwrap();
-        let quoted_udp_data = quoted_udp.encode_to_bytes_vec().concat();
+        let quoted_udp = ScionUdpPacket::new(
+            "[1-ff00:0:111,10.0.0.2]:54321".parse().unwrap(),
+            "[1-ff00:0:110,10.0.0.1]:12345".parse().unwrap(),
+            Path::Empty,
+            b"quoted payload".to_vec(),
+        );
 
-        let dest_unreach = ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
-            DestinationUnreachableCode::AddressUnreachable,
-            quoted_udp_data.into(),
-        ));
+        let quoted_udp_data = quoted_udp
+            .encode_to_vec()
+            .expect("failed to encode quoted UDP packet");
 
-        let scmp_packet = ScionPacketScmp::new(
-            ByEndpoint {
-                source: "1-ff00:0:110,10.0.0.1".parse().unwrap(),
-                destination: "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            },
-            DataPlanePath::EmptyPath,
-            dest_unreach,
-        )
-        .unwrap();
-        let buf = scmp_packet.encode_to_bytes_vec().concat().to_vec();
+        let scmp_packet = ScionScmpPacket::new(
+            "1-ff00:0:110,10.0.0.1".parse().unwrap(),
+            "1-ff00:0:111,10.0.0.2".parse().unwrap(),
+            Path::Empty,
+            ScmpDestinationUnreachable::new(
+                crate::payload::scmp::types::ScmpDestinationUnreachableCode::AddressUnreachable,
+                quoted_udp_data,
+            )
+            .into(),
+        );
+
+        let buf = scmp_packet.encode_to_vec().unwrap();
         let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
         let classified = view.classify().unwrap();
         match &classified {
@@ -241,21 +278,18 @@ mod tests {
 
     #[test]
     fn classify_scmp_destination_unreachable_without_parsable_payload() {
-        let dest_unreach = ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
-            DestinationUnreachableCode::AddressUnreachable,
-            bytes::Bytes::from_static(b"invalid UDP packet"),
-        ));
+        let scmp_packet = ScionScmpPacket::new(
+            "1-ff00:0:110,10.0.0.1".parse().unwrap(),
+            "1-ff00:0:111,10.0.0.2".parse().unwrap(),
+            Path::Empty,
+            ScmpDestinationUnreachable::new(
+                crate::payload::scmp::types::ScmpDestinationUnreachableCode::AddressUnreachable,
+                b"not a valid quoted UDP packet".to_vec(),
+            )
+            .into(),
+        );
 
-        let scmp_packet = ScionPacketScmp::new(
-            ByEndpoint {
-                source: "1-ff00:0:110,10.0.0.1".parse().unwrap(),
-                destination: "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            },
-            DataPlanePath::EmptyPath,
-            dest_unreach,
-        )
-        .unwrap();
-        let buf = scmp_packet.encode_to_bytes_vec().concat().to_vec();
+        let buf = scmp_packet.encode_to_vec().unwrap();
         let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
         let classified = view.classify().unwrap();
         match &classified {
@@ -269,20 +303,16 @@ mod tests {
 
     #[test]
     fn classify_unknown_next_header_returns_other() {
-        let bytes = ScionPacketRaw::new(
-            ByEndpoint {
-                source: "1-ff00:0:110,10.0.0.1".parse().unwrap(),
-                destination: "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            },
-            DataPlanePath::EmptyPath,
-            bytes::Bytes::from_static(b"raw"),
-            0xFE, // unknown next header
-            FlowId::new(0).unwrap(),
+        let bytes = ScionRawPacket::new(
+            "1-ff00:0:110,10.0.0.1".parse().unwrap(),
+            "1-ff00:0:111,10.0.0.2".parse().unwrap(),
+            Path::Empty,
+            ProtocolNumber::Other(0xFE),
+            b"rawr".to_vec(),
         )
-        .unwrap()
-        .encode_to_bytes_vec()
-        .concat()
-        .to_vec();
+        .encode_to_vec()
+        .expect("failed to encode SCION raw packet");
+
         let (view, _) = ScionPacketView::from_slice(&bytes).unwrap();
         assert!(matches!(
             view.classify().unwrap(),

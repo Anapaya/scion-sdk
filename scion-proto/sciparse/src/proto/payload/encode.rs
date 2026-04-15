@@ -18,6 +18,8 @@
 //! depend on the total size of the SCION packet and contents of the SCION
 //! address header.
 
+use std::{fmt::Debug, hash::Hash};
+
 use crate::{core::encode::EncodeError, header::model::AddressHeader};
 
 /// Allows encoding scion packet payload models to wire format.
@@ -25,7 +27,7 @@ use crate::{core::encode::EncodeError, header::model::AddressHeader};
 /// Implementors are responsible for correctly reporting the number of bytes
 /// that will be written and for upholding the safety requirements of
 /// `encode_unchecked`.
-pub trait PayloadEncode {
+pub trait PayloadEncode: Debug + Send + Sync + PartialEq + PartialOrd + Hash {
     /// Returns the size required for the wire encoding.
     ///
     /// The `header_and_extensions_size` parameter is the size in bytes of the

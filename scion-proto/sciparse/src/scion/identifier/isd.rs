@@ -45,6 +45,7 @@ use crate::{
     DeserializeFromStr,
     ToSchema,
 )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 #[repr(transparent)]
 pub struct Isd(pub u16);
 impl Isd {

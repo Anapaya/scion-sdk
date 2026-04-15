@@ -18,48 +18,6 @@ use std::{fmt::Debug, ops::Deref, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-/// Path types used in SCION packets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum PathType {
-    /// The empty path type.
-    Empty = 0,
-    /// The standard SCION path type.
-    Scion = 1,
-    /// One-hop paths between neighboring border routers.
-    OneHop = 2,
-    /// Experimental Epic path type.
-    Epic = 3,
-    /// Experimental Colibri path type.
-    Colibri = 4,
-    /// Other, unrecognized path types.
-    Other(u8),
-}
-impl From<u8> for PathType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => PathType::Empty,
-            1 => PathType::Scion,
-            2 => PathType::OneHop,
-            3 => PathType::Epic,
-            4 => PathType::Colibri,
-            other => PathType::Other(other),
-        }
-    }
-}
-impl From<PathType> for u8 {
-    fn from(val: PathType) -> Self {
-        match val {
-            PathType::Empty => 0,
-            PathType::Scion => 1,
-            PathType::OneHop => 2,
-            PathType::Epic => 3,
-            PathType::Colibri => 4,
-            PathType::Other(other) => other,
-        }
-    }
-}
-
 /// MAC (Message Authentication Code) used in HopFields.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
@@ -112,7 +70,7 @@ impl Debug for HopFieldMac {
 // InfoFieldFlags
 bitflags::bitflags! {
     /// InfoField flags.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
     pub struct InfoFieldFlags: u8 {
         /// If set to true then the hop fields are arranged in the direction they have been constructed during beaconing.
         /// (i.e. Core AS where the beacon originated )
@@ -129,7 +87,7 @@ bitflags::bitflags! {
 // HopFieldFlags
 bitflags::bitflags! {
     /// HopField flags.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
     pub struct HopFieldFlags: u8 {
         /// If ConsEgress Router Alert is set, the egress router in construction direction will process the L4 payload in the packet.
         const CONS_EGRESS_ROUTER_ALERT = 0b0000_0001;
@@ -188,4 +146,33 @@ pub const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
 /// The highest possible expiration time is 256 * [EXP_TIME_UNIT] (when `exp_time` is 255).
 pub fn exp_time_to_duration(exp_time: u8) -> Duration {
     EXP_TIME_UNIT.saturating_mul(exp_time as u32 + 1)
+}
+
+#[cfg(feature = "proptest")]
+mod ptest {
+    use ::proptest::prelude::*;
+
+    use super::*;
+
+    impl Arbitrary for InfoFieldFlags {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any::<u8>()
+                .prop_map(InfoFieldFlags::from_bits_retain)
+                .boxed()
+        }
+    }
+
+    impl Arbitrary for HopFieldFlags {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any::<u8>()
+                .prop_map(HopFieldFlags::from_bits_retain)
+                .boxed()
+        }
+    }
 }

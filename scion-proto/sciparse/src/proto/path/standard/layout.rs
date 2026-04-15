@@ -106,8 +106,12 @@ impl StdPathMetaLayout {
     /// Size of meta header in bytes
     pub const SIZE_BYTES: usize = Self::TOTAL_RNG.end / 8;
 
-    /// Maximum length of a path segment
-    pub const MAX_SEGMENT_LENGTH: usize = 63;
+    /// Maximum number of path segments
+    pub const MAX_SEGMENTS: usize = 3;
+    /// Maximum hop fields per segment
+    pub const MAX_SEGMENT_HOPS: usize = 63;
+    /// Maximum total hops across all segments CurrHF field can represent
+    pub const MAX_TOTAL_HOPS: usize = 63;
 }
 impl StdPathMetaLayout {
     /// Returns annotations for the common header fields

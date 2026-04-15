@@ -62,7 +62,8 @@ use crate::{
 ///
 /// There are separate enum types [`ScmpErrorMessage`] and [`ScmpInformationalMessage`] that only
 /// include error and informational messages, respectively.
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum ScmpMessage {
     /// An SCMP DestinationUnreachable message.
     ///
@@ -340,7 +341,7 @@ impl From<ScmpInformationalMessage> for ScmpMessage {
 ///
 /// See [`ScmpInformationalMessage`] for informational messages and [`ScmpMessage`] for an enum that
 /// includes both error and informational messages.
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub enum ScmpErrorMessage {
     /// An SCMP DestinationUnreachable message.
     ///
@@ -363,7 +364,6 @@ pub enum ScmpErrorMessage {
     /// See [`ScmpInternalConnectivityDown`] for further details.
     InternalConnectivityDown(ScmpInternalConnectivityDown),
 }
-
 impl ScmpErrorMessage {
     /// Get the type of the error SCMP message.
     pub fn message_type(&self) -> ScmpMessageType {
@@ -376,7 +376,6 @@ impl ScmpErrorMessage {
         }
     }
 }
-
 impl PayloadEncode for ScmpErrorMessage {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         match self {
@@ -435,7 +434,7 @@ impl PayloadEncode for ScmpErrorMessage {
 ///
 /// See [`ScmpErrorMessage`] for error messages and [`ScmpMessage`] for an enum that includes both
 /// error and informational messages.
-#[derive(Debug, PartialEq, Clone, Eq)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub enum ScmpInformationalMessage {
     /// An SCMP EchoRequest message.
     ///
@@ -522,7 +521,8 @@ macro_rules! error_message {
         }
     ) => {
         $(#[$outer])*
-        #[derive(Debug, Clone, PartialEq, Eq)]
+        #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+        #[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
         pub struct $name {
             $($(#[$doc])* $vis $field: $type,)*
             /// The (truncated) packet that triggered the error.
@@ -960,7 +960,8 @@ macro_rules! informational_message {
         $message_type:ident => pub struct $name:ident {$($(#[$doc:meta])* $vis:vis $field:ident : $type:ty,)*}
     ) => {
         $(#[$outer])*
-        #[derive(Debug, Clone, PartialEq, Eq)]
+        #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+        #[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
         pub struct $name {
             /// A 16-bit identifier to aid matching replies with requests.
             pub identifier: u16,
@@ -1241,7 +1242,7 @@ impl PayloadEncode for ScmpTracerouteReply {
 }
 
 /// An unknown SCMP message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct ScmpMessageUnknown {
     /// The type of the SCMP message.
     pub message_type: u8,
@@ -1320,5 +1321,44 @@ impl PayloadEncode for ScmpMessageUnknown {
 impl From<ScmpMessageUnknown> for ScmpMessage {
     fn from(value: ScmpMessageUnknown) -> Self {
         Self::Unknown(value)
+    }
+}
+
+#[cfg(feature = "proptest")]
+mod ptest {
+    use ::proptest::prelude::*;
+
+    use super::*;
+
+    impl Arbitrary for ScmpMessageUnknown {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            (
+                any::<u8>(),
+                any::<u8>(),
+                ::proptest::collection::vec(any::<u8>(), 0..1200),
+            )
+                .prop_map(|(message_type, code, message_specific_data)| {
+                    // message_type must not be a valid message type
+                    // loop and increase until it's an Unknown message type, wrapping around if
+                    // necessary
+                    let mut message_type = message_type;
+                    while !matches!(
+                        ScmpMessageType::from(message_type),
+                        ScmpMessageType::Unknown(_)
+                    ) {
+                        message_type = message_type.wrapping_add(1);
+                    }
+
+                    Self {
+                        message_type,
+                        code,
+                        message_specific_data,
+                    }
+                })
+                .boxed()
+        }
     }
 }

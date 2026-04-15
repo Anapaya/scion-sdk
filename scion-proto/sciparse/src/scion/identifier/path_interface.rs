@@ -18,6 +18,7 @@ use crate::scion::identifier::isd_asn::IsdAsn;
 
 /// SCION interface with the AS's ISD-ASN and the interface's ID.
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub struct PathInterface {
     /// The ISD-ASN of the AS where the interface is located
     pub isd_asn: IsdAsn,

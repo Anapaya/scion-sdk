@@ -31,9 +31,10 @@ use sciparse::{
         encode::{EncodeError, WireEncode},
         view::View as _,
     },
-    header::model::{AddressHeader, Path},
+    header::model::AddressHeader,
     identifier::isd_asn::IsdAsn,
-    packet::model::ScionPacketScmpRef,
+    packet::model::ScionScmpPacketRef,
+    path::model::Path,
     payload::scmp::{self, types::ScmpParameterProblemCode},
 };
 use snap_tun::{
@@ -319,7 +320,7 @@ where
         target_buf: &mut Packet,
     ) -> Result<usize, EncodeError> {
         let scmp_message = create_inbound_scmp_error(err);
-        let scmp_packet_model = ScionPacketScmpRef::new_from_parts(
+        let scmp_packet_model = ScionScmpPacketRef::new_from_parts(
             AddressHeader {
                 src_ia: dst_addr.isd_asn(),
                 src_host_addr: local_addr.into(),

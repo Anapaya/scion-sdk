@@ -34,8 +34,9 @@ use crate::{
     },
     header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
     path::{
-        onehop::view::OneHopPathView,
-        standard::{types::PathType, view::StandardPathView},
+        standard::view::StandardPathView,
+        types::PathType,
+        view::{ScionPathView, ScionPathViewMut},
     },
     scion::{
         address::host_addr::{HostAddressSizeError, WireHostAddr, WireHostAddrType},
@@ -123,7 +124,10 @@ impl ScionHeaderView {
             len.is_multiple_of(4),
             "Header length must be a multiple of 4"
         );
-        debug_assert!(len <= 255 * 4, "Header length must be at most 1020 bytes");
+        debug_assert!(
+            len <= ScionHeaderLayout::MAX_SIZE_BYTES as u16,
+            "Header length must be at most 1020 bytes"
+        );
 
         let raw_len = (len / 4) as u8;
 
@@ -490,40 +494,4 @@ impl Debug for ScionHeaderView {
             .field("path", &path)
             .finish()
     }
-}
-
-/// View over different path types
-#[derive(Debug)]
-pub enum ScionPathView<'a> {
-    /// View over a standard SCION path
-    Standard(&'a StandardPathView),
-    /// View over a one-hop SCION path
-    OneHop(&'a OneHopPathView),
-    /// View over an unsupported path type
-    Unsupported {
-        /// The unsupported path type
-        path_type: PathType,
-        /// Raw path data
-        data: &'a [u8],
-    },
-    /// Empty path type
-    Empty,
-}
-
-/// Mutable view over different path types
-#[derive(Debug)]
-pub enum ScionPathViewMut<'a> {
-    /// Mutable view over a standard SCION path
-    Standard(&'a mut StandardPathView),
-    /// Mutable view over a one-hop SCION path
-    OneHop(&'a mut OneHopPathView),
-    /// Mutable view over an unsupported path type
-    Unsupported {
-        /// The unsupported path type
-        path_type: PathType,
-        /// Raw path data
-        buf: &'a mut [u8],
-    },
-    /// Empty path type
-    Empty,
 }

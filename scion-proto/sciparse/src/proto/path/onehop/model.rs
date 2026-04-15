@@ -14,6 +14,8 @@
 
 //! Model for one-hop paths between neighboring border routers in SCION.
 
+use tinyvec::{array_vec, tiny_vec};
+
 use crate::{
     core::encode::WireEncode,
     path::{
@@ -27,7 +29,7 @@ use crate::{
 };
 
 /// Represents a one-hop path between neighboring border routers in SCION.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OneHopPath {
     /// Info field
     pub info: InfoField,
@@ -134,10 +136,10 @@ impl OneHopPath {
         let standard_path = StandardPath {
             current_info_field: 0,
             curr_hop_field: 0,
-            segments: vec![Segment {
+            segments: array_vec!(Segment {
                 info_field: info,
-                hop_fields: vec![hop2, hop1],
-            }],
+                hop_fields: tiny_vec!(hop2, hop1),
+            }),
         };
 
         Ok(standard_path)
@@ -176,5 +178,40 @@ impl WireEncode for OneHopPath {
         }
 
         OneHopPathLayout::SIZE_BYTES
+    }
+}
+
+#[cfg(feature = "proptest")]
+mod ptest {
+    use ::proptest::prelude::*;
+
+    use super::*;
+
+    #[derive(Debug, Clone, Default)]
+    pub struct ArbitraryOneHopPathContext {
+        // Not implemented yet, but would allow providing ForwardingKeys for generating valid MACs,
+        // or even generating paths valid on a topology
+    }
+
+    impl Arbitrary for OneHopPath {
+        type Parameters = ArbitraryOneHopPathContext;
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_ctx: Self::Parameters) -> Self::Strategy {
+            // For simplicity, we generate random values for the fields without ensuring valid MACs.
+            // In a more advanced implementation, we could use the context to generate valid paths.
+            (
+                any::<InfoField>(),
+                any::<HopField>(),
+                any::<Option<HopField>>(),
+            )
+                .prop_map(|(info, hop1, hop2)| {
+                    Self {
+                        info,
+                        hops: [hop1, hop2.unwrap_or_else(HopField::empty)],
+                    }
+                })
+                .boxed()
+        }
     }
 }

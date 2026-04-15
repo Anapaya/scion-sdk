@@ -45,6 +45,7 @@ use crate::{
     ToSchema,
 )]
 #[schema(examples("1-ff00:0:110"), value_type = String, pattern = r"^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$" )]
+#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 #[repr(transparent)]
 pub struct IsdAsn(pub u64);
 impl IsdAsn {
