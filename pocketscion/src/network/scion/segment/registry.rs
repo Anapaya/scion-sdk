@@ -15,6 +15,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZero,
     sync::LazyLock,
 };
 
@@ -25,7 +26,7 @@ use crate::network::scion::{
         model::LinkSegment,
         visitors::{CoreSegmentCollector, DownSegmentCollector},
     },
-    topology::{FastTopologyLookup, ScionTopology, visitor::walk_all_links},
+    topology::{FastTopologyLookup, ScionTopology, visitor::walk_all_links_parallel},
 };
 
 /// Keeps all available [LinkSegment] for a topology.
@@ -140,11 +141,22 @@ impl SegmentRegistry {
             .map(|as_entry| as_entry.isd_as())
             .collect();
 
+        let threads = std::thread::available_parallelism()
+            .map(NonZero::get)
+            .unwrap_or(1);
+
+        tracing::debug!("Computing core segments with up to {} threads", threads);
+
         // For each core AS, find all segments
         core_ases
             .iter()
             .flat_map(|core_as| {
-                walk_all_links(CoreSegmentCollector::default(), *core_as, topo_lookup)
+                walk_all_links_parallel(
+                    CoreSegmentCollector::default(),
+                    *core_as,
+                    topo_lookup,
+                    threads,
+                )
             })
             .collect::<Vec<_>>()
     }
@@ -165,10 +177,23 @@ impl SegmentRegistry {
 
         // For each core AS, find all segments that start at this AS
 
+        let threads = std::thread::available_parallelism()
+            .map(NonZero::get)
+            .unwrap_or(1);
+
+        tracing::debug!(
+            "Computing down segments for ISD {isd} with up to {} threads",
+            threads
+        );
         core_ases
             .iter()
             .flat_map(|core_as| {
-                walk_all_links(DownSegmentCollector::default(), *core_as, topo_lookup)
+                walk_all_links_parallel(
+                    DownSegmentCollector::default(),
+                    *core_as,
+                    topo_lookup,
+                    threads,
+                )
             })
             .collect::<Vec<_>>()
     }
