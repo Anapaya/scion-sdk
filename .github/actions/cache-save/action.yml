@@ -1,0 +1,32 @@
+# Copyright 2026 Anapaya Systems
+name: Cache Save
+description: >
+  Save a cache entry. Uses actions/cache/save@v4 on GitHub-hosted runners. No-op on
+  non-GitHub-hosted runners as Namespace Labs automatically saves cache at job end.
+
+inputs:
+  key:
+    description: Cache key.
+    required: true
+  path:
+    description: Paths to cache (newline-separated).
+    required: true
+  cache-hit:
+    description: "Pass the cache-hit output from the restore step to skip saving when the exact key was already cached."
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Save cache (GitHub-hosted Linux)
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted' && inputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}
+    - name: Save cache (GitHub-hosted Windows)
+      if: runner.os == 'Windows' && runner.environment == 'github-hosted' && inputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}
