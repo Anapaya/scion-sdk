@@ -61,13 +61,13 @@ impl SegmentsDiscovery for MockSegmentLister {
         };
 
         Ok(SegmentsPage {
-            segments: default_segments(src, dst),
+            segments: default_segments(self.supported_ases),
             next_page_token: String::new(),
         })
     }
 }
 
-fn default_segments(start_as: IsdAsn, end_as: IsdAsn) -> Segments {
+fn default_segments((start_as, end_as): (IsdAsn, IsdAsn)) -> Segments {
     let timestamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -88,7 +88,7 @@ fn default_segments(start_as: IsdAsn, end_as: IsdAsn) -> Segments {
                     hop_field: SegmentHopField {
                         exp_time: 60,
                         cons_ingress: 0,
-                        cons_egress: 1,
+                        cons_egress: 2,
                         mac: HopFieldMac::default(),
                     },
                 },
@@ -113,7 +113,7 @@ fn default_segments(start_as: IsdAsn, end_as: IsdAsn) -> Segments {
                     ingress_mtu: 1480,
                     hop_field: SegmentHopField {
                         exp_time: 60,
-                        cons_ingress: 1,
+                        cons_ingress: 201,
                         cons_egress: 0,
                         mac: HopFieldMac::default(),
                     },
