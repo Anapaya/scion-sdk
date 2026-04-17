@@ -18,7 +18,7 @@ use std::{
     fmt::{self, Debug},
     hash::{BuildHasher, Hash as _, Hasher as _},
     io::ErrorKind,
-    net::{IpAddr, Ipv6Addr},
+    net::{self, IpAddr, Ipv6Addr},
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Poll, ready},
@@ -51,6 +51,7 @@ const IO_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(3);
 /// Addresses are mapped by the provided ScionAsyncUdpSocket.
 pub struct Endpoint {
     inner: anapaya_quinn::Endpoint,
+    socket: Arc<ScionAsyncUdpSocket>,
     path_prefetcher: Arc<dyn PathPrefetcher + Send + Sync>,
     address_translator: Arc<AddressTranslator>,
     local_scion_addr: scion_proto::address::SocketAddr,
@@ -58,10 +59,10 @@ pub struct Endpoint {
 
 impl Endpoint {
     /// Creates a new endpoint.
-    pub fn new_with_abstract_socket(
+    pub(crate) fn new_with_abstract_socket(
         config: anapaya_quinn::EndpointConfig,
         server_config: Option<anapaya_quinn::ServerConfig>,
-        socket: Arc<dyn anapaya_quinn::AsyncUdpSocket>,
+        socket: Arc<ScionAsyncUdpSocket>,
         local_scion_addr: scion_proto::address::SocketAddr,
         runtime: Arc<dyn anapaya_quinn::Runtime>,
         pather: Arc<dyn PathPrefetcher + Send + Sync>,
@@ -71,9 +72,10 @@ impl Endpoint {
             inner: anapaya_quinn::Endpoint::new_with_abstract_socket(
                 config,
                 server_config,
-                socket,
+                socket.clone(),
                 runtime,
             )?,
+            socket,
             path_prefetcher: pather,
             address_translator,
             local_scion_addr,
@@ -152,6 +154,11 @@ impl Endpoint {
     /// Returns the local SCION address of the endpoint.
     pub fn local_scion_addr(&self) -> scion_proto::address::SocketAddr {
         self.local_scion_addr
+    }
+
+    /// Snap data plane address the endpoint is connected to, if any.
+    pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        self.socket.snap_data_plane()
     }
 }
 
@@ -258,6 +265,11 @@ impl ScionAsyncUdpSocket {
             last_recv_error: Mutex::new(instant),
             last_send_error: Mutex::new(instant),
         }
+    }
+
+    /// Returns the address of the SNAP data plane address the socket is connected to, if any.
+    pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        self.socket.snap_data_plane()
     }
 }
 

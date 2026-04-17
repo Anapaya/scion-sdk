@@ -230,6 +230,7 @@ use scion_proto::{
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use snap_tun::client::ConnectSnapTunSocketError;
 pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
+use url::Url;
 
 // Re-export the main types from the modules
 pub use self::builder::ScionStackBuilder;
@@ -257,6 +258,7 @@ use crate::{
 /// The SCION stack abstracts over the underlay stack that is used for the underlying
 /// transport.
 pub struct ScionStack {
+    endhost_api: Option<Url>,
     client: Arc<dyn EndhostApiClient>,
     underlay: Arc<dyn DynUnderlayStack>,
     scmp_error_receivers: Subscribers<dyn ScmpErrorReceiver>,
@@ -274,10 +276,12 @@ impl fmt::Debug for ScionStack {
 
 impl ScionStack {
     pub(crate) fn new(
+        endhost_api: Option<Url>,
         client: Arc<dyn EndhostApiClient>,
         underlay: Arc<dyn DynUnderlayStack>,
     ) -> Self {
         Self {
+            endhost_api,
             client,
             underlay,
             scmp_error_receivers: Subscribers::new(),
@@ -590,6 +594,11 @@ impl ScionStack {
     /// A list of local ISD-AS identifiers.
     pub fn local_ases(&self) -> Vec<IsdAsn> {
         self.underlay.local_ases()
+    }
+
+    /// Get the currently selected endhost API URL, if any.
+    pub fn endhost_api(&self) -> Option<Url> {
+        self.endhost_api.clone()
     }
 
     /// Creates a path manager with default configuration.
@@ -929,9 +938,14 @@ pub(crate) trait UnderlaySocket: 'static + Send + Sync {
     /// path to resolve the underlay next hop.
     fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError>;
 
+    /// Receive a raw SCION packet.
     fn recv<'a>(&'a self) -> BoxFuture<'a, Result<ScionPacketRaw, ScionSocketReceiveError>>;
 
+    /// Get the local socket address of this socket.
     fn local_addr(&self) -> SocketAddr;
+
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    fn snap_data_plane(&self) -> Option<net::SocketAddr>;
 }
 
 /// A trait that defines an asynchronous path unaware UDP socket.
@@ -950,7 +964,10 @@ pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
         &self,
         cx: &mut Context,
     ) -> Poll<std::io::Result<(SocketAddr, Bytes, Path)>>;
+    /// Get the local socket address of this socket.
     fn local_addr(&self) -> SocketAddr;
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    fn snap_data_plane(&self) -> Option<net::SocketAddr>;
 }
 
 impl Drop for ScionStack {

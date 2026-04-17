@@ -729,6 +729,10 @@ mod cancel_safety_tests {
         fn local_addr(&self) -> SocketAddr {
             self.local
         }
+
+        fn snap_data_plane(&self) -> Option<std::net::SocketAddr> {
+            None
+        }
     }
 
     #[derive(Default)]

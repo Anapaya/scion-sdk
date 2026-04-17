@@ -336,6 +336,10 @@ impl UnderlaySocket for UdpUnderlaySocket {
     fn local_addr(&self) -> scion_proto::address::SocketAddr {
         self.bind_addr
     }
+
+    fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        None
+    }
 }
 
 /// An async UDP underlay socket.
@@ -532,5 +536,9 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
 
     fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        None
     }
 }

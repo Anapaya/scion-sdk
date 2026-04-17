@@ -520,6 +520,11 @@ impl SnapTunnel {
     pub async fn writable(&self) -> io::Result<()> {
         self.underlay_socket.writable().await
     }
+
+    /// The data plane the tunnel is connected to.
+    pub fn data_plane_address(&self) -> SocketAddr {
+        self.dataplane_address
+    }
 }
 
 struct BackoffState {

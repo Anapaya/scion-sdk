@@ -13,7 +13,7 @@
 // limitations under the License.
 //! SNAP underlay socket.
 use std::{
-    io,
+    io, net,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll, ready},
@@ -198,6 +198,10 @@ impl UnderlaySocket for SnapUnderlaySocket {
     fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
+
+    fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        Some(self.inner.data_plane_address())
+    }
 }
 
 pub(crate) struct SnapAsyncUdpSocket {
@@ -318,5 +322,9 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
 
     fn local_addr(&self) -> SocketAddr {
         self.socket.local_addr()
+    }
+
+    fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        self.socket.snap_data_plane()
     }
 }

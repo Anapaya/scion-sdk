@@ -302,6 +302,7 @@ impl ScionStackBuilder {
         );
 
         Ok(ScionStack::new(
+            Some(api_url),
             endhost_api_client,
             Arc::new(underlay_stack),
         ))
