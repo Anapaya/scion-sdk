@@ -22,6 +22,7 @@ use std::{
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
+use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -46,6 +47,10 @@ pub struct InterfaceBeaconState {
     /// If beacons which would pass through this interface's AS should be generated and sent on
     /// this interface
     pub generate_forward_beacons: bool,
+    /// The set of ISD-ASes that originate beacons which should be forwarded through this
+    /// interface. Only segments starting from these ASes will be forwarded.
+    /// If `None`, beacons from all originating ASes will be forwarded.
+    pub originator_ases: Option<HashSet<IsdAsn>>,
     /// The interval at which beacons should be sent on this interface
     pub beacon_interval: Duration,
     /// The interval to wait before retrying beacon sending after a failure
@@ -61,12 +66,14 @@ impl InterfaceBeaconState {
         is_core: bool,
         interface: ScionGlobalInterfaceId,
         generate_forward_beacons: bool,
+        originator_ases: Option<HashSet<IsdAsn>>,
     ) -> Self {
         Self {
             interface,
             is_core,
             hop_expiry_units: 255,
             generate_forward_beacons,
+            originator_ases,
             beacon_interval: Duration::from_secs(600),
             beacon_retry_interval: Duration::from_secs(10),
             next_send_time: Utc::now(),
@@ -120,6 +127,7 @@ impl InterfaceBeaconState {
                 BeaconGen::generate_forwarding_beacons(
                     self.interface,
                     self.is_core,
+                    self.originator_ases.as_ref(),
                     segment_registry,
                     topology,
                     current_time.into(),
@@ -175,6 +183,7 @@ impl BeaconGen {
     pub fn generate_forwarding_beacons(
         egress_if: ScionGlobalInterfaceId,
         is_core: bool,
+        originator_ases: Option<&HashSet<IsdAsn>>,
         segments: &SegmentRegistry,
         topology: &ScionTopology,
         timestamp: DateTime<Utc>,
@@ -193,11 +202,15 @@ impl BeaconGen {
 
         let forward_segments: Vec<_> = match is_core {
             true => {
-                // All segments which end at a our AS would be forwarded
+                // All segments which end at our AS and starts from an originating AS would be
+                // forwarded
                 segments
                     .core_segments()
                     .segments_by_end_as(our_as)
                     .iter()
+                    .filter(|seg| {
+                        originator_ases.is_none_or(|oas| oas.contains(&seg.bucket.start_as))
+                    })
                     .map(|seg| {
                         segments
                             .core_segments()
@@ -219,7 +232,7 @@ impl BeaconGen {
 
                     let relevant = match directed.link_type {
                         ScionLinkType::Parent => true, // Our parent will send us beacons
-                        ScionLinkType::Core => false,  // Core links do not exiast for non-core ASes
+                        ScionLinkType::Core => false,  // Core links do not exist for non-core ASes
                         ScionLinkType::Peer => false,  // TODO: Handling peer links
                         ScionLinkType::Child => false,
                     };
@@ -230,8 +243,8 @@ impl BeaconGen {
                     }
                 }).collect();
 
-                // All segments, ending at our AS, which we received on a relevant interface
-                // would be forwarded
+                // All segments, ending at our AS and starting from an originating AS, which we
+                // received on a relevant interface would be forwarded
                 let isd_segment_store = segments
                     .isd_segments(&our_as.isd())
                     .unwrap_or(&empty_segment_store);
@@ -239,6 +252,9 @@ impl BeaconGen {
                 isd_segment_store
                     .segments_by_end_as(our_as)
                     .iter()
+                    .filter(|seg| {
+                        originator_ases.is_none_or(|oas| oas.contains(&seg.bucket.start_as))
+                    })
                     .map(|seg| {
                         isd_segment_store
                             .segment(seg)

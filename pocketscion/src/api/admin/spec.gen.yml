@@ -313,6 +313,17 @@ components:
           type: string
           format: date-time
           description: The next scheduled time to send beacons on this interface
+        originator_ases:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/IsdAsn'
+          description: |-
+            The set of ISD-ASes that originate beacons which should be forwarded through this
+            interface. Only segments starting from these ASes will be forwarded.
+            If `None`, beacons from all originating ASes will be forwarded.
+          uniqueItems: true
     IoAuthServerConfigDto:
       type: object
       description: The I/O configuration of the Auth server.
