@@ -265,6 +265,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+
+[[package]]
 name = "asn1-rs"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,6 +308,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "assert_matches"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
 
 [[package]]
 name = "async-channel"
@@ -540,6 +552,12 @@ name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
@@ -1436,6 +1454,15 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "etherparse"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b119b9796ff800751a220394b8b3613f26dd30c48f254f6837e64c464872d1c7"
+dependencies = [
+ "arrayvec",
 ]
 
 [[package]]
@@ -4012,6 +4039,49 @@ dependencies = [
  "jsonwebtoken",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "scion-sdk-edge-tun"
+version = "0.4.0"
+dependencies = [
+ "ana-gotatun",
+ "anapaya-quinn",
+ "assert_matches",
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "chacha20 0.10.0",
+ "chrono",
+ "etherparse",
+ "http",
+ "httparse",
+ "ipnet",
+ "ntest",
+ "prometheus",
+ "prost",
+ "prost-build",
+ "rand 0.10.0",
+ "rand_xorshift 0.5.0",
+ "rcgen",
+ "rustls",
+ "scion-proto",
+ "scion-sdk-observability",
+ "scion-sdk-quic-scion",
+ "scion-sdk-scion-connect-rpc",
+ "scion-sdk-token-validator",
+ "scion-sdk-utils",
+ "scion-stack",
+ "serde",
+ "serde_json",
+ "squiche",
+ "tempfile",
+ "test-log",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
 ]
 
 [[package]]

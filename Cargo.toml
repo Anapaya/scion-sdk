@@ -66,6 +66,7 @@ aes = "0.8"
 # We use our own version here
 ana-gotatun = { version = "0.2.1-ana.0" }
 anyhow = { version = "1" }
+assert_matches = "1.5"
 arc-swap = "1.7"
 async-channel = "2.3"
 async-trait = "0.1"
@@ -74,6 +75,7 @@ axum-client-ip = "1.3.1"
 bitfield-struct = "0.12.1"
 base64 = "0.22.1"
 buffer-pool = "0.2.1"
+byteorder = "1.5"
 bytes = "1.10"
 bitflags = "2.10"
 chrono = { version = "0.4", features = ["serde"] }
@@ -85,11 +87,13 @@ derive_more = { version = "2.0", features = ["display", "deref"] }
 der = { version = "0.7", features = ["pem", "derive"] }
 ecdsa = { version = "0.16", features = ["arithmetic"] }
 ed25519-dalek = { version = "2.1", features = ["pkcs8", "pem"] }
+etherparse = "0.19"
 foldhash = "0.2"
 futures = "0.3"
 hickory-resolver = { version = "0.25", features = ["tokio", "system-config"] }
 hickory-server = "0.25"
 http = "1.3"
+httparse = "1.10"
 ipnet = "2.11"
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 mockall = "0.14"

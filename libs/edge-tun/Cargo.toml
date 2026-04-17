@@ -1,0 +1,58 @@
+[package]
+name = "scion-sdk-edge-tun"
+version = "0.4.0"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Tunnel packets through a QUIC/SCION connection"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking", "tunnel", "QUIC"]
+
+[dependencies]
+# Local Dependencies
+scion-stack = { workspace = true }
+scion-sdk-token-validator = { workspace = true }
+
+# General Dependencies
+ana-gotatun = { workspace = true }
+async-trait = { workspace = true }
+byteorder = { workspace = true }
+bytes = { workspace = true }
+chacha20 = { workspace = true }
+chrono = { workspace = true }
+etherparse = { workspace = true }
+http = { workspace = true }
+httparse = { workspace = true }
+ipnet = { workspace = true }
+prometheus = { workspace = true }
+prost = { workspace = true }
+anapaya-quinn = { workspace = true }
+rand = { workspace = true }
+rand_xorshift = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
+scion-proto = { workspace = true }
+scion-sdk-observability = { workspace = true }
+scion-sdk-quic-scion = { workspace = true }
+scion-sdk-scion-connect-rpc = { workspace = true }
+scion-sdk-utils = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+ntest = { workspace = true }
+rcgen = { workspace = true }
+squiche = { workspace = true }
+tempfile = { workspace = true }
+test-log = { workspace = true, features = ["trace"] }
+
+[build-dependencies]
+prost-build = { workspace = true }
+
+[lints]
+workspace = true
