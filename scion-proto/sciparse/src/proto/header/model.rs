@@ -330,18 +330,33 @@ impl WireEncode for AddressHeader {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
     use crate::path::model::Path;
 
+    /// Configuration for generating arbitrary [`ScionPacketHeader`] values.
+    ///
+    /// Composes sub-parameters for the address header (host address variant weights)
+    /// and the path.
+    #[derive(Debug, Clone, Default)]
+    pub struct ArbitraryScionPacketHeaderParams {
+        /// Parameters for generating destination host addresses.
+        pub dst_host_addr: <WireHostAddr as Arbitrary>::Parameters,
+        /// Parameters for generating source host addresses.
+        pub src_host_addr: <WireHostAddr as Arbitrary>::Parameters,
+        /// Parameters for generating paths.
+        pub path: <Path as Arbitrary>::Parameters,
+    }
+
     impl Arbitrary for ScionPacketHeader {
-        type Parameters = ();
+        type Parameters = ArbitraryScionPacketHeaderParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
             let traffic_class = any::<u8>();
             let flow_id = 0u32..=0xF_FFFFu32;
             let next_header = any::<u8>();
@@ -349,10 +364,10 @@ mod ptest {
             let dst_ia = any::<IsdAsn>();
             let src_ia = any::<IsdAsn>();
 
-            let dst_host_addr = any::<WireHostAddr>();
-            let src_host_addr = any::<WireHostAddr>();
+            let dst_host_addr = WireHostAddr::arbitrary_with(params.dst_host_addr);
+            let src_host_addr = WireHostAddr::arbitrary_with(params.src_host_addr);
 
-            let path = any::<Path>();
+            let path = Path::arbitrary_with(params.path);
 
             (
                 traffic_class,

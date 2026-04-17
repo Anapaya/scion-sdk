@@ -20,7 +20,7 @@
 
 use crate::{
     address::socket_addr::ScionSocketAddr,
-    core::encode::WireEncode,
+    core::encode::{EncodeError, WireEncode},
     identifier::isd_asn::IsdAsn,
     packet::{
         model::{ScionRawPacket, ScionScmpPacket, ScionUdpPacket},
@@ -97,6 +97,24 @@ impl ClassifiedPacket {
 
         Some(ScionSocketAddr::new(isd_asn, host, dst_port))
     }
+
+    /// Converts the classified packet back into a raw packet.
+    pub fn into_raw(self) -> Result<ScionRawPacket, EncodeError> {
+        match self {
+            ClassifiedPacket::Udp(packet) => packet.into_raw(),
+            ClassifiedPacket::Scmp(packet) => packet.into_raw(),
+            ClassifiedPacket::Other(packet) => Ok(packet),
+        }
+    }
+
+    /// Returns a reference to the SCION packet header.
+    pub fn header(&self) -> &crate::header::model::ScionPacketHeader {
+        match self {
+            ClassifiedPacket::Udp(packet) => &packet.header,
+            ClassifiedPacket::Scmp(packet) => &packet.header,
+            ClassifiedPacket::Other(packet) => &packet.header,
+        }
+    }
 }
 impl WireEncode for ClassifiedPacket {
     fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
@@ -136,21 +154,83 @@ pub enum ClassifyError {
     #[error("malformed SCMP payload: {0}")]
     MalformedScmp(crate::core::view::ViewConversionError),
 }
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::{
+        header::model::ScionPacketHeader,
+        packet::model::ScionPacket,
+        payload::{ProtocolNumber, scmp::model::ScmpMessage, udp::model::UdpDatagram},
+    };
+
+    /// Configuration for generating arbitrary [`ClassifiedPacket`] values.
+    ///
+    /// Controls the relative probability of each classified packet variant.
+    ///
+    /// Default weights: `udp = 1, scmp = 1, other = 1`.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryClassifiedPacketParams {
+        /// Weight for generating UDP packets.
+        pub udp: u32,
+        /// Weight for generating SCMP packets.
+        pub scmp: u32,
+        /// Weight for generating raw (other) packets.
+        pub other: u32,
+        /// Parameters for generating the underlying SCION packet header.
+        pub header_params: <ScionPacketHeader as Arbitrary>::Parameters,
+        /// Parameters for generating SCMP payloads.
+        pub scmp_params: <ScmpMessage as Arbitrary>::Parameters,
+    }
+    impl Default for ArbitraryClassifiedPacketParams {
+        fn default() -> Self {
+            Self {
+                udp: 1,
+                scmp: 1,
+                other: 1,
+                header_params: Default::default(),
+                scmp_params: Default::default(),
+            }
+        }
+    }
 
     impl Arbitrary for ClassifiedPacket {
-        type Parameters = ();
+        type Parameters = ArbitraryClassifiedPacketParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            let hp = params.header_params;
             prop_oneof![
-                any::<ScionUdpPacket>().prop_map(ClassifiedPacket::Udp),
-                any::<ScionScmpPacket>().prop_map(ClassifiedPacket::Scmp),
-                any::<ScionRawPacket>().prop_map(ClassifiedPacket::Other),
+                params.udp => (
+                    ScionPacketHeader::arbitrary_with(hp.clone()),
+                    any::<UdpDatagram>(),
+                )
+                    .prop_map(|(mut header, payload)| {
+                        header.common.next_header = ProtocolNumber::Udp.into();
+                        ClassifiedPacket::Udp(ScionPacket { header, payload })
+                    }),
+                params.scmp => (
+                    ScionPacketHeader::arbitrary_with(hp.clone()),
+                    ScmpMessage::arbitrary_with(params.scmp_params),
+                )
+                    .prop_map(|(mut header, payload)| {
+                        header.common.next_header = ProtocolNumber::Scmp.into();
+                        ClassifiedPacket::Scmp(ScionPacket { header, payload })
+                    }),
+                params.other => (
+                    ScionPacketHeader::arbitrary_with(hp),
+                    proptest::collection::vec(any::<u8>(), 0..2048),
+                )
+                    .prop_map(|(mut header, payload)| {
+                        header.common.next_header = match header.common.next_header {
+                            17 => 255, // Avoid generating UDP next_header for the Other variant
+                            202 => 255, // Avoid generating SCMP next_header for the Other variant
+                            v => v,
+                        };
+                        ClassifiedPacket::Other(ScionPacket { header, payload })
+                    }),
             ]
             .boxed()
         }

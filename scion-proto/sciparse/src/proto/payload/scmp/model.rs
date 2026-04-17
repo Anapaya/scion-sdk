@@ -63,7 +63,6 @@ use crate::{
 /// There are separate enum types [`ScmpErrorMessage`] and [`ScmpInformationalMessage`] that only
 /// include error and informational messages, respectively.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum ScmpMessage {
     /// An SCMP DestinationUnreachable message.
     ///
@@ -1324,11 +1323,98 @@ impl From<ScmpMessageUnknown> for ScmpMessage {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
+
+    /// Configuration for generating arbitrary [`ScmpMessage`] values.
+    ///
+    /// Controls the relative probability of each SCMP message variant being generated.
+    ///
+    /// Default weights: all variants = 1.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryScmpMessageParams {
+        /// Weight for DestinationUnreachable messages.
+        pub destination_unreachable: u32,
+        /// Weight for PacketTooBig messages.
+        pub packet_too_big: u32,
+        /// Weight for ParameterProblem messages.
+        pub parameter_problem: u32,
+        /// Weight for ExternalInterfaceDown messages.
+        pub external_interface_down: u32,
+        /// Weight for InternalConnectivityDown messages.
+        pub internal_connectivity_down: u32,
+        /// Weight for EchoRequest messages.
+        pub echo_request: u32,
+        /// Weight for EchoReply messages.
+        pub echo_reply: u32,
+        /// Weight for TracerouteRequest messages.
+        pub traceroute_request: u32,
+        /// Weight for TracerouteReply messages.
+        pub traceroute_reply: u32,
+        /// Weight for Unknown messages.
+        pub unknown: u32,
+    }
+    impl Default for ArbitraryScmpMessageParams {
+        fn default() -> Self {
+            Self {
+                destination_unreachable: 1,
+                packet_too_big: 1,
+                parameter_problem: 1,
+                external_interface_down: 1,
+                internal_connectivity_down: 1,
+                echo_request: 1,
+                echo_reply: 1,
+                traceroute_request: 1,
+                traceroute_reply: 1,
+                unknown: 1,
+            }
+        }
+    }
+
+    impl Arbitrary for ScmpMessage {
+        type Parameters = ArbitraryScmpMessageParams;
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                params.destination_unreachable =>
+                    any::<ScmpDestinationUnreachable>()
+                        .prop_map(ScmpMessage::DestinationUnreachable),
+                params.packet_too_big =>
+                    any::<ScmpPacketTooBig>()
+                        .prop_map(ScmpMessage::PacketTooBig),
+                params.parameter_problem =>
+                    any::<ScmpParameterProblem>()
+                        .prop_map(ScmpMessage::ParameterProblem),
+                params.external_interface_down =>
+                    any::<ScmpExternalInterfaceDown>()
+                        .prop_map(ScmpMessage::ExternalInterfaceDown),
+                params.internal_connectivity_down =>
+                    any::<ScmpInternalConnectivityDown>()
+                        .prop_map(ScmpMessage::InternalConnectivityDown),
+                params.echo_request =>
+                    any::<ScmpEchoRequest>()
+                        .prop_map(ScmpMessage::EchoRequest),
+                params.echo_reply =>
+                    any::<ScmpEchoReply>()
+                        .prop_map(ScmpMessage::EchoReply),
+                params.traceroute_request =>
+                    any::<ScmpTracerouteRequest>()
+                        .prop_map(ScmpMessage::TracerouteRequest),
+                params.traceroute_reply =>
+                    any::<ScmpTracerouteReply>()
+                        .prop_map(ScmpMessage::TracerouteReply),
+                params.unknown =>
+                    any::<ScmpMessageUnknown>()
+                        .prop_map(ScmpMessage::Unknown),
+            ]
+            .boxed()
+        }
+    }
 
     impl Arbitrary for ScmpMessageUnknown {
         type Parameters = ();

@@ -117,7 +117,7 @@ impl StandardPath {
         Self {
             path_meta: MetaHeader {
                 current_info_field: InfoFieldIndex::new_unchecked(sciparse_path.current_info_field),
-                current_hop_field: HopFieldIndex::new_unchecked(sciparse_path.curr_hop_field),
+                current_hop_field: HopFieldIndex::new_unchecked(sciparse_path.current_hop_field),
                 reserved: MetaReserved::new_unchecked(0),
                 segment_lengths: [
                     SegmentLength::new_unchecked(seg1),

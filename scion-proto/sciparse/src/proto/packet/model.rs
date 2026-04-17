@@ -19,7 +19,7 @@ use std::{fmt::Debug, ops::Deref};
 use crate::{
     address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
     core::{
-        encode::{InvalidStructureError, WireEncode},
+        encode::{EncodeError, InvalidStructureError, WireEncode},
         view::{View, ViewConversionError},
     },
     header::{
@@ -43,6 +43,28 @@ pub struct ScionPacket<T: PayloadEncode> {
     pub header: ScionPacketHeader,
     /// Payload
     pub payload: T,
+}
+impl<T: PayloadEncode> ScionPacket<T> {
+    /// Converts this packet into a raw packet with an owned `Vec<u8>` payload by encoding the
+    /// payload
+    pub fn into_raw(self) -> Result<ScionRawPacket, EncodeError> {
+        let header_size = self.header.required_size();
+        let payload_size = self.payload.required_size(header_size);
+        let mut buf = vec![0u8; payload_size];
+        let size = self
+            .payload
+            .encode(&mut buf[..], &self.header.address, header_size)?;
+
+        debug_assert_eq!(
+            size, payload_size,
+            "Encoded payload size does not match expected size"
+        );
+
+        Ok(ScionPacket {
+            header: self.header,
+            payload: buf,
+        })
+    }
 }
 impl Debug for ScionPacket<Vec<u8>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -391,20 +413,28 @@ impl Debug for ScionUdpPacket {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
     use proptest::collection;
 
     use super::*;
 
+    /// Configuration for generating arbitrary [`ScionRawPacket`] values.
+    #[derive(Debug, Clone, Default)]
+    pub struct ArbitraryScionRawPacketParams {
+        /// Parameters for generating the SCION packet header.
+        pub header: <ScionPacketHeader as Arbitrary>::Parameters,
+    }
+
     impl Arbitrary for ScionRawPacket {
-        type Parameters = ();
+        type Parameters = ArbitraryScionRawPacketParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
             (
-                any::<ScionPacketHeader>(),
+                ScionPacketHeader::arbitrary_with(params.header),
                 collection::vec(any::<u8>(), 0..2048),
             )
                 .prop_map(|(header, payload)| ScionPacket { header, payload })
@@ -412,12 +442,22 @@ mod ptest {
         }
     }
 
+    /// Configuration for generating arbitrary [`ScionUdpPacket`] values.
+    #[derive(Debug, Clone, Default)]
+    pub struct ArbitraryScionUdpPacketParams {
+        /// Parameters for generating the SCION packet header.
+        pub header: <ScionPacketHeader as Arbitrary>::Parameters,
+    }
+
     impl Arbitrary for ScionUdpPacket {
-        type Parameters = ();
+        type Parameters = ArbitraryScionUdpPacketParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            (any::<ScionPacketHeader>(), any::<UdpDatagram>())
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            (
+                ScionPacketHeader::arbitrary_with(params.header),
+                any::<UdpDatagram>(),
+            )
                 .prop_map(|(mut header, payload)| {
                     header.common.next_header = ProtocolNumber::Udp.into();
                     ScionPacket { header, payload }
@@ -426,12 +466,24 @@ mod ptest {
         }
     }
 
+    /// Configuration for generating arbitrary [`ScionScmpPacket`] values.
+    #[derive(Debug, Clone, Default)]
+    pub struct ArbitraryScionScmpPacketParams {
+        /// Parameters for generating the SCION packet header.
+        pub header: <ScionPacketHeader as Arbitrary>::Parameters,
+        /// Parameters for generating the SCMP message payload.
+        pub scmp_message: <ScmpMessage as Arbitrary>::Parameters,
+    }
+
     impl Arbitrary for ScionScmpPacket {
-        type Parameters = ();
+        type Parameters = ArbitraryScionScmpPacketParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            (any::<ScionPacketHeader>(), any::<ScmpMessage>())
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            (
+                ScionPacketHeader::arbitrary_with(params.header),
+                ScmpMessage::arbitrary_with(params.scmp_message),
+            )
                 .prop_map(|(mut header, payload)| {
                     header.common.next_header = ProtocolNumber::Scmp.into();
                     ScionPacket { header, payload }

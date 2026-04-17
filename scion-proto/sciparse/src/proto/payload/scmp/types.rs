@@ -244,8 +244,9 @@ impl IntoUnalignedWrite for ScmpParameterProblemCode {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     // note: can't use derive because of the `Unknown` variants, so we implement `Arbitrary`
     // manually
 
@@ -253,29 +254,180 @@ mod ptest {
 
     use super::*;
 
+    /// Configuration for generating arbitrary [`ScmpMessageType`] values.
+    ///
+    /// Controls the relative probability of each variant being generated.
+    ///
+    /// Default weights: all known types = 1, unknown = 1.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryScmpMessageTypeParams {
+        /// Weight for DestinationUnreachable.
+        pub destination_unreachable: u32,
+        /// Weight for PacketTooBig.
+        pub packet_too_big: u32,
+        /// Weight for ParameterProblem.
+        pub parameter_problem: u32,
+        /// Weight for ExternalInterfaceDown.
+        pub external_interface_down: u32,
+        /// Weight for InternalConnectivityDown.
+        pub internal_connectivity_down: u32,
+        /// Weight for EchoRequest.
+        pub echo_request: u32,
+        /// Weight for EchoReply.
+        pub echo_reply: u32,
+        /// Weight for TracerouteRequest.
+        pub traceroute_request: u32,
+        /// Weight for TracerouteReply.
+        pub traceroute_reply: u32,
+        /// Weight for Unknown (random byte not matching known types).
+        pub unknown: u32,
+    }
+    impl Default for ArbitraryScmpMessageTypeParams {
+        fn default() -> Self {
+            Self {
+                destination_unreachable: 1,
+                packet_too_big: 1,
+                parameter_problem: 1,
+                external_interface_down: 1,
+                internal_connectivity_down: 1,
+                echo_request: 1,
+                echo_reply: 1,
+                traceroute_request: 1,
+                traceroute_reply: 1,
+                unknown: 1,
+            }
+        }
+    }
+
     impl Arbitrary for ScmpMessageType {
-        type Parameters = ();
+        type Parameters = ArbitraryScmpMessageTypeParams;
         type Strategy = BoxedStrategy<Self>;
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            any::<u8>().prop_map(ScmpMessageType::from).boxed()
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                params.destination_unreachable => Just(ScmpMessageType::DestinationUnreachable),
+                params.packet_too_big => Just(ScmpMessageType::PacketTooBig),
+                params.parameter_problem => Just(ScmpMessageType::ParameterProblem),
+                params.external_interface_down => Just(ScmpMessageType::ExternalInterfaceDown),
+                params.internal_connectivity_down => Just(ScmpMessageType::InternalConnectivityDown),
+                params.echo_request => Just(ScmpMessageType::EchoRequest),
+                params.echo_reply => Just(ScmpMessageType::EchoReply),
+                params.traceroute_request => Just(ScmpMessageType::TracerouteRequest),
+                params.traceroute_reply => Just(ScmpMessageType::TracerouteReply),
+                params.unknown => any::<u8>().prop_map(|v| {
+                    let mut v = v;
+                    while !matches!(ScmpMessageType::from(v), ScmpMessageType::Unknown(_)) {
+                        v = v.wrapping_add(1);
+                    }
+                    ScmpMessageType::Unknown(v)
+                }),
+            ]
+            .boxed()
+        }
+    }
+
+    /// Configuration for generating arbitrary [`ScmpDestinationUnreachableCode`] values.
+    ///
+    /// Controls the relative probability of known vs unknown codes.
+    ///
+    /// Default weights: `known = 7, unknown = 1`.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryScmpDestinationUnreachableCodeParams {
+        /// Weight for generating any of the known destination unreachable codes (uniformly).
+        pub known: u32,
+        /// Weight for generating unknown (unassigned) codes.
+        pub unknown: u32,
+    }
+    impl Default for ArbitraryScmpDestinationUnreachableCodeParams {
+        fn default() -> Self {
+            Self {
+                known: 7,
+                unknown: 1,
+            }
         }
     }
 
     impl Arbitrary for ScmpDestinationUnreachableCode {
-        type Parameters = ();
+        type Parameters = ArbitraryScmpDestinationUnreachableCodeParams;
         type Strategy = BoxedStrategy<Self>;
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            any::<u8>()
-                .prop_map(ScmpDestinationUnreachableCode::from)
-                .boxed()
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                params.known => prop::sample::select(vec![
+                    ScmpDestinationUnreachableCode::NoRouteToDestination,
+                    ScmpDestinationUnreachableCode::CommunicationAdministrativelyDenied,
+                    ScmpDestinationUnreachableCode::BeyondScopeOfSourceAddress,
+                    ScmpDestinationUnreachableCode::AddressUnreachable,
+                    ScmpDestinationUnreachableCode::PortUnreachable,
+                    ScmpDestinationUnreachableCode::SourceAddressFailedIngressEgressPolicy,
+                    ScmpDestinationUnreachableCode::RejectRouteToDestination,
+                ]),
+                params.unknown => (7u8..=255)
+                    .prop_map(ScmpDestinationUnreachableCode::Unassigned),
+            ]
+            .boxed()
+        }
+    }
+
+    /// Configuration for generating arbitrary [`ScmpParameterProblemCode`] values.
+    ///
+    /// Controls the relative probability of known vs unknown codes.
+    ///
+    /// Default weights: `known = 5, unknown = 1`.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryScmpParameterProblemCodeParams {
+        /// Weight for generating any of the known parameter problem codes (uniformly).
+        pub known: u32,
+        /// Weight for generating unknown codes.
+        pub unknown: u32,
+    }
+    impl Default for ArbitraryScmpParameterProblemCodeParams {
+        fn default() -> Self {
+            Self {
+                known: 5,
+                unknown: 1,
+            }
         }
     }
 
     impl Arbitrary for ScmpParameterProblemCode {
-        type Parameters = ();
+        type Parameters = ArbitraryScmpParameterProblemCodeParams;
         type Strategy = BoxedStrategy<Self>;
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            any::<u8>().prop_map(ScmpParameterProblemCode::from).boxed()
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                params.known => prop::sample::select(vec![
+                    ScmpParameterProblemCode::ErroneousHeaderField,
+                    ScmpParameterProblemCode::UnknownNextHdrType,
+                    ScmpParameterProblemCode::InvalidCommonHeader,
+                    ScmpParameterProblemCode::UnknownScionVersion,
+                    ScmpParameterProblemCode::FlowIdRequired,
+                    ScmpParameterProblemCode::InvalidPacketSize,
+                    ScmpParameterProblemCode::UnknownPathType,
+                    ScmpParameterProblemCode::UnknownAddressFormat,
+                    ScmpParameterProblemCode::InvalidAddressHeader,
+                    ScmpParameterProblemCode::InvalidSourceAddress,
+                    ScmpParameterProblemCode::InvalidDestinationAddress,
+                    ScmpParameterProblemCode::NonLocalDelivery,
+                    ScmpParameterProblemCode::InvalidPath,
+                    ScmpParameterProblemCode::UnknownHopFieldConsIngressInterface,
+                    ScmpParameterProblemCode::UnknownHopFieldConsEgressInterface,
+                    ScmpParameterProblemCode::InvalidHopFieldMac,
+                    ScmpParameterProblemCode::PathExpired,
+                    ScmpParameterProblemCode::InvalidSegmentChange,
+                    ScmpParameterProblemCode::InvalidExtensionHeader,
+                    ScmpParameterProblemCode::UnknownHopByHopOption,
+                    ScmpParameterProblemCode::UnknownEndToEndOption,
+                ]),
+                params.unknown => any::<u8>().prop_map(|v| {
+                    let mut v = v;
+                    while !matches!(
+                        ScmpParameterProblemCode::from(v),
+                        ScmpParameterProblemCode::Unassigned(_)
+                    ) {
+                        v = v.wrapping_add(1);
+                    }
+                    ScmpParameterProblemCode::Unassigned(v)
+                }),
+            ]
+            .boxed()
         }
     }
 }

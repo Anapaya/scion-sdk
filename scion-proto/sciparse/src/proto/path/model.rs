@@ -128,29 +128,62 @@ impl WireEncode for Path {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
     use crate::path::{model::Path, types::PathType};
 
+    /// Configuration for generating arbitrary [`Path`] values.
+    ///
+    /// Controls the relative probability of each path variant being generated,
+    /// and allows passing sub-parameters to the generators for specific path types.
+    ///
+    /// Default weights: `standard = 8, one_hop = 2, empty = 1, unsupported = 1`.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryPathParams {
+        /// Weight for generating standard SCION paths.
+        pub standard: u32,
+        /// Weight for generating one-hop paths.
+        pub one_hop: u32,
+        /// Weight for generating empty paths.
+        pub empty: u32,
+        /// Weight for generating unsupported path types.
+        pub unsupported: u32,
+        /// Parameters for generating standard paths.
+        pub standard_params: <StandardPath as Arbitrary>::Parameters,
+        /// Parameters for generating one-hop paths.
+        pub one_hop_params: <OneHopPath as Arbitrary>::Parameters,
+    }
+    impl Default for ArbitraryPathParams {
+        fn default() -> Self {
+            Self {
+                standard: 8,
+                one_hop: 2,
+                empty: 1,
+                unsupported: 1,
+                standard_params: Default::default(),
+                one_hop_params: Default::default(),
+            }
+        }
+    }
+
     impl Arbitrary for Path {
-        type Parameters = ();
+        type Parameters = ArbitraryPathParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            let standard_path = any::<StandardPath>();
-            let onehop_path = any::<OneHopPath>();
-
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
             prop_oneof![
-                8 => standard_path.prop_map(Path::Standard),
-                2 => onehop_path.prop_map(Path::OneHop),
-                1 => Just(Path::Empty),
-                // Unrecognized path type
-                1 => (
+                params.standard => StandardPath::arbitrary_with(params.standard_params)
+                    .prop_map(Path::Standard),
+                params.one_hop => OneHopPath::arbitrary_with(params.one_hop_params)
+                    .prop_map(Path::OneHop),
+                params.empty => Just(Path::Empty),
+                params.unsupported => (
                     any::<PathType>(),
-                    ::proptest::collection::vec(any::<u8>(), 0..512)
+                    ::proptest::collection::vec(any::<u8>(), 0..512),
                 )
                     .prop_map(|(path_type, data)| {
                         // Should not be a compatible path type
@@ -161,7 +194,10 @@ mod ptest {
 
                         let data_len = data.len() / 4 * 4; // Truncate to multiple of 4 bytes
                         let data_truncated = &data[..data_len];
-                        Path::Unsupported { path_type, data: data_truncated.to_vec() }
+                        Path::Unsupported {
+                            path_type,
+                            data: data_truncated.to_vec(),
+                        }
                     }),
             ]
             .boxed()

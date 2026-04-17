@@ -235,7 +235,6 @@ impl_from!(ServiceAddr, WireHostAddr, |value| {
 /// Includes the `Unknown` variant to represent address types that are not recognized by this
 /// version of the library or are invalid.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum WireHostAddr {
     /// IPv4 address.
     V4(Ipv4Addr),
@@ -244,10 +243,6 @@ pub enum WireHostAddr {
     /// Service address.
     Svc(ServiceAddr),
     /// Unknown address type. Raw bytes.
-    #[cfg_attr(
-        feature = "proptest",
-        proptest(strategy = "arbitrary_unknown_wire_host_addr()")
-    )]
     Unknown {
         /// Address type identifier.
         id: u8,
@@ -429,31 +424,10 @@ impl_from!(ScionHostAddr, WireHostAddr, |value| {
         ScionHostAddr::Svc(svc) => WireHostAddr::Svc(svc),
     }
 });
-#[cfg(feature = "proptest")]
-fn arbitrary_unknown_wire_host_addr() -> impl proptest::prelude::Strategy<Value = WireHostAddr> {
-    use proptest::prelude::*;
-
-    (
-        2u8..=3,
-        proptest::collection::vec(prop::num::u8::ANY, 4..=16),
-    )
-        .prop_map(|(id, bytes_vec)| {
-            // Take chunks of 4 bytes to keep alignment
-            let chunks = bytes_vec.chunks_exact(4);
-            let mut bytes = ArrayVec::new();
-            for chunk in chunks {
-                for &b in chunk {
-                    bytes.push(b);
-                }
-            }
-            WireHostAddr::Unknown { id, bytes }
-        })
-}
 
 /// Host Address types on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-#[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
 pub enum WireHostAddrType {
     /// IPv4 address.
     IPV4 = 0b0000,
@@ -462,10 +436,6 @@ pub enum WireHostAddrType {
     /// Service address.
     Service = 0b0100,
     /// Unknown address type.
-    #[cfg_attr(
-        feature = "proptest",
-        proptest(strategy = "arbitrary_unknown_wire_host_addr_type()")
-    )]
     Unknown {
         /// Address type identifier.
         id: u8,
@@ -512,14 +482,6 @@ impl From<WireHostAddrType> for u8 {
     }
 }
 
-#[cfg(feature = "proptest")]
-fn arbitrary_unknown_wire_host_addr_type()
--> impl proptest::prelude::Strategy<Value = WireHostAddrType> {
-    use proptest::prelude::*;
-    let size_strategy = prop::num::u8::ANY.prop_map(|size| ((size % 4) + 1) * 4);
-    (2u8..=3, size_strategy).prop_map(|(id, size)| WireHostAddrType::Unknown { id, size })
-}
-
 /// Error indicating a mismatch between expected and actual address sizes.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
@@ -532,4 +494,121 @@ pub struct HostAddressSizeError {
     pub expected_size: usize,
     /// Provided buffer size in bytes
     pub actual_size: usize,
+}
+
+/// Support for [`proptest::arbitrary`].
+#[cfg(feature = "proptest")]
+pub mod ptest {
+    use ::proptest::prelude::*;
+
+    use super::*;
+
+    /// Configuration for generating arbitrary [`WireHostAddr`] values.
+    ///
+    /// Controls the relative probability of each variant being generated.
+    /// Weights are relative to each other — e.g., setting `v4` and `v6` to `1`
+    /// and `svc` and `unknown` to `0` will only generate IPv4 and IPv6 addresses.
+    ///
+    /// Default weights: `v4 = 3, v6 = 3, svc = 3, unknown = 1`.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryWireHostAddrParams {
+        /// Weight for generating IPv4 addresses.
+        pub v4: u32,
+        /// Weight for generating IPv6 addresses.
+        pub v6: u32,
+        /// Weight for generating service addresses.
+        pub svc: u32,
+        /// Weight for generating unknown address types.
+        pub unknown: u32,
+    }
+    impl Default for ArbitraryWireHostAddrParams {
+        fn default() -> Self {
+            Self {
+                v4: 3,
+                v6: 3,
+                svc: 3,
+                unknown: 1,
+            }
+        }
+    }
+
+    impl Arbitrary for WireHostAddr {
+        type Parameters = ArbitraryWireHostAddrParams;
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                params.v4 => any::<Ipv4Addr>().prop_map(WireHostAddr::V4),
+                params.v6 => any::<Ipv6Addr>().prop_map(WireHostAddr::V6),
+                params.svc => any::<ServiceAddr>().prop_map(WireHostAddr::Svc),
+                params.unknown => arbitrary_unknown_wire_host_addr(),
+            ]
+            .boxed()
+        }
+    }
+
+    fn arbitrary_unknown_wire_host_addr() -> impl Strategy<Value = WireHostAddr> {
+        (
+            2u8..=3,
+            proptest::collection::vec(prop::num::u8::ANY, 4..=16),
+        )
+            .prop_map(|(id, bytes_vec)| {
+                // Take chunks of 4 bytes to keep alignment
+                let chunks = bytes_vec.chunks_exact(4);
+                let mut bytes = ArrayVec::new();
+                for chunk in chunks {
+                    for &b in chunk {
+                        bytes.push(b);
+                    }
+                }
+                WireHostAddr::Unknown { id, bytes }
+            })
+    }
+
+    /// Configuration for generating arbitrary [`WireHostAddrType`] values.
+    ///
+    /// Controls the relative probability of each variant being generated.
+    ///
+    /// Default weights: `ipv4 = 3, ipv6 = 3, service = 3, unknown = 1`.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryWireHostAddrTypeParams {
+        /// Weight for generating IPv4 address types.
+        pub ipv4: u32,
+        /// Weight for generating IPv6 address types.
+        pub ipv6: u32,
+        /// Weight for generating service address types.
+        pub service: u32,
+        /// Weight for generating unknown address types.
+        pub unknown: u32,
+    }
+    impl Default for ArbitraryWireHostAddrTypeParams {
+        fn default() -> Self {
+            Self {
+                ipv4: 3,
+                ipv6: 3,
+                service: 3,
+                unknown: 1,
+            }
+        }
+    }
+
+    impl Arbitrary for WireHostAddrType {
+        type Parameters = ArbitraryWireHostAddrTypeParams;
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                params.ipv4 => Just(WireHostAddrType::IPV4),
+                params.ipv6 => Just(WireHostAddrType::IPV6),
+                params.service => Just(WireHostAddrType::Service),
+                params.unknown => arbitrary_unknown_wire_host_addr_type(),
+            ]
+            .boxed()
+        }
+    }
+
+    fn arbitrary_unknown_wire_host_addr_type() -> impl Strategy<Value = WireHostAddrType> {
+        let size_strategy = prop::num::u8::ANY.prop_map(|size| ((size % 4) + 1) * 4);
+        (2u8..=3, size_strategy).prop_map(|(id, size)| WireHostAddrType::Unknown { id, size })
+    }
 }

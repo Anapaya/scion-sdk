@@ -128,8 +128,9 @@ impl PayloadEncode for UdpDatagram {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;

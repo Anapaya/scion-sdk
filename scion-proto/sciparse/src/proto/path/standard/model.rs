@@ -39,7 +39,7 @@ pub struct StandardPath {
     /// The current info field index
     pub current_info_field: u8,
     /// The current hop field index
-    pub curr_hop_field: u8,
+    pub current_hop_field: u8,
     /// The segments of the path
     pub segments: ArrayVec<[Segment; 3]>,
 }
@@ -68,7 +68,7 @@ impl StandardPath {
 
         StandardPath {
             current_info_field: view.curr_info_field(),
-            curr_hop_field: view.curr_hop_field(),
+            current_hop_field: view.curr_hop_field(),
             segments,
         }
     }
@@ -137,7 +137,7 @@ impl WireEncode for StandardPath {
             return Err("Standard path must contain at least one segment".into());
         }
 
-        if self.curr_hop_field as usize >= self.hop_field_count() {
+        if self.current_hop_field as usize >= self.hop_field_count() {
             return Err("curr_hop_field exceeds total number of hop fields".into());
         }
 
@@ -172,7 +172,7 @@ impl WireEncode for StandardPath {
         // Encode standard path meta information
         unsafe {
             unchecked_bit_range_be_write(buf, SL::CURR_INFO_FIELD_RNG, self.current_info_field);
-            unchecked_bit_range_be_write(buf, SL::CURR_HOP_FIELD_RNG, self.curr_hop_field);
+            unchecked_bit_range_be_write(buf, SL::CURR_HOP_FIELD_RNG, self.current_hop_field);
             unchecked_bit_range_be_write(buf, SL::SEG0_LEN_RNG, seg0);
             unchecked_bit_range_be_write(buf, SL::SEG1_LEN_RNG, seg1);
             unchecked_bit_range_be_write(buf, SL::SEG2_LEN_RNG, seg2);
@@ -406,12 +406,14 @@ impl WireEncode for HopField {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod proptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
 
+    /// Configuration for generating arbitrary [`StandardPath`] values.
     #[derive(Debug, Clone, Default)]
     pub struct ArbitraryPathContext {
         // Not implemented yet, but would allow providing ForwardingKeys for generating valid MACs,
@@ -425,10 +427,9 @@ mod proptest {
         fn arbitrary_with(ctx: Self::Parameters) -> Self::Strategy {
             (
                 any::<u8>(),
-                any::<u8>(),
                 prop::collection::vec(Segment::arbitrary_with(ctx), 1..=3),
             )
-                .prop_map(|(curr_info, curr_hop, segments): (u8, u8, Vec<Segment>)| {
+                .prop_map(|(curr_hop, segments): (u8, Vec<Segment>)| {
                     // A full path can only address up to 63 hops due to the 6-bit limit of the
                     // curr_hop_field.
                     let max_total_hops = StdPathMetaLayout::MAX_TOTAL_HOPS;
@@ -447,16 +448,29 @@ mod proptest {
                         }
                     }
 
-                    let curr_info = curr_info % (segments.len() as u8); // Ensure current_info_field is within bounds
+                    // current_hop must be in range of total hops
+                    let total_hops: usize = segments.iter().map(|s| s.hop_fields.len()).sum();
+                    let curr_hop = match total_hops {
+                        0 => 0,
+                        _ => curr_hop % (total_hops as u8),
+                    };
 
-                    let curr_hop = curr_hop
-                        % (segments.iter().map(|s| s.hop_fields.len()).sum::<usize>() as u8); // Ensure curr_hop_field is within bounds
+                    // current_info_field is defined by which segment the current_hop_field is in
+                    let mut hop_count = 0;
+                    let mut curr_info = 0;
+                    for (i, seg) in segments.iter().enumerate() {
+                        hop_count += seg.hop_fields.len();
+                        if (curr_hop as usize) < hop_count {
+                            curr_info = i as u8;
+                            break;
+                        }
+                    }
 
                     let segments = segments.into_iter().collect();
 
                     StandardPath {
                         current_info_field: curr_info,
-                        curr_hop_field: curr_hop,
+                        current_hop_field: curr_hop,
                         segments,
                     }
                 })

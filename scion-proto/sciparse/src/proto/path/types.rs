@@ -62,18 +62,60 @@ impl From<PathType> for u8 {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
 
+    /// Configuration for generating arbitrary [`PathType`] values.
+    ///
+    /// Controls the relative probability of each variant being generated.
+    ///
+    /// Default weights: `empty = 1, scion = 4, one_hop = 2, epic = 1, colibri = 1, other = 1`.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryPathTypeParams {
+        /// Weight for generating Empty path type.
+        pub empty: u32,
+        /// Weight for generating Scion (standard) path type.
+        pub scion: u32,
+        /// Weight for generating OneHop path type.
+        pub one_hop: u32,
+        /// Weight for generating Epic path type.
+        pub epic: u32,
+        /// Weight for generating Colibri path type.
+        pub colibri: u32,
+        /// Weight for generating Other (unknown) path types.
+        pub other: u32,
+    }
+    impl Default for ArbitraryPathTypeParams {
+        fn default() -> Self {
+            Self {
+                empty: 1,
+                scion: 4,
+                one_hop: 2,
+                epic: 1,
+                colibri: 1,
+                other: 1,
+            }
+        }
+    }
+
     impl Arbitrary for PathType {
-        type Parameters = ();
+        type Parameters = ArbitraryPathTypeParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-            any::<u8>().prop_map(PathType::from).boxed()
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                params.empty => Just(PathType::Empty),
+                params.scion => Just(PathType::Scion),
+                params.one_hop => Just(PathType::OneHop),
+                params.epic => Just(PathType::Epic),
+                params.colibri => Just(PathType::Colibri),
+                params.other => (5u8..=255).prop_map(PathType::Other),
+            ]
+            .boxed()
         }
     }
 }

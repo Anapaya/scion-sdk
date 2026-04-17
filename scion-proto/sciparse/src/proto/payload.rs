@@ -67,25 +67,68 @@ impl From<ProtocolNumber> for u8 {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
 
+    /// Configuration for generating arbitrary [`ProtocolNumber`] values.
+    ///
+    /// Controls the relative probability of each protocol number variant being generated.
+    ///
+    /// Default weights: all variants = 1.
+    #[derive(Debug, Clone)]
+    pub struct ArbitraryProtocolNumberParams {
+        /// Weight for TCP protocol.
+        pub tcp: u32,
+        /// Weight for UDP protocol.
+        pub udp: u32,
+        /// Weight for Hop-by-hop options.
+        pub hbh: u32,
+        /// Weight for End-to-End options.
+        pub e2e: u32,
+        /// Weight for SCMP protocol.
+        pub scmp: u32,
+        /// Weight for BFD protocol.
+        pub bfd: u32,
+        /// Weight for other (unknown) protocol numbers.
+        pub other: u32,
+    }
+    impl Default for ArbitraryProtocolNumberParams {
+        fn default() -> Self {
+            Self {
+                tcp: 1,
+                udp: 1,
+                hbh: 1,
+                e2e: 1,
+                scmp: 1,
+                bfd: 1,
+                other: 1,
+            }
+        }
+    }
+
     impl Arbitrary for ProtocolNumber {
-        type Parameters = ();
+        type Parameters = ArbitraryProtocolNumberParams;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
             prop_oneof![
-                1 => Just(ProtocolNumber::Tcp),
-                2 => Just(ProtocolNumber::Udp),
-                1 => Just(ProtocolNumber::Hbh),
-                1 => Just(ProtocolNumber::E2e),
-                2 => Just(ProtocolNumber::Scmp),
-                1 => Just(ProtocolNumber::Bfd),
-                1 => any::<u8>().prop_map(ProtocolNumber::from)
+                params.tcp => Just(ProtocolNumber::Tcp),
+                params.udp => Just(ProtocolNumber::Udp),
+                params.hbh => Just(ProtocolNumber::Hbh),
+                params.e2e => Just(ProtocolNumber::E2e),
+                params.scmp => Just(ProtocolNumber::Scmp),
+                params.bfd => Just(ProtocolNumber::Bfd),
+                params.other => any::<u8>().prop_map(|v| {
+                    let mut v = v;
+                    while !matches!(ProtocolNumber::from(v), ProtocolNumber::Other(_)) {
+                        v = v.wrapping_add(1);
+                    }
+                    ProtocolNumber::Other(v)
+                }),
             ]
             .boxed()
         }

@@ -197,7 +197,7 @@ mod packet_manipulation {
                             let max_valid = if count == 0 { 0 } else { count - 1 };
                             let invalid = max_valid + exceed_by as usize;
                             let clamped = invalid.min(StdPathMetaLayout::MAX_SEGMENT_HOPS);
-                            std_path.curr_hop_field = clamped as u8;
+                            std_path.current_hop_field = clamped as u8;
                         }
                     }
                     PacketModification::InvalidCurrentInfo(exceed_by) => {

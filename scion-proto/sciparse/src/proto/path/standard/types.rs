@@ -148,8 +148,9 @@ pub fn exp_time_to_duration(exp_time: u8) -> Duration {
     EXP_TIME_UNIT.saturating_mul(exp_time as u32 + 1)
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;

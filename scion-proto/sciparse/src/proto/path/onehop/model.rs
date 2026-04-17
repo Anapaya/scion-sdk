@@ -135,7 +135,7 @@ impl OneHopPath {
 
         let standard_path = StandardPath {
             current_info_field: 0,
-            curr_hop_field: 0,
+            current_hop_field: 0,
             segments: array_vec!(Segment {
                 info_field: info,
                 hop_fields: tiny_vec!(hop2, hop1),
@@ -181,12 +181,14 @@ impl WireEncode for OneHopPath {
     }
 }
 
+/// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
-mod ptest {
+pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
 
+    /// Configuration for generating arbitrary [`OneHopPath`] values.
     #[derive(Debug, Clone, Default)]
     pub struct ArbitraryOneHopPathContext {
         // Not implemented yet, but would allow providing ForwardingKeys for generating valid MACs,

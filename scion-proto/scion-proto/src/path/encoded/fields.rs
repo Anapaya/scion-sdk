@@ -225,6 +225,11 @@ impl EncodedHopField {
         HopField::DURATION_PER_EXP_UNIT * (1 + self.inner[1] as u32)
     }
 
+    /// Returns the expiration time unit of this hop field.
+    pub fn expiration_units(&self) -> u8 {
+        self.inner[1]
+    }
+
     /// Returns the expiration time of this hop field.
     ///
     /// This computes the hop field's expiry time relative to the the
