@@ -61,7 +61,11 @@ pub trait EdgeTunControlPlane: Send + Sync {
     /// `None` for the `requested_address`.
     ///
     /// Returns `None` if no address can be assigned at the moment.
-    fn assign_address(&self, requested_address: Option<IpAddr>) -> Option<IpAddr>;
+    fn assign_address(
+        &self,
+        initiator_static_x25519: x25519::PublicKey,
+        requested_address: Option<IpAddr>,
+    ) -> Option<IpAddr>;
 
     /// Returns the advertised routes for the given client identity when the client
     /// calls `/anapaya.edgetun.v1/request_routes`.

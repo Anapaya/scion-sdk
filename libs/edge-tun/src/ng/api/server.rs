@@ -223,17 +223,7 @@ fn handle_register_identity<C: EdgeTunControlPlane>(
         )
     })?;
 
-    let initiator_key_bytes: [u8; 32] = request
-        .initiator_static_x25519
-        .as_slice()
-        .try_into()
-        .map_err(|_| {
-            CrpcError::new(
-                CrpcErrorCode::InvalidArgument,
-                "initiator_static_x25519 must be 32 bytes".to_string(),
-            )
-        })?;
-    let initiator_key = x25519::PublicKey::from(initiator_key_bytes);
+    let initiator_key = extract_x25519_public_key(request.initiator_static_x25519.as_slice())?;
 
     let psk_share = psk_bytes_to_option(&request.psk_share)?;
 
@@ -248,6 +238,16 @@ fn handle_register_identity<C: EdgeTunControlPlane>(
     Ok(response.encode_to_vec())
 }
 
+fn extract_x25519_public_key(bytes: &[u8]) -> Result<x25519::PublicKey, CrpcError> {
+    let key_bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+        CrpcError::new(
+            CrpcErrorCode::InvalidArgument,
+            "initiator_static_x25519 must be 32 bytes".to_string(),
+        )
+    })?;
+    Ok(x25519::PublicKey::from(key_bytes))
+}
+
 /// Handles a `/anapaya.edgetun.v1/assign_addresses` request.
 fn handle_assign_addresses<C: EdgeTunControlPlane>(
     req: &scion_sdk_quic_scion::h3::request::H3Request,
@@ -260,6 +260,8 @@ fn handle_assign_addresses<C: EdgeTunControlPlane>(
             format!("failed to decode request: {e}"),
         )
     })?;
+
+    let initiator_key = extract_x25519_public_key(request.client_identity.as_slice())?;
 
     // The trait only accepts a single address request.
     if request.requested_addresses.len() > 1 {
@@ -276,7 +278,7 @@ fn handle_assign_addresses<C: EdgeTunControlPlane>(
         .map(ip_address_range_to_addr)
         .transpose()?;
 
-    let assigned = control_plane.assign_address(requested_address);
+    let assigned = control_plane.assign_address(initiator_key, requested_address);
 
     let response = AddressAssignResponse {
         assigned_addresses: assigned.map(addr_to_ip_address_range).into_iter().collect(),

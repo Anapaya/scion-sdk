@@ -206,7 +206,11 @@ impl EdgeTunControlPlane for FakeControlPlane {
         (self.responder_key, psk_share)
     }
 
-    fn assign_address(&self, _requested_address: Option<IpAddr>) -> Option<IpAddr> {
+    fn assign_address(
+        &self,
+        _identity: x25519::PublicKey,
+        _requested_address: Option<IpAddr>,
+    ) -> Option<IpAddr> {
         self.assigned_addr
     }
 
