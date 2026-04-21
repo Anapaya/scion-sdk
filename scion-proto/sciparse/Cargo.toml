@@ -3,6 +3,13 @@ name = "sciparse"
 publish = true
 version = "0.5.0"
 edition = { workspace = true }
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Zero-copy SCION packet parsing, serialization and control plane components"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
+
 
 [dependencies]
 aes = { workspace = true }
