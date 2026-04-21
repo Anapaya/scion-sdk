@@ -1,6 +1,6 @@
 [package]
 name = "hsd-api-client"
-version = "0.5.0"
+version = "0.5.1"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
