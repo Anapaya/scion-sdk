@@ -1,0 +1,3 @@
+# Windows use \r\n as line endings. Git automatically deals with that, but that leads to files being
+# modified inadvertently when running on windows (e.g. CI steps).
+* text=auto eol=lf
