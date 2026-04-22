@@ -2,6 +2,9 @@
 name = "sciparse-interop"
 publish = false
 edition = { workspace = true }
+license = "Apache-2.0"
+description = "Interop tests for sciparse"
+repository = "https://github.com/anapaya/scion-sdk"
 
 [dependencies]
 bytes = { workspace = true }

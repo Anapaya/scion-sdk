@@ -1,0 +1,28 @@
+# Copyright 2026 Anapaya Systems
+name: Cargo Publish Check
+description: Sanity check for crates to ensure they can be published to crates.io.
+
+inputs:
+  working-directory:
+    description: Path to the cargo workspace (used for cache key and cache paths).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify cargo package
+      working-directory: ${{ inputs.working-directory }}
+      shell: bash
+      env:
+        CARGO_TERM_COLOR: never
+      run: |
+        set -euo pipefail
+        output=$(mktemp)
+        trap 'rm -f "$output"' EXIT
+
+        cargo package --no-verify 2>&1 | tee "$output"
+
+        if grep -qE "warning:" "$output"; then
+          echo "cargo package produced warnings that may prevent publishing to crates.io"
+          exit 1
+        fi

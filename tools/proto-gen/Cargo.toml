@@ -2,6 +2,9 @@
 name = "proto-gen"
 edition.workspace = true
 publish = false
+license = "Apache-2.0"
+description = "A tool to compile all protobuf definitions to Rust code"
+repository = "https://github.com/anapaya/scion-sdk"
 
 [dependencies]
 anyhow = { workspace = true }

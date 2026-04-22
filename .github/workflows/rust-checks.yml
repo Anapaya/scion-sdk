@@ -54,3 +54,7 @@ jobs:
         uses: ./.github/actions/rust-cache-save
         with:
           workspace: ${{ env.workspace }}
+      - name: Check crates publishing
+        uses: ./.github/actions/cargo-publish-check
+        with:
+          working-directory: ${{ env.workspace }}
