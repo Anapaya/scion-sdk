@@ -19,47 +19,47 @@ edition = "2024"
 
 [workspace.dependencies]
 # Local Crates
-dhsd = { path = "libs/dhsd", version = "0.5.1" }
+dhsd = { path = "libs/dhsd", version = "0.5.2" }
 
-endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.5.1" }
-endhost-api = { path = "endhost-api/endhost-api", version = "0.5.1" }
-endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.5.1" }
-endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.5.1" }
+endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.5.2" }
+endhost-api = { path = "endhost-api/endhost-api", version = "0.5.2" }
+endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.5.2" }
+endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.5.2" }
 
-endhost-api-discovery-client = { path = "endhost-api-discovery/ead-client", version = "0.5.1" }
-endhost-api-discovery-api = { path = "endhost-api-discovery/ead-api", version = "0.5.1" }
-endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", version = "0.5.1" }
+endhost-api-discovery-client = { path = "endhost-api-discovery/ead-client", version = "0.5.2" }
+endhost-api-discovery-api = { path = "endhost-api-discovery/ead-api", version = "0.5.2" }
+endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", version = "0.5.2" }
 
 
 # hsd-api = { path = "hsd-api/hsd-api", version = "0.2" }
 # hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.2" }
 # hsd-api-client = { path = "hsd-api/hsd-api-client", version = "0.3" }
-hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.5.1" }
+hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.5.2" }
 
-anapaya-aa-protobuf = { path = "anapaya-aa/anapaya-aa-protobuf", version = "0.5.1" }
+anapaya-aa-protobuf = { path = "anapaya-aa/anapaya-aa-protobuf", version = "0.5.2" }
 
-scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.5.1" }
+scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.5.2" }
 # scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
-scion-sdk-observability = { path = "libs/observability", version = "0.5.1" }
-scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.5.1" }
-scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.5.1" }
-scion-sdk-scion-connect-rpc = { path = "libs/scion-connect-rpc", version = "0.5.1" }
-scion-sdk-trc = { path = "libs/trc", version = "0.5.1" }
-scion-sdk-token-validator = { path = "libs/token-validator", version = "0.5.1" }
-scion-sdk-utils = { path = "libs/utils", version = "0.5.1" }
+scion-sdk-observability = { path = "libs/observability", version = "0.5.2" }
+scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.5.2" }
+scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.5.2" }
+scion-sdk-scion-connect-rpc = { path = "libs/scion-connect-rpc", version = "0.5.2" }
+scion-sdk-trc = { path = "libs/trc", version = "0.5.2" }
+scion-sdk-token-validator = { path = "libs/token-validator", version = "0.5.2" }
+scion-sdk-utils = { path = "libs/utils", version = "0.5.2" }
 
-pocketscion = { path = "pocketscion", version = "0.5.1" }
+pocketscion = { path = "pocketscion", version = "0.5.2" }
 
-scion-proto = { path = "scion-proto/scion-proto", version = "0.5.1" }
-scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.5.1" }
-sciparse = { path = "scion-proto/sciparse" , version = "0.5.1" }
+scion-proto = { path = "scion-proto/scion-proto", version = "0.5.2" }
+scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.5.2" }
+sciparse = { path = "scion-proto/sciparse" , version = "0.5.2" }
 
-snap-control = { path = "snap/snap-control", version = "0.5.1" }
-snap-dataplane = { path = "snap/snap-dataplane", version = "0.5.1" }
-snap-tun = { path = "snap/snap-tun", version = "0.5.1" }
-snap-tokens = { path = "snap/snap-tokens", version = "0.5.1" }
+snap-control = { path = "snap/snap-control", version = "0.5.2" }
+snap-dataplane = { path = "snap/snap-dataplane", version = "0.5.2" }
+snap-tun = { path = "snap/snap-tun", version = "0.5.2" }
+snap-tokens = { path = "snap/snap-tokens", version = "0.5.2" }
 
-scion-stack = { path = "scion-stack", version = "0.5.1" }
+scion-stack = { path = "scion-stack", version = "0.5.2" }
 
 # General Dependencies
 aes = "0.8"
