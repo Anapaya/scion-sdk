@@ -17,7 +17,7 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use ring::rand::SystemRandom;
-use scion_proto::address::SocketAddr;
+use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
 use squiche::ConnectionId;
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify, mpsc};
@@ -166,7 +166,7 @@ impl ConnectionManager {
     async fn process_pkt(
         &mut self,
         pkt: &mut [u8],
-        from: SocketAddr,
+        from: ScionSocketAddr,
         out: &mut [u8],
     ) -> Result<usize, PacketProcessError> {
         // Parse QUIC header
@@ -175,13 +175,11 @@ impl ConnectionManager {
 
         tracing::debug!(?hdr.scid, ?hdr.dcid, ?from, "Received QUIC packet");
 
-        let (remote_addr, local_addr) = match (
-            from.local_address(),
-            self.socket.local_addr().local_address(),
-        ) {
-            (Some(from), Some(to)) => (from, to),
-            _ => return Err(PacketProcessError::InvalidAddress),
-        };
+        let (remote_addr, local_addr) =
+            match (from.socket_addr(), self.socket.local_addr().socket_addr()) {
+                (Some(from), Some(to)) => (from, to),
+                _ => return Err(PacketProcessError::InvalidAddress),
+            };
 
         let recv_info = squiche::RecvInfo {
             from: remote_addr,
@@ -373,7 +371,7 @@ struct SendDriver {
     conn: Arc<Mutex<squiche::Connection>>,
     socket: Arc<dyn GenericScionUdpSocket>,
     send_notifier: Arc<Notify>,
-    remote_isd_as: scion_proto::address::IsdAsn,
+    remote_isd_as: IsdAsn,
 
     // For connection map cleanup once the send driver exits.
     server_scid: ConnectionId<'static>,
@@ -408,7 +406,7 @@ impl SendDriver {
 
             // Prepare the send future if there is data to send and no pending send.
             if pending_send.is_none() && send_size > 0 {
-                let dst = SocketAddr::from_std(self.remote_isd_as, target_address);
+                let dst = ScionSocketAddr::from_std(self.remote_isd_as, target_address);
 
                 // We need to move the send buffer into the future, once the future completes,
                 // return the original buffer so that it can be reused for the next send.

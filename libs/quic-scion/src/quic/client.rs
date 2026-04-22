@@ -20,7 +20,7 @@ use ring::{
     error::Unspecified,
     rand::{SecureRandom, SystemRandom},
 };
-use scion_proto::address::{IsdAsn, SocketAddr};
+use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -60,7 +60,7 @@ impl QuicConnection {
     /// Creates a new QUIC connection over SCION.
     pub async fn new(
         server_name: Option<String>,
-        remote: SocketAddr,
+        remote: ScionSocketAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         mut quiche_config: squiche::Config,
     ) -> Result<Self, QuicConnectionError> {
@@ -68,10 +68,10 @@ impl QuicConnection {
 
         let local_addr = socket
             .local_addr()
-            .local_address()
+            .socket_addr()
             .ok_or(QuicConnectionError::InvalidSocketLocalAddress)?;
         let remote_addr = remote
-            .local_address()
+            .socket_addr()
             .ok_or(QuicConnectionError::InvalidRemoteAddress)?;
 
         let quic_tx_notifier = Arc::new(tokio::sync::Notify::new());
@@ -239,7 +239,7 @@ impl QuicConnectionDriver {
 
             // Prepare the send future if there is data to send and no pending send.
             if pending_send.is_none() && send_size > 0 {
-                let dst = SocketAddr::from_std(self.remote_isd_as, target_address);
+                let dst = ScionSocketAddr::from_std(self.remote_isd_as, target_address);
                 let socket = self.socket.clone();
                 pending_send = Some(Box::pin(async move {
                     socket.send_to(&send_buffer[..send_size], dst).await
@@ -274,7 +274,7 @@ impl QuicConnectionDriver {
                     );
                     body.truncate(len);
 
-                    if let (Some(from), Some(to)) = (src.local_address(), self.socket.local_addr().local_address()) {
+                    if let (Some(from), Some(to)) = (src.socket_addr(), self.socket.local_addr().socket_addr()) {
                         let recv_info = squiche::RecvInfo { from, to };
                         let mut conn = self.conn.lock().await;
                         if let Err(err) = conn.recv(&mut body, recv_info) {

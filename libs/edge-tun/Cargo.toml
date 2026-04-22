@@ -30,11 +30,11 @@ anapaya-quinn = { workspace = true }
 rand = { workspace = true }
 rand_xorshift = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }
-scion-proto = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-quic-scion = { workspace = true }
 scion-sdk-scion-connect-rpc = { workspace = true }
 scion-sdk-utils = { workspace = true }
+sciparse = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

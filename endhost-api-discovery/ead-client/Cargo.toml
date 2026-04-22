@@ -11,7 +11,6 @@ keywords = ["SCION", "networking"]
 [dependencies]
 # local
 endhost-api-discovery-models = { workspace = true }
-scion-proto = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }
 
 # global

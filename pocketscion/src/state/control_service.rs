@@ -36,7 +36,10 @@ use scion_protobuf::control_plane::v1::{
 };
 use scion_sdk_quic_scion::quic::config::QuicConfig;
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
-use sciparse::{core::encode::WireEncode, path::onehop::model::OneHopPath};
+use sciparse::{
+    address::socket_addr::ScionSocketAddr, core::encode::WireEncode,
+    path::onehop::model::OneHopPath,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{task, time::timeout};
 use tracing::instrument;
@@ -713,10 +716,7 @@ impl ControlServiceCrpcClient {
         let socket = Arc::new(socket);
 
         let client_fut = CrpcClient::with_quic_config(
-            SocketAddr::new(
-                ScionAddr::new(dst_ia, dst_addr.ip().into()),
-                dst_addr.port(),
-            ),
+            ScionSocketAddr::new(dst_ia.into(), dst_addr.ip().into(), dst_addr.port()),
             socket,
             None, // XXX: Peer validation is disabled
             None,

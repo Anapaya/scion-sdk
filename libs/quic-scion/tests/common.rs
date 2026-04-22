@@ -16,23 +16,21 @@
 
 use std::{io, net::Ipv4Addr};
 
-use scion_proto::address::{ScionAddr, SocketAddr};
 use scion_sdk_quic_scion::{
     quic::config::QuicConfig,
     socket::{BoxedSocketError, GenericScionUdpSocket},
 };
+use sciparse::address::socket_addr::ScionSocketAddr;
 use tempfile::NamedTempFile;
 use tokio::sync::{Mutex, mpsc};
 
 /// Setup a client and server socket in two different ASes in the pocket SCION topology.
 pub fn setup_sockets() -> (MockScionSocket, MockScionSocket) {
     let ia132 = "1-32".parse().unwrap();
-    let client_addr = ScionAddr::new(ia132, Ipv4Addr::new(10, 1, 1, 0).into());
-    let client_addr = SocketAddr::new(client_addr, 0);
+    let client_addr = ScionSocketAddr::new(ia132, Ipv4Addr::new(10, 1, 1, 0).into(), 0);
 
     let ia212 = "2-12".parse().unwrap();
-    let server_addr = ScionAddr::new(ia212, Ipv4Addr::new(10, 2, 1, 0).into());
-    let server_addr = SocketAddr::new(server_addr, 0);
+    let server_addr = ScionSocketAddr::new(ia212, Ipv4Addr::new(10, 2, 1, 0).into(), 0);
 
     MockScionSocket::pair(1024, client_addr, server_addr)
 }
@@ -72,23 +70,23 @@ pub fn generate_server_config() -> (squiche::Config, NamedTempFile, NamedTempFil
 
 struct MockDatagram {
     data: Vec<u8>,
-    src: SocketAddr,
-    dst: SocketAddr,
+    src: ScionSocketAddr,
+    dst: ScionSocketAddr,
 }
 
 /// Simple in-memory mock implementation of a `GenericScionUdpSocket`
 pub struct MockScionSocket {
     recv_channel: Mutex<mpsc::Receiver<MockDatagram>>,
     send_channel: mpsc::Sender<MockDatagram>,
-    local_addr: scion_proto::address::SocketAddr,
+    local_addr: ScionSocketAddr,
 }
 
 impl MockScionSocket {
     /// Creates a pair of connected `MockScionSocket`s
     pub fn pair(
         queue_size: usize,
-        sockaddr_a: SocketAddr,
-        sockaddr_b: SocketAddr,
+        sockaddr_a: ScionSocketAddr,
+        sockaddr_b: ScionSocketAddr,
     ) -> (MockScionSocket, MockScionSocket) {
         let (a_to_b_tx, a_to_b_rx) = mpsc::channel(queue_size);
         let (b_to_a_tx, b_to_a_rx) = mpsc::channel(queue_size);
@@ -115,7 +113,7 @@ impl GenericScionUdpSocket for MockScionSocket {
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: SocketAddr,
+        destination: ScionSocketAddr,
     ) -> Result<(), BoxedSocketError> {
         let datagram = MockDatagram {
             data: payload.to_vec(),
@@ -131,7 +129,10 @@ impl GenericScionUdpSocket for MockScionSocket {
 
     /// Asynchronously receives a Datagram, writing it into the provided buffer, and returns the
     /// number of bytes read and the source address.
-    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), BoxedSocketError> {
+    async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
         loop {
             let datagram = self.recv_channel.lock().await.recv().await.ok_or_else(|| {
                 Box::new(io::Error::new(
@@ -153,7 +154,7 @@ impl GenericScionUdpSocket for MockScionSocket {
     }
 
     /// Returns the local socket address of this socket.
-    fn local_addr(&self) -> SocketAddr {
+    fn local_addr(&self) -> ScionSocketAddr {
         self.local_addr
     }
 }

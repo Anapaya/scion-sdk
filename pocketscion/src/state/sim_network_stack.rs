@@ -29,6 +29,7 @@ use scion_proto::{
     path::DataPlanePath,
 };
 use scion_sdk_quic_scion::socket::{BoxedSocketError, GenericScionUdpSocket};
+use sciparse::address::socket_addr::ScionSocketAddr;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::{
@@ -482,16 +483,19 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: SocketAddr,
+        destination: ScionSocketAddr,
     ) -> Result<(), BoxedSocketError> {
-        self.try_send(destination, Bytes::copy_from_slice(payload))
+        self.try_send(destination.into(), Bytes::copy_from_slice(payload))
             .map_err(|e| Box::new(e) as BoxedSocketError)?;
         Ok(())
     }
 
     /// Asynchronously receives a Datagram, writing it into the provided buffer, and returns the
     /// number of bytes read and the source address.
-    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), BoxedSocketError> {
+    async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
         let (pkt, src_addr) = loop {
             let pkt = self
                 .recv()
@@ -508,7 +512,10 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
 
             let port = pkt.src_port();
 
-            break (pkt, SocketAddr::new(sci_addr, port));
+            break (
+                pkt,
+                ScionSocketAddr::new(sci_addr.isd_asn().into(), sci_addr.host().into(), port),
+            );
         };
 
         let payload = pkt.payload();
@@ -521,12 +528,10 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
     }
 
     /// Returns the local socket address of this socket.
-    fn local_addr(&self) -> SocketAddr {
-        SocketAddr::new(
-            ScionAddr::new(
-                self.socket.stack.0.local_as,
-                self.socket.stack.0.bind_addr.into(),
-            ),
+    fn local_addr(&self) -> ScionSocketAddr {
+        ScionSocketAddr::new(
+            self.socket.stack.0.local_as.into(),
+            self.socket.stack.0.bind_addr.into(),
             self.socket.port,
         )
     }

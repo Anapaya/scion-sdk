@@ -25,6 +25,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use tinyvec::ArrayVec;
 
 use crate::{
+    address::ip_addr::ScionIpAddr,
     core::{
         encode::{InvalidStructureError, WireEncode},
         macros::impl_from,
@@ -73,6 +74,21 @@ impl ScionHostAddr {
     /// Returns the address as a [WireHostAddr] for encoding on the wire.
     pub fn to_wire_host_addr(&self) -> WireHostAddr {
         (*self).into()
+    }
+
+    /// Returns true if the SCION Host Address is an IPv4 address
+    pub fn is_ipv4(&self) -> bool {
+        matches!(self, ScionHostAddr::V4(_))
+    }
+
+    /// Returns true if the SCION Host Address is an IPv6 address
+    pub fn is_ipv6(&self) -> bool {
+        matches!(self, ScionHostAddr::V6(_))
+    }
+
+    /// Returns true if the SCION Host Address is a service address
+    pub fn is_service(&self) -> bool {
+        matches!(self, ScionHostAddr::Svc(_))
     }
 }
 impl FromStr for ScionHostAddr {
@@ -132,6 +148,7 @@ impl_from!(ServiceAddr, ScionHostAddr, |value| {
     ScionHostAddr::Svc(value)
 });
 impl_from!(ScionAddr, ScionHostAddr, |value| value.host());
+impl_from!(ScionIpAddr, ScionHostAddr, |value| value.host());
 
 /// A SCION service address.
 ///

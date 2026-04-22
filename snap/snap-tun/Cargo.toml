@@ -17,7 +17,6 @@ bitfield-struct = { workspace = true }
 bytes = { workspace = true }
 anapaya-quinn = { workspace = true }
 quinn-udp = { workspace = true }
-scion-proto = { workspace = true }
 scion-sdk-utils = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -31,6 +30,7 @@ zerocopy = { workspace = true }
 ed25519-dalek = { workspace = true }
 pem = { workspace = true }
 rcgen = { workspace = true }
+sciparse = { workspace = true }
 mockall = "0.14"
 socket2 = { workspace = true }
 tokio-util = { workspace = true }

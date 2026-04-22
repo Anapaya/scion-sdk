@@ -91,30 +91,27 @@ impl std::fmt::Debug for PacketPolicyError<'_> {
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
-    use bytes::{BufMut, Bytes, BytesMut};
-    use scion_proto::{
-        address::{Asn, EndhostAddr, Isd, IsdAsn, ScionAddr},
-        packet::{ByEndpoint, FlowId, ScionPacketRaw},
-        path::{DataPlanePath, encoded::EncodedStandardPath},
-        wire_encoding::{WireDecode, WireEncodeVec},
+    use sciparse::{
+        address::addr::ScionAddr,
+        core::{encode::WireEncode, view::View},
+        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+        packet::model::ScionRawPacket,
+        path::{model::Path, standard::model::StandardPath},
+        util::ToValue,
     };
-    use sciparse::core::view::View;
     use test_log::test;
 
     use super::*;
 
-    fn standard_path() -> DataPlanePath {
-        let mut path_raw = BytesMut::with_capacity(36);
-        path_raw.put_u32(0x0000_2000);
-        path_raw.put_slice(&[0_u8; 32]);
-        DataPlanePath::Standard(EncodedStandardPath::decode(&mut path_raw.freeze()).unwrap())
+    fn standard_path() -> Path {
+        Path::Standard(StandardPath::arbitrary_value(0))
     }
 
-    fn example_source_addrs() -> Vec<EndhostAddr> {
+    fn example_source_addrs() -> Vec<ScionAddr> {
         let ia = IsdAsn::new(Isd(1), Asn::new(0xff00_0000_0110));
         vec![
-            EndhostAddr::new(ia, Ipv4Addr::new(127, 0, 0, 1).into()),
-            EndhostAddr::new(
+            ScionAddr::new(ia, Ipv4Addr::new(127, 0, 0, 1).into()),
+            ScionAddr::new(
                 ia,
                 Ipv6Addr::new(
                     0x2001, 0x0db8, 0x85a3, 0x0000, 0x0000, 0x8a2e, 0x0370, 0x7334,
@@ -124,23 +121,16 @@ mod tests {
         ]
     }
 
-    fn get_valid_packet(source: EndhostAddr, dp_path: DataPlanePath) -> Vec<u8> {
-        let _ia = IsdAsn::new(Isd(1), Asn::new(0xff00_0000_0110));
-        let endpoints: ByEndpoint<ScionAddr> = ByEndpoint {
-            source: source.into(),
-            destination: example_source_addrs()[0].into(),
-        };
-
-        let packet = ScionPacketRaw::new(
-            endpoints,
+    fn get_valid_packet(source: ScionAddr, dp_path: Path) -> Vec<u8> {
+        let packet = ScionRawPacket::new(
+            source,
+            example_source_addrs()[0],
             dp_path,
-            Bytes::from_static("my SCION packet".as_bytes()),
-            0,
-            FlowId::new(0).unwrap(),
-        )
-        .unwrap();
+            sciparse::payload::ProtocolNumber::Udp,
+            b"my SCION packet".to_vec(),
+        );
 
-        packet.encode_to_bytes_vec().concat()
+        packet.encode_to_vec().unwrap()
     }
 
     #[test]
@@ -149,7 +139,7 @@ mod tests {
 
         let packet = get_valid_packet(source_addrs[0], standard_path());
 
-        let res = inbound_datagram_check(&packet, source_addrs[0].local_address());
+        let res = inbound_datagram_check(&packet, source_addrs[0].ip().unwrap());
         assert!(res.is_ok());
         assert_eq!(&packet[..], res.unwrap().as_bytes());
     }
@@ -157,9 +147,9 @@ mod tests {
     #[test]
     fn inbound_datagram_invalid_packet_rejected() {
         let source_addrs = example_source_addrs();
-        let datagram: &[u8; 4] = &[1, 2, 3, 4];
+        let invalid_packet: &[u8; 4] = &[1, 2, 3, 4];
 
-        let res = inbound_datagram_check(datagram, source_addrs[0].local_address());
+        let res = inbound_datagram_check(invalid_packet, source_addrs[0].ip().unwrap());
         assert!(matches!(res, Err(PacketPolicyError::MalformedPacket(..))));
     }
 
@@ -167,13 +157,9 @@ mod tests {
     fn inbound_datagram_invalid_source_addr_rejected() {
         let source_addrs = example_source_addrs();
         let packet = get_valid_packet(source_addrs[0], standard_path());
+        let wrong_source = Ipv4Addr::new(127, 0, 0, 2);
 
-        let wrong_source_addrs = EndhostAddr::new(
-            IsdAsn::new(Isd(2), Asn::new(0xff00_0000_0110)),
-            Ipv4Addr::new(127, 0, 0, 2).into(),
-        );
-
-        let res = inbound_datagram_check(&packet, wrong_source_addrs.local_address());
+        let res = inbound_datagram_check(&packet, wrong_source.into());
         assert!(matches!(
             res,
             Err(PacketPolicyError::InvalidSourceAddress(_))

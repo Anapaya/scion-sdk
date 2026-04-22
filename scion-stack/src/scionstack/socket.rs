@@ -26,6 +26,7 @@ use scion_proto::{
     scmp::{SCMP_PROTOCOL_NUMBER, ScmpMessage},
 };
 use scion_sdk_quic_scion::socket::{BoxedSocketError, GenericScionUdpSocket};
+use sciparse::address::socket_addr::ScionSocketAddr;
 
 use super::UnderlaySocket;
 use crate::{
@@ -618,24 +619,28 @@ impl<P: PathManager + Sync + Send + 'static> GenericScionUdpSocket for UdpScionS
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: SocketAddr,
+        destination: ScionSocketAddr,
     ) -> Result<(), BoxedSocketError> {
-        self.send_to(payload, destination)
+        self.send_to(payload, destination.into())
             .await
             .map_err(|e| Box::new(e) as BoxedSocketError)
     }
 
     /// Asynchronously receives a Datagram, writing it into the provided buffer, and returns the
     /// number of bytes read and the source address.
-    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), BoxedSocketError> {
+    async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
         self.recv_from(buf)
             .await
+            .map(|(len, src_addr)| (len, src_addr.into()))
             .map_err(|e| Box::new(e) as BoxedSocketError)
     }
 
     /// Returns the local socket address of this socket.
-    fn local_addr(&self) -> SocketAddr {
-        self.local_addr()
+    fn local_addr(&self) -> ScionSocketAddr {
+        self.local_addr().into()
     }
 }
 

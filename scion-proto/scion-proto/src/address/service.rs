@@ -136,6 +136,18 @@ impl From<ServiceAddr> for HostType {
     }
 }
 
+impl From<sciparse::address::host_addr::ServiceAddr> for ServiceAddr {
+    fn from(value: sciparse::address::host_addr::ServiceAddr) -> Self {
+        Self(value.0)
+    }
+}
+
+impl From<ServiceAddr> for sciparse::address::host_addr::ServiceAddr {
+    fn from(val: ServiceAddr) -> Self {
+        sciparse::address::host_addr::ServiceAddr(val.0)
+    }
+}
+
 impl Display for ServiceAddr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.anycast() {

@@ -25,7 +25,6 @@ use std::{
 
 use ana_gotatun::x25519;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
-use scion_proto::address::{ScionAddr, SocketAddr as ScionSocketAddr};
 use scion_sdk_edge_tun::ng::{
     api::{client::EdgeTunControlPlaneClient, server::EdgeTunControlPlaneCrpcApi},
     control_plane::{EdgeTunControlPlane, EdgeTunDataPlaneConfig},
@@ -42,6 +41,7 @@ use scion_sdk_scion_connect_rpc::{
     Method,
     client::{ConnectRpcClient, CrpcClient},
 };
+use sciparse::address::socket_addr::ScionSocketAddr;
 use tempfile::NamedTempFile;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -135,13 +135,10 @@ impl GenericScionUdpSocket for MockScionSocket {
 /// Creates a socket pair for in-memory testing.
 fn make_socket_pair() -> (MockScionSocket, MockScionSocket) {
     let ia1 = "1-1".parse().unwrap();
-    let client_addr =
-        ScionSocketAddr::new(ScionAddr::new(ia1, Ipv4Addr::new(10, 0, 0, 1).into()), 0);
+    let client_addr = ScionSocketAddr::new(ia1, Ipv4Addr::new(10, 0, 0, 1).into(), 0);
 
     let ia2 = "1-2".parse().unwrap();
-    let server_addr =
-        ScionSocketAddr::new(ScionAddr::new(ia2, Ipv4Addr::new(10, 0, 0, 2).into()), 0);
-
+    let server_addr = ScionSocketAddr::new(ia2, Ipv4Addr::new(10, 0, 0, 2).into(), 0);
     MockScionSocket::pair(1024, client_addr, server_addr)
 }
 
@@ -222,12 +219,8 @@ impl EdgeTunControlPlane for FakeControlPlane {
 // ─── Setup helpers ──────────────────────────────────────────────────────────────
 
 fn make_scion_addr(ia: &str, ip: impl Into<std::net::IpAddr>) -> ScionSocketAddr {
-    use scion_proto::address::HostAddr;
     let ip: std::net::IpAddr = ip.into();
-    ScionSocketAddr::new(
-        ScionAddr::new(ia.parse().unwrap(), HostAddr::from(ip)),
-        1234,
-    )
+    ScionSocketAddr::new(ia.parse().unwrap(), ip.into(), 1234)
 }
 
 /// Starts the API server and returns a cancellation token to stop it.

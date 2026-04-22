@@ -20,12 +20,8 @@ use ana_gotatun::{
     x25519::{self, PublicKey},
 };
 use bytes::BytesMut;
-use scion_proto::{
-    packet::{ByEndpoint, ScionPacketUdp},
-    path::DataPlanePath,
-    wire_encoding::WireEncodeVec,
-};
 use scion_sdk_reqwest_connect_rpc::token_source::mock::MockTokenSource;
+use sciparse::{core::encode::WireEncode, packet::model::ScionUdpPacket, path::model::Path};
 use snap_tun::{client::SnapTunEndpoint, server::SnapTunServer};
 use tokio::task::JoinHandle;
 
@@ -36,18 +32,18 @@ use super::{
 
 /// Build a test SCION packet with the given payload
 pub fn build_test_scion_packet(payload: &[u8]) -> Packet {
-    let packet = ScionPacketUdp::new(
-        ByEndpoint {
-            source: "[1-ff00:0:100,10.0.0.1]:1234".parse().unwrap(),
-            destination: "[1-ff00:0:101,10.0.0.2]:1235".parse().unwrap(),
-        },
-        DataPlanePath::EmptyPath,
-        payload.to_owned().into(),
-    )
-    .unwrap();
-    let mut buf = BytesMut::with_capacity(packet.required_capacity());
-    buf.extend_from_slice(packet.encode_to_bytes_vec().concat().as_slice());
-    Packet::from_bytes(buf)
+    let packet = ScionUdpPacket::new(
+        "[1-ff00:0:100,10.0.0.1]:1234".parse().unwrap(),
+        "[1-ff00:0:101,10.0.0.2]:1235".parse().unwrap(),
+        Path::Empty,
+        payload.to_vec(),
+    );
+    let required_size = packet.required_size();
+    let mut bytes = BytesMut::with_capacity(required_size);
+    bytes.resize(required_size, 0);
+    packet.encode(&mut bytes).unwrap();
+
+    Packet::from_bytes(bytes)
 }
 
 /// Running server harness with task handle for cleanup

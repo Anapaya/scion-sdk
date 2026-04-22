@@ -18,14 +18,14 @@ use std::net::IpAddr;
 
 use ana_gotatun::x25519;
 use ipnet::IpNet;
-use scion_proto::address::SocketAddr as EndhostSocketAddr;
+use sciparse::address::socket_addr::ScionSocketAddr;
 
 /// Configuration for the edge-tun data plane.
 pub struct EdgeTunDataPlaneConfig {
     /// SCION socket address of the control plane (for further control requests).
-    pub control_plane_scion_sockaddr: EndhostSocketAddr,
+    pub control_plane_scion_sockaddr: ScionSocketAddr,
     /// SCION socket address of the data plane.
-    pub data_plane_scion_sockaddr: EndhostSocketAddr,
+    pub data_plane_scion_sockaddr: ScionSocketAddr,
 }
 
 /// Trait implemented by the edge-tun server to handle control plane requests.

@@ -21,11 +21,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use ana_gotatun::x25519;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
-use scion_proto::address::SocketAddr as EndhostSocketAddr;
 use scion_sdk_scion_connect_rpc::{
     Method,
     client::{ConnectRpcClient, RequestError},
 };
+use sciparse::address::socket_addr::ScionSocketAddr;
 use thiserror::Error;
 use url::Url;
 
@@ -107,21 +107,21 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
 
         let control_plane_scion_sockaddr = resp
             .control_plane_scion_sockaddr
-            .parse::<EndhostSocketAddr>()
+            .parse::<ScionSocketAddr>()
             .map_err(|e| {
                 EdgeTunClientError::InvalidResponse(format!(
-                    "invalid control_plane_scion_sockaddr: {e}"
+                    "invalid control_plane_scion_sockaddr: {e} {resp:?}"
                 ))
             })?;
 
         let data_plane_scion_sockaddr = resp
             .data_plane_scion_sockaddr
-            .parse::<EndhostSocketAddr>()
+            .parse::<ScionSocketAddr>()
             .map_err(|e| {
-                EdgeTunClientError::InvalidResponse(format!(
-                    "invalid data_plane_scion_sockaddr: {e}"
-                ))
-            })?;
+            EdgeTunClientError::InvalidResponse(format!(
+                "invalid data_plane_scion_sockaddr: {e} {resp:?}"
+            ))
+        })?;
 
         Ok(EdgeTunDataPlaneConfig {
             control_plane_scion_sockaddr,

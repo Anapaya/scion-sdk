@@ -23,9 +23,17 @@
 //!
 //! [ScionSocketAddr](socket_addr::ScionSocketAddr) is a socket address combining a
 //! [ScionAddr](addr::ScionAddr) and a port number.
+//!
+//! For versions of SCION addresses that only allow IPv4 or IPv6 see:
+//!
+//! [ScionIpAddr](ip_addr::ScionIpAddr) for [ScionAddr](addr::ScionAddr)
+//! [ScionSocketIpAddr](ip_socket_addr::ScionSocketIpAddr) for
+//! [ScionSocketAddr](socket_addr::ScionSocketAddr)
 
 pub mod addr;
 pub mod host_addr;
+pub mod ip_addr;
+pub mod ip_socket_addr;
 pub mod socket_addr;
 
 /// An error which can be returned when parsing various SCION address formats.

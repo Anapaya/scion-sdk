@@ -32,6 +32,7 @@ scion-proto = { workspace = true }
 scion-sdk-quic-scion = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }
 scion-sdk-utils = { workspace = true }
+sciparse = { workspace = true }
 snap-control = { workspace = true }
 snap-tun = { workspace = true }
 socket2 = { workspace = true }

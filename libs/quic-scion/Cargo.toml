@@ -13,8 +13,8 @@ async-trait = { workspace = true }
 buffer-pool = { workspace = true }
 http = { workspace = true }
 ring = { workspace = true }
-scion-proto = { workspace = true }
 squiche = { workspace = true }
+sciparse = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

@@ -49,6 +49,26 @@ impl From<IpAddr> for HostAddr {
     }
 }
 
+impl From<sciparse::address::host_addr::ScionHostAddr> for HostAddr {
+    fn from(value: sciparse::address::host_addr::ScionHostAddr) -> Self {
+        match value {
+            sciparse::address::host_addr::ScionHostAddr::V4(addr) => HostAddr::V4(addr),
+            sciparse::address::host_addr::ScionHostAddr::V6(addr) => HostAddr::V6(addr),
+            sciparse::address::host_addr::ScionHostAddr::Svc(addr) => HostAddr::Svc(addr.into()),
+        }
+    }
+}
+
+impl From<HostAddr> for sciparse::address::host_addr::ScionHostAddr {
+    fn from(val: HostAddr) -> Self {
+        match val {
+            HostAddr::V4(addr) => sciparse::address::host_addr::ScionHostAddr::V4(addr),
+            HostAddr::V6(addr) => sciparse::address::host_addr::ScionHostAddr::V6(addr),
+            HostAddr::Svc(addr) => sciparse::address::host_addr::ScionHostAddr::Svc(addr.into()),
+        }
+    }
+}
+
 /// Enum to discriminate among different types of Host addresses.
 #[repr(u8)]
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]

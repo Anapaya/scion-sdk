@@ -18,7 +18,7 @@ pub mod driver;
 
 use std::{borrow::Cow, sync::Arc};
 
-use scion_proto::address::SocketAddr;
+use sciparse::address::socket_addr::ScionSocketAddr;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -38,7 +38,7 @@ use crate::{
 #[derive(Clone)]
 pub struct H3Client {
     // QUIC connection information
-    remote: SocketAddr,
+    remote: ScionSocketAddr,
     server_name: Option<String>,
     socket: Arc<dyn GenericScionUdpSocket>,
     config: QuicConfig,
@@ -70,7 +70,7 @@ pub enum RequestError {
 impl H3Client {
     /// Creates a new HTTP/3 client.
     pub async fn new(
-        remote: SocketAddr,
+        remote: ScionSocketAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
     ) -> Result<Self, H3ConnectionError> {
@@ -79,7 +79,7 @@ impl H3Client {
 
     /// Creates a new HTTP/3 client with custom configuration.
     pub async fn with_config(
-        remote: SocketAddr,
+        remote: ScionSocketAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
         config: QuicConfig,

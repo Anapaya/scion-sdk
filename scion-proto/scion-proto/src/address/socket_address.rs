@@ -166,6 +166,22 @@ impl From<SocketAddrSvc> for SocketAddr {
     }
 }
 
+impl From<sciparse::address::socket_addr::ScionSocketAddr> for SocketAddr {
+    fn from(value: sciparse::address::socket_addr::ScionSocketAddr) -> Self {
+        SocketAddr::new(value.scion_addr().into(), value.port())
+    }
+}
+
+impl From<SocketAddr> for sciparse::address::socket_addr::ScionSocketAddr {
+    fn from(val: SocketAddr) -> Self {
+        sciparse::address::socket_addr::ScionSocketAddr::new(
+            val.isd_asn().into(),
+            val.host().into(),
+            val.port(),
+        )
+    }
+}
+
 impl FromStr for SocketAddr {
     type Err = AddressParseError;
 

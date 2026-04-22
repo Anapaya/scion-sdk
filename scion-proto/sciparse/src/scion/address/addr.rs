@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCION network address (IsdAsn + HostAddr)
+//! SCION address combining [IsdAsn] and [ScionHostAddr]
 
 use std::{
     fmt::Display,
@@ -25,6 +25,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use utoipa::{PartialSchema, ToSchema, openapi::Type};
 
 use crate::{
+    address::ip_addr::ScionIpAddr,
     core::macros::impl_from,
     scion::{
         address::{
@@ -132,6 +133,7 @@ impl_from!(ScionAddrSvc, ScionAddr, |v| ScionAddr::Svc(v));
 impl_from!(ScionSocketAddr, ScionAddr, |v| {
     ScionAddr::new(v.isd_asn(), v.host())
 });
+impl_from!(ScionIpAddr, ScionAddr, |v| v.into_scion_addr());
 impl PartialSchema for ScionAddr {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         utoipa::openapi::ObjectBuilder::new()

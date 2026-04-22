@@ -12,7 +12,6 @@ categories = ["network-programming"]
 [dependencies]
 ana-gotatun = { workspace = true }
 anyhow = { workspace = true }
-bytes = { workspace = true }
 x25519-dalek = { workspace = true }
 prometheus = { workspace = true }
 regex = { workspace = true }
@@ -30,8 +29,6 @@ scion-sdk-observability = { workspace = true }
 scion-sdk-utils = { workspace = true }
 snap-tun = { workspace = true }
 
-[dev-dependencies]
-scion-proto = { workspace = true }
 
 [lints]
 workspace = true

@@ -18,7 +18,6 @@
 
 use std::{borrow::Cow, sync::Arc};
 
-use scion_proto::address::SocketAddr;
 use scion_sdk_quic_scion::{
     h3::{
         client::{H3Client, H3ConnectionError},
@@ -27,6 +26,7 @@ use scion_sdk_quic_scion::{
     quic::config::QuicConfig,
     socket::GenericScionUdpSocket,
 };
+use sciparse::address::socket_addr::ScionSocketAddr;
 use thiserror::Error;
 use url::Url;
 
@@ -94,7 +94,7 @@ impl CrpcClient {
     /// # Returns
     /// A new client instance that is ready to connect.
     pub async fn new(
-        remote: SocketAddr,
+        remote: ScionSocketAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
         authorization_token: Option<String>,
@@ -119,7 +119,7 @@ impl CrpcClient {
     /// # Returns
     /// A new client instance that is ready to connect.
     pub async fn with_quic_config(
-        remote: SocketAddr,
+        remote: ScionSocketAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
         authorization_token: Option<String>,

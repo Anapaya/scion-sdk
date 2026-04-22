@@ -126,6 +126,13 @@ impl_from!(ScionAddrV4, ScionAddr::V4);
 impl_from!(ScionAddrV6, ScionAddr::V6);
 impl_from!(ScionAddrSvc, ScionAddr::Svc);
 
+impl From<sciparse::address::addr::ScionAddr> for ScionAddr {
+    #[inline]
+    fn from(value: sciparse::address::addr::ScionAddr) -> Self {
+        Self::new(value.isd_asn().into(), value.host().into())
+    }
+}
+
 impl From<(IsdAsn, HostAddr)> for ScionAddr {
     #[inline]
     fn from((isd_asn, host): (IsdAsn, HostAddr)) -> Self {
