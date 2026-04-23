@@ -295,7 +295,6 @@ impl RefreshTokenSourceTask {
                         if token_expiry <= Instant::now() + self.min_token_lifetime {
                             current_token = None;
                             self.watch_tx.send_replace(Some(Err(e)));
-                            continue;
                         }
 
                         tokio::time::sleep(self.refresh_retry_delay).await;
