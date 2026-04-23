@@ -414,10 +414,18 @@ pub mod ptest {
     use super::*;
 
     /// Configuration for generating arbitrary [`StandardPath`] values.
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub struct ArbitraryPathContext {
-        // Not implemented yet, but would allow providing ForwardingKeys for generating valid MACs,
-        // or even generating paths valid on a topology
+        /// Range of hop fields per segment. Defaults to `1..=63` (the protocol maximum).
+        pub hops_per_segment: std::ops::RangeInclusive<usize>,
+    }
+
+    impl Default for ArbitraryPathContext {
+        fn default() -> Self {
+            Self {
+                hops_per_segment: 1..=63,
+            }
+        }
     }
 
     impl Arbitrary for StandardPath {
@@ -482,10 +490,11 @@ pub mod ptest {
         type Parameters = ArbitraryPathContext;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_ctx: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(ctx: Self::Parameters) -> Self::Strategy {
+            let range = ctx.hops_per_segment.clone();
             (
                 any::<InfoField>(),
-                prop::collection::vec(any::<HopField>(), 1..=63),
+                prop::collection::vec(any::<HopField>(), range),
             )
                 .prop_map(|(info_field, hop_fields)| {
                     Segment {

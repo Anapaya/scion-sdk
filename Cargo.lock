@@ -4277,6 +4277,7 @@ name = "sciparse-interop"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "criterion",
  "proptest",
  "scion-proto",
  "sciparse",

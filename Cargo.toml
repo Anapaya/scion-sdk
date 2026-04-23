@@ -186,3 +186,9 @@ ignored = [
 [profile.ci]
 inherits = "dev"            # https://doc.rust-lang.org/cargo/reference/profiles.html#dev
 incremental = false         # Disable incremental compilation to allow caching dependencies
+
+# Profile for inspecting generated assembly with full inlining across crate boundaries
+[profile.asm]
+inherits = "release"
+lto = true
+codegen-units = 1

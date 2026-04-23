@@ -124,6 +124,15 @@ impl View for ScionRawPacketView {
     }
 }
 impl ScionRawPacketView {
+    /// Non-inlined entry point for inspecting the full view parse pipeline in generated assembly.
+    ///
+    /// This function exists solely to provide a single, traceable symbol for `cargo asm`.
+    /// It is functionally identical to `View::from_slice`.
+    #[inline(never)]
+    pub fn parse_from_slice(buf: &[u8]) -> Result<(&Self, &[u8]), ViewConversionError> {
+        Self::from_slice(buf)
+    }
+
     /// Returns a mutable slice of the payload
     #[inline]
     pub fn payload_mut(&mut self) -> &mut [u8] {

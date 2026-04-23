@@ -12,6 +12,14 @@ sciparse = { workspace = true }
 scion-proto = { workspace = true }
 proptest = { workspace = true }
 
+[dev-dependencies]
+bytes = { workspace = true }
+criterion = { workspace = true }
+scion-proto = { path = "../scion-proto" }
+
+[[bench]]
+name = "bench"
+harness = false
 
 [lints]
 workspace = true
