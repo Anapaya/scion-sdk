@@ -31,10 +31,12 @@ use tower_http::{
 use tracing::Span;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
-use tracing_subscriber::{EnvFilter, Registry, fmt::time::UtcTime, prelude::*};
+use tracing_subscriber::{EnvFilter, Layer, Registry, fmt::time::UtcTime, prelude::*};
 
 pub mod metrics;
 pub mod prometheus_json;
+
+pub use tracing_subscriber;
 
 /// Environment variable to define the log level.
 pub const LOG_LEVEL_ENV: &str = "RUST_LOG";
@@ -62,13 +64,13 @@ pub enum LogFormat {
 }
 
 /// Configuration for tracing setup.
-#[derive(Debug, Clone)]
 pub struct TracingConfig {
     log_dir: Option<PathBuf>,
     /// Console output sink. `None` disables console logging.
     console_output: Option<LogOutput>,
     console_format: LogFormat,
     directives: Vec<String>,
+    extra_layers: Vec<Box<dyn Layer<Registry> + Send + Sync + 'static>>,
 }
 
 impl Default for TracingConfig {
@@ -79,6 +81,7 @@ impl Default for TracingConfig {
             console_output: Some(LogOutput::Stderr),
             console_format: LogFormat::Text,
             directives: Vec::new(),
+            extra_layers: Vec::new(),
         }
     }
 }
@@ -128,6 +131,15 @@ impl TracingConfig {
         self
     }
 
+    /// Add a custom tracing layer.
+    pub fn with_layer<L>(mut self, layer: L) -> Self
+    where
+        L: Layer<Registry> + Send + Sync + 'static,
+    {
+        self.extra_layers.push(layer.boxed());
+        self
+    }
+
     /// Initialize tracing using this configuration.
     pub fn init(self) -> Result<Vec<WorkerGuard>, TracingSetupError> {
         // Setup log tracer to forward log records to tracing subscriber, this is required to
@@ -143,6 +155,7 @@ impl TracingConfig {
             console_output,
             console_format,
             directives,
+            extra_layers,
         } = self;
 
         // Closure that builds a fresh EnvFilter with all configured directives applied.
@@ -175,7 +188,7 @@ impl TracingConfig {
                 .with_ansi(false)
                 .with_timer(UtcTime::rfc_3339())
                 .with_writer(non_blocking_writer)
-                .with_filter(tracing::level_filters::LevelFilter::DEBUG);
+                .with_filter(make_filter(&directives)?);
             layers.push(file_logger.boxed());
             guards.push(file_guard);
         }
@@ -231,6 +244,11 @@ impl TracingConfig {
                     guards.push(guard);
                 }
             }
+        }
+
+        // add any additionally configured layers
+        for layer in extra_layers {
+            layers.push(layer.with_filter(make_filter(&directives)?).boxed());
         }
 
         // global subscriber
