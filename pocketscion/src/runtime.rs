@@ -32,8 +32,8 @@ use scion_sdk_utils::{
 };
 use snap_control::server::identity_registry::IdentityRegistry;
 use snap_dataplane::tunnel_gateway::{
-    dispatcher::TunnelGatewayDispatcher, metrics::TunnelGatewayDispatcherMetrics,
-    start_tunnel_gateway,
+    NoopTunnelGatewayObserver, dispatcher::TunnelGatewayDispatcher,
+    metrics::TunnelGatewayDispatcherMetrics, start_tunnel_gateway,
 };
 use thiserror::Error;
 use tokio::{net::TcpListener, time::sleep};
@@ -282,6 +282,7 @@ impl PocketScionRuntimeBuilder {
                 socket,
                 authz,
                 Arc::new(NetSimDispatcher::new(pstate.clone())),
+                Arc::new(NoopTunnelGatewayObserver),
                 tun_dispatcher_rx,
                 static_secret,
             );

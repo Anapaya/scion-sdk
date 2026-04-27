@@ -46,6 +46,7 @@ pub mod model {
     };
 
     use axum::http::StatusCode;
+    use snap_tokens::AnyClaims;
     use url::Url;
     use x25519_dalek::PublicKey;
 
@@ -95,7 +96,16 @@ pub mod model {
             // The lifetime the registered identity is valid for.
             // Usually this is determined by the expiration of the SNAP token.
             lifetime: Duration,
-        ) -> bool;
+            // The verified token claims associated with this registration.
+            claims: &AnyClaims,
+        ) -> anyhow::Result<bool>;
+
+        /// Removes registrations whose authorization lifetime has expired.
+        ///
+        /// Implementations must evict expired registrations here. The control
+        /// plane server calls this periodically to enforce authorization
+        /// liveness for active SNAP identities.
+        fn remove_expired(&self, now: Instant);
     }
 }
 
@@ -241,14 +251,18 @@ async fn register_snaptun_identity_handler(
         })?)
     };
 
-    let key = &snap_token.jti();
-    if !identity_registry.register(
-        Instant::now(),
-        key,
-        *initiator_identity.as_bytes(),
-        psk_share,
-        lifetime,
-    ) {
+    let key = snap_token.jti();
+    if !identity_registry
+        .register(
+            Instant::now(),
+            &key,
+            *initiator_identity.as_bytes(),
+            psk_share,
+            lifetime,
+            &snap_token,
+        )
+        .map_err(|err| CrpcError::new(CrpcErrorCode::InvalidArgument, err.to_string()))?
+    {
         tracing::info!(key, "re-registered identity");
     }
     Ok(ConnectRpc(RegisterSnapTunIdentityResponse {

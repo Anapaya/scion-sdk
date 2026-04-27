@@ -42,6 +42,7 @@ pub struct MockAuthorization {
     inner: Arc<Mutex<MockAuthorizationInner>>,
 }
 
+#[derive(Clone)]
 struct MockAuthorizationInner {
     authorized_identities: HashMap<[u8; 32], Instant>,
 }
@@ -76,13 +77,19 @@ impl MockAuthorization {
 }
 
 impl SnapTunAuthorization for MockAuthorization {
-    fn is_authorized(&self, now: Instant, identity: &[u8; 32]) -> bool {
+    type SessionData = ();
+
+    fn is_authorized(&self, now: Instant, identity: &[u8; 32]) -> Option<Arc<Self::SessionData>> {
         let inner = self.inner.lock().unwrap();
 
         if let Some(&expires_at) = inner.authorized_identities.get(identity) {
-            now < expires_at
+            if now < expires_at {
+                Some(Arc::new(()))
+            } else {
+                None
+            }
         } else {
-            false
+            None
         }
     }
 }

@@ -13,7 +13,11 @@
 // limitations under the License.
 //! SNAP control plane API server.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{BoxError, Router, error_handling::HandleErrorLayer};
 use endhost_api::routes::nest_endhost_api;
@@ -52,6 +56,8 @@ pub mod token_verifier;
 pub use token_verifier::SnapTokenVerifier;
 
 const CONTROL_PLANE_API_TIMEOUT: Duration = Duration::from_secs(30);
+const IDENTITY_REGISTRY_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
+const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Start the SNAP control plane API server.
 pub async fn start<UD, SL, SR, IR>(
@@ -100,6 +106,23 @@ where
         segment_lister.clone(),
     );
 
+    // Use a child token so the cleanup loop can be stopped after an
+    // unexpected server exit without canceling the caller-owned token.
+    let cleanup_token = cancellation_token.child_token();
+    let cleanup_task_token = cleanup_token.clone();
+    let cleanup_identity_registry = identity_registry.clone();
+    let cleanup_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(IDENTITY_REGISTRY_CLEANUP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                _ = cleanup_task_token.cancelled() => break,
+                _ = interval.tick() => cleanup_identity_registry.remove_expired(Instant::now()),
+            }
+        }
+    });
+
     let router = nest_snap_control_api(router, snap_resolver, identity_registry);
 
     let router = router.layer(
@@ -130,6 +153,19 @@ where
     .await
     {
         tracing::error!(error=%e, "Control plane API server unexpectedly stopped");
+    }
+
+    cleanup_token.cancel();
+    let mut cleanup_task = cleanup_task;
+    match tokio::time::timeout(CLEANUP_TASK_SHUTDOWN_TIMEOUT, &mut cleanup_task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "Control plane cleanup task failed while shutting down")
+        }
+        Err(_) => {
+            cleanup_task.abort();
+            tracing::warn!("Control plane cleanup task exceeded shutdown timeout")
+        }
     }
 
     tracing::info!("Shutting down control plane API server");

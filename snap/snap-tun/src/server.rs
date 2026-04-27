@@ -81,15 +81,108 @@ use ana_gotatun::{
 ///   }
 /// }
 /// ```
-pub struct SnapTunServer<T> {
+pub struct SnapTunServer<T: SnapTunAuthorization> {
     static_private: x25519::StaticSecret,
     static_public: x25519::PublicKey,
-    active_tunnels: HashMap<SocketAddr, (x25519::PublicKey, Tunn)>,
+    active_tunnels: HashMap<SocketAddr, ActiveTunnel>,
     rate_limiter: Arc<RateLimiter>,
     authz: Arc<T>,
 }
 
+struct ActiveTunnel {
+    peer_static: x25519::PublicKey,
+    tunn: Tunn,
+}
+
+/// Packet-processing output for callers that also need the resolved tunnel session.
+///
+/// This is an opt-in extension of the original `TunnResult`-based API so the
+/// dataplane can reuse the resolved session without forcing existing snap-tun
+/// callers to change their control flow.
+pub enum HandleIncomingPacketResult<S> {
+    /// The result returned by the underlying WireGuard tunnel state machine
+    /// when no tunneled SCION payload was forwarded.
+    Result {
+        /// The result returned by the underlying WireGuard tunnel state
+        /// machine.
+        result: TunnResult,
+    },
+    /// A forwarded tunneled SCION payload together with the processing
+    /// metadata captured while the tunnel entry was already borrowed.
+    Forwarded {
+        /// The packet forwarded to the caller.
+        packet: Packet,
+        /// The timestamp captured after rate-limiter verification.
+        processed_at: Instant,
+        /// The active session data resolved while processing the packet.
+        session_data: Arc<S>,
+    },
+}
+
+impl<S> HandleIncomingPacketResult<S> {
+    /// Converts the result back into the underlying WireGuard tunnel result.
+    pub fn into_result(self) -> TunnResult {
+        match self {
+            HandleIncomingPacketResult::Result { result } => result,
+            HandleIncomingPacketResult::Forwarded { packet, .. } => {
+                TunnResult::WriteToTunnel(packet)
+            }
+        }
+    }
+}
+
+/// Packet-processing output for callers that need the active session once an
+/// outbound payload is accepted into the tunnel pipeline.
+pub struct HandleOutgoingPacketResult<S> {
+    /// The WireGuard packet to send to the network, if the tunnel emitted one
+    /// immediately.
+    pub network_packet: Option<WgKind>,
+    /// The timestamp captured for the authorization check that gated this
+    /// outgoing packet.
+    pub processed_at: Instant,
+    /// The session data resolved for the tunneled SCION payload.
+    pub session_data: Arc<S>,
+}
+
+impl<S> HandleOutgoingPacketResult<S> {
+    /// Converts the result into the immediate network packet, if one exists.
+    pub fn into_packet(self) -> Option<WgKind> {
+        self.network_packet
+    }
+}
+
 impl<T: SnapTunAuthorization> SnapTunServer<T> {
+    // The caller captures this timestamp after rate-limiter verification and
+    // reuses it for both authorization and forwarded-packet metadata.
+    fn incoming_packet_result(
+        result: TunnResult,
+        session_data: Arc<T::SessionData>,
+        now: Instant,
+    ) -> HandleIncomingPacketResult<T::SessionData> {
+        match result {
+            TunnResult::WriteToTunnel(packet) => {
+                HandleIncomingPacketResult::Forwarded {
+                    packet,
+                    processed_at: now,
+                    session_data,
+                }
+            }
+            result => HandleIncomingPacketResult::Result { result },
+        }
+    }
+
+    fn outgoing_packet_result(
+        network_packet: Option<WgKind>,
+        now: Instant,
+        session_data: Arc<T::SessionData>,
+    ) -> HandleOutgoingPacketResult<T::SessionData> {
+        HandleOutgoingPacketResult {
+            network_packet,
+            processed_at: now,
+            session_data,
+        }
+    }
+
     /// Creates a new [SnapTunServer] instance.
     pub fn new(
         static_private: x25519::StaticSecret,
@@ -116,45 +209,78 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
     ///
     /// If the rate limiter signals that the server is under load, at most one
     /// packet is added to the queue.
-    #[tracing::instrument(skip_all, fields(remote = %from))]
+    ///
+    /// This compatibility wrapper preserves the original public API for callers
+    /// that only care about the tunnel result.
     pub fn handle_incoming_packet(
         &mut self,
         packet: Packet,
         from: SocketAddr,
         send_to_network: &mut VecDeque<WgKind>,
     ) -> TunnResult {
-        let now = Instant::now();
+        self.handle_incoming_packet_with_session(packet, from, send_to_network)
+            .into_result()
+    }
 
+    /// Handles an incoming packet and also returns the active session when one
+    /// was resolved while processing the packet.
+    ///
+    /// Callers on the dataplane hot path can use this to observe forwarded
+    /// packets without re-hashing `from` for a second active-tunnel lookup,
+    /// while existing callers can keep using [`SnapTunServer::handle_incoming_packet`].
+    #[tracing::instrument(skip_all, fields(remote = %from))]
+    pub fn handle_incoming_packet_with_session(
+        &mut self,
+        packet: Packet,
+        from: SocketAddr,
+        send_to_network: &mut VecDeque<WgKind>,
+    ) -> HandleIncomingPacketResult<T::SessionData> {
         let parsed_packet = match self.rate_limiter.verify_packet(from.ip(), packet) {
             Ok(p) => p,
             Err(TunnResult::WriteToNetwork(c)) => {
                 tracing::debug!(remote = ?from, "rate limiter issued cookie reply");
                 send_to_network.push_back(c);
-                return TunnResult::Done;
+                return HandleIncomingPacketResult::Result {
+                    result: TunnResult::Done,
+                };
             }
             Err(e) => {
                 tracing::debug!(remote = ?from, err = ?e, "rate limiter rejected packet");
-                return e;
+                return HandleIncomingPacketResult::Result { result: e };
             }
         };
+        // Capture one shared timestamp after rate-limiter verification so the
+        // authorization decision and any forwarded-packet metadata use the same
+        // instant without an extra clock read on the hot path.
+        let packet_now = Instant::now();
 
         use std::collections::hash_map::Entry;
 
         use ana_gotatun::noise::errors::WireGuardError;
         match (self.active_tunnels.entry(from), parsed_packet) {
             (Entry::Occupied(mut occupied_entry), p) => {
-                let (peer_static, tunn) = occupied_entry.get_mut();
+                let active_tunnel = occupied_entry.get_mut();
                 // TODO(dsd): At the moment, this keeps a tunnel alive even
                 // though the processing might fail, but gives the authorization
                 // layer a chance to block incomding packets in case an identity
                 // is unauthorized.
                 //
                 // Will fix later.
-                if !self.authz.is_authorized(now, peer_static.as_bytes()) {
-                    tracing::debug!(remote = ?from, "rejected packet from unauthorized peer");
-                    return TunnResult::Err(WireGuardError::UnexpectedPacket);
-                }
-                Self::handle_incoming_and_drain_queue(send_to_network, p, tunn)
+                let Some(session_data) = self
+                    .authz
+                    .is_authorized(packet_now, active_tunnel.peer_static.as_bytes())
+                else {
+                    tracing::debug!(remote = ?from, peer_static = ?active_tunnel.peer_static, "rejected packet from unauthorized peer");
+                    return HandleIncomingPacketResult::Result {
+                        result: TunnResult::Err(WireGuardError::UnexpectedPacket),
+                    };
+                };
+                let result = Self::handle_incoming_and_drain_queue(
+                    send_to_network,
+                    p,
+                    &mut active_tunnel.tunn,
+                );
+                Self::incoming_packet_result(result, session_data, packet_now)
             }
             (e, WgKind::HandshakeInit(wg_init)) => {
                 let peer = match parse_handshake_anon(
@@ -165,7 +291,9 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                     Ok(v) => v,
                     Err(e) => {
                         tracing::debug!(remote = ?from, err = ?e, "failed to parse handshake init");
-                        return TunnResult::from(e);
+                        return HandleIncomingPacketResult::Result {
+                            result: TunnResult::from(e),
+                        };
                     }
                 };
 
@@ -174,10 +302,15 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
 
                 // TODO(dsd): extend ana-gotatun::Tunn such that peer static
                 // identity can be retrieved
-                if !self.authz.is_authorized(now, &peer.peer_static_public) {
+                let Some(session_data) = self
+                    .authz
+                    .is_authorized(packet_now, &peer.peer_static_public)
+                else {
                     tracing::debug!(remote = ?from, "rejected handshake from unauthorized peer");
-                    return TunnResult::Err(WireGuardError::UnexpectedPacket);
-                }
+                    return HandleIncomingPacketResult::Result {
+                        result: TunnResult::Err(WireGuardError::UnexpectedPacket),
+                    };
+                };
                 tracing::debug!(remote = ?from, "accepted new handshake, inserting tunnel");
                 let peer_static = x25519::PublicKey::from(peer.peer_static_public);
                 let mut tunn = Tunn::new(
@@ -194,25 +327,59 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                     WgKind::HandshakeInit(wg_init),
                     &mut tunn,
                 );
-                e.insert_entry((peer_static, tunn));
-                res
+                // Derive the caller-visible forwarded-packet result before
+                // moving `session_data` into the active-tunnel entry below.
+                let handled = Self::incoming_packet_result(res, session_data.clone(), packet_now);
+                e.insert_entry(ActiveTunnel { peer_static, tunn });
+                handled
             }
             (_, _p) => {
                 tracing::debug!(remote = ?from, "received unexpected packet kind for new entry");
-                TunnResult::Err(WireGuardError::InvalidPacket)
+                HandleIncomingPacketResult::Result {
+                    result: TunnResult::Err(WireGuardError::InvalidPacket),
+                }
             }
         }
     }
 
     /// Handles an outgoing packet sent through the tunnel identified by the
     /// remote socket address `to`.
-    #[tracing::instrument(skip_all, fields(remote = %to))]
     pub fn handle_outgoing_packet(&mut self, packet: Packet, to: SocketAddr) -> Option<WgKind> {
-        let Some((_, tunn)) = self.active_tunnels.get_mut(&to) else {
+        self.handle_outgoing_packet_with_session(packet, to)
+            .and_then(HandleOutgoingPacketResult::into_packet)
+    }
+
+    /// Handles an outgoing packet and returns the active tunnel session used to
+    /// admit the payload into the tunnel pipeline.
+    ///
+    /// This re-checks authorization on the outgoing path. If the active tunnel
+    /// no longer has current authorization, the packet is dropped and `None` is
+    /// returned even when the tunnel state itself still exists.
+    #[tracing::instrument(skip_all, fields(remote = %to))]
+    pub fn handle_outgoing_packet_with_session(
+        &mut self,
+        packet: Packet,
+        to: SocketAddr,
+    ) -> Option<HandleOutgoingPacketResult<T::SessionData>> {
+        let Some(active_tunnel) = self.active_tunnels.get_mut(&to) else {
             tracing::error!(to=?to, "No tunnel for outgoing packet found.");
             return None;
         };
-        tunn.handle_outgoing_packet(packet.into_bytes())
+        let packet_now = Instant::now();
+        let Some(session_data) = self
+            .authz
+            .is_authorized(packet_now, active_tunnel.peer_static.as_bytes())
+        else {
+            tracing::debug!(remote = ?to, peer_static = ?active_tunnel.peer_static, "dropping outgoing packet for unauthorized peer");
+            return None;
+        };
+        Some(Self::outgoing_packet_result(
+            active_tunnel
+                .tunn
+                .handle_outgoing_packet(packet.into_bytes()),
+            packet_now,
+            session_data,
+        ))
     }
 
     /// Update timers of all tunnels. Generate corresponding keepalive or
@@ -222,14 +389,14 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
     /// this is not the same as unauthorized tunnels.
     pub fn update_timers(&mut self) -> Vec<(SocketAddr, WgKind)> {
         let mut res = vec![];
-        self.active_tunnels.retain(|k, (_, tunn)| {
-            match tunn.update_timers() {
+        self.active_tunnels.retain(|k, active_tunnel| {
+            match active_tunnel.tunn.update_timers() {
                 Ok(Some(wg)) => res.push((*k, wg)),
                 Ok(None) => {},
                 Err(e) => tracing::error!(err=?e, remote_sockaddr=?k, "error when updating timers on tunnel"),
             }
 
-            !tunn.is_expired()
+            !active_tunnel.tunn.is_expired()
         });
         res
     }
@@ -257,13 +424,20 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
 
 /// Authorization layer for the snaptun server.
 pub trait SnapTunAuthorization: Send + Sync {
-    /// Returns true iff the peer is allowed to send traffic to the server.
-    fn is_authorized(&self, now: Instant, identity: &[u8; 32]) -> bool;
+    /// Immutable session data that downstream dataplane consumers may read.
+    type SessionData: Clone + Send + Sync + 'static;
+
+    /// Returns the current session data iff the peer is allowed to send traffic.
+    fn is_authorized(&self, now: Instant, identity: &[u8; 32]) -> Option<Arc<Self::SessionData>>;
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
+    use std::{
+        collections::{HashMap, VecDeque},
+        net::SocketAddr,
+        sync::{Arc, Mutex},
+    };
 
     use ana_gotatun::{
         noise::{Tunn, TunnResult, rate_limiter::RateLimiter},
@@ -274,7 +448,10 @@ mod tests {
 
     use crate::{
         scion_packet::{Scion, ScionHeader},
-        server::{SnapTunAuthorization, SnapTunServer},
+        server::{
+            HandleIncomingPacketResult, HandleOutgoingPacketResult, SnapTunAuthorization,
+            SnapTunServer,
+        },
     };
 
     type ResultT = Result<(), Box<dyn std::error::Error>>;
@@ -282,9 +459,86 @@ mod tests {
     struct TrivialAuthz;
 
     impl SnapTunAuthorization for TrivialAuthz {
-        fn is_authorized(&self, _now: std::time::Instant, _ident: &[u8; 32]) -> bool {
-            true
+        type SessionData = ();
+
+        fn is_authorized(
+            &self,
+            _now: std::time::Instant,
+            _ident: &[u8; 32],
+        ) -> Option<Arc<Self::SessionData>> {
+            Some(Arc::new(()))
         }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct MutableSessionData {
+        jti: &'static str,
+        pssid: &'static str,
+        tags: Vec<(&'static str, &'static str)>,
+    }
+
+    #[derive(Default)]
+    struct MutableAuthz {
+        sessions: Mutex<HashMap<[u8; 32], Arc<MutableSessionData>>>,
+    }
+
+    impl MutableAuthz {
+        fn set_session_data(&self, identity: [u8; 32], session_data: MutableSessionData) {
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(identity, Arc::new(session_data));
+        }
+    }
+
+    impl SnapTunAuthorization for MutableAuthz {
+        type SessionData = MutableSessionData;
+
+        fn is_authorized(
+            &self,
+            _now: std::time::Instant,
+            ident: &[u8; 32],
+        ) -> Option<Arc<Self::SessionData>> {
+            self.sessions.lock().unwrap().get(ident).cloned()
+        }
+    }
+
+    fn test_packet<const N: usize>(payload: [u8; N]) -> Packet {
+        let packet = Scion {
+            header: ScionHeader::new(
+                0,
+                0xAA,
+                0xABCDE,
+                payload.len() as _,
+                IpNextProtocol::Udp,
+                7,
+                0x0123_4567_89AB_CDEF,
+                0xFEDC_BA98_7654_3210,
+            ),
+            payload,
+        };
+        Packet::copy_from(packet.as_bytes())
+    }
+
+    fn establish_tunnel<T: SnapTunAuthorization>(
+        snaptun_server: &mut SnapTunServer<T>,
+        tunn_client: &mut Tunn,
+        packet: &Packet,
+        sockaddr_client: SocketAddr,
+        send_to_network: &mut VecDeque<WgKind>,
+    ) {
+        let Some(WgKind::HandshakeInit(hs_init)) =
+            tunn_client.handle_outgoing_packet(Packet::copy_from(packet))
+        else {
+            panic!("expected handshake init")
+        };
+
+        snaptun_server.handle_incoming_packet(
+            Packet::copy_from(hs_init.as_bytes()),
+            sockaddr_client,
+            send_to_network,
+        );
+        dispatch_one(tunn_client, send_to_network);
     }
 
     #[test]
@@ -303,27 +557,8 @@ mod tests {
 
         let mut send_to_network = VecDeque::<WgKind>::new();
 
-        let test_payload0 = [b'T', b'E', b'S', b'T', b'0'];
-        let test_payload1 = [b'T', b'E', b'S', b'T', b'1'];
-        let test_packet0 = Scion {
-            header: ScionHeader::new(
-                0,                        // version
-                0xAA,                     // traffic_class
-                0xABCDE,                  // flow_id (20 bits)
-                test_payload0.len() as _, // payload_len
-                IpNextProtocol::Udp,
-                7, // hop_count
-                0x0123_4567_89AB_CDEF,
-                0xFEDC_BA98_7654_3210,
-            ),
-            payload: test_payload0,
-        };
-        let test_packet1 = Scion {
-            header: test_packet0.header,
-            payload: test_payload1,
-        };
-        let test_packet0 = Packet::copy_from(test_packet0.as_bytes());
-        let test_packet1 = Packet::copy_from(test_packet1.as_bytes());
+        let test_packet0 = test_packet([b'T', b'E', b'S', b'T', b'0']);
+        let test_packet1 = test_packet([b'T', b'E', b'S', b'T', b'1']);
 
         let mut tunn_client0 = Tunn::new(
             static_client0,
@@ -346,38 +581,26 @@ mod tests {
         );
 
         /* handshake 0 */
-        let Some(WgKind::HandshakeInit(hs_init)) =
-            tunn_client0.handle_outgoing_packet(Packet::copy_from(&test_packet0))
-        else {
-            panic!("expected handshake init")
-        };
-
-        snaptun_server.handle_incoming_packet(
-            Packet::copy_from(hs_init.as_bytes()),
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_client0,
+            &test_packet0,
             sockaddr_client0,
             &mut send_to_network,
         );
-
-        dispatch_one(&mut tunn_client0, &mut send_to_network);
         assert_eq!(
             tunn_client0.get_initiator_remote_sockaddr(),
             Some(sockaddr_client0)
         );
 
         /* handshake 1 */
-        let Some(WgKind::HandshakeInit(hs_init)) =
-            tunn_client1.handle_outgoing_packet(Packet::copy_from(&test_packet1))
-        else {
-            panic!("expected handshake init")
-        };
-
-        snaptun_server.handle_incoming_packet(
-            Packet::copy_from(hs_init.as_bytes()),
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_client1,
+            &test_packet1,
             sockaddr_client1,
             &mut send_to_network,
         );
-
-        dispatch_one(&mut tunn_client1, &mut send_to_network);
         assert_eq!(
             tunn_client1.get_initiator_remote_sockaddr(),
             Some(sockaddr_client1)
@@ -428,9 +651,190 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn outgoing_packet_with_session_returns_active_session() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let static_client = x25519::StaticSecret::from([0u8; 32]);
+        let sockaddr_server: SocketAddr = "10.0.0.1:5001".parse().unwrap();
+        let static_server = x25519::StaticSecret::from([2u8; 32]);
+        let static_server_public = x25519::PublicKey::from(&static_server);
+
+        let rate_limiter = Arc::new(RateLimiter::new(&static_server_public, 100));
+        let mut snaptun_server =
+            SnapTunServer::new(static_server, rate_limiter.clone(), Arc::new(TrivialAuthz));
+        let mut send_to_network = VecDeque::<WgKind>::new();
+
+        let test_packet = test_packet([b'T', b'E', b'S', b'T']);
+
+        let mut tunn_client = Tunn::new(
+            static_client,
+            static_server_public,
+            None,
+            None,
+            0,
+            rate_limiter,
+            sockaddr_server,
+        );
+
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_client,
+            &test_packet,
+            sockaddr_client,
+            &mut send_to_network,
+        );
+
+        let Some(WgKind::Data(client_data)) = tunn_client.get_queued_packets().next() else {
+            panic!("expected packet to be queued");
+        };
+        let TunnResult::WriteToTunnel(server_plaintext) = snaptun_server.handle_incoming_packet(
+            Packet::copy_from(client_data.as_bytes()),
+            sockaddr_client,
+            &mut send_to_network,
+        ) else {
+            panic!("expected packet to be processed")
+        };
+
+        let handled = snaptun_server
+            .handle_outgoing_packet_with_session(server_plaintext, sockaddr_client)
+            .expect("expected packet to be encapsulated");
+        let HandleOutgoingPacketResult {
+            network_packet: Some(WgKind::Data(encapsulated)),
+            processed_at: _,
+            session_data,
+        } = handled
+        else {
+            panic!("expected encapsulated data packet")
+        };
+        assert_eq!(session_data.as_ref(), &());
+
+        let TunnResult::WriteToTunnel(plaintext) =
+            tunn_client.handle_incoming_packet(WgKind::Data(encapsulated))
+        else {
+            panic!("expected packet to be delivered back to client")
+        };
+        assert_eq!(plaintext.as_bytes(), test_packet.as_bytes());
+    }
+
+    #[test]
+    fn established_tunnel_refreshes_session_data_for_later_packets() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let static_client = x25519::StaticSecret::from([0u8; 32]);
+        let client_identity = x25519::PublicKey::from(&static_client);
+        let sockaddr_server: SocketAddr = "10.0.0.1:5001".parse().unwrap();
+        let static_server = x25519::StaticSecret::from([2u8; 32]);
+        let static_server_public = x25519::PublicKey::from(&static_server);
+        let rate_limiter = Arc::new(RateLimiter::new(&static_server_public, 100));
+        let authz = Arc::new(MutableAuthz::default());
+        let original_session = MutableSessionData {
+            jti: "original-jti",
+            pssid: "original-pssid",
+            tags: vec![("subject_id", "subject-1"), ("scope", "basic")],
+        };
+        authz.set_session_data(*client_identity.as_bytes(), original_session);
+
+        let mut snaptun_server =
+            SnapTunServer::new(static_server, rate_limiter.clone(), authz.clone());
+        let mut send_to_network = VecDeque::<WgKind>::new();
+        let test_packet = test_packet([b'T', b'E', b'S', b'T']);
+
+        let mut tunn_client = Tunn::new(
+            static_client,
+            static_server_public,
+            None,
+            None,
+            0,
+            rate_limiter,
+            sockaddr_server,
+        );
+
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_client,
+            &test_packet,
+            sockaddr_client,
+            &mut send_to_network,
+        );
+
+        let refreshed_session = MutableSessionData {
+            jti: "refreshed-jti",
+            pssid: "refreshed-pssid",
+            tags: vec![("subject_id", "subject-2"), ("scope", "premium")],
+        };
+        authz.set_session_data(*client_identity.as_bytes(), refreshed_session.clone());
+
+        let Some(WgKind::Data(client_data)) = tunn_client.get_queued_packets().next() else {
+            panic!("expected packet to be queued");
+        };
+        let HandleIncomingPacketResult::Forwarded {
+            packet: server_plaintext,
+            session_data,
+            ..
+        } = snaptun_server.handle_incoming_packet_with_session(
+            Packet::copy_from(client_data.as_bytes()),
+            sockaddr_client,
+            &mut send_to_network,
+        )
+        else {
+            panic!("expected forwarded packet with refreshed session data")
+        };
+        assert_eq!(session_data.as_ref(), &refreshed_session);
+
+        let Some(HandleOutgoingPacketResult {
+            network_packet: Some(WgKind::Data(encapsulated)),
+            processed_at: _,
+            session_data,
+        }) = snaptun_server.handle_outgoing_packet_with_session(server_plaintext, sockaddr_client)
+        else {
+            panic!("expected encapsulated data packet with refreshed session data")
+        };
+        assert_eq!(session_data.as_ref(), &refreshed_session);
+
+        let TunnResult::WriteToTunnel(plaintext) =
+            tunn_client.handle_incoming_packet(WgKind::Data(encapsulated))
+        else {
+            panic!("expected packet to be delivered back to client")
+        };
+        assert_eq!(plaintext.as_bytes(), test_packet.as_bytes());
+    }
+
+    #[test]
+    fn outgoing_packet_with_session_returns_none_without_tunnel() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let static_server = x25519::StaticSecret::from([2u8; 32]);
+        let static_server_public = x25519::PublicKey::from(&static_server);
+        let rate_limiter = Arc::new(RateLimiter::new(&static_server_public, 100));
+        let mut snaptun_server =
+            SnapTunServer::new(static_server, rate_limiter, Arc::new(TrivialAuthz));
+
+        let payload = [b'T', b'E', b'S', b'T'];
+        let test_packet = Scion {
+            header: ScionHeader::new(
+                0,
+                0xAA,
+                0xABCDE,
+                payload.len() as _,
+                IpNextProtocol::Udp,
+                7,
+                0x0123_4567_89AB_CDEF,
+                0xFEDC_BA98_7654_3210,
+            ),
+            payload,
+        };
+
+        assert!(
+            snaptun_server
+                .handle_outgoing_packet_with_session(
+                    Packet::copy_from(test_packet.as_bytes()),
+                    sockaddr_client
+                )
+                .is_none()
+        );
+    }
+
     fn dispatch_one(tunn: &mut Tunn, packets: &mut VecDeque<WgKind>) -> TunnResult {
-        if let Some(p) = packets.pop_front() {
-            return tunn.handle_incoming_packet(p);
+        if let Some(packet) = packets.pop_front() {
+            return tunn.handle_incoming_packet(packet);
         }
         TunnResult::Done
     }
