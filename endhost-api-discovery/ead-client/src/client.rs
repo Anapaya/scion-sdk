@@ -81,7 +81,7 @@ impl EndhostApiDiscoveryClient for CrpcEndhostApiDiscoveryClient {
                     RpcEndhostApiDiscoveryService::SERVICE_PATH,
                     RpcEndhostApiDiscoveryService::GET_ENDHOST_APIS_PATH
                 ),
-                RpcGetEndhostApisRequest {},
+                &RpcGetEndhostApisRequest {},
             )
             .await?;
 

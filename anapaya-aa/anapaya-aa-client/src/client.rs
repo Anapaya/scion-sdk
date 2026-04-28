@@ -84,7 +84,7 @@ impl AaAuthClient for CrpcAaAuthClient {
             .client
             .unary_request::<AuthenticateByKeyRequest, AuthenticateByKeyResponse>(
                 &format!("{ANAPAYA_AA_V1}.{AUTH_SERVICE}{AUTHENTICATE_BY_KEY}"),
-                AuthenticateByKeyRequest {
+                &AuthenticateByKeyRequest {
                     api_key,
                     device_id,
                     requested_validity,

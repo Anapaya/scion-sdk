@@ -497,7 +497,7 @@ async fn test_assign_address_multiple_requested_rejected() {
             "https://localhost/anapaya.edgetun.v1/assign_addresses"
                 .parse()
                 .unwrap(),
-            AddressAssignRequest {
+            &AddressAssignRequest {
                 client_identity: vec![5u8; 32],
                 requested_addresses: vec![addr1, addr2],
             },
@@ -566,7 +566,7 @@ async fn test_unknown_path_returns_error() {
             "https://localhost/anapaya.edgetun.v1/unknown_method"
                 .parse()
                 .unwrap(),
-            GetDataPlaneConfigurationRequest {},
+            &GetDataPlaneConfigurationRequest {},
         )
         .await;
 

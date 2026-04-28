@@ -132,7 +132,7 @@ impl EndhostApiClient for CrpcEndhostApiClient {
         self.client
             .unary_request::<ListUnderlaysRequest, ListUnderlaysResponse>(
                 &format!("{ENDHOST_API_V1}.{UNDERLAY_SERVICE}{LIST_UNDERLAYS}"),
-                ListUnderlaysRequest {
+                &ListUnderlaysRequest {
                     isd_as: Some(isd_as.into()),
                 },
             )
@@ -160,7 +160,7 @@ impl EndhostApiClient for CrpcEndhostApiClient {
         self.client
             .unary_request::<ListSegmentsRequest, ListSegmentsResponse>(
                 &format!("{ENDHOST_API_V1}.{SEGMENTS_SERVICE}{LIST_SEGMENTS}"),
-                ListSegmentsRequest {
+                &ListSegmentsRequest {
                     src_isd_as: src.0,
                     dst_isd_as: dst.0,
                     page_size,

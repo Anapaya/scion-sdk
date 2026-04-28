@@ -129,7 +129,7 @@ where
             .unary_request::<ListSegmentsRequest, ListSegmentsResponse>(
                 Method::POST,
                 url,
-                ListSegmentsRequest {
+                &ListSegmentsRequest {
                     src_isd_as: src.0,
                     dst_isd_as: dst.0,
                 },

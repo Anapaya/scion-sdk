@@ -110,10 +110,10 @@ impl CrpcClient {
     pub async fn unary_request<Req, Res>(
         &self,
         path: &str,
-        req: Req,
+        req: &Req,
     ) -> Result<Res, CrpcClientError>
     where
-        Req: prost::Message + Default,
+        Req: prost::Message,
         Res: prost::Message + Default,
     {
         self.do_unary_request(path, req)
@@ -122,9 +122,13 @@ impl CrpcClient {
     }
 
     /// Sends a unary request to the endhost API.
-    async fn do_unary_request<Req, Res>(&self, path: &str, req: Req) -> Result<Res, CrpcClientError>
+    async fn do_unary_request<Req, Res>(
+        &self,
+        path: &str,
+        req: &Req,
+    ) -> Result<Res, CrpcClientError>
     where
-        Req: prost::Message + Default,
+        Req: prost::Message,
         Res: prost::Message + Default,
     {
         let url = self.base_url.join(path).map_err(|e| {

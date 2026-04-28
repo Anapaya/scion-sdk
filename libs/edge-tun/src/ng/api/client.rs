@@ -101,7 +101,7 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
             .unary_request::<GetDataPlaneConfigurationRequest, GetDataPlaneConfigurationResponse>(
                 Method::POST,
                 url,
-                GetDataPlaneConfigurationRequest {},
+                &GetDataPlaneConfigurationRequest {},
             )
             .await?;
 
@@ -145,7 +145,7 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
             .unary_request::<RegisterEdgeTunIdentityRequest, RegisterEdgeTunIdentityResponse>(
                 Method::POST,
                 url,
-                RegisterEdgeTunIdentityRequest {
+                &RegisterEdgeTunIdentityRequest {
                     initiator_static_x25519: initiator_static_x25519.as_bytes().to_vec(),
                     psk_share: option_to_psk_bytes(psk_share),
                 },
@@ -190,7 +190,7 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
             .unary_request::<AddressAssignRequest, AddressAssignResponse>(
                 Method::POST,
                 url,
-                AddressAssignRequest {
+                &AddressAssignRequest {
                     client_identity: client_identity.as_bytes().to_vec(),
                     requested_addresses,
                 },
@@ -220,7 +220,7 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
             .unary_request::<RouteAdvertisementRequest, RouteAdvertisementResponse>(
                 Method::POST,
                 url,
-                RouteAdvertisementRequest {
+                &RouteAdvertisementRequest {
                     client_identity: client_identity.as_bytes().to_vec(),
                 },
             )

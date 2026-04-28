@@ -101,7 +101,7 @@ impl ControlPlaneApi for CrpcSnapControlClient {
             .client
             .unary_request::<proto::GetSnapDataPlaneRequest, proto::GetSnapDataPlaneResponse>(
                 &format!("{SERVICE_PATH}{GET_SNAP_DATA_PLANE_ADDRESS}"),
-                proto::GetSnapDataPlaneRequest::default(),
+                &proto::GetSnapDataPlaneRequest::default(),
             )
             .await?;
         let address = res.address.parse().map_err(|e: std::net::AddrParseError| {
@@ -166,7 +166,7 @@ impl ControlPlaneApi for CrpcSnapControlClient {
     ) -> Result<Option<[u8; 32]>, CrpcClientError> {
         let res = self.client.unary_request::<proto::RegisterSnapTunIdentityRequest, proto::RegisterSnapTunIdentityResponse>(
             &format!("{SERVICE_PATH}{REGISTER_SNAPTUN_IDENTITY}"),
-            proto::RegisterSnapTunIdentityRequest { initiator_static_x25519: initiator_identity.to_bytes().to_vec(), psk_share: psk_share.unwrap_or([0u8;32]).to_vec() },
+            &proto::RegisterSnapTunIdentityRequest { initiator_static_x25519: initiator_identity.to_bytes().to_vec(), psk_share: psk_share.unwrap_or([0u8;32]).to_vec() },
         ).await?;
         let psk_share = if res.psk_share.as_slice() == [0u8; 32] {
             None

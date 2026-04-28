@@ -66,10 +66,10 @@ pub trait ConnectRpcClient {
         &self,
         method: http::Method,
         url: Url,
-        request: Req,
+        request: &Req,
     ) -> Result<Res, RequestError>
     where
-        Req: prost::Message + Default,
+        Req: prost::Message,
         Res: prost::Message + Default;
 }
 
@@ -141,10 +141,10 @@ impl ConnectRpcClient for CrpcClient {
         &self,
         method: http::Method,
         url: Url,
-        req: Req,
+        req: &Req,
     ) -> Result<Res, RequestError>
     where
-        Req: prost::Message + Default,
+        Req: prost::Message,
         Res: prost::Message + Default,
     {
         let request_body = req.encode_to_vec();

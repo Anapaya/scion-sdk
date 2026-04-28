@@ -263,7 +263,7 @@ impl ControlService {
 
                         for beacon_req in beacon_reqs {
                             match crpc_client
-                                .beacon_request(Duration::from_secs(5), beacon_req)
+                                .beacon_request(Duration::from_secs(5), &beacon_req)
                                 .await
                             {
                                 Ok(_) => {}
@@ -741,7 +741,7 @@ impl ControlServiceCrpcClient {
     pub async fn beacon_request(
         &self,
         timeout: Duration,
-        beacon_req: BeaconRequest,
+        beacon_req: &BeaconRequest,
     ) -> anyhow::Result<BeaconResponse> {
         const BEACON_SERVICE_PATH: &str = "/proto.control_plane.v1.SegmentCreationService/Beacon";
 
