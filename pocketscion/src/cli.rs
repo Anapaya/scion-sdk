@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
+use scion_sdk_observability::{LogFormat, LogOutput};
 
 use crate::runtime::DEFAULT_MGMT_PORT;
 
@@ -47,15 +48,19 @@ pub struct ManagementOptions {
 /// Logging options.
 #[derive(Debug, Args)]
 pub struct LoggingOptions {
-    /// Log pocket SCION output to stderr.
-    #[arg(long, global = true, default_value = "true")]
-    #[clap(global = true)]
-    pub stderr: bool,
-
-    /// Directory for the pocket SCION log.
-    #[arg(long, global = true)]
-    pub log_dir: Option<PathBuf>,
+    /// Log output level.
+    #[arg(long, global = true, default_value_t = DEFAULT_LOG_OUTPUT)]
+    pub output: LogOutput,
+    /// Log output format.
+    #[arg(long, global = true, default_value_t = DEFAULT_LOG_FORMAT)]
+    pub format: LogFormat,
 }
+
+/// Default log putput.
+pub const DEFAULT_LOG_OUTPUT: LogOutput = LogOutput::Stderr;
+
+/// Default log output format.
+pub const DEFAULT_LOG_FORMAT: LogFormat = LogFormat::Json;
 
 /// Top-level subcommands.
 #[derive(Debug, Subcommand)]

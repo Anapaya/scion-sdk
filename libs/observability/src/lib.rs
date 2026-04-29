@@ -16,7 +16,7 @@
 use std::{
     fmt,
     io::{IsTerminal, Write},
-    path::{Path, PathBuf},
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
@@ -52,6 +52,32 @@ pub enum LogOutput {
     Stdout,
 }
 
+impl FromStr for LogOutput {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "stdout" => Ok(LogOutput::Stdout),
+            "stderr" => Ok(LogOutput::Stderr),
+            _ => {
+                Err(format!(
+                    "Invalid log output: '{}', expected 'stdout' or 'stderr'",
+                    s
+                ))
+            }
+        }
+    }
+}
+
+impl fmt::Display for LogOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogOutput::Stdout => write!(f, "stdout"),
+            LogOutput::Stderr => write!(f, "stderr"),
+        }
+    }
+}
+
 /// Selects the log line format.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -63,9 +89,34 @@ pub enum LogFormat {
     Json,
 }
 
+impl FromStr for LogFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "text" => Ok(LogFormat::Text),
+            "json" => Ok(LogFormat::Json),
+            _ => {
+                Err(format!(
+                    "Invalid log format: '{}', expected 'text' or 'json'",
+                    s
+                ))
+            }
+        }
+    }
+}
+
+impl fmt::Display for LogFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogFormat::Text => write!(f, "text"),
+            LogFormat::Json => write!(f, "json"),
+        }
+    }
+}
+
 /// Configuration for tracing setup.
 pub struct TracingConfig {
-    log_dir: Option<PathBuf>,
     /// Console output sink. `None` disables console logging.
     console_output: Option<LogOutput>,
     console_format: LogFormat,
@@ -76,7 +127,6 @@ pub struct TracingConfig {
 impl Default for TracingConfig {
     fn default() -> Self {
         Self {
-            log_dir: None,
             // Default: human-readable text → stderr (preserves existing behaviour).
             console_output: Some(LogOutput::Stderr),
             console_format: LogFormat::Text,
@@ -90,12 +140,6 @@ impl TracingConfig {
     /// Create a new tracing configuration with defaults.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Set an optional log directory for file output.
-    pub fn with_log_dir<P: AsRef<Path>>(mut self, log_dir: Option<P>) -> Self {
-        self.log_dir = log_dir.map(|path| path.as_ref().to_path_buf());
-        self
     }
 
     /// Set where console log lines are written.
@@ -141,6 +185,8 @@ impl TracingConfig {
     }
 
     /// Initialize tracing using this configuration.
+    ///
+    /// The tracing directives from the configuration are applied to all layers.
     pub fn init(self) -> Result<Vec<WorkerGuard>, TracingSetupError> {
         // Setup log tracer to forward log records to tracing subscriber, this is required to
         // capture logs from dependencies such as squiche.
@@ -151,7 +197,6 @@ impl TracingConfig {
         })?;
 
         let TracingConfig {
-            log_dir,
             console_output,
             console_format,
             directives,
@@ -179,19 +224,6 @@ impl TracingConfig {
 
         let mut guards = vec![];
         let mut layers = vec![JsonStorageLayer.boxed()];
-
-        if let Some(log_dir) = log_dir {
-            let log_file =
-                tracing_appender::rolling::never(log_dir, format!("{}.log", extract_exec_name()));
-            let (non_blocking_writer, file_guard) = tracing_appender::non_blocking(log_file);
-            let file_logger = tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_timer(UtcTime::rfc_3339())
-                .with_writer(non_blocking_writer)
-                .with_filter(make_filter(&directives)?);
-            layers.push(file_logger.boxed());
-            guards.push(file_guard);
-        }
 
         if let Some(output) = console_output {
             match (output, &console_format) {
@@ -278,15 +310,6 @@ impl fmt::Display for TracingSetupError {
 
 impl std::error::Error for TracingSetupError {}
 
-/// Setup logging using the tracing library with default options. Log output format is json.
-pub fn setup_tracing<P: AsRef<Path>>(log_dir: Option<P>, log_to_stderr: bool) -> Vec<WorkerGuard> {
-    let mut cfg = TracingConfig::new().with_log_dir(log_dir);
-    if !log_to_stderr {
-        cfg.console_output = None;
-    }
-    cfg.init().expect("Failed to initialize tracing")
-}
-
 #[allow(unused)]
 fn json_formatted_layer<W: Write + Send + 'static>(
     w: W,
@@ -346,14 +369,4 @@ impl<B> MakeSpan<B> for RandomSpans {
             version = ?request.version(),
         )
     }
-}
-
-/// Extract the name of the executable that is currently running.
-fn extract_exec_name() -> String {
-    let exec_path = std::env::current_exe().expect("Failed to get the current executable path");
-    exec_path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_string())
-        .expect("Failed to extract program name")
 }
