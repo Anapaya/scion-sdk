@@ -64,7 +64,7 @@ pub(crate) const PACKET_PER_SEC_LIMIT: u64 = 50 * 1024;
 pub(crate) type PacketPool = ana_gotatun::packet::PacketBufPool<PACKET_BUF_SIZE>;
 
 /// The tunnel gateway.
-pub struct TunnelGateway<A, D, O> {
+pub struct TunnelGateway<A, D, O: ?Sized> {
     /// The socket shared by the server (which in our case is just handling
     /// inbound traffic) and the dispatcher (which processes outbound traffic).
     socket: tokio::net::UdpSocket,
@@ -79,7 +79,7 @@ pub struct TunnelGateway<A, D, O> {
     observer: Arc<O>,
 }
 
-impl<A, D, O> TunnelGateway<A, D, O>
+impl<A, D, O: ?Sized> TunnelGateway<A, D, O>
 where
     D: Dispatcher + 'static,
     A: SnapTunAuthorization + 'static,

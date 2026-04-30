@@ -95,7 +95,7 @@ pub fn start_tunnel_gateway<A, D, O>(
 ) where
     A: SnapTunAuthorization + 'static,
     D: Dispatcher + 'static,
-    O: TunnelGatewayObserver<A::SessionData> + 'static,
+    O: TunnelGatewayObserver<A::SessionData> + ?Sized + 'static,
 {
     let tun_gateway = TunnelGateway::new(
         socket,
