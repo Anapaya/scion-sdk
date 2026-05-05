@@ -182,7 +182,10 @@ async fn handle_request<C: EdgeTunControlPlane>(
         }
     };
 
-    if let Err(e) = responder.send_response(status, &body).await {
+    if let Err(e) = responder
+        .send_response(status, &http::HeaderMap::new(), &body)
+        .await
+    {
         tracing::error!(?e, "EdgeTunControlPlaneCrpcApi: failed to send response");
     }
 }

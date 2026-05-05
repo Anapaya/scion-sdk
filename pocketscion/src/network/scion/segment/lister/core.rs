@@ -52,16 +52,24 @@ impl SegmentRegistry {
         let res: Vec<&LinkSegment> = match query_type {
             Query::Core(dst_asn) => {
                 core_store
-                    .segments(local.into(), dst_asn.into())
+                    // Core segments are fetched in a reversed fashion, because they are assumed to
+                    // be stored in the direction of propagation in the appliance implementation.
+                    // In other words, we must return segments originated from `dst_asn`, and
+                    // terminated at `local`.
+                    .segments(dst_asn.into(), local.into())
                     .iter()
                     .by_ref()
                     .collect()
             }
             Query::CoreWildcard(isd) => {
                 core_store
-                    .segments_by_start_as(local.into())
+                    // Core segments are fetched in a reversed fashion, because they are assumed to
+                    // be stored in the direction of propagation in the appliance implementation.
+                    // In other words, we must return segments originated from any core AS and
+                    // terminated at `local`.
+                    .segments_by_end_as(local.into())
                     .iter()
-                    .filter(|s| s.bucket.leaf_as.isd() == isd.into())
+                    .filter(|s| s.bucket.start_as.isd() == isd.into())
                     .filter_map(|s| core_store.segment(s))
                     .collect()
             }

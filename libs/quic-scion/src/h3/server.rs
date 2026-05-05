@@ -219,12 +219,20 @@ impl H3ResponseSender {
     pub async fn send_response(
         &mut self,
         status: http::StatusCode,
+        response_headers: &http::HeaderMap,
         body: &[u8],
     ) -> Result<(), squiche::h3::Error> {
-        let headers = vec![squiche::h3::Header::new(
+        let mut headers = vec![squiche::h3::Header::new(
             b":status",
             status.as_u16().to_string().as_bytes(),
         )];
+
+        for (name, value) in response_headers.iter() {
+            headers.push(squiche::h3::Header::new(
+                name.as_str().as_bytes(),
+                value.as_bytes(),
+            ));
+        }
 
         let mut h3 = self.h3_conn.lock().await;
         let mut quic = self.quic_conn.lock().await;

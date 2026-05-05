@@ -57,7 +57,7 @@ async fn http3_ping_pong() {
 
                 // send pong response
                 responder
-                    .send_response(http::StatusCode::OK, b"pong")
+                    .send_response(http::StatusCode::OK, &http::HeaderMap::new(), b"pong")
                     .await
                     .unwrap();
             }
