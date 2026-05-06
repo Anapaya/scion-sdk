@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! SCION dataplane path parsing and interpretation.
+//!
+//! SCION dataplane paths specify the path that a packet should take through the network. They can
+//! be of different types, such as standard SCION paths or one-hop paths between neighboring border
+//! routers.
+//!
+//! Dataplane paths usually are supplied by SCION the control plane, contained in a
+//! [ScionPath](crate::path::ScionPath) together with metadata.
+
 pub mod onehop;
 pub mod standard;
 

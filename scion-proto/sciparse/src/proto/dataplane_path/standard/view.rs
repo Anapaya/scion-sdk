@@ -27,12 +27,12 @@ use crate::{
         },
         write::unchecked_bit_range_be_write,
     },
-    path::standard::{
+    dataplane_path::standard::{
         layout::{
             HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathLayout, StdPathMetaLayout,
         },
         mac::{HopMacInput, HopMacInputSource},
-        types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
+        types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, exp_time_to_duration},
     },
 };
 
@@ -61,6 +61,7 @@ impl StandardPathView {
         self.seg0_len() + self.seg1_len() + self.seg2_len()
     }
 }
+
 // Meta header mut
 impl StandardPathView {
     gen_field_write!(
@@ -277,6 +278,56 @@ impl StandardPathView {
         }
     }
 }
+// Utility
+impl StandardPathView {
+    /// Returns a iterator over the segments of the path, where each segment is represented as a
+    /// tuple of an info field and a slice of hop fields.
+    ///
+    /// The iterator gurantees that each info field has at least one hop field, and that the number
+    /// of info fields and hop fields matches the segment lengths in the meta header.
+    #[inline]
+    pub fn segments(&self) -> SegmentIterator<'_> {
+        SegmentIterator::new(self)
+    }
+
+    /// Calculates the expiry time of the path by scanning info and hop fields
+    ///
+    /// Returns the absolute expiry time as a UNIX timestamp in seconds, or 0 if the path has no hop
+    /// fields.
+    pub fn expiration(&self) -> u32 {
+        let segment_iter = self.segments();
+        if segment_iter.is_empty() {
+            return 0;
+        }
+
+        let mut expiry_time = u32::MAX;
+
+        for (info_field, hop_fields) in self.segments() {
+            // get the lowest exp_time of the hop fields in the segment
+            let exp_time = hop_fields
+                .iter()
+                .map(|hop_field| hop_field.exp_time())
+                .min()
+                .expect("segment iterator ensures at least one hop field per segment");
+
+            let info_expiry = info_field.timestamp();
+
+            // calculate the absolute expiry time of the segment
+            let exp_time: u32 = exp_time_to_duration(exp_time)
+                .as_secs()
+                .try_into()
+                .expect("maximum expiry time fits in u32");
+
+            let segment_expiry = info_expiry.saturating_add(exp_time);
+
+            // Update the path expiry time to be the minimum of the current expiry time and the
+            // segment expiry
+            expiry_time = expiry_time.min(segment_expiry);
+        }
+
+        expiry_time
+    }
+}
 impl Debug for StandardPathView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hop_fields = self.hop_fields();
@@ -290,6 +341,76 @@ impl Debug for StandardPathView {
             .field("info_fields", &info_fields)
             .field("hop_fields", &hop_fields)
             .finish()
+    }
+}
+
+/// Iterator over the segments of a standard path, where each segment is represented as a tuple of
+/// an info field and a slice of hop fields.
+pub struct SegmentIterator<'a> {
+    segment_lengths: [u8; 3],
+    hop_fields: &'a [HopFieldView],
+    info_fields: &'a [InfoFieldView],
+    seg_idx: usize,
+    total_segments: usize,
+    hop_idx: usize,
+}
+impl SegmentIterator<'_> {
+    fn new(path_view: &StandardPathView) -> SegmentIterator<'_> {
+        let segment_lengths = [
+            path_view.seg0_len(),
+            path_view.seg1_len(),
+            path_view.seg2_len(),
+        ];
+
+        let mut total_segments = 0;
+        for &len in &segment_lengths {
+            if len == 0 {
+                break;
+            }
+            total_segments += 1;
+        }
+
+        SegmentIterator {
+            total_segments: total_segments as usize,
+            hop_fields: path_view.hop_fields(),
+            info_fields: path_view.info_fields(),
+            segment_lengths,
+            seg_idx: 0,
+            hop_idx: 0,
+        }
+    }
+
+    /// Returns true if the path has no segments, i.e. no info fields and no hop fields.
+    pub fn is_empty(&self) -> bool {
+        self.total_segments == 0
+    }
+
+    /// Returns the total number of segments in the path, which is determined by the number of info
+    pub fn segment_count(&self) -> usize {
+        self.total_segments
+    }
+
+    /// Returns the total number of hop fields in the path.
+    pub fn hop_field_count(&self) -> usize {
+        self.hop_fields.len()
+    }
+}
+impl<'a> Iterator for SegmentIterator<'a> {
+    type Item = (&'a InfoFieldView, &'a [HopFieldView]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.seg_idx >= self.total_segments {
+            return None;
+        }
+
+        let info_field = self.info_fields.get(self.seg_idx)?;
+        let hop_fields = &self.hop_fields
+            [self.hop_idx..(self.hop_idx + self.segment_lengths[self.seg_idx] as usize)];
+
+        self.seg_idx += 1;
+        self.hop_idx += hop_fields.len();
+
+        Some((info_field, hop_fields))
     }
 }
 
@@ -362,7 +483,17 @@ impl InfoFieldView {
     }
 
     gen_field_read!(segment_id, InfoFieldLayout::SEGMENT_ID_RNG, u16);
-    gen_field_read!(timestamp, InfoFieldLayout::TIMESTAMP_RNG, u32);
+
+    #[inline]
+    #[allow(unused)]
+    /// Returns the timestamp of the info field, which is used for path expiry calculations
+    ///
+    /// The timestamp is the number of seconds since the UNIX epoch, and is used in combination with
+    /// the `exp_time` field of the hop fields to calculate the absolute expiry time of the path.
+    pub fn timestamp(&self) -> u32 {
+        use crate::core::read::unchecked_bit_range_be_read;
+        unsafe { unchecked_bit_range_be_read::<u32>(&self.0, (InfoFieldLayout::TIMESTAMP_RNG)) }
+    }
 }
 // Mutable
 impl InfoFieldView {

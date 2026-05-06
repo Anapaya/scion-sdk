@@ -288,8 +288,8 @@ fn offset_annotations(
 #[cfg(test)]
 mod test {
     use crate::{
-        core::layout::Layout, header::layout::ScionHeaderLayout,
-        path::standard::layout::StdPathDataLayout,
+        core::layout::Layout, dataplane_path::standard::layout::StdPathDataLayout,
+        header::layout::ScionHeaderLayout,
     };
 
     #[test]

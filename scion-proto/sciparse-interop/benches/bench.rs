@@ -26,13 +26,16 @@ use scion_proto::{
 };
 use sciparse::{
     core::{encode::WireEncode, view::View},
+    dataplane_path::{
+        model::ptest::ArbitraryPathParams, standard::model::ptest::ArbitraryPathContext,
+        view::ScionDpPathViewRef,
+    },
     header::model::ptest::ArbitraryScionPacketHeaderParams,
     packet::{
         classify::{ClassifiedPacket, ptest::ArbitraryClassifiedPacketParams},
         model::ScionRawPacket,
         view::ScionRawPacketView,
     },
-    path::{model::ptest::ArbitraryPathParams, standard::model::ptest::ArbitraryPathContext},
     util::ToValue,
 };
 
@@ -301,9 +304,7 @@ fn bench_access(c: &mut Criterion) {
                 for pkt in &packets {
                     // We use unchecked view parse here to isolate just the cost of field access.
                     let view = unsafe { ScionRawPacketView::from_slice_unchecked(pkt) };
-                    if let sciparse::path::view::ScionPathView::Standard(std_path) =
-                        view.header().path()
-                    {
+                    if let ScionDpPathViewRef::Standard(std_path) = view.header().path() {
                         for hf in std_path.hop_fields() {
                             total += hf.cons_ingress() as u64 + hf.cons_egress() as u64;
                         }

@@ -243,12 +243,12 @@ mod tests {
     use crate::{
         address::socket_addr::ScionSocketAddr,
         core::{encode::WireEncode, view::View},
+        dataplane_path::model::DpPath,
         packet::{
             classify::ClassifiedPacketView,
             model::{ScionRawPacket, ScionScmpPacket, ScionUdpPacket},
             view::ScionPacketView,
         },
-        path::model::Path,
         payload::{
             ProtocolNumber,
             scmp::model::{ScmpDestinationUnreachable, ScmpEchoReply},
@@ -260,7 +260,7 @@ mod tests {
         let buf = ScionUdpPacket::new(
             "[1-ff00:0:110,10.0.0.1]:12345".parse().unwrap(),
             "[1-ff00:0:111,10.0.0.2]:54321".parse().unwrap(),
-            Path::Empty,
+            DpPath::Empty,
             b"payload".to_vec(),
         )
         .encode_to_vec()
@@ -285,7 +285,7 @@ mod tests {
         let scion_scmp_packet = ScionScmpPacket::new(
             "1-ff00:0:110,10.0.0.1".parse().unwrap(),
             "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            Path::Empty,
+            DpPath::Empty,
             ScmpEchoReply::new(
                 54321, // identifier used as port
                 1,
@@ -320,7 +320,7 @@ mod tests {
         let quoted_udp = ScionUdpPacket::new(
             "[1-ff00:0:111,10.0.0.2]:54321".parse().unwrap(),
             "[1-ff00:0:110,10.0.0.1]:12345".parse().unwrap(),
-            Path::Empty,
+            DpPath::Empty,
             b"quoted payload".to_vec(),
         );
 
@@ -331,7 +331,7 @@ mod tests {
         let scmp_packet = ScionScmpPacket::new(
             "1-ff00:0:110,10.0.0.1".parse().unwrap(),
             "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            Path::Empty,
+            DpPath::Empty,
             ScmpDestinationUnreachable::new(
                 crate::payload::scmp::types::ScmpDestinationUnreachableCode::AddressUnreachable,
                 quoted_udp_data,
@@ -361,7 +361,7 @@ mod tests {
         let scmp_packet = ScionScmpPacket::new(
             "1-ff00:0:110,10.0.0.1".parse().unwrap(),
             "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            Path::Empty,
+            DpPath::Empty,
             ScmpDestinationUnreachable::new(
                 crate::payload::scmp::types::ScmpDestinationUnreachableCode::AddressUnreachable,
                 b"not a valid quoted UDP packet".to_vec(),
@@ -386,7 +386,7 @@ mod tests {
         let bytes = ScionRawPacket::new(
             "1-ff00:0:110,10.0.0.1".parse().unwrap(),
             "1-ff00:0:111,10.0.0.2".parse().unwrap(),
-            Path::Empty,
+            DpPath::Empty,
             ProtocolNumber::Other(0xFE),
             b"rawr".to_vec(),
         )

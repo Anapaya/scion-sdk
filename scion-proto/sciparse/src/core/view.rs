@@ -143,9 +143,9 @@ pub trait View {
     /// Returns the underlying byte representation of the view as a boxed slice.
     fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]>;
 
-    /// Converts the view into an owned boxed slice
+    /// Copies the view into a new boxed slice
     #[inline]
-    fn to_owned(&self) -> Box<Self> {
+    fn to_boxed(&self) -> Box<Self> {
         unsafe { Self::from_boxed_unchecked(self.as_bytes().to_vec().into_boxed_slice()) }
     }
 
@@ -169,6 +169,35 @@ pub trait View {
     /// The caller must ensure that the buffer is at least as large as required by the view
     /// this is usually done by calling [View::has_required_size] before.
     unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self>;
+
+    /// Copies the view into the provided buffer
+    ///
+    /// Expects the given buffer to be at least as large as required by the view, otherwise returns
+    /// an error.
+    ///
+    /// Returns Ok with a new view into the provided buffer, and the rest of the buffer after the
+    /// view.
+    fn copy_to_slice<'buf>(
+        &self,
+        buf: &'buf mut [u8],
+    ) -> Result<(&'buf mut Self, &'buf mut [u8]), ViewConversionError> {
+        let this_buf = self.as_bytes();
+        if buf.len() < this_buf.len() {
+            return Err(ViewConversionError::BufferTooSmall {
+                at: "buf",
+                required: this_buf.len(),
+                actual: buf.len(),
+            });
+        }
+
+        buf[..this_buf.len()].copy_from_slice(this_buf);
+        let (view_buf, rest) = buf.split_at_mut(this_buf.len());
+
+        // SAFETY: view_buf is as valid as self, since we just copied self's bytes into it
+        let view = unsafe { Self::from_mut_slice_unchecked(view_buf) };
+
+        Ok((view, rest))
+    }
 }
 
 /// Errors that can occur during view conversion
@@ -325,6 +354,11 @@ pub(crate) mod macros {
                 unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
                     // SAFETY: see View trait documentation
                     unsafe { std::mem::transmute(buf) }
+                }
+            }
+            impl Clone for Box<$name> {
+                fn clone(&self) -> Self {
+                    self.to_boxed()
                 }
             }
         };

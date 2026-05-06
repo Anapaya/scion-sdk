@@ -88,7 +88,7 @@ pub enum ValidateError {
 ///
 /// - Signature: A Der-encoded ECDSA signature over the header, body and associated data, using the
 ///   specified digest algorithm.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignedMessage {
     /// The header and body of the message.
     pub header_and_body: Vec<u8>,

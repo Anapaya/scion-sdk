@@ -29,6 +29,7 @@ use scion_proto::{
 use sciparse::{
     self,
     core::{encode::WireEncode, view::View},
+    dataplane_path::model::DpPath,
     header::layout::ScionHeaderLayout,
     packet::{
         classify::{ClassifiedPacket, ptest::ArbitraryClassifiedPacketParams},
@@ -256,17 +257,19 @@ fn compare_host_addr(
 // Path comparison
 // ------------------------------------------------------------------------------------------------
 
-fn compare_path(sci: &sciparse::path::model::Path, proto: &scion_proto::path::DataPlanePath) {
+fn compare_path(
+    sci: &sciparse::dataplane_path::model::DpPath,
+    proto: &scion_proto::path::DataPlanePath,
+) {
     use scion_proto::path::DataPlanePath;
-    use sciparse::path::model::Path;
 
     match (sci, proto) {
-        (Path::Empty, DataPlanePath::EmptyPath) => {}
-        (Path::Standard(sci_std), DataPlanePath::Standard(proto_enc)) => {
+        (DpPath::Empty, DataPlanePath::EmptyPath) => {}
+        (DpPath::Standard(sci_std), DataPlanePath::Standard(proto_enc)) => {
             compare_standard_path(sci_std, proto_enc);
         }
         (
-            Path::Unsupported {
+            DpPath::Unsupported {
                 path_type: sci_pt,
                 data: sci_data,
             },
@@ -286,7 +289,7 @@ fn compare_path(sci: &sciparse::path::model::Path, proto: &scion_proto::path::Da
                 "Unsupported path data mismatch"
             );
         }
-        (Path::OneHop(_), DataPlanePath::Unsupported { .. }) => {
+        (DpPath::OneHop(_), DataPlanePath::Unsupported { .. }) => {
             // scion-proto treats OneHop as unsupported, so we just compare raw bytes
             // via the top-level re-encode check.
         }
@@ -301,7 +304,7 @@ fn compare_path(sci: &sciparse::path::model::Path, proto: &scion_proto::path::Da
 }
 
 fn compare_standard_path(
-    sci: &sciparse::path::standard::model::StandardPath,
+    sci: &sciparse::dataplane_path::standard::model::StandardPath,
     proto_enc: &scion_proto::path::EncodedStandardPath,
 ) {
     let meta = proto_enc.meta_header();
@@ -356,14 +359,14 @@ fn compare_standard_path(
         assert_eq!(
             sci_info
                 .flags
-                .contains(sciparse::path::standard::types::InfoFieldFlags::CONS_DIR),
+                .contains(sciparse::dataplane_path::standard::types::InfoFieldFlags::CONS_DIR),
             proto_info.cons_dir,
             "info_field[{i}].cons_dir mismatch"
         );
         assert_eq!(
             sci_info
                 .flags
-                .contains(sciparse::path::standard::types::InfoFieldFlags::PEERING),
+                .contains(sciparse::dataplane_path::standard::types::InfoFieldFlags::PEERING),
             proto_info.peer,
             "info_field[{i}].peer mismatch"
         );
@@ -390,15 +393,15 @@ fn compare_standard_path(
     );
     for (i, (sci_hop, proto_hop)) in sci_hops.iter().zip(decoded.hop_fields.iter()).enumerate() {
         assert_eq!(
-            sci_hop
-                .flags
-                .contains(sciparse::path::standard::types::HopFieldFlags::CONS_EGRESS_ROUTER_ALERT),
+            sci_hop.flags.contains(
+                sciparse::dataplane_path::standard::types::HopFieldFlags::CONS_EGRESS_ROUTER_ALERT
+            ),
             proto_hop.egress_router_alert,
             "hop_field[{i}].egress_router_alert mismatch"
         );
         assert_eq!(
             sci_hop.flags.contains(
-                sciparse::path::standard::types::HopFieldFlags::CONS_INGRESS_ROUTER_ALERT
+                sciparse::dataplane_path::standard::types::HopFieldFlags::CONS_INGRESS_ROUTER_ALERT
             ),
             proto_hop.ingress_router_alert,
             "hop_field[{i}].ingress_router_alert mismatch"

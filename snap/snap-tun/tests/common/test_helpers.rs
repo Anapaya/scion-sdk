@@ -21,7 +21,9 @@ use ana_gotatun::{
 };
 use bytes::BytesMut;
 use scion_sdk_reqwest_connect_rpc::token_source::mock::MockTokenSource;
-use sciparse::{core::encode::WireEncode, packet::model::ScionUdpPacket, path::model::Path};
+use sciparse::{
+    core::encode::WireEncode, dataplane_path::model::DpPath, packet::model::ScionUdpPacket,
+};
 use snap_tun::{client::SnapTunEndpoint, server::SnapTunServer};
 use tokio::task::JoinHandle;
 
@@ -35,7 +37,7 @@ pub fn build_test_scion_packet(payload: &[u8]) -> Packet {
     let packet = ScionUdpPacket::new(
         "[1-ff00:0:100,10.0.0.1]:1234".parse().unwrap(),
         "[1-ff00:0:101,10.0.0.2]:1235".parse().unwrap(),
-        Path::Empty,
+        DpPath::Empty,
         payload.to_vec(),
     );
     let required_size = packet.required_size();

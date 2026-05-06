@@ -20,14 +20,15 @@ use crate::{
     core::{
         encode::{InvalidStructureError, WireEncode},
         layout::Layout,
+        view::{View, ViewConversionError},
         write::unchecked_bit_range_be_write,
     },
-    path::{
+    dataplane_path::{
         layout::ScionHeaderPathLayout,
         standard::{
             layout::{HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathMetaLayout},
             mac::{ForwardingKey, HopMacCalculate, HopMacInput, HopMacInputSource},
-            types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
+            types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, exp_time_to_duration},
             view::{HopFieldView, InfoFieldView, StandardPathView},
         },
     },
@@ -43,6 +44,17 @@ pub struct StandardPath {
     /// The segments of the path
     pub segments: ArrayVec<[Segment; 3]>,
 }
+impl StandardPath {
+    /// Creates a new empty [StandardPath] with zeroed fields and no segments.
+    pub fn new_empty() -> Self {
+        StandardPath {
+            current_info_field: 0,
+            current_hop_field: 0,
+            segments: ArrayVec::new(),
+        }
+    }
+}
+// Decoding
 impl StandardPath {
     /// Constructs a `StandardPath` from a `StandardPathView`
     pub fn from_view(view: &StandardPathView) -> Self {
@@ -71,6 +83,14 @@ impl StandardPath {
             current_hop_field: view.curr_hop_field(),
             segments,
         }
+    }
+
+    /// Parses a [StandardPath] from a byte slice, returning the parsed path and any remaining
+    /// unparsed bytes.
+    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
+        let (view, _rest) = StandardPathView::from_slice(buf)?;
+        let path = Self::from_view(view);
+        Ok((path, _rest))
     }
 }
 // Utility
@@ -114,6 +134,37 @@ impl StandardPath {
         let seg1 = self.segments.get(1).map_or(0, |s| s.hop_fields.len()) as u8;
         let seg2 = self.segments.get(2).map_or(0, |s| s.hop_fields.len()) as u8;
         [seg0, seg1, seg2]
+    }
+
+    /// Calculates expiry time of the path as a Unix timestamp in seconds by scanning all segments.
+    ///
+    /// Returns 0 if any of the segments in the path has no hop fields
+    pub fn expiration(&self) -> u32 {
+        let mut min_expiry = u32::MAX;
+        for segment in &self.segments {
+            // find the minimum expiry time across all hop fields in the segment
+            let Some(exp_units) = segment
+                .hop_fields
+                .iter()
+                .map(|hop| hop.expiration_units)
+                .min()
+            else {
+                // A segment has no hop fields
+                return 0;
+            };
+
+            let exp_duration = exp_time_to_duration(exp_units)
+                .as_secs()
+                .try_into()
+                .expect("exp_units can't exceed u32");
+
+            let expiry = segment.info_field.timestamp.saturating_add(exp_duration);
+
+            // update expiry
+            min_expiry = min_expiry.min(expiry);
+        }
+
+        min_expiry
     }
 }
 impl WireEncode for StandardPath {
@@ -287,7 +338,7 @@ pub struct HopField {
     /// Hop field expiration units
     ///
     /// The expiration time of a hop field is determined by multiplying the value in this field
-    /// by [`EXP_TIME_UNIT`](crate::path::standard::types::EXP_TIME_UNIT)
+    /// by [`EXP_TIME_UNIT`](crate::dataplane_path::standard::types::EXP_TIME_UNIT)
     ///
     /// After this duration has passed since the segment creation time (found in the info
     /// field), the hop field is considered expired and may not be used for forwarding.
@@ -359,7 +410,7 @@ impl HopField {
 impl HopField {
     /// Recalculates the MAC for this hop field and updates the `mac` field with the new value.
     ///
-    /// See [`HopMacCalculate::calculate_mac`](crate::path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
+    /// See [`HopMacCalculate::calculate_mac`](crate::dataplane_path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
     pub fn with_calculated_mac(
         mut self,
         mac_chain_beta: u16,
@@ -371,7 +422,8 @@ impl HopField {
     }
 }
 /// Provides the necessary input for calculating the MAC of a hop field.
-/// Automatically implements [`HopMacCalculate`](crate::path::standard::mac::HopMacCalculate)
+/// Automatically implements
+/// [`HopMacCalculate`](crate::dataplane_path::standard::mac::HopMacCalculate)
 impl HopMacInputSource for HopField {
     #[inline]
     fn get_mac_input(&self) -> HopMacInput {

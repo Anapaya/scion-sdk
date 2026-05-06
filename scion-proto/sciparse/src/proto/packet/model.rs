@@ -22,6 +22,7 @@ use crate::{
         encode::{EncodeError, InvalidStructureError, WireEncode},
         view::{View, ViewConversionError},
     },
+    dataplane_path::model::DpPath,
     header::{
         model::{AddressHeader, CommonHeader, ScionPacketHeader},
         view::ScionHeaderView,
@@ -30,7 +31,6 @@ use crate::{
         classify::{ClassifiedPacket, ClassifyError},
         view::{ScionPacketView, ScionScmpPacketView, ScionUdpPacketView},
     },
-    path::model::Path,
     payload::{
         ProtocolNumber, encode::PayloadEncode, scmp::model::ScmpMessage, udp::model::UdpDatagram,
     },
@@ -117,7 +117,7 @@ impl ScionRawPacket {
     pub fn new(
         src: ScionAddr,
         dst: ScionAddr,
-        path: Path,
+        path: DpPath,
         next_header: ProtocolNumber,
         payload: Vec<u8>,
     ) -> Self {
@@ -243,7 +243,7 @@ impl ScionScmpPacket {
     ///
     /// Traffic class and flow ID are set to 0, and `next_header` is set to the appropriate value
     /// for SCMP.
-    pub fn new(src: ScionAddr, dst: ScionAddr, path: Path, payload: ScmpMessage) -> Self {
+    pub fn new(src: ScionAddr, dst: ScionAddr, path: DpPath, payload: ScmpMessage) -> Self {
         Self {
             header: ScionPacketHeader {
                 common: CommonHeader {
@@ -308,7 +308,7 @@ impl Debug for ScionScmpPacket {
 pub type ScionScmpPacketRef<'a> = ScionPacket<&'a ScmpMessage>;
 impl<'a> ScionPacket<&'a ScmpMessage> {
     /// Constructs a [ScionScmpPacketRef] from the given parts, inferring header fields as needed.
-    pub fn new_from_parts(address: AddressHeader, path: Path, payload: &'a ScmpMessage) -> Self {
+    pub fn new_from_parts(address: AddressHeader, path: DpPath, payload: &'a ScmpMessage) -> Self {
         let header = ScionPacketHeader {
             common: CommonHeader {
                 traffic_class: 0,
@@ -338,7 +338,7 @@ impl ScionUdpPacket {
     ///
     /// Traffic class and flow ID are set to 0, and `next_header` is set to the appropriate value
     /// for UDP.
-    pub fn new(src: ScionSocketAddr, dst: ScionSocketAddr, path: Path, payload: Vec<u8>) -> Self {
+    pub fn new(src: ScionSocketAddr, dst: ScionSocketAddr, path: DpPath, payload: Vec<u8>) -> Self {
         Self {
             header: ScionPacketHeader {
                 common: CommonHeader {
@@ -354,7 +354,7 @@ impl ScionUdpPacket {
     }
 
     /// Constructs a [ScionUdpPacket] from the given parts, inferring header fields as needed.
-    pub fn new_from_parts(address: AddressHeader, path: Path, payload: UdpDatagram) -> Self {
+    pub fn new_from_parts(address: AddressHeader, path: DpPath, payload: UdpDatagram) -> Self {
         let header = ScionPacketHeader {
             common: CommonHeader {
                 traffic_class: 0,

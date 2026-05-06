@@ -17,5 +17,7 @@
 pub mod address;
 pub mod checksum;
 pub mod identifier;
+pub mod path;
+pub mod rpc;
 pub mod segment;
 pub mod signed_message;

@@ -21,7 +21,7 @@
 //! Main type is: [SignedPathSegment]
 use std::{
     fmt,
-    hash::Hasher,
+    hash::{Hash, Hasher},
     ops::Deref,
     time::{Duration, SystemTime},
 };
@@ -32,13 +32,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    identifier::isd_asn::IsdAsn,
-    path::standard::{
+    dataplane_path::standard::{
         mac::{
             ForwardingKey, HopMacCalculate, HopMacInput, HopMacInputSource, algo::mac_chaining_beta,
         },
-        types::{HopFieldMac, exp_time_to_duration},
+        model::HopField,
+        types::{HopFieldFlags, HopFieldMac, exp_time_to_duration},
     },
+    identifier::isd_asn::IsdAsn,
     signed_message::{DigestAlgorithm, SignedMessage, ValidateError},
 };
 
@@ -47,7 +48,9 @@ pub mod rpc;
 
 /// Trait for AS entries in a path segment, allowing for both signed and unsigned AS entries to be
 /// treated uniformly.
-pub trait Entry: Sized + Send + Sync + 'static {
+pub trait Entry:
+    Eq + PartialEq + Ord + PartialOrd + Hash + Clone + Sized + Send + Sync + 'static
+{
     /// Returns a reference to the underlying AS entry.
     fn get(&self) -> &AsEntry;
 }
@@ -155,12 +158,12 @@ impl<E: Entry + Sized> PathSegment<E> {
         for ase in &self.as_entries {
             let ase = ase.get();
 
-            let hf_ttl = exp_time_to_duration(ase.hop_entry.hop_field.exp_time);
+            let hf_ttl = exp_time_to_duration(ase.hop_entry.hop_field.expiration_units);
             if compare(hf_ttl, ttl) {
                 ttl = hf_ttl;
             }
             for peer in &ase.peer_entries {
-                let hf_ttl = exp_time_to_duration(peer.hop_field.exp_time);
+                let hf_ttl = exp_time_to_duration(peer.hop_field.expiration_units);
                 if compare(hf_ttl, ttl) {
                     ttl = hf_ttl;
                 }
@@ -467,7 +470,7 @@ pub struct EntryKeyInfo {
 }
 
 /// A entry for a PathSegment, describing a single AS hop and multiple peering hops.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AsEntry {
     /// ISD-AS of the AS corresponding to this entry.
     pub local: IsdAsn,
@@ -546,7 +549,7 @@ impl AsEntry {
                 hop_field: Some(scion_protobuf::control_plane::v1::HopField {
                     ingress: self.hop_entry.hop_field.cons_ingress as u64,
                     egress: self.hop_entry.hop_field.cons_egress as u64,
-                    exp_time: self.hop_entry.hop_field.exp_time as u32,
+                    exp_time: self.hop_entry.hop_field.expiration_units as u32,
                     mac: self.hop_entry.hop_field.mac.to_vec(),
                 }),
                 ingress_mtu: self.hop_entry.ingress_mtu as u32,
@@ -562,7 +565,7 @@ impl AsEntry {
                         hop_field: Some(scion_protobuf::control_plane::v1::HopField {
                             ingress: peer.hop_field.cons_ingress as u64,
                             egress: peer.hop_field.cons_egress as u64,
-                            exp_time: peer.hop_field.exp_time as u32,
+                            exp_time: peer.hop_field.expiration_units as u32,
                             mac: peer.hop_field.mac.to_vec(),
                         }),
                     }
@@ -638,7 +641,7 @@ impl Entry for AsEntry {
 /// A signed entry for a PathSegment, describing a single AS hop and multiple peering hops.
 ///
 /// The signed entry is immutable, as any modification would invalidate the signature.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SignedAsEntry {
     entry: AsEntry,
     signed: SignedMessage,
@@ -728,7 +731,7 @@ impl std::fmt::Display for SegmentInfo {
 }
 
 /// HopEntry defines an AS hop entry in the path segment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HopEntry {
     /// Ingress MTU of the hop.
     pub ingress_mtu: u16,
@@ -746,7 +749,7 @@ impl std::fmt::Display for HopEntry {
 }
 
 /// PeerEntry defines a peering entry at a specific AS hop in a path segment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PeerEntry {
     /// The peer's ISD-AS identifier.
     pub peer: IsdAsn,
@@ -769,10 +772,11 @@ impl std::fmt::Display for PeerEntry {
 }
 
 /// HopField contains the information required for routing.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SegmentHopField {
-    /// Expiration time of the hop field.
-    pub exp_time: u8,
+    /// Expiration time of the hop field in units of
+    /// [`EXP_TIME_UNIT`](crate::dataplane_path::standard::types::EXP_TIME_UNIT).
+    pub expiration_units: u8,
     /// Ingress interface ID.
     pub cons_ingress: u16,
     /// Egress interface ID.
@@ -783,7 +787,7 @@ pub struct SegmentHopField {
 impl SegmentHopField {
     /// Recalculates the MAC for this hop field and updates the `mac` field with the new value.
     ///
-    /// See [`HopMacCalculate::calculate_mac`](crate::path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
+    /// See [`HopMacCalculate::calculate_mac`](crate::dataplane_path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
     pub fn with_calculated_mac(
         mut self,
         mac_chain_beta: u16,
@@ -793,11 +797,22 @@ impl SegmentHopField {
         self.mac = self.calculate_mac(mac_chain_beta, timestamp_epoch, forwarding_key);
         self
     }
+
+    /// Converts the [SegmentHopField] into a [HopField] used in the data plane.
+    pub fn to_dp_hopfield(&self) -> HopField {
+        HopField {
+            flags: HopFieldFlags::empty(),
+            expiration_units: self.expiration_units,
+            cons_ingress: self.cons_ingress,
+            cons_egress: self.cons_egress,
+            mac: self.mac.clone(),
+        }
+    }
 }
 impl HopMacInputSource for SegmentHopField {
     fn get_mac_input(&self) -> HopMacInput {
         HopMacInput {
-            exp_time: self.exp_time,
+            exp_time: self.expiration_units,
             cons_ingress: self.cons_ingress,
             cons_egress: self.cons_egress,
         }
@@ -808,7 +823,7 @@ impl std::fmt::Display for SegmentHopField {
         write!(
             f,
             "HopField[ingress: {}, egress: {}, exp_time: {}, mac: {:02x?}]",
-            self.cons_ingress, self.cons_egress, self.exp_time, self.mac
+            self.cons_ingress, self.cons_egress, self.expiration_units, self.mac
         )
     }
 }
@@ -958,7 +973,7 @@ mod tests {
             hop_entry: HopEntry {
                 ingress_mtu: 1500,
                 hop_field: SegmentHopField {
-                    exp_time: 10,
+                    expiration_units: 10,
                     cons_ingress: 1,
                     cons_egress: 2,
                     mac: HopFieldMac([0; 6]),
@@ -980,7 +995,7 @@ mod tests {
             hop_entry: HopEntry {
                 ingress_mtu: 1500,
                 hop_field: SegmentHopField {
-                    exp_time: 10,
+                    expiration_units: 10,
                     cons_ingress: 2,
                     cons_egress: 3,
                     mac: HopFieldMac([0; 6]),
@@ -1024,7 +1039,7 @@ mod tests {
                     hop_entry: HopEntry {
                         ingress_mtu: 1500,
                         hop_field: SegmentHopField {
-                            exp_time: 10,
+                            expiration_units: 10,
                             cons_ingress: 0,
                             cons_egress: 2,
                             mac: HopFieldMac([0; 6]),
@@ -1041,7 +1056,7 @@ mod tests {
                     hop_entry: HopEntry {
                         ingress_mtu: 1500,
                         hop_field: SegmentHopField {
-                            exp_time: 10,
+                            expiration_units: 10,
                             cons_ingress: 2,
                             cons_egress: 3,
                             mac: HopFieldMac([0; 6]),
@@ -1058,7 +1073,7 @@ mod tests {
                     hop_entry: HopEntry {
                         ingress_mtu: 1500,
                         hop_field: SegmentHopField {
-                            exp_time: 10,
+                            expiration_units: 10,
                             cons_ingress: 2,
                             cons_egress: 3,
                             mac: HopFieldMac([0; 6]),

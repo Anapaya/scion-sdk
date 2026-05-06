@@ -655,7 +655,7 @@ impl std::fmt::Display for SegmentHopField {
 impl From<sciparse::segment::SegmentHopField> for SegmentHopField {
     fn from(value: sciparse::segment::SegmentHopField) -> Self {
         SegmentHopField {
-            exp_time: value.exp_time,
+            exp_time: value.expiration_units,
             cons_ingress: value.cons_ingress,
             cons_egress: value.cons_egress,
             mac: value.mac.0,

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use bytes::{Buf as _, BufMut, Bytes};
 use chrono::{DateTime, Utc};
-use sciparse::path::standard::types::{HopFieldFlags, InfoFieldFlags};
+use sciparse::dataplane_path::standard::types::{HopFieldFlags, InfoFieldFlags};
 
 use super::{HopFieldIndex, InfoFieldIndex, MetaHeader, MetaReserved, SegmentLength, encoded};
 use crate::{
@@ -82,7 +82,7 @@ impl StandardPath {
     /// Creates a StandardPath from a sciparse standard path.
     #[doc(hidden)]
     pub fn from_sciparse_standard_path(
-        sciparse_path: sciparse::path::standard::model::StandardPath,
+        sciparse_path: sciparse::dataplane_path::standard::model::StandardPath,
     ) -> Self {
         let info_fields = sciparse_path
             .iter_info_fields()

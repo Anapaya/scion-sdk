@@ -24,8 +24,8 @@ use p256::pkcs8::DecodePrivateKey;
 use scion_protobuf::control_plane::v1::VerificationKeyId;
 use scion_sdk_trc::trc::der_int_to_u64;
 use sciparse::{
+    dataplane_path::standard::types::HopFieldMac,
     identifier::isd_asn::IsdAsn,
-    path::standard::types::HopFieldMac,
     segment::{AsEntry, HopEntry, PeerEntry, SegmentHopField, SignedPathSegment},
 };
 
@@ -165,7 +165,7 @@ impl LinkSegment {
         let hop_entry = HopEntry {
             ingress_mtu: Self::HARDCODED_MTU,
             hop_field: SegmentHopField {
-                exp_time: hop_entry_expiry,
+                expiration_units: hop_entry_expiry,
                 cons_ingress: hop.ingress_if,
                 cons_egress: hop.egress_if,
                 mac: HopFieldMac::zero(),
@@ -210,7 +210,7 @@ impl LinkSegment {
                 peer_interface: peer_lnk.to.if_id, // The interface connecting the peer to us
                 peer_mtu: Self::HARDCODED_MTU,
                 hop_field: SegmentHopField {
-                    exp_time: hop_entry_expiry,
+                    expiration_units: hop_entry_expiry,
                     cons_ingress,
                     cons_egress,
                     mac: HopFieldMac::zero(),
@@ -289,7 +289,7 @@ impl Iterator for HopIter<'_> {
 #[cfg(test)]
 mod tests {
     use scion_proto::path::crypto::mac_chaining_step;
-    use sciparse::path::standard::mac::algo::calculate_hop_mac;
+    use sciparse::dataplane_path::standard::mac::algo::calculate_hop_mac;
 
     use super::*;
     mod hop_iter {
@@ -423,7 +423,7 @@ mod tests {
             let expected_mac = calculate_hop_mac(
                 accumulator,
                 segment.info().timestamp,
-                hop.exp_time,
+                hop.expiration_units,
                 hop.cons_ingress,
                 hop.cons_egress,
                 forwarding_key,
@@ -433,7 +433,7 @@ mod tests {
                 let peer_mac = calculate_hop_mac(
                     accumulator,
                     segment.info().timestamp,
-                    hop.exp_time,
+                    hop.expiration_units,
                     peer_entry.hop_field.cons_ingress,
                     peer_entry.hop_field.cons_egress,
                     forwarding_key,
@@ -538,7 +538,7 @@ mod tests {
             assert_eq!(entry.next, topo.as2);
             assert_eq!(entry.hop_entry.hop_field.cons_ingress, 0);
             assert_eq!(entry.hop_entry.hop_field.cons_egress, 1);
-            assert_eq!(entry.hop_entry.hop_field.exp_time, 1);
+            assert_eq!(entry.hop_entry.hop_field.expiration_units, 1);
             assert_eq!(entry.peer_entries.len(), 0);
 
             let entry = &path_segment.as_entries[1];
@@ -546,7 +546,7 @@ mod tests {
             assert_eq!(entry.next, topo.as3);
             assert_eq!(entry.hop_entry.hop_field.cons_ingress, 2);
             assert_eq!(entry.hop_entry.hop_field.cons_egress, 3);
-            assert_eq!(entry.hop_entry.hop_field.exp_time, 1);
+            assert_eq!(entry.hop_entry.hop_field.expiration_units, 1);
 
             assert_eq!(entry.peer_entries.len(), 1);
             let peer_entry = &entry.peer_entries[0];
@@ -554,14 +554,14 @@ mod tests {
             assert_eq!(peer_entry.peer_interface, 11);
             assert_eq!(peer_entry.hop_field.cons_ingress, 10);
             assert_eq!(peer_entry.hop_field.cons_egress, 3);
-            assert_eq!(peer_entry.hop_field.exp_time, 1);
+            assert_eq!(peer_entry.hop_field.expiration_units, 1);
 
             let entry = &path_segment.as_entries[2];
             assert_eq!(entry.local, topo.as3);
             assert_eq!(entry.next, topo.as0);
             assert_eq!(entry.hop_entry.hop_field.cons_ingress, 4);
             assert_eq!(entry.hop_entry.hop_field.cons_egress, 0);
-            assert_eq!(entry.hop_entry.hop_field.exp_time, 1);
+            assert_eq!(entry.hop_entry.hop_field.expiration_units, 1);
             assert_eq!(entry.peer_entries.len(), 0);
         }
     }

@@ -12,20 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCION path header model and encoding
+//! SCION dataplane path model and encoding.
 
 use crate::{
     core::encode::{InvalidStructureError, WireEncode},
-    path::{
+    dataplane_path::{
         layout::ScionHeaderPathLayout, onehop::model::OneHopPath, standard::model::StandardPath,
-        types::PathType, view::ScionPathView,
+        types::PathType, view::ScionDpPathViewRef,
     },
 };
 
-/// Represents a SCION path.
+/// Represents a SCION dataplane path.
+///
+/// The dataplane path is usually supplied by the SCION control plane, contained in a
+/// [ScionPath](crate::path::ScionPath) together with metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(clippy::large_enum_variant)]
-pub enum Path {
+pub enum DpPath {
     /// Standard SCION path
     Standard(StandardPath),
     /// One-hop SCION path
@@ -40,20 +43,22 @@ pub enum Path {
         data: Vec<u8>,
     },
 }
-impl Path {
-    /// Constructs a `Path` from a `ScionPathView`
-    pub fn from_view(view: &ScionPathView) -> Self {
+impl DpPath {
+    /// Constructs a `DpPath` from a `ScionDpPathView`
+    pub fn from_view(view: &ScionDpPathViewRef) -> Self {
         match *view {
-            ScionPathView::Standard(standard_view) => {
-                Path::Standard(StandardPath::from_view(standard_view))
+            ScionDpPathViewRef::Standard(standard_view) => {
+                DpPath::Standard(StandardPath::from_view(standard_view))
             }
-            ScionPathView::OneHop(onehop_view) => Path::OneHop(OneHopPath::from_view(onehop_view)),
-            ScionPathView::Empty => Path::Empty,
-            ScionPathView::Unsupported {
+            ScionDpPathViewRef::OneHop(onehop_view) => {
+                DpPath::OneHop(OneHopPath::from_view(onehop_view))
+            }
+            ScionDpPathViewRef::Empty => DpPath::Empty,
+            ScionDpPathViewRef::Unsupported {
                 path_type,
                 data: buf,
             } => {
-                Path::Unsupported {
+                DpPath::Unsupported {
                     path_type,
                     data: buf.to_vec(),
                 }
@@ -61,33 +66,33 @@ impl Path {
         }
     }
 }
-impl Path {
+impl DpPath {
     /// Returns the type of the path
     pub fn path_type(&self) -> PathType {
         match self {
-            Path::Standard(_) => PathType::Scion,
-            Path::OneHop(_) => PathType::OneHop,
-            Path::Empty => PathType::Empty,
-            Path::Unsupported { path_type, .. } => PathType::Other((*path_type).into()),
+            DpPath::Standard(_) => PathType::Scion,
+            DpPath::OneHop(_) => PathType::OneHop,
+            DpPath::Empty => PathType::Empty,
+            DpPath::Unsupported { path_type, .. } => PathType::Other((*path_type).into()),
         }
     }
 
     /// Returns a reference to the standard path if it is of that type
     pub fn standard(&self) -> Option<&StandardPath> {
         match self {
-            Path::Standard(path) => Some(path),
+            DpPath::Standard(path) => Some(path),
             _ => None,
         }
     }
 }
 
-impl WireEncode for Path {
+impl WireEncode for DpPath {
     fn required_size(&self) -> usize {
         match self {
-            Path::Standard(path) => path.required_size(),
-            Path::OneHop(path) => path.required_size(),
-            Path::Unsupported { data, .. } => data.len(),
-            Path::Empty => 0,
+            DpPath::Standard(path) => path.required_size(),
+            DpPath::OneHop(path) => path.required_size(),
+            DpPath::Unsupported { data, .. } => data.len(),
+            DpPath::Empty => 0,
         }
     }
 
@@ -112,10 +117,10 @@ impl WireEncode for Path {
 
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         match self {
-            Path::Standard(path) => unsafe { path.encode_unchecked(buf) },
-            Path::OneHop(path) => unsafe { path.encode_unchecked(buf) },
-            Path::Empty => 0,
-            Path::Unsupported { data, .. } => {
+            DpPath::Standard(path) => unsafe { path.encode_unchecked(buf) },
+            DpPath::OneHop(path) => unsafe { path.encode_unchecked(buf) },
+            DpPath::Empty => 0,
+            DpPath::Unsupported { data, .. } => {
                 let len = data.len();
 
                 unsafe {
@@ -134,9 +139,9 @@ pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
-    use crate::path::{model::Path, types::PathType};
+    use crate::dataplane_path::{model::DpPath, types::PathType};
 
-    /// Configuration for generating arbitrary [`Path`] values.
+    /// Configuration for generating arbitrary [`DpPath`] values.
     ///
     /// Controls the relative probability of each path variant being generated,
     /// and allows passing sub-parameters to the generators for specific path types.
@@ -170,17 +175,17 @@ pub mod ptest {
         }
     }
 
-    impl Arbitrary for Path {
+    impl Arbitrary for DpPath {
         type Parameters = ArbitraryPathParams;
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
             prop_oneof![
                 params.standard => StandardPath::arbitrary_with(params.standard_params)
-                    .prop_map(Path::Standard),
+                    .prop_map(DpPath::Standard),
                 params.one_hop => OneHopPath::arbitrary_with(params.one_hop_params)
-                    .prop_map(Path::OneHop),
-                params.empty => Just(Path::Empty),
+                    .prop_map(DpPath::OneHop),
+                params.empty => Just(DpPath::Empty),
                 params.unsupported => (
                     any::<PathType>(),
                     ::proptest::collection::vec(any::<u8>(), 0..512),
@@ -194,7 +199,7 @@ pub mod ptest {
 
                         let data_len = data.len() / 4 * 4; // Truncate to multiple of 4 bytes
                         let data_truncated = &data[..data_len];
-                        Path::Unsupported {
+                        DpPath::Unsupported {
                             path_type,
                             data: data_truncated.to_vec(),
                         }

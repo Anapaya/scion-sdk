@@ -34,7 +34,7 @@ use scion_proto::{
 use scion_protobuf::control_plane::v1::{ServiceResolutionResponse, Transport};
 use sciparse::{
     core::view::View,
-    path::onehop::{model::OneHopPath, view::OneHopPathView},
+    dataplane_path::onehop::{model::OneHopPath, view::OneHopPathView},
 };
 use tracing::info_span;
 

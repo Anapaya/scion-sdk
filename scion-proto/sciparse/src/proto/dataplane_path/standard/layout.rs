@@ -22,7 +22,7 @@ use crate::{
         layout::{BitRange, Layout, LayoutParseError, macros::gen_bitrange_const},
         view::{View, ViewConversionError},
     },
-    path::standard::view::StandardPathView,
+    dataplane_path::standard::view::StandardPathView,
 };
 
 /// Layout for the standard SCION path, composed of a meta header and data

@@ -18,7 +18,7 @@ use tinyvec::{array_vec, tiny_vec};
 
 use crate::{
     core::encode::WireEncode,
-    path::{
+    dataplane_path::{
         onehop::layout::OneHopPathLayout,
         standard::{
             mac::{ForwardingKey, algo::mac_beta_step},
@@ -94,7 +94,7 @@ impl OneHopPath {
         let beta = if segment_id_was_advanced {
             self.info.segment_id
         } else {
-            mac_beta_step(self.info.segment_id, self.hops[0].mac.into())
+            mac_beta_step(self.info.segment_id, *self.hops[0].mac)
         };
 
         self.hops[1] = HopField {
@@ -147,7 +147,7 @@ impl OneHopPath {
 }
 impl OneHopPath {
     /// Creates a OneHopPath from a OneHopPathView.
-    pub fn from_view(view: &crate::proto::path::onehop::view::OneHopPathView) -> Self {
+    pub fn from_view(view: &crate::proto::dataplane_path::onehop::view::OneHopPathView) -> Self {
         let info: InfoField = InfoField::from_view(view.info_field());
         let [hop1, hop2] = view.hop_fields();
         let hops = [HopField::from_view(hop1), HopField::from_view(hop2)];

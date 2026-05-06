@@ -13,7 +13,10 @@
 // limitations under the License.
 //! Conversions between endhost API protobuf types and endhost API models.
 
-use sciparse::segment::{Segments, SegmentsPage, SignedPathSegment, rpc::InvalidSegmentError};
+use sciparse::{
+    rpc::FromRpcError,
+    segment::{Segments, SegmentsPage, SignedPathSegment},
+};
 
 use crate::v1::{
     ListSegmentsResponse, ListUnderlaysResponse, Router, Snap, SnapUnderlay, UdpUnderlay,
@@ -145,7 +148,7 @@ impl From<SegmentsPage> for ListSegmentsResponse {
 }
 
 impl TryFrom<ListSegmentsResponse> for SegmentsPage {
-    type Error = InvalidSegmentError;
+    type Error = FromRpcError;
     fn try_from(response: ListSegmentsResponse) -> Result<Self, Self::Error> {
         let convert = |segs: Vec<_>| {
             segs.into_iter()

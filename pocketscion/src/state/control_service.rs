@@ -38,7 +38,7 @@ use scion_sdk_quic_scion::quic::config::QuicConfig;
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
 use sciparse::{
     address::socket_addr::ScionSocketAddr, core::encode::WireEncode,
-    path::onehop::model::OneHopPath,
+    dataplane_path::onehop::model::OneHopPath,
 };
 use serde::{Deserialize, Serialize};
 use tokio::{task, time::timeout};

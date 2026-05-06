@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCION packet parsing and serialization.
+//! SCION path fingerprinting
 
-/// path interpretation
-pub mod dataplane_path;
-/// SCION header interpretation
-pub mod header;
-/// Full SCION packet  interpretation
-pub mod packet;
-/// payload interpretation
-pub mod payload;
+pub mod control_plane;
+pub mod data_plane;

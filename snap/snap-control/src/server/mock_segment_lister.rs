@@ -17,8 +17,8 @@ use std::{str::FromStr, time::SystemTime};
 
 use endhost_api_models::{SegmentsDiscovery, SegmentsError};
 use sciparse::{
+    dataplane_path::standard::types::HopFieldMac,
     identifier::isd_asn::IsdAsn,
-    path::standard::types::HopFieldMac,
     reexport::p256::ecdsa::SigningKey,
     segment::{AsEntry, HopEntry, SegmentHopField, Segments, SegmentsPage, SignedPathSegment},
 };
@@ -86,10 +86,10 @@ fn default_segments((start_as, end_as): (IsdAsn, IsdAsn)) -> Segments {
                 hop_entry: HopEntry {
                     ingress_mtu: 1480,
                     hop_field: SegmentHopField {
-                        exp_time: 60,
+                        expiration_units: 60,
                         cons_ingress: 0,
                         cons_egress: 2,
-                        mac: HopFieldMac::default(),
+                        mac: HopFieldMac::zero(),
                     },
                 },
                 peer_entries: vec![],
@@ -112,10 +112,10 @@ fn default_segments((start_as, end_as): (IsdAsn, IsdAsn)) -> Segments {
                 hop_entry: HopEntry {
                     ingress_mtu: 1480,
                     hop_field: SegmentHopField {
-                        exp_time: 60,
+                        expiration_units: 60,
                         cons_ingress: 201,
                         cons_egress: 0,
-                        mac: HopFieldMac::default(),
+                        mac: HopFieldMac::zero(),
                     },
                 },
                 peer_entries: vec![],

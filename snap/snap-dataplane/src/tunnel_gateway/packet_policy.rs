@@ -20,8 +20,8 @@ use std::net::IpAddr;
 
 use sciparse::{
     core::view::{View, ViewConversionError},
+    dataplane_path::types::PathType,
     packet::view::ScionPacketView,
-    path::types::PathType,
 };
 use thiserror::Error;
 
@@ -94,17 +94,17 @@ mod tests {
     use sciparse::{
         address::addr::ScionAddr,
         core::{encode::WireEncode, view::View},
+        dataplane_path::{model::DpPath, standard::model::StandardPath},
         identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
         packet::model::ScionRawPacket,
-        path::{model::Path, standard::model::StandardPath},
         util::ToValue,
     };
     use test_log::test;
 
     use super::*;
 
-    fn standard_path() -> Path {
-        Path::Standard(StandardPath::arbitrary_value(0))
+    fn standard_path() -> DpPath {
+        DpPath::Standard(StandardPath::arbitrary_value(0))
     }
 
     fn example_source_addrs() -> Vec<ScionAddr> {
@@ -121,7 +121,7 @@ mod tests {
         ]
     }
 
-    fn get_valid_packet(source: ScionAddr, dp_path: Path) -> Vec<u8> {
+    fn get_valid_packet(source: ScionAddr, dp_path: DpPath) -> Vec<u8> {
         let packet = ScionRawPacket::new(
             source,
             example_source_addrs()[0],

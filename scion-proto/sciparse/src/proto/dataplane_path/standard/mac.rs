@@ -14,7 +14,7 @@
 
 //! SCION path MAC calculation and validation logic.
 
-use crate::path::standard::{mac::algo::calculate_hop_mac, types::HopFieldMac};
+use crate::dataplane_path::standard::{mac::algo::calculate_hop_mac, types::HopFieldMac};
 
 /// 16 Byte Forwarding Key
 pub type ForwardingKey = [u8; 16];
@@ -83,7 +83,7 @@ pub(crate) struct HopMacInput {
 
 /// Algorithm implementations for MAC calculation and validation.
 pub mod algo {
-    use crate::path::standard::mac::ForwardingKey;
+    use crate::dataplane_path::standard::mac::ForwardingKey;
 
     // https://github.com/scionproto/scion/blob/1615ae80e004f1753028a9990abd9928c8aa332d/pkg/slayers/path/mac.go#L40
     /// Calculates the MAC for a hop field.

@@ -23,10 +23,9 @@ use crate::{
         layout::{BitRange, Layout, LayoutParseError, macros::gen_bitrange_const},
         view::{View, ViewConversionError},
     },
-    header::{model::ScionPacketHeader, view::ScionHeaderView},
-    path::{
+    dataplane_path::{
         layout::ScionHeaderPathLayout,
-        model::Path,
+        model::DpPath,
         onehop::layout::OneHopPathLayout,
         standard::{
             layout::{StdPathDataLayout, StdPathMetaLayout},
@@ -34,6 +33,7 @@ use crate::{
         },
         types::PathType,
     },
+    header::{model::ScionPacketHeader, view::ScionHeaderView},
 };
 
 /// Metadata about the SCION header layout
@@ -229,7 +229,7 @@ impl ScionHeaderLayout {
         );
 
         let path = match &packet.path {
-            Path::Standard(std_path) => {
+            DpPath::Standard(std_path) => {
                 let (seg0, seg1, seg2) = std_path.segment_lengths();
 
                 ScionHeaderPathLayout::Standard(
@@ -237,9 +237,9 @@ impl ScionHeaderLayout {
                     StdPathDataLayout::new(seg0, seg1, seg2),
                 )
             }
-            Path::OneHop(_) => ScionHeaderPathLayout::OneHop(OneHopPathLayout),
-            Path::Empty => ScionHeaderPathLayout::Empty,
-            Path::Unsupported { path_type, data } => {
+            DpPath::OneHop(_) => ScionHeaderPathLayout::OneHop(OneHopPathLayout),
+            DpPath::Empty => ScionHeaderPathLayout::Empty,
+            DpPath::Unsupported { path_type, data } => {
                 let addr_end = common.size_bytes() + address.size_bytes();
                 ScionHeaderPathLayout::Unknown {
                     path_type: *path_type,

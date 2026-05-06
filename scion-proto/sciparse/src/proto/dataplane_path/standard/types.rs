@@ -19,7 +19,7 @@ use std::{fmt::Debug, ops::Deref, time::Duration};
 use serde::{Deserialize, Serialize};
 
 /// MAC (Message Authentication Code) used in HopFields.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct HopFieldMac(pub [u8; 6]);
 impl HopFieldMac {

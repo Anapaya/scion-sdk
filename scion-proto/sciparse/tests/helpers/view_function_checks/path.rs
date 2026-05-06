@@ -18,7 +18,7 @@
 
 use sciparse::{
     core::view::View,
-    path::{
+    dataplane_path::{
         onehop::view::OneHopPathView,
         standard::{
             mac::ForwardingKey,

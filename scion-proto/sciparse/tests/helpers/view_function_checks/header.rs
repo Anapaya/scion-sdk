@@ -18,11 +18,11 @@
 
 use sciparse::{
     core::view::View,
-    header::view::ScionHeaderView,
-    path::{
+    dataplane_path::{
         standard::view::{HopFieldView, InfoFieldView},
-        view::{ScionPathView, ScionPathViewMut},
+        view::{ScionDpPathView, ScionDpPathViewRef, ScionDpPathViewRefMut},
     },
+    header::view::ScionHeaderView,
 };
 
 use super::{path, read_slice_bounds, touch_slice_bounds};
@@ -76,21 +76,21 @@ pub fn exec_every_view_function(view: &mut ScionHeaderView) {
 
     // ── Path (immutable) ──────────────────────────────────────────────
     match view.path() {
-        ScionPathView::Standard(p) => path::exec_standard_path_view(p),
-        ScionPathView::OneHop(p) => path::exec_onehop_path_view(p),
-        ScionPathView::Unsupported { path_type: _, data } => {
+        ScionDpPathViewRef::Standard(p) => path::exec_standard_path_view(p),
+        ScionDpPathViewRef::OneHop(p) => path::exec_onehop_path_view(p),
+        ScionDpPathViewRef::Unsupported { path_type: _, data } => {
             read_slice_bounds(data);
         }
-        ScionPathView::Empty => {}
+        ScionDpPathViewRef::Empty => {}
     }
 
     // ── Path (mutable) ────────────────────────────────────────────────
     match view.path_mut() {
-        ScionPathViewMut::Standard(p) => path::exec_standard_path_view_mut(p),
-        ScionPathViewMut::OneHop(p) => path::exec_onehop_path_view_mut(p),
-        ScionPathViewMut::Unsupported { path_type: _, buf } => {
+        ScionDpPathViewRefMut::Standard(p) => path::exec_standard_path_view_mut(p),
+        ScionDpPathViewRefMut::OneHop(p) => path::exec_onehop_path_view_mut(p),
+        ScionDpPathViewRefMut::Unsupported { path_type: _, buf } => {
             touch_slice_bounds(buf);
         }
-        ScionPathViewMut::Empty => {}
+        ScionDpPathViewRefMut::Empty => {}
     }
 }

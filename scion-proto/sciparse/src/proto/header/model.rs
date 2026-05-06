@@ -22,11 +22,11 @@ use crate::{
         view::{View, ViewConversionError},
         write::unchecked_bit_range_be_write,
     },
+    dataplane_path::{model::DpPath, types::PathType},
     header::{
         layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
         view::ScionHeaderView,
     },
-    path::{model::Path, types::PathType},
     scion::{
         address::host_addr::{WireHostAddr, WireHostAddrType},
         identifier::isd_asn::IsdAsn,
@@ -44,7 +44,7 @@ pub struct ScionPacketHeader {
     /// The address header of the SCION packet
     pub address: AddressHeader,
     /// The path information of the SCION packet
-    pub path: Path,
+    pub path: DpPath,
 }
 impl ScionPacketHeader {
     /// Constructs a `ScionPacketHeader` from a `ScionHeaderView`
@@ -52,7 +52,7 @@ impl ScionPacketHeader {
         Ok(ScionPacketHeader {
             common: CommonHeader::from_view(view),
             address: AddressHeader::from_view(view)?,
-            path: Path::from_view(&view.path()),
+            path: DpPath::from_view(&view.path()),
         })
     }
 
@@ -336,7 +336,7 @@ pub mod ptest {
     use ::proptest::prelude::*;
 
     use super::*;
-    use crate::path::model::Path;
+    use crate::dataplane_path::model::DpPath;
 
     /// Configuration for generating arbitrary [`ScionPacketHeader`] values.
     ///
@@ -349,7 +349,7 @@ pub mod ptest {
         /// Parameters for generating source host addresses.
         pub src_host_addr: <WireHostAddr as Arbitrary>::Parameters,
         /// Parameters for generating paths.
-        pub path: <Path as Arbitrary>::Parameters,
+        pub path: <DpPath as Arbitrary>::Parameters,
     }
 
     impl Arbitrary for ScionPacketHeader {
@@ -367,7 +367,7 @@ pub mod ptest {
             let dst_host_addr = WireHostAddr::arbitrary_with(params.dst_host_addr);
             let src_host_addr = WireHostAddr::arbitrary_with(params.src_host_addr);
 
-            let path = Path::arbitrary_with(params.path);
+            let path = DpPath::arbitrary_with(params.path);
 
             (
                 traffic_class,

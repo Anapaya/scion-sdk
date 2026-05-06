@@ -21,12 +21,12 @@ use crate::{
         debug::Annotations,
         layout::{BitRange, Layout},
     },
-    header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
-    path::{
+    dataplane_path::{
         onehop::layout::OneHopPathLayout,
         standard::layout::{StdPathDataLayout, StdPathMetaLayout},
         types::PathType,
     },
+    header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
 };
 
 /// Layout for the SCION path header

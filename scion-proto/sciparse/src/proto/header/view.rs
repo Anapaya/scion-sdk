@@ -32,12 +32,12 @@ use crate::{
         },
         write::unchecked_bit_range_be_write,
     },
-    header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
-    path::{
+    dataplane_path::{
         standard::view::StandardPathView,
         types::PathType,
-        view::{ScionPathView, ScionPathViewMut},
+        view::{ScionDpPathViewRef, ScionDpPathViewRefMut},
     },
+    header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
     scion::{
         address::host_addr::{HostAddressSizeError, WireHostAddr, WireHostAddrType},
         identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
@@ -392,7 +392,7 @@ impl ScionHeaderView {
 impl ScionHeaderView {
     /// Returns a view over the path
     #[inline]
-    pub fn path(&self) -> ScionPathView<'_> {
+    pub fn path(&self) -> ScionDpPathViewRef<'_> {
         let path_offset = CommonHeaderLayout::SIZE_BYTES
             + AddressHeaderLayout::new(self.dst_addr_type().size(), self.src_addr_type().size())
                 .size_bytes();
@@ -400,29 +400,32 @@ impl ScionHeaderView {
         let len = self.header_len() as usize;
 
         match self.path_type() {
-            PathType::Empty => ScionPathView::Empty,
+            PathType::Empty => ScionDpPathViewRef::Empty,
             PathType::Scion => {
                 // SAFETY: min buffer size is checked on construction
                 let path_buf = unsafe { self.0.get_unchecked(path_offset..len) };
                 let path = unsafe { StandardPathView::from_slice_unchecked(path_buf) };
 
-                ScionPathView::Standard(path)
+                ScionDpPathViewRef::Standard(path)
             }
             PathType::OneHop => {
                 // SAFETY: min buffer size is checked on construction
-                let path_size = crate::proto::path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
+                let path_size =
+                    crate::proto::dataplane_path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
                 let path_range = path_offset..path_offset + path_size;
                 let path_buf = unsafe { self.0.get_unchecked(path_range) };
                 let path = unsafe {
-                    crate::proto::path::onehop::view::OneHopPathView::from_slice_unchecked(path_buf)
+                    crate::proto::dataplane_path::onehop::view::OneHopPathView::from_slice_unchecked(
+                        path_buf,
+                    )
                 };
 
-                ScionPathView::OneHop(path)
+                ScionDpPathViewRef::OneHop(path)
             }
             pt => {
                 // SAFETY: min buffer size is checked on construction
                 let path_buf = unsafe { self.0.get_unchecked(path_offset..len) };
-                ScionPathView::Unsupported {
+                ScionDpPathViewRef::Unsupported {
                     path_type: pt,
                     data: path_buf,
                 }
@@ -432,7 +435,7 @@ impl ScionHeaderView {
 
     /// Returns a mutable view over the path
     #[inline]
-    pub fn path_mut(&mut self) -> ScionPathViewMut<'_> {
+    pub fn path_mut(&mut self) -> ScionDpPathViewRefMut<'_> {
         let path_offset = CommonHeaderLayout::SIZE_BYTES
             + AddressHeaderLayout::new(self.dst_addr_type().size(), self.src_addr_type().size())
                 .size_bytes();
@@ -440,31 +443,32 @@ impl ScionHeaderView {
         let len = self.header_len() as usize;
 
         match self.path_type() {
-            PathType::Empty => ScionPathViewMut::Empty,
+            PathType::Empty => ScionDpPathViewRefMut::Empty,
             PathType::Scion => {
                 // SAFETY: min size is checked on construction of ScionHeaderView
                 let path_buf = unsafe { self.0.get_unchecked_mut(path_offset..len) };
                 let path = unsafe { StandardPathView::from_mut_slice_unchecked(path_buf) };
 
-                ScionPathViewMut::Standard(path)
+                ScionDpPathViewRefMut::Standard(path)
             }
             PathType::OneHop => {
                 // SAFETY: min size is checked on construction of ScionHeaderView
-                let header_size = crate::proto::path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
+                let header_size =
+                    crate::proto::dataplane_path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
                 let path_range = path_offset..path_offset + header_size;
                 let path_buf = unsafe { self.0.get_unchecked_mut(path_range) };
                 let path = unsafe {
-                    crate::proto::path::onehop::view::OneHopPathView::from_mut_slice_unchecked(
+                    crate::proto::dataplane_path::onehop::view::OneHopPathView::from_mut_slice_unchecked(
                         path_buf,
                     )
                 };
 
-                ScionPathViewMut::OneHop(path)
+                ScionDpPathViewRefMut::OneHop(path)
             }
             pt => {
                 // SAFETY: min size is checked on construction of ScionHeaderView
                 let path_buf = unsafe { self.0.get_unchecked_mut(path_offset..len) };
-                ScionPathViewMut::Unsupported {
+                ScionDpPathViewRefMut::Unsupported {
                     path_type: pt,
                     buf: path_buf,
                 }

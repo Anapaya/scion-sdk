@@ -17,4 +17,3 @@
 pub mod asn;
 pub mod isd;
 pub mod isd_asn;
-pub mod path_interface;

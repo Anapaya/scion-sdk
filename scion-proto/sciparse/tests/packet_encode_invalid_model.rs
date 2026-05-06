@@ -96,9 +96,8 @@ mod packet_manipulation {
     use proptest::prelude::Arbitrary;
     use sciparse::{
         address::host_addr::WireHostAddr,
-        packet::classify::ClassifiedPacket,
-        path::{
-            model::Path,
+        dataplane_path::{
+            model::DpPath,
             standard::{
                 layout::StdPathMetaLayout,
                 model::HopField,
@@ -106,6 +105,7 @@ mod packet_manipulation {
             },
             types::PathType,
         },
+        packet::classify::ClassifiedPacket,
     };
     use tinyvec::ArrayVec;
 
@@ -180,7 +180,7 @@ mod packet_manipulation {
                 match modification {
                     // ── Header-level modifications ────────────────────
                     PacketModification::EmptySegment(seg_idx) => {
-                        if let Path::Standard(ref mut std_path) = header.path {
+                        if let DpPath::Standard(ref mut std_path) = header.path {
                             if std_path.segments.is_empty() {
                                 continue;
                             }
@@ -192,7 +192,7 @@ mod packet_manipulation {
                         }
                     }
                     PacketModification::InvalidCurrentHop(exceed_by) => {
-                        if let Path::Standard(ref mut std_path) = header.path {
+                        if let DpPath::Standard(ref mut std_path) = header.path {
                             let count = std_path.hop_field_count();
                             let max_valid = if count == 0 { 0 } else { count - 1 };
                             let invalid = max_valid + exceed_by as usize;
@@ -201,7 +201,7 @@ mod packet_manipulation {
                         }
                     }
                     PacketModification::InvalidCurrentInfo(exceed_by) => {
-                        if let Path::Standard(ref mut std_path) = header.path {
+                        if let DpPath::Standard(ref mut std_path) = header.path {
                             let count = std_path.info_field_count();
                             let max_valid = if count == 0 { 0 } else { count - 1 };
                             let invalid = max_valid + exceed_by as usize;
@@ -211,7 +211,7 @@ mod packet_manipulation {
                         }
                     }
                     PacketModification::TooManyHopFields(seg_idx, extra) => {
-                        if let Path::Standard(ref mut std_path) = header.path {
+                        if let DpPath::Standard(ref mut std_path) = header.path {
                             let seg_len = std_path.segments.len();
                             if seg_len == 0 {
                                 continue;
@@ -234,7 +234,7 @@ mod packet_manipulation {
                         }
                     }
                     PacketModification::InvalidUnknownPathBytes(raw_bytes) => {
-                        header.path = Path::Unsupported {
+                        header.path = DpPath::Unsupported {
                             path_type: PathType::Other(6),
                             data: raw_bytes,
                         };
@@ -305,13 +305,13 @@ mod packet_manipulation {
                 .prop_flat_map(|base| {
                     let has_scion_path = match &base {
                         ClassifiedPacket::Udp(p) => {
-                            matches!(p.header.path, Path::Standard(_))
+                            matches!(p.header.path, DpPath::Standard(_))
                         }
                         ClassifiedPacket::Scmp(p) => {
-                            matches!(p.header.path, Path::Standard(_))
+                            matches!(p.header.path, DpPath::Standard(_))
                         }
                         ClassifiedPacket::Other(p) => {
-                            matches!(p.header.path, Path::Standard(_))
+                            matches!(p.header.path, DpPath::Standard(_))
                         }
                     };
 

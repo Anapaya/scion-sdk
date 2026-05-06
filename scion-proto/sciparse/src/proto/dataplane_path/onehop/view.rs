@@ -18,10 +18,11 @@ use std::{fmt::Debug, mem::transmute};
 
 use crate::{
     core::view::{View, ViewConversionError},
-    path::{
+    dataplane_path::{
         onehop::layout::OneHopPathLayout,
         standard::{
             mac::{ForwardingKey, HopMacCalculate, algo::mac_beta_step},
+            types::exp_time_to_duration,
             view::{HopFieldView, InfoFieldView},
         },
     },
@@ -29,6 +30,7 @@ use crate::{
 
 /// View for a one-hop path between neighboring border routers in SCION.
 #[repr(transparent)]
+#[derive(Eq, PartialEq, Clone)]
 pub struct OneHopPathView([u8; OneHopPathLayout::SIZE_BYTES]);
 impl OneHopPathView {
     /// Returns a reference to the info field
@@ -121,6 +123,23 @@ impl OneHopPathView {
         hop2.set_mac(mac);
     }
 }
+// Util
+impl OneHopPathView {
+    /// Returns the expiration time of the path in seconds since the UNIX epoch.
+    pub fn expiration(&self) -> u32 {
+        let base = self.info_field().timestamp();
+
+        let min_exp = self
+            .hop_fields()
+            .iter()
+            .map(|hop| hop.exp_time())
+            .min()
+            .unwrap_or(0);
+
+        base + exp_time_to_duration(min_exp).as_secs() as u32
+    }
+}
+
 impl Debug for OneHopPathView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OneHopPathView")
@@ -129,6 +148,7 @@ impl Debug for OneHopPathView {
             .finish()
     }
 }
+// Note: can't use gen_view_impl! as self is a fixed size array
 impl View for OneHopPathView {
     fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
         use crate::core::layout::Layout;

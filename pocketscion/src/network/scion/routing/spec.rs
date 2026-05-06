@@ -33,7 +33,7 @@ use scion_proto::{
 };
 use sciparse::{
     core::view::View,
-    path::{onehop::view::OneHopPathView, standard::types::InfoFieldFlags},
+    dataplane_path::{onehop::view::OneHopPathView, standard::types::InfoFieldFlags},
 };
 use tracing::info_span;
 
@@ -120,7 +120,7 @@ impl RoutingLogic for SpecRoutingLogic {
                                 }
                             };
 
-                            let mut ohp = ohp.to_owned();
+                            let mut ohp = ohp.to_boxed();
                             let result = Self::handle_one_hop_path(
                                 local_as,
                                 &mut ohp,
@@ -1182,7 +1182,7 @@ mod tests {
         use std::str::FromStr;
 
         use scion_proto::{address::EndhostAddr, packet::ByEndpoint};
-        use sciparse::{core::encode::WireEncode, path::onehop::model::OneHopPath};
+        use sciparse::{core::encode::WireEncode, dataplane_path::onehop::model::OneHopPath};
 
         use super::*;
         use crate::network::scion::topology::ScionAs;

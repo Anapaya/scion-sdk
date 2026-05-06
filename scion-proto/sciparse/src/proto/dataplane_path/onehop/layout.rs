@@ -20,7 +20,7 @@ use crate::{
         layout::{Layout, macros::gen_bitrange_const},
         view::ViewConversionError,
     },
-    path::standard::layout::{HopFieldLayout, InfoFieldLayout},
+    dataplane_path::standard::layout::{HopFieldLayout, InfoFieldLayout},
 };
 
 /// Layout for a one-hop path between neighboring border routers in SCION.

@@ -87,7 +87,7 @@ fn broken_wire_packets_must_not_panic() {
 /// Wire-level manipulation of encoded packets to break them strategically
 mod wire_manipulation {
     use proptest::prelude::Arbitrary;
-    use sciparse::path::view::ScionPathViewMut;
+    use sciparse::dataplane_path::view::ScionDpPathViewRefMut;
 
     use super::*;
 
@@ -157,7 +157,7 @@ mod wire_manipulation {
                 }
 
                 // ── Path-level mutations ──────────────────────────────
-                if let ScionPathViewMut::Standard(path_view) = view.path_mut() {
+                if let ScionDpPathViewRefMut::Standard(path_view) = view.path_mut() {
                     if let Some(hf_overflow) = self.hop_field_overflow {
                         let curr = path_view.curr_hop_field();
                         let overflow = curr.saturating_add(hf_overflow).min(255 >> 2);

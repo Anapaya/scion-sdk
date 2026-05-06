@@ -56,10 +56,7 @@ use scion_sdk_reqwest_connect_rpc::{
     client::{CrpcClient, CrpcClientError},
     token_source::TokenSource,
 };
-use sciparse::{
-    identifier::isd_asn::IsdAsn,
-    segment::{SegmentsPage, rpc::InvalidSegmentError},
-};
+use sciparse::{identifier::isd_asn::IsdAsn, rpc::FromRpcError, segment::SegmentsPage};
 
 /// Endhost API client trait.
 ///
@@ -169,9 +166,9 @@ impl EndhostApiClient for CrpcEndhostApiClient {
             )
             .await?
             .try_into()
-            .map_err(|e: InvalidSegmentError| {
+            .map_err(|e: FromRpcError| {
                 CrpcClientError::DecodeError {
-                    context: "decoding segments".into(),
+                    context: "failed decoding segments".into(),
                     source: Some(e.into()),
                     body: None,
                 }

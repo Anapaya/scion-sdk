@@ -31,10 +31,10 @@ use sciparse::{
         encode::{EncodeError, WireEncode},
         view::View as _,
     },
+    dataplane_path::model::DpPath,
     header::model::AddressHeader,
     identifier::isd_asn::IsdAsn,
     packet::{model::ScionScmpPacketRef, view::ScionPacketView},
-    path::model::Path,
     payload::scmp::{self, types::ScmpParameterProblemCode},
 };
 use snap_tun::{
@@ -422,7 +422,7 @@ where
                 dst_ia: dst_addr.isd_asn(),
                 dst_host_addr: dst_addr.host().into(),
             },
-            Path::Empty,
+            DpPath::Empty,
             &scmp_message,
         );
         scmp_packet_model.encode(target_buf)
@@ -485,7 +485,6 @@ mod tests {
         core::encode::WireEncode,
         identifier::isd_asn::IsdAsn as ProtoIsdAsn,
         packet::model::ScionRawPacket,
-        path::model::Path,
         payload::ProtocolNumber,
     };
     use snap_tun::server::{SnapTunAuthorization, SnapTunServer};
@@ -533,7 +532,7 @@ mod tests {
         let packet = ScionRawPacket::new(
             src,
             dst,
-            Path::Empty,
+            DpPath::Empty,
             ProtocolNumber::Udp,
             b"payload".to_vec(),
         );
