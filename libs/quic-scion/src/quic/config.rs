@@ -39,6 +39,12 @@ pub struct QuicConfig {
     pub verify_peer: bool,
     /// Optional path to CA certificates directory.
     pub ca_certs_directory: Option<String>,
+    /// Optional path to a CA certificate PEM file for verification.
+    pub ca_certs_file: Option<String>,
+    /// Optional list of signature algorithm preferences for certificate verification.
+    /// If set, overrides the default list. Use `squiche::SIGN_ED25519` (0x0807) to
+    /// accept Ed25519 certificates.
+    pub verify_algorithm_prefs: Option<Vec<u16>>,
     /// Initial max data.
     pub initial_max_data: u64,
     /// Initial max stream data for bidirectional local streams.
@@ -62,6 +68,8 @@ impl Default for QuicConfig {
             application_protos: vec![b"h3".to_vec()],
             verify_peer: true,
             ca_certs_directory: None,
+            ca_certs_file: None,
+            verify_algorithm_prefs: None,
             initial_max_data: 10_000_000,
             initial_max_stream_data_bidi_local: 1_000_000,
             initial_max_stream_data_bidi_remote: 1_000_000,
@@ -93,6 +101,9 @@ impl QuicConfig {
         if let Some(ca_certs_dir) = &self.ca_certs_directory {
             config.load_verify_locations_from_directory(ca_certs_dir)?;
         }
+        if let Some(ca_certs_file) = &self.ca_certs_file {
+            config.load_verify_locations_from_file(ca_certs_file)?;
+        }
 
         config.set_max_idle_timeout(self.idle_timeout.as_millis() as u64);
         config.set_max_recv_udp_payload_size(self.max_udp_payload_size);
@@ -106,6 +117,10 @@ impl QuicConfig {
         config.set_disable_active_migration(true);
 
         config.verify_peer(self.verify_peer);
+
+        if let Some(prefs) = &self.verify_algorithm_prefs {
+            config.set_verify_algorithm_prefs(prefs)?;
+        }
 
         Ok(config)
     }
@@ -148,9 +163,21 @@ impl QuicConfigBuilder {
         self
     }
 
-    /// Sets the path to CA certificates file for verification.
+    /// Sets the path to a CA certificates directory for verification.
     pub fn ca_certs_dir(mut self, path: impl Into<String>) -> Self {
         self.config.ca_certs_directory = Some(path.into());
+        self
+    }
+
+    /// Sets the path to a CA certificate PEM file for verification.
+    pub fn ca_certs_file(mut self, path: impl Into<String>) -> Self {
+        self.config.ca_certs_file = Some(path.into());
+        self
+    }
+
+    /// Sets the signature algorithm preferences for certificate verification.
+    pub fn verify_algorithm_prefs(mut self, prefs: Vec<u16>) -> Self {
+        self.config.verify_algorithm_prefs = Some(prefs);
         self
     }
 

@@ -3806,7 +3806,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4696,9 +4696,9 @@ dependencies = [
 
 [[package]]
 name = "squiche"
-version = "0.24.8-ana.2"
+version = "0.24.8-ana.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9b3a10ebd259b95baf43360d91c0a3ed80f81927e88cd411283feb8ab1189c8"
+checksum = "e4195768e8f894a79fc6acfa4b2f304257b5759965873a80e9a6638841f7ca6a"
 dependencies = [
  "cmake",
  "either",
