@@ -44,6 +44,8 @@ pub mod udp;
 
 /// Configuration needed to create a SNAP socket(s).
 pub struct SnapSocketConfig {
+    /// Custom CRPC client for reaching the SNAP control plane.
+    pub crpc_client: Option<reqwest::Client>,
     /// Source for SNAP token. If this is None, no SNAP sockets
     /// can be bound.
     pub snap_token_source: Option<Arc<dyn TokenSource>>,
@@ -162,6 +164,7 @@ impl UnderlayStack {
             token_source.clone(),
             1024,
             self.pool.clone(),
+            self.snap_socket_config.crpc_client.clone(),
         )
         .await?;
 

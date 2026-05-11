@@ -72,13 +72,25 @@ impl SnapUnderlaySocket {
         snap_token_source: Arc<dyn TokenSource>,
         receive_queue_capacity: usize,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
+        crpc_client: Option<reqwest::Client>,
     ) -> Result<Self, crate::scionstack::ScionSocketBindError> {
         // Establish the initial tunnel.
-        let mut snap_cp_client = CrpcSnapControlClient::new(&snap_cp).map_err(|e| {
-            crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::ControlPlaneClientCreationError(e),
-            )
-        })?;
+        let mut snap_cp_client = match crpc_client.clone() {
+            Some(client) => {
+                CrpcSnapControlClient::new_with_client(&snap_cp, client).map_err(|e| {
+                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    )
+                })?
+            }
+            None => {
+                CrpcSnapControlClient::new(&snap_cp).map_err(|e| {
+                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    )
+                })?
+            }
+        };
         snap_cp_client.use_token_source(snap_token_source.clone());
 
         let data_plane = snap_cp_client.get_data_plane_address().await.map_err(|e| {
@@ -96,11 +108,22 @@ impl SnapUnderlaySocket {
                 .into_boxed_dyn_error(),
             ),
         )?;
-        let mut snaptun_cp_client = CrpcSnapControlClient::new(&snaptun_cp_addr).map_err(|e| {
-            crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::ControlPlaneClientCreationError(e),
-            )
-        })?;
+        let mut snaptun_cp_client = match crpc_client {
+            Some(client) => {
+                CrpcSnapControlClient::new_with_client(&snaptun_cp_addr, client).map_err(|e| {
+                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    )
+                })?
+            }
+            None => {
+                CrpcSnapControlClient::new(&snaptun_cp_addr).map_err(|e| {
+                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    )
+                })?
+            }
+        };
         snaptun_cp_client.use_token_source(snap_token_source.clone());
 
         let tunnel = snaptunnel_manager.connect_tunnel(

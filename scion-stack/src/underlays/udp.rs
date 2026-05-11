@@ -64,13 +64,27 @@ pub(crate) struct TargetAddrLocalIpResolver {
 }
 
 impl TargetAddrLocalIpResolver {
-    pub fn new(api_address: url::Url) -> anyhow::Result<Self> {
-        let socket_addr = api_address
-            .socket_addrs(|| None)
-            .context("invalid api address")?
-            .first()
-            .ok_or(anyhow::anyhow!("failed to resolve api socket address"))?
-            .to_owned();
+    /// Create an IP resolver for URLs.
+    ///
+    /// If the URL contains an IP address, it is used directly. If it contains a hostname, the
+    /// hostname is resolved using the OS resolver.
+    pub fn from_url(api_address: url::Url) -> anyhow::Result<Self> {
+        let host = api_address
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("missing host"))?;
+        let port = api_address.port_or_known_default().unwrap_or(0);
+
+        let socket_addr = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            net::SocketAddr::new(ip, port)
+        } else {
+            api_address
+                .socket_addrs(|| None)
+                .context("invalid api address")?
+                .first()
+                .ok_or(anyhow::anyhow!("failed to resolve api socket address"))?
+                .to_owned()
+        };
+
         Ok(Self {
             api_socket_address: socket_addr,
         })

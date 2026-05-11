@@ -62,6 +62,7 @@ const DEFAULT_ENDHOST_API_DISCOVERY_PER_GROUP_DELAY: Duration = Duration::from_m
 /// }
 /// ```
 pub struct ScionStackBuilder {
+    crpc_client: Option<reqwest::Client>,
     endhost_api_token_source: Option<Arc<dyn TokenSource>>,
     auth_token_source: Option<Arc<dyn TokenSource>>,
     endhost_api_source: Arc<dyn EndhostApiSource>,
@@ -78,6 +79,7 @@ impl ScionStackBuilder {
     /// By default, udp dataplanes are preferred over snap dataplanes.
     pub fn new() -> Self {
         Self {
+            crpc_client: None,
             endhost_api_token_source: None,
             auth_token_source: None,
             endhost_api_source: Arc::new(StaticEndhostApiDiscovery::global()),
@@ -97,6 +99,15 @@ impl ScionStackBuilder {
     /// When discovering data planes, prefer UDP data planes if available.
     pub fn with_prefer_udp(mut self) -> Self {
         self.preferred_underlay = PreferredUnderlay::Udp;
+        self
+    }
+
+    /// Set a custom CRPC client for discovering and connecting to data planes.
+    ///
+    /// Can be useful if no DNS resolution is possible, so the client can be configured with custom
+    /// name resolution or with IP addresses directly.
+    pub fn with_crpc_client(mut self, crpc_client: reqwest::Client) -> Self {
+        self.crpc_client = Some(crpc_client);
         self
     }
 
@@ -194,13 +205,14 @@ impl ScionStackBuilder {
         self
     }
 
-    /// Build the SCION stack.
+    /// Override the socket address used to determine the local outbound IP for UDP.
     ///
-    /// # Returns
-    ///
-    /// A new SCION stack.
+    /// By default the builder resolves the endhost API hostname via OS DNS to find the socket
+    /// address. Use this method when the hostname is only resolvable through a custom DNS
+    /// override (e.g. a reqwest `resolve` entry) that is invisible to the OS resolver.
     pub async fn build(self) -> Result<ScionStack, BuildScionStackError> {
         let ScionStackBuilder {
+            crpc_client,
             endhost_api_token_source,
             auth_token_source,
             endhost_api_source,
@@ -244,12 +256,21 @@ impl ScionStackBuilder {
 
         let token_source: Option<Arc<dyn TokenSource>> =
             endhost_api_token_source.or(auth_token_source.clone());
+        let crpc_c = crpc_client.clone();
         let discover_underlays = move |url: Url| {
             let token_source = token_source.clone();
+            let crpc_c = crpc_c.clone();
             let url = url.clone();
             async move {
-                let mut client =
-                    CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::ClientSetup)?;
+                let mut client = match crpc_c {
+                    Some(client) => {
+                        CrpcEndhostApiClient::new_with_client(&url, client)
+                            .map_err(ApiAttemptError::ClientSetup)?
+                    }
+                    None => {
+                        CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::ClientSetup)?
+                    }
+                };
                 if let Some(token_source) = &token_source {
                     client.use_token_source(token_source.clone());
                 }
@@ -285,7 +306,7 @@ impl ScionStackBuilder {
             Some(ips) => Arc::new(ips),
             None => {
                 Arc::new(
-                    TargetAddrLocalIpResolver::new(api_url.clone())
+                    TargetAddrLocalIpResolver::from_url(api_url.clone())
                         .map_err(BuildUdpScionStackError::LocalIpResolutionError)?,
                 )
             }
@@ -297,6 +318,7 @@ impl ScionStackBuilder {
             local_ip_resolver,
             snap.static_identity.unwrap_or_else(StaticSecret::random),
             SnapSocketConfig {
+                crpc_client: snap.crpc_client.or(crpc_client),
                 snap_token_source: snap.snap_token_source.or(auth_token_source),
             },
         );
@@ -428,6 +450,7 @@ pub enum PreferredUnderlay {
 /// SNAP underlay configuration.
 #[derive(Default)]
 pub struct SnapUnderlayConfig {
+    crpc_client: Option<reqwest::Client>,
     snap_token_source: Option<Arc<dyn TokenSource>>,
     snap_dp_index: usize,
     /// Private key used for snap-tun connections. If unset, a random static identity is generated.
@@ -454,6 +477,12 @@ impl SnapUnderlayConfigBuilder {
     /// Set a token source to use for authentication with the SNAP control plane.
     pub fn with_auth_token_source(mut self, source: impl TokenSource) -> Self {
         self.0.snap_token_source = Some(Arc::new(source));
+        self
+    }
+
+    /// Set a custom CRPC client for discovering and connecting to data planes.
+    pub fn with_crpc_client(mut self, client: reqwest::Client) -> Self {
+        self.0.crpc_client = Some(client);
         self
     }
 

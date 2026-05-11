@@ -36,7 +36,7 @@
 //! example.com. IN TXT "scion=v1;[19-ff00:0:110,192.0.2.1],[19-ff00:0:111,203.0.113.5]"
 //! ```
 
-use std::{net::IpAddr, str::FromStr};
+use std::{collections::HashMap, net::IpAddr, str::FromStr};
 
 use async_trait::async_trait;
 use hickory_resolver::{
@@ -51,13 +51,15 @@ const SCION_TXT_PREFIX: &str = "scion=v1;";
 
 /// Resolver that interprets TXT records using the TSAR format.
 ///
-/// Use this resolver to look up `scion=v1;...` TXT records and translate them
-/// into `ScionAddr` values. Construction errors are reported via
-/// `TxtResolverError`, while lookup failures and parsing outcomes are reported
-/// through `ResolveError` from `ScionDnsResolver::resolve`.
+/// Use this resolver to look up `scion=v1;...` TXT records and translate them into `ScionAddr`
+/// values. Construction errors are reported via `TxtResolverError`, while lookup failures and
+/// parsing outcomes are reported through `ResolveError` from `ScionDnsResolver::resolve`.
+///
+/// Domain-specific overrides can be added to bypass DNS and always return the configured addresses.
 #[derive(Clone, Debug)]
 pub struct ScionTxtDnsResolver {
     resolver: TokioResolver,
+    overrides: HashMap<String, Vec<ScionAddr>>,
 }
 
 impl ScionTxtDnsResolver {
@@ -74,6 +76,23 @@ impl ScionTxtDnsResolver {
         Self::from_builder(builder)
     }
 
+    /// Override DNS resolution for a specific domain.
+    pub fn with_override(self, domain: &str, addrs: Vec<ScionAddr>) -> Self {
+        self.with_overrides(vec![(domain, addrs)])
+    }
+
+    /// Override DNS resolution for multiple domains at once.
+    pub fn with_overrides<D, I>(mut self, overrides: I) -> Self
+    where
+        D: Into<String>,
+        I: IntoIterator<Item = (D, Vec<ScionAddr>)>,
+    {
+        for (domain, addrs) in overrides {
+            self.overrides.insert(domain.into(), addrs);
+        }
+        self
+    }
+
     /// Construct a resolver from a pre-configured hickory `ResolverBuilder`.
     ///
     /// This allows callers to customize resolver options (timeouts, retries,
@@ -88,6 +107,7 @@ impl ScionTxtDnsResolver {
     ) -> Result<Self, TxtResolverError> {
         Ok(Self {
             resolver: builder.build(),
+            overrides: HashMap::new(),
         })
     }
 
@@ -125,6 +145,10 @@ impl ScionTxtDnsResolver {
 #[async_trait]
 impl ScionDnsResolver for ScionTxtDnsResolver {
     async fn resolve(&self, domain: &str) -> Result<Vec<ScionAddr>, ResolveError> {
+        if let Some(addrs) = self.overrides.get(domain) {
+            return Ok(addrs.clone());
+        }
+
         let lookup = self
             .resolver
             .txt_lookup(domain)
@@ -334,5 +358,67 @@ mod tests {
         let addrs = parse_txt_payload("[19-ff00:0:110,192.0.2.1] , [19-ff00:0:111,2001:db8::1]")
             .expect("valid payload");
         assert_eq!(addrs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn with_override_returns_single_address() {
+        let addr = ScionAddr::from_str("19-ff00:0:110,192.0.2.1").unwrap();
+        let resolver = ScionTxtDnsResolver::new()
+            .unwrap()
+            .with_override("example.com", vec![addr]);
+
+        let result = ScionDnsResolver::resolve(&resolver, "example.com")
+            .await
+            .unwrap();
+        assert_eq!(result, vec![addr]);
+    }
+
+    #[tokio::test]
+    async fn with_overrides_returns_all_addresses() {
+        let addr1 = ScionAddr::from_str("19-ff00:0:110,192.0.2.1").unwrap();
+        let addr2 = ScionAddr::from_str("19-ff00:0:111,2001:db8::1").unwrap();
+        let resolver = ScionTxtDnsResolver::new()
+            .unwrap()
+            .with_override("example.com", vec![addr1, addr2]);
+
+        let result = ScionDnsResolver::resolve(&resolver, "example.com")
+            .await
+            .unwrap();
+        assert_eq!(result, vec![addr1, addr2]);
+    }
+
+    #[tokio::test]
+    async fn with_multi_overrides_handles_multiple_domains() {
+        let addr1 = ScionAddr::from_str("19-ff00:0:110,192.0.2.1").unwrap();
+        let addr2 = ScionAddr::from_str("19-ff00:0:111,192.0.2.2").unwrap();
+        let resolver = ScionTxtDnsResolver::new().unwrap().with_overrides([
+            ("first.example.com", vec![addr1]),
+            ("second.example.com", vec![addr2]),
+        ]);
+
+        let result1 = ScionDnsResolver::resolve(&resolver, "first.example.com")
+            .await
+            .unwrap();
+        assert_eq!(result1, vec![addr1]);
+
+        let result2 = ScionDnsResolver::resolve(&resolver, "second.example.com")
+            .await
+            .unwrap();
+        assert_eq!(result2, vec![addr2]);
+    }
+
+    #[tokio::test]
+    async fn with_override_later_call_replaces_previous() {
+        let addr1 = ScionAddr::from_str("19-ff00:0:110,192.0.2.1").unwrap();
+        let addr2 = ScionAddr::from_str("19-ff00:0:111,192.0.2.2").unwrap();
+        let resolver = ScionTxtDnsResolver::new()
+            .unwrap()
+            .with_override("example.com", vec![addr1])
+            .with_override("example.com", vec![addr2]);
+
+        let result = ScionDnsResolver::resolve(&resolver, "example.com")
+            .await
+            .unwrap();
+        assert_eq!(result, vec![addr2]);
     }
 }

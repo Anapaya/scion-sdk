@@ -4228,6 +4228,7 @@ dependencies = [
  "pocketscion",
  "prost",
  "rand 0.10.0",
+ "reqwest",
  "rustls",
  "scc",
  "scion-proto",
