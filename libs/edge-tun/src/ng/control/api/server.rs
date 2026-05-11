@@ -32,8 +32,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing;
 
-use crate::ng::{
-    control_plane::EdgeTunControlPlane,
+use crate::ng::control::{
+    EdgeTunControlPlane,
     protobuf::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
         GetDataPlaneConfigurationResponse, IpAddressRange, RegisterEdgeTunIdentityRequest,
@@ -78,7 +78,7 @@ const PATH_REQUEST_ROUTES: &str = "/anapaya.edgetun.v1/request_routes";
 ///
 /// ```no_run
 /// use std::sync::Arc;
-/// use scion_sdk_edge_tun::ng::{api::server::EdgeTunControlPlaneCrpcApi, control_plane::EdgeTunControlPlane};
+/// use scion_sdk_edge_tun::ng::control::{api::server::EdgeTunControlPlaneCrpcApi, EdgeTunControlPlane};
 /// use tokio_util::sync::CancellationToken;
 ///
 /// # async fn example<C: EdgeTunControlPlane + 'static>(quic_server: scion_sdk_quic_scion::quic::server::QuicServer, control_plane: Arc<C>) {

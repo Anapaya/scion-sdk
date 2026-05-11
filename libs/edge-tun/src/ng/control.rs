@@ -12,13 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Edge-tun control plane trait and associated types.
+//! Next-generation edge-tun control plane API.
+//!
+//! This module contains the control plane API for the next-generation edge-tun,
+//! including the trait definition, the server-side API implementation, and a
+//! Connect-RPC client.
 
 use std::net::IpAddr;
 
 use ana_gotatun::x25519;
 use ipnet::IpNet;
 use sciparse::address::socket_addr::ScionSocketAddr;
+
+pub mod api;
+pub mod protobuf;
 
 /// Configuration for the edge-tun data plane.
 pub struct EdgeTunDataPlaneConfig {
@@ -33,7 +40,7 @@ pub struct EdgeTunDataPlaneConfig {
 /// The methods on this trait are called by [`EdgeTunControlPlaneCrpcApi`] when
 /// the corresponding Connect-RPC endpoint is invoked.
 ///
-/// [`EdgeTunControlPlaneCrpcApi`]: crate::ng::api::server::EdgeTunControlPlaneCrpcApi
+/// [`EdgeTunControlPlaneCrpcApi`]: crate::ng::control::api::server::EdgeTunControlPlaneCrpcApi
 pub trait EdgeTunControlPlane: Send + Sync {
     /// Returns the data plane configuration when the client calls
     /// `/anapaya.edgetun.v1/data_plane_configuration`.

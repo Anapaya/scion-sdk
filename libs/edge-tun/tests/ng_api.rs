@@ -25,9 +25,9 @@ use std::{
 
 use ana_gotatun::x25519;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
-use scion_sdk_edge_tun::ng::{
+use scion_sdk_edge_tun::ng::control::{
+    EdgeTunControlPlane, EdgeTunDataPlaneConfig,
     api::{client::EdgeTunControlPlaneClient, server::EdgeTunControlPlaneCrpcApi},
-    control_plane::{EdgeTunControlPlane, EdgeTunDataPlaneConfig},
     protobuf::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
         IpAddressRange,

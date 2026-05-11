@@ -16,7 +16,8 @@
 //!
 //! This crate provides the building blocks for establishing secure IP tunnels between
 //! an edge application server and its clients. Tunnels are transported over QUIC
-//! connections (see [`server`] / [`client`]) or WireGuard sessions (see [`wg`]).
+//! connections (see [`server`] / [`client`]) or next-generation control/data plane
+//! components (see [`ng`]).
 
 /// Address allocation traits and types for edge-tun servers.
 pub mod address_allocation;
@@ -36,5 +37,3 @@ pub mod requests;
 pub mod server;
 /// Test utilities for building synthetic IP packets.
 pub mod test_util;
-/// WireGuard-based edge-tun tunnel implementation.
-pub mod wg;

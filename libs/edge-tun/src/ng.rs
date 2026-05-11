@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Next-generation edge-tun control plane API.
+//! Next-generation edge-tun modules.
 //!
-//! This module contains the control plane API for the next-generation edge-tun,
-//! including the trait definition, the server-side API implementation, and a
-//! Connect-RPC client.
+//! This module contains the control plane API (`control`), data plane implementation
+//! (`data`), and high-level tunnel orchestration (`tunnel`).
 
-pub mod api;
-pub mod control_plane;
-pub mod protobuf;
+pub mod control;
+/// Next-generation edge-tun data plane implementation.
+pub mod data;
+/// High-level next-generation edge-tun client tunnel orchestration.
+pub mod tunnel;

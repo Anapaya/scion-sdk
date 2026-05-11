@@ -13,7 +13,7 @@
 // limitations under the License.
 //! # Wireguard-inspired Edgetun Tunnel server
 //!
-//! The [crate::wg::server::EdgeTunServerState] manages the tunnel state for
+//! The [crate::ng::data::server::EdgeTunServerState] manages the tunnel state for
 //! multiple clients. On the _inbound_ path, it decapsulates and verifies
 //! WireGuard-Frames, containing fragments of tunneled packets, reassembles the
 //! fragments, checks provided policies and dispatches the packets.
@@ -41,7 +41,7 @@ use crate::{
         Defragmenter, Fragmenter,
         metrics::{DefragmentMetrics, FragmentMetrics},
     },
-    wg::common::{
+    ng::data::common::{
         AsIpAddr, EdgePacketBufPool, fragment_and_dispatch, handle_incoming_and_drain_queue,
         pool_allocate_packet_with_payload,
     },
@@ -631,8 +631,8 @@ mod tests {
 
     use crate::{
         fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
-        wg::{
-            client::{EdgeTunClientConfig, EdgeTunClientState},
+        ng::data::{
+            client_state::{EdgeTunClientConfig, EdgeTunClientState},
             common::{AsIpAddr, EdgePacketBufPool},
             server::{EdgeTunAuthz, EdgeTunServerState, InboundTrafficPolicy, LocalIdx},
         },

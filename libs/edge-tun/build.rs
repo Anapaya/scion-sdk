@@ -17,7 +17,7 @@
 use std::io::Result;
 
 fn main() -> Result<()> {
-    let out_dir = "src/ng/protobuf/generated";
+    let out_dir = "src/ng/control/protobuf/generated";
     let proto_files = ["./protobuf/anapaya.edgetun.v1.proto"];
     let proto_include_paths = ["./protobuf"];
 

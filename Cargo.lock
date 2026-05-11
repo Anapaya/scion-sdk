@@ -4047,6 +4047,7 @@ dependencies = [
  "ana-gotatun",
  "anapaya-quinn",
  "assert_matches",
+ "async-channel",
  "async-trait",
  "byteorder",
  "bytes",
@@ -4081,6 +4082,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "zerocopy",
 ]
 
 [[package]]

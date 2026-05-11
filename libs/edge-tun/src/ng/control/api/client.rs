@@ -29,11 +29,11 @@ use sciparse::address::socket_addr::ScionSocketAddr;
 use thiserror::Error;
 use url::Url;
 
-use crate::ng::{
+use crate::ng::control::{
+    EdgeTunDataPlaneConfig,
     api::server::{
         ASSIGN_ADDRESSES, DATA_PLANE_CONFIGURATION, REGISTER_IDENTITY, REQUEST_ROUTES, SERVICE_PATH,
     },
-    control_plane::EdgeTunDataPlaneConfig,
     protobuf::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
         GetDataPlaneConfigurationResponse, IpAddressRange, RegisterEdgeTunIdentityRequest,

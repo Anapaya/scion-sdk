@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/// WireGuard-based edge-tun client state.
+/// WireGuard-based edge-tun client driver and handle.
 pub mod client;
+/// WireGuard-based edge-tun client state.
+pub mod client_state;
 /// Common helpers shared by the WireGuard client and server implementations.
 pub mod common;
 /// WireGuard identity registry for authorized tunnel peers.

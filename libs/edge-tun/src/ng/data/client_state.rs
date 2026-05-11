@@ -29,7 +29,7 @@ use crate::{
         Defragmenter, Fragmenter,
         metrics::{DefragmentMetrics, FragmentMetrics},
     },
-    wg::common::{
+    ng::data::common::{
         AsIpAddr, EdgePacketBufPool, fragment_and_dispatch, handle_incoming_and_drain_queue,
         pool_allocate_packet_with_payload,
     },
@@ -210,8 +210,8 @@ mod tests {
 
     use crate::{
         fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
-        wg::{
-            client::{EdgeTunClientConfig, EdgeTunClientState},
+        ng::data::{
+            client_state::{EdgeTunClientConfig, EdgeTunClientState},
             common::{AsIpAddr, EdgePacketBufPool, handle_incoming_and_drain_queue},
         },
     };
