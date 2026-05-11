@@ -37,7 +37,7 @@ impl TopologyLinkVisitor for CoreSegmentCollector {
         if let Some(link) = used_link {
             let _ = self
                 .links
-                .add_link(*current_as, link.clone(), true)
+                .add_link(current_as, link.clone(), true)
                 .inspect_err(|e| {
                     debug_assert!(false, "Should never fail to add hop to segment");
                     tracing::error!(error = %e, "Failed to add hop to segment in core path aggregator");
@@ -49,9 +49,23 @@ impl TopologyLinkVisitor for CoreSegmentCollector {
         self.links.finalize().ok()
     }
 
-    // Only follow core AS links
-    fn should_follow_link(&self, _current_as: &ScionAs, next_link: &ScionLink) -> bool {
-        next_link.link_type == ScionLinkType::Core
+    // Only follow core AS links that are not external.
+    fn should_follow_link(
+        &self,
+        current_as: &ScionAs,
+        next_link: &ScionLink,
+        next_as: &ScionAs,
+    ) -> bool {
+        if self.links.links.len() >= 63 {
+            tracing::warn!(
+                isd_as = %current_as.isd_as(),
+                "Segment has reached maximum length of 63 links, not following more links"
+            );
+
+            return false;
+        }
+
+        !next_as.is_external() && next_link.link_type == ScionLinkType::Core
     }
 }
 
@@ -68,7 +82,7 @@ impl TopologyLinkVisitor for DownSegmentCollector {
         if let Some(link) = used_link {
             let _ = self
                 .links
-                .add_link(*current_as, link.clone(), true)
+                .add_link(current_as, link.clone(), true)
                 .inspect_err(|e| {
                     debug_assert!(false, "Should never fail to add hop to links");
                     tracing::error!(error = %e, "Failed to add hop to links in down segment collector");
@@ -80,15 +94,37 @@ impl TopologyLinkVisitor for DownSegmentCollector {
         self.links.finalize().ok()
     }
 
-    fn should_follow_link(&self, current_as: &ScionAs, next_link: &ScionLink) -> bool {
-        let link_type = next_link.get_link_type(&current_as.isd_as);
+    /// Should only follow parent links, as these are the only links that can be part of a down
+    /// segment.
+    ///
+    /// If a link goes to a external AS, we do not follow it.
+    fn should_follow_link(
+        &self,
+        current_as: &ScionAs,
+        next_link: &ScionLink,
+        next_as: &ScionAs,
+    ) -> bool {
+        if self.links.links.len() >= 63 {
+            tracing::warn!(
+                isd_as = %current_as.isd_as(),
+                "Segment has reached maximum length of 63 links, not following more links"
+            );
+
+            return false;
+        }
+
+        let link_type = next_link.get_link_type(&current_as.isd_as());
+
+        if next_as.is_external() {
+            return false;
+        }
 
         match link_type {
             Some(ScionLinkType::Parent) => true,
             None => {
                 tracing::warn!(
                     link_id = %next_link.id,
-                    isd_as = %current_as.isd_as,
+                    isd_as = %current_as.isd_as(),
                     "Link type for link in AS is none, this should not happen"
                 );
 
@@ -113,21 +149,21 @@ impl DirectedLinks {
         let last_hop_if = self.links.back().context("links empty")?.to;
 
         Ok(LinkSegment {
-            start_as: first_hop_if.isd_as,
-            end_as: last_hop_if.isd_as,
+            start_as: first_hop_if.isd_as.into(),
+            end_as: last_hop_if.isd_as.into(),
             links: self.links,
         })
     }
 
     pub fn add_link(
         &mut self,
-        to_as: ScionAs,
+        to_as: &ScionAs,
         used_link: ScionLink,
         is_construction_dir: bool,
     ) -> anyhow::Result<()> {
         let hop = match is_construction_dir {
-            true => used_link.get_directed_to(&to_as.isd_as),
-            false => used_link.get_directed_from(&to_as.isd_as),
+            true => used_link.get_directed_to(&to_as.isd_as()),
+            false => used_link.get_directed_from(&to_as.isd_as()),
         };
 
         let hop = hop.context("error getting directed link from hop AS")?;
@@ -145,18 +181,22 @@ impl DirectedLinks {
 mod tests {
     use super::*;
     use crate::network::scion::{
-        topology::{FastTopologyLookup, visitor::walk_all_links},
+        topology::{
+            FastTopologyLookup,
+            visitor::{walk_all_links, walk_all_links_parallel},
+        },
         util::test_helper::{parse_segment, test_topology},
     };
 
-    #[test]
+    #[test_log::test]
     fn should_discover_all_complete_down_segments() {
         let topo = test_topology().unwrap();
 
-        let all_segments = walk_all_links(
+        let all_segments = walk_all_links_parallel(
             DownSegmentCollector::default(),
             "1-1".parse().unwrap(),
             &FastTopologyLookup::new(&topo),
+            4,
         );
 
         let expected_segments = [
@@ -175,10 +215,11 @@ mod tests {
             );
         });
 
-        let all_segments = walk_all_links(
+        let all_segments = walk_all_links_parallel(
             DownSegmentCollector::default(),
             "1-11".parse().unwrap(),
             &FastTopologyLookup::new(&topo),
+            4,
         );
 
         let expected_segments = [
@@ -232,5 +273,79 @@ mod tests {
                 "segment {i}: {lnk} was not expected"
             );
         });
+    }
+
+    /// Builds a topology with N fully-connected core ASes (1-1 .. 1-N) and
+    /// runs the core segment collector with 10 threads.
+    #[test_log::test]
+    fn single_and_multi_thread_should_have_same_results() {
+        use crate::network::scion::topology::ScionTopology;
+
+        const NUM_CORE_ASES: u16 = 6;
+        // Build topology: N core ASes, all connected to each other.
+        let mut topo = ScionTopology::new();
+        for i in 1..=NUM_CORE_ASES {
+            topo.add_as(ScionAs::new_core(format!("1-{i}").parse().unwrap()))
+                .unwrap();
+        }
+
+        // Create core links between every pair.  Interface IDs are derived
+        // deterministically from the (i, j) pair so they are unique.
+        // id_from = i*10 + j, id_to = j*10 + i
+        for i in 1..=NUM_CORE_ASES {
+            for j in (i + 1)..=NUM_CORE_ASES {
+                let link_str = format!("1-{i}#{} core 1-{j}#{}", i * 10 + j, j * 10 + i);
+                topo.add_link(link_str.parse().unwrap()).unwrap();
+            }
+        }
+
+        let lookup = FastTopologyLookup::new(&topo);
+
+        let start = std::time::Instant::now();
+        // Run single-threaded as reference.
+        let segments_single = walk_all_links(
+            CoreSegmentCollector::default(),
+            "1-1".parse().unwrap(),
+            &lookup,
+        );
+        let elapsed_single = start.elapsed();
+
+        let start = std::time::Instant::now();
+        // Run multi-threaded
+        let segments_parallel = walk_all_links_parallel(
+            CoreSegmentCollector::default(),
+            "1-1".parse().unwrap(),
+            &lookup,
+            10,
+        );
+
+        tracing::info!(
+            "Core segment discovery for {} fully connected core ASes took {:?} single-threaded counting {} segments",
+            NUM_CORE_ASES,
+            elapsed_single,
+            segments_single.len()
+        );
+        tracing::info!(
+            "Core segment discovery for {} fully connected core ASes took {:?} with threads counting {} segments",
+            NUM_CORE_ASES,
+            start.elapsed(),
+            segments_parallel.len()
+        );
+
+        // Both must produce the same set of segments (order may differ).
+        assert_eq!(
+            segments_single.len(),
+            segments_parallel.len(),
+            "segment count mismatch: single={} parallel={}",
+            segments_single.len(),
+            segments_parallel.len(),
+        );
+
+        for (i, seg) in segments_parallel.iter().enumerate() {
+            assert!(
+                segments_single.contains(seg),
+                "parallel segment {i}: {seg} was not found in single-threaded results"
+            );
+        }
     }
 }

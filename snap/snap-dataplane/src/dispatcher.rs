@@ -13,11 +13,11 @@
 // limitations under the License.
 //! SCION packet dispatcher trait.
 
-use scion_proto::packet::ScionPacketRaw;
+use sciparse::packet::view::ScionPacketView;
 
 /// The dispatcher trait is used to dispatch SCION packets to the appropriate handlers within the
 /// SNAP (and pocketscion) data plane.
 pub trait Dispatcher: Sync + Send {
     /// Try to dispatch the given SCION packet.
-    fn try_dispatch(&self, packet: ScionPacketRaw);
+    fn try_dispatch(&self, packet: &ScionPacketView);
 }

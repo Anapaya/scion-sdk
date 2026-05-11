@@ -1,0 +1,46 @@
+# Copyright 2026 Anapaya Systems
+name: Rust Checks
+description: >
+  Run Rust formatting, linting, tests, and documentation checks.
+  Format, clippy, doc and shear run on Linux only; tests run on all platforms.
+
+inputs:
+  workspace:
+    description: Path to the cargo workspace.
+    required: true
+  version:
+    description: Rust version.
+    default: "nightly-2026-03-12"
+
+runs:
+  using: composite
+  steps:
+    - name: Install rustfmt
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: rustup toolchain install ${{ inputs.version }} --component rustfmt
+    - name: Check formatting
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: cargo +${{ inputs.version }} fmt --all -- --check
+    - name: Run clippy
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: cargo clippy_ci
+    - name: Run tests
+      shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+      working-directory: ${{ inputs.workspace }}
+      run: cargo test_ci
+    - name: Check documentation
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: RUSTDOCFLAGS="-D warnings" cargo doc_ci
+    - name: Unused dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: cargo install --version 1.3.2 cargo-shear && cargo shear

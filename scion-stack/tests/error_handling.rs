@@ -18,7 +18,7 @@ use scion_proto::address::{ScionAddrSvc, ServiceAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_stack::scionstack::{
     InvalidBindAddressError, ScionSocketBindError, ScionStackBuilder, SnapConnectionError,
-    builder::BuildScionStackError,
+    builder::{AllEndhostApisFailed, ApiAttemptError, BuildScionStackError},
 };
 use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
@@ -29,22 +29,29 @@ use test_log::test;
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn endhost_api_unreachable_should_error() {
-    let unreachable_addr = "127.0.0.1:1";
+    let unreachable_url = "http://127.0.0.1:1".parse().unwrap();
 
-    let result = ScionStackBuilder::new(format!("http://{unreachable_addr}").parse().unwrap())
+    let result = ScionStackBuilder::new()
+        .with_endhost_api(unreachable_url)
         .with_auth_token(dummy_snap_token())
         .build()
         .await;
 
-    assert!(
-        matches!(
-            result,
-            Err(BuildScionStackError::UnderlayDiscoveryError(
-                CrpcClientError::ConnectionError { .. }
-            ))
-        ),
-        "expected UnderlayDiscoveryError::ConnectionError for unreachable server, got {result:?}"
-    );
+    match result {
+        Err(BuildScionStackError::AllEndhostApisFailed(AllEndhostApisFailed(errs)))
+            if matches!(
+                errs.as_slice(),
+                [(
+                    _,
+                    ApiAttemptError::UnderlayDiscovery(CrpcClientError::ConnectionError { .. })
+                )]
+            ) => {}
+        _ => {
+            panic!(
+                "expected BuildScionStackError::AllEndhostApisFailed for unreachable server, got {result:?}"
+            )
+        }
+    };
 }
 
 #[test(tokio::test)]
@@ -52,7 +59,8 @@ async fn endhost_api_unreachable_should_error() {
 async fn test_invalid_snap_token() {
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
-    let result = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let result = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token("invalid token".to_string())
         .build()
         .await
@@ -76,7 +84,8 @@ async fn test_invalid_snap_token() {
 async fn test_bind_service_address_fails_impl(underlay: UnderlayType) {
     let ps_handle = two_path_topology(underlay).await;
 
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await

@@ -1,0 +1,60 @@
+# Copyright 2026 Anapaya Systems
+name: Setup Protoc
+description: Cache and install the protoc compiler for both Linux and Windows.
+
+inputs:
+  protoc-version:
+    description: Version of protoc to install.
+    default: "34.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Restore protoc cache
+      id: cache-protoc
+      uses: ./.github/actions/cache-restore
+      with:
+        path: ${{ runner.os == 'Windows' && 'C:\Users\runneradmin\.protoc' || '~/.protoc' }}
+        key: ${{ runner.os }}-protoc-${{ inputs.protoc-version }}
+        restore-keys: |
+          ${{ runner.os }}-protoc-
+    - name: Install protoc
+      if: steps.cache-protoc.outputs.cache-hit != 'true'
+      shell: bash
+      run: |-
+        if [ "$RUNNER_OS" = "Linux" ]; then
+            PROTOC_ZIP="protoc-${{ inputs.protoc-version }}-linux-x86_64.zip"
+        elif [ "$RUNNER_OS" = "macOS" ]; then
+            PROTOC_ZIP="protoc-${{ inputs.protoc-version }}-osx-universal_binary.zip"
+        elif [ "$RUNNER_OS" = "Windows" ]; then
+            PROTOC_ZIP="protoc-${{ inputs.protoc-version }}-win64.zip"
+        else
+            echo "Unsupported OS: $RUNNER_OS"
+            exit 1
+        fi
+
+        PROTOC_DIR="${HOME}/.protoc"
+        PROTOC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v${{ inputs.protoc-version }}/${PROTOC_ZIP}"
+
+        mkdir -p "${PROTOC_DIR}"
+        curl -LO "${PROTOC_URL}"
+        unzip -q "${PROTOC_ZIP}" -d "${PROTOC_DIR}"
+        rm "${PROTOC_ZIP}"
+    - name: Save protoc cache
+      if: github.event_name == 'push'
+      uses: ./.github/actions/cache-save
+      with:
+        path: ${{ runner.os == 'Windows' && 'C:\Users\runneradmin\.protoc' || '~/.protoc' }}
+        key: ${{ runner.os }}-protoc-${{ inputs.protoc-version }}
+        cache-hit: ${{ steps.cache-protoc.outputs.cache-hit }}
+
+    - name: Add protoc to PATH (Linux / macOS)
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      shell: bash
+      run: echo "$HOME/.protoc/bin" >> $GITHUB_PATH
+    - name: Set PROTOC env var (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+          echo "$HOME\.protoc\bin" >> $env:GITHUB_PATH
+          echo "PROTOC=$HOME\.protoc\bin\protoc.exe" >> $env:GITHUB_ENV

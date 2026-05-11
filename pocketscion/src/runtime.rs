@@ -16,13 +16,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, SystemTime},
 };
 
+use anyhow::Context;
 use jsonwebtoken::DecodingKey;
+use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use scion_sdk_utils::{
     io::{get_tmp_path, read_file, write_file},
@@ -41,14 +43,22 @@ use crate::{
     addr_to_http_url,
     api::admin,
     authorization_server,
-    dto::{self},
-    endhost_api::PsEndhostApi,
+    dto::{self, SystemStateDto},
+    endhost_api::{EndhostApiId, PsEndhostApi},
     io_config::{IoConfig, SharedPocketScionIoConfig},
     management_api,
-    network::local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
+    network::{
+        local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
+        scion::routing::ScionNetworkTime,
+    },
     state::{
-        SharedPocketScionState, SystemState,
+        RouterId, SharedPocketScionState, SystemState,
+        control_service::ControlService,
+        endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryService},
         endhost_segment_lister::StateEndhostSegmentLister,
+        external_as::ExternalAsService,
+        network_forwarder::NetworkForwarder,
+        sim_network_stack::NetSimStack,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
         snap::{SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL, SnapId},
     },
@@ -138,6 +148,8 @@ impl PocketScionRuntimeBuilder {
         let snap_token_decoding_key =
             DecodingKey::from_ed_pem(pem::encode(&pstate.snap_token_public_key()).as_bytes())
                 .unwrap();
+        let snap_token_verifier =
+            snap_control::server::SnapTokenVerifier::new(snap_token_decoding_key);
 
         let mut snap_authz_map: BTreeMap<SnapId, Arc<IdentityRegistry>> = Default::default();
 
@@ -166,7 +178,7 @@ impl PocketScionRuntimeBuilder {
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
             let snap_resolver = pstate.snap_resolver(snap_id, io_config.clone());
             let identity_registry = Arc::new(IdentityRegistry::new());
-            let decoding_key = snap_token_decoding_key.clone();
+            let token_verifier = snap_token_verifier.clone();
 
             let local_ases = snap_state.isd_ases();
 
@@ -183,7 +195,7 @@ impl PocketScionRuntimeBuilder {
                         segment_lister,
                         snap_resolver,
                         identity_registry,
-                        decoding_key,
+                        token_verifier,
                         snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
                     )
                     .await
@@ -275,6 +287,51 @@ impl PocketScionRuntimeBuilder {
             );
         }
 
+        // Start Endhost Discovery APIs
+        for (id, _) in pstate.endhost_api_discovery_apis() {
+            let pstate = pstate.clone();
+            let io_config = io_config.clone();
+            EndhostApiDiscoveryService::start(id, pstate, io_config)
+                .await
+                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        }
+
+        // Start External AS adapters
+        for (isd_as, _state) in pstate.external_ases() {
+            let pstate = pstate.clone();
+            let io_config = io_config.clone();
+            let ext_as = ExternalAsService::start(isd_as, pstate.clone(), io_config.clone())
+                .await
+                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+
+            // Add the the handler to the simulation
+            pstate
+                .register_external_as_handler(isd_as, ext_as)
+                .map_err(|e| {
+                    io::Error::other(format!(
+                        "Failed to register external AS handler for AS {isd_as}: {e:?}"
+                    ))
+                })?;
+        }
+
+        // Control Services
+        for (isd_as, _) in pstate.get_control_services() {
+            let pstate = pstate.clone();
+            task_set.join_set.spawn(async move {
+                match ControlService::start(isd_as, pstate) {
+                    Ok(_) => {
+                        tracing::info!(isd_as = %isd_as, "Control Service started");
+                        Ok(())
+                    },
+                    Err(e) => {
+                        tracing::error!(isd_as = %isd_as, error = ?e, "Failed to start Control Service");
+                        Err(io::Error::other(format!("Failed to start Control Service for AS {isd_as}: {e:?}")))
+                    }
+                }
+            });
+        }
+
+        // Start router sockets
         for sock_id in pstate.router_ids() {
             let udp_socket = {
                 let bind_addr = match io_config.router_socket_addr(sock_id) {
@@ -309,6 +366,48 @@ impl PocketScionRuntimeBuilder {
                 .expect("Failed to add wildcard receiver");
 
             task_set.spawn_cancellable_task(async move { router_socket.run().await });
+        }
+
+        // Start Network Forwarders
+        for (sci_addr, forwarder_state) in pstate.network_forwarders() {
+            let listen_addr = io_config
+                .network_forwarder_addr(sci_addr.isd_asn(), forwarder_state.sim_addr)
+                .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)));
+
+            if sci_addr.local_address().unwrap() != forwarder_state.sim_addr {
+                return Err(io::Error::other(format!(
+                    "SCION address {sci_addr} does not match the simulation address {sim_addr} configured for the forwarder",
+                    sim_addr = forwarder_state.sim_addr
+                )).into());
+            }
+
+            let forwarder = NetworkForwarder::bind(
+                pstate.clone(),
+                forwarder_state.local_as,
+                forwarder_state.sim_addr,
+                forwarder_state.queue_size,
+                listen_addr,
+                forwarder_state.forward_addr,
+            )
+            .await
+            .map_err(|e| {
+                io::Error::other(format!(
+                    "Failed to start network forwarder for {sci_addr}: {e}"
+                ))
+            })?;
+
+            // update the listen address in the io config in case it was not set
+            io_config.set_network_forwarder_addr(
+                sci_addr.isd_asn(),
+                forwarder_state.sim_addr,
+                forwarder.listen_addr(),
+            );
+
+            // Start the forwarder
+            task_set.spawn_cancellable_task(async move {
+                forwarder.run().await;
+                Ok(())
+            });
         }
 
         ready_state.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -350,6 +449,8 @@ impl PocketScionRuntimeBuilder {
 
         Ok(PocketScionRuntime {
             handle: InProcess::new(task_set),
+            state: pstate,
+            io_config,
             client,
         })
     }
@@ -364,9 +465,105 @@ impl Default for PocketScionRuntimeBuilder {
 /// In-memory PocketSCION runtime.
 pub struct PocketScionRuntime {
     handle: InProcess,
+    // TODO(ake): all api functions should be replaced with direct function calls and the client
+    // should be removed.
+    state: SharedPocketScionState,
+    io_config: SharedPocketScionIoConfig,
     // Eventually, the in-memory representation should use direct function calls
     // and not go through the http-interface.
     client: admin::client::ApiClient,
+}
+
+impl PocketScionRuntime {
+    /// Returns the socket address of given endhost api, if it exists.
+    pub fn endhost_api_addr(&self, id: EndhostApiId) -> Option<SocketAddr> {
+        self.state
+            .endhost_api(id)
+            .and_then(|_| self.io_config.endhost_api_addr(id))
+    }
+
+    /// Returns the socket address of given endhost api discovery api, if it exists.
+    pub fn endhost_api_discovery_addr(&self, id: EndhostApiDiscoveryApiId) -> Option<SocketAddr> {
+        self.state
+            .endhost_api_discovery_api(id)
+            .and_then(|_| self.io_config.endhost_api_discovery_api_addr(id))
+    }
+
+    /// Returns the socket address of the interface with the given id of the external AS, if it
+    /// exists.
+    pub fn external_as_interface_addr(&self, ia: IsdAsn, interface_id: u16) -> Option<SocketAddr> {
+        self.state
+            .external_as(ia)
+            .and_then(|_| self.io_config.external_as_interface_addr(ia, interface_id))
+    }
+
+    /// Returns the socket address of the control plane API of the snap with the given id, if it
+    /// exists.
+    pub fn snap_control_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
+        self.state
+            .snap(snap_id)
+            .and_then(|_| self.io_config.snap_control_addr(snap_id))
+    }
+
+    /// Returns the socket address of the data plane API of the snap with the given id, if it
+    /// exists.
+    pub fn snap_data_plane_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
+        self.state
+            .snap(snap_id)
+            .and_then(|_| self.io_config.snap_data_plane_addr(snap_id))
+    }
+
+    /// Returns the socket address of the router with the given id, if it exists.
+    pub fn router_socket_addr(&self, router_id: RouterId) -> Option<SocketAddr> {
+        self.state
+            .router(router_id)
+            .and_then(|_| self.io_config.router_socket_addr(router_id))
+    }
+
+    /// Returns the listening socket address of the network forwarder registered at the given AS and
+    /// IP, if it exists.
+    pub fn network_forwarder_addr(&self, isd_asn: IsdAsn, ip: IpAddr) -> Option<SocketAddr> {
+        self.io_config.network_forwarder_addr(isd_asn, ip)
+    }
+
+    /// Returns a handle to the shared state of the PocketSCION runtime.
+    pub fn state(&self) -> SharedPocketScionState {
+        self.state.clone()
+    }
+}
+
+impl PocketScionRuntime {
+    /// Dispatches a packet through PocketScions Network simulation.
+    ///
+    /// ## Parameters
+    /// - `local_as`: The ISD-AS the packet starts processing
+    /// - `local_interface`: Interface where the packet starts processing. 0 means packet originated
+    ///   in the AS.
+    /// - `now`: The timestamp to dispatch the packet at.
+    /// - `packet`: The raw SCION packet to dispatch.
+    pub fn dispatch_packet(
+        &self,
+        local_as: IsdAsn,
+        local_interface: u16,
+        now: ScionNetworkTime,
+        packet: ScionPacketRaw,
+    ) {
+        self.state
+            .dispatch_to_network_sim(local_as, local_interface, now, packet);
+    }
+
+    /// Binds a socket to the given address and registers it as a simulation receiver for the given
+    /// AS.
+    ///
+    /// See [NetSimStack] for more details.
+    pub fn bind_sim_network_stack(
+        &self,
+        local_as: IsdAsn,
+        bind_addr: IpAddr,
+        queue_size: usize,
+    ) -> anyhow::Result<NetSimStack> {
+        NetSimStack::bind(self.state.clone(), local_as, bind_addr, queue_size)
+    }
 }
 
 const MAX_ATTEMPTS: i32 = 5;
@@ -441,16 +638,19 @@ impl PathOrObject<SystemState> {
     /// This method panics in case of i/o-errors. We deem this acceptable as it
     /// is primarily used in testing.
     #[allow(unused)]
-    pub(crate) async fn sync_to_file(self) -> Option<PathBuf> {
+    pub(crate) async fn sync_to_file(self) -> anyhow::Result<Option<PathBuf>> {
         let state = match self {
-            PathOrObject::Unspecified => return None,
-            PathOrObject::Path(path_buf) => return Some(path_buf),
+            PathOrObject::Unspecified => return Ok(None),
+            PathOrObject::Path(path_buf) => return Ok(Some(path_buf)),
             PathOrObject::Object(s) => s,
         };
         let path = get_tmp_path("system_state.json");
-        let dto = crate::dto::SystemStateDto::from(&state);
-        write_file(path.clone(), &dto).await.expect("failed");
-        Some(path)
+        let dto: SystemStateDto = (&state).into();
+        write_file(path.clone(), &dto)
+            .await
+            .context("failed to write system state")?;
+
+        Ok(Some(path))
     }
 
     pub(crate) async fn load(self, start_time: SystemTime) -> Result<SystemState, std::io::Error> {

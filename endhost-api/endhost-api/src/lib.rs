@@ -22,30 +22,29 @@
 //! use std::{net::SocketAddr, sync::Arc};
 //!
 //! use endhost_api::routes::nest_endhost_api;
-//! use endhost_api_models::{PathDiscovery, UnderlayDiscovery};
+//! use endhost_api_models::{SegmentsDiscovery, UnderlayDiscovery};
 //! use tokio::net::TcpListener;
 //!
 //! struct MyUnderlayService;
 //! impl UnderlayDiscovery for MyUnderlayService {
 //!     fn list_underlays(
 //!         &self,
-//!         request_as: scion_proto::address::IsdAsn,
+//!         request_as: sciparse::identifier::isd_asn::IsdAsn,
 //!     ) -> endhost_api_models::underlays::Underlays {
 //!         todo!();
 //!     }
 //! }
 //!
-//! struct MyPathService;
+//! struct MySegmentsService;
 //! #[async_trait::async_trait]
-//! impl PathDiscovery for MyPathService {
+//! impl SegmentsDiscovery for MySegmentsService {
 //!     async fn list_segments(
 //!         &self,
-//!         request_as: scion_proto::address::IsdAsn,
-//!         dst: scion_proto::address::IsdAsn,
+//!         request_as: sciparse::identifier::isd_asn::IsdAsn,
+//!         dst: sciparse::identifier::isd_asn::IsdAsn,
 //!         page_size: i32,
 //!         page_token: String,
-//!     ) -> Result<scion_proto::path::segment::SegmentsPage, scion_proto::path::SegmentsError>
-//!     {
+//!     ) -> Result<sciparse::segment::SegmentsPage, endhost_api_models::SegmentsError> {
 //!         todo!();
 //!     }
 //! }
@@ -55,7 +54,7 @@
 //! let router = nest_endhost_api(
 //!     base_router,
 //!     Arc::new(MyUnderlayService),
-//!     Arc::new(MyPathService),
+//!     Arc::new(MySegmentsService),
 //! );
 //!
 //! let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))

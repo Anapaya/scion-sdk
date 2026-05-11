@@ -14,7 +14,12 @@
 
 //! Conversion implementations between protobuf and native types.
 
-use crate::{EndhostApiInfo, proto::endhost::discovery::v1::RpcEndhostApiInfo};
+use crate::{
+    EndhostApiGroup, EndhostApiInfo,
+    proto::endhost::discovery::v1::{RpcEndhostApiGroup, RpcEndhostApiInfo},
+};
+
+// EndhostApiInfo
 
 /// Errors that can occur when trying to convert RpcEndhostApiInfo to EndhostApiInfo.
 #[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
@@ -45,6 +50,33 @@ impl From<EndhostApiInfo> for RpcEndhostApiInfo {
     fn from(value: EndhostApiInfo) -> Self {
         RpcEndhostApiInfo {
             address: value.address.to_string(),
+        }
+    }
+}
+
+// EndhostApiGroup
+
+impl TryFrom<RpcEndhostApiGroup> for EndhostApiGroup {
+    type Error = EndhostApiFromRpcError;
+
+    fn try_from(value: RpcEndhostApiGroup) -> Result<Self, Self::Error> {
+        let mut apis = Vec::with_capacity(value.apis.len());
+        for rpc_api in value.apis {
+            apis.push(rpc_api.try_into()?);
+        }
+
+        Ok(EndhostApiGroup { apis })
+    }
+}
+
+impl From<EndhostApiGroup> for RpcEndhostApiGroup {
+    fn from(value: EndhostApiGroup) -> Self {
+        RpcEndhostApiGroup {
+            apis: value
+                .apis
+                .into_iter()
+                .map(RpcEndhostApiInfo::from)
+                .collect(),
         }
     }
 }

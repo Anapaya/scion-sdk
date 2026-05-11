@@ -78,7 +78,12 @@ where
         let ConnectRpc(message) = self;
         let buf = message.encode_to_vec();
 
-        (StatusCode::OK, buf).into_response()
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, APPLICATION_PROTO)],
+            buf,
+        )
+            .into_response()
     }
 }
 
@@ -135,5 +140,30 @@ impl IntoResponse for ConnectRpcRejection {
                     .into_response()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        http::{StatusCode, header},
+        response::IntoResponse,
+    };
+
+    use super::{APPLICATION_PROTO, ConnectRpc};
+
+    #[derive(prost::Message)]
+    struct EmptyMessage {}
+
+    #[test]
+    fn into_response_sets_content_type_application_proto() {
+        let msg = ConnectRpc(EmptyMessage {});
+        let response = msg.into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            APPLICATION_PROTO,
+        );
     }
 }

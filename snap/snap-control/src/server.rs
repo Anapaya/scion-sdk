@@ -18,13 +18,12 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use axum::{BoxError, Router, error_handling::HandleErrorLayer};
 use endhost_api::routes::nest_endhost_api;
 use endhost_api_models::{
-    PathDiscovery,
+    SegmentsDiscovery,
     underlays::{ScionRouter, Underlays},
 };
 use http::StatusCode;
-use jsonwebtoken::DecodingKey;
-use scion_proto::address::IsdAsn;
 use scion_sdk_observability::info_trace_layer;
+use sciparse::identifier::isd_asn::IsdAsn;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};
@@ -44,15 +43,15 @@ use crate::{
 
 pub mod auth;
 pub mod identity_registry;
+pub mod jwks_key_store;
 pub mod metrics;
 pub mod mock_segment_lister;
 pub mod state;
+pub mod token_verifier;
+
+pub use token_verifier::SnapTokenVerifier;
 
 const CONTROL_PLANE_API_TIMEOUT: Duration = Duration::from_secs(30);
-
-// The control plane API rate limit is set to 5 requests per second.
-const CONTROL_PLANE_RATE_LIMIT: u64 = 20;
-const CONTROL_PLANE_RATE_LIMIT_PERIOD: Duration = Duration::from_secs(1);
 
 /// Start the SNAP control plane API server.
 pub async fn start<UD, SL, SR, IR>(
@@ -62,12 +61,12 @@ pub async fn start<UD, SL, SR, IR>(
     segment_lister: SL,
     snap_resolver: SR,
     identity_registry: Arc<IR>,
-    snap_token_decoding_key: DecodingKey,
+    token_verifier: SnapTokenVerifier,
     metrics: Metrics,
 ) -> std::io::Result<()>
 where
     UD: UnderlayDiscovery + 'static + Send + Sync,
-    SL: PathDiscovery + 'static + Send + Sync,
+    SL: SegmentsDiscovery + 'static + Send + Sync,
     SR: SnapDataPlaneResolver + 'static + Send + Sync,
     IR: SnapTunIdentityRegistry + 'static + Send + Sync,
 {
@@ -117,13 +116,8 @@ where
             }))
             .layer(info_trace_layer())
             .layer(TimeoutLayer::new(CONTROL_PLANE_API_TIMEOUT))
-            .layer(tower::buffer::BufferLayer::new(1024))
-            .layer(tower::limit::RateLimitLayer::new(
-                CONTROL_PLANE_RATE_LIMIT,
-                CONTROL_PLANE_RATE_LIMIT_PERIOD,
-            ))
             .layer(PrometheusMiddlewareLayer::new(metrics))
-            .layer(AuthMiddlewareLayer::new(snap_token_decoding_key)),
+            .layer(AuthMiddlewareLayer::new(token_verifier)),
     );
 
     tracing::info!(addr=%snap_cp_addr, "Starting control plane API");

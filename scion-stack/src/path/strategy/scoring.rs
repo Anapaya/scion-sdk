@@ -222,7 +222,7 @@ mod tests {
     );
 
     pub fn path(hop_count: u16, timestamp: u32, exp_units: u8, asn_seed: u32) -> Path {
-        let mut builder = TestPathBuilder::new(SRC_ADDR, DST_ADDR)
+        let mut builder = TestPathBuilder::new(SRC_ADDR.into(), DST_ADDR.into())
             .using_info_timestamp(timestamp)
             .with_hop_expiry(exp_units)
             .up();

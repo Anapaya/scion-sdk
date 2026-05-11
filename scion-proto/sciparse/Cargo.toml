@@ -1,16 +1,42 @@
 [package]
 name = "sciparse"
-publish = false
-edition.workspace = true
+publish = true
+version = "0.5.2"
+edition = { workspace = true }
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Zero-copy SCION packet parsing, serialization and control plane components"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
+
 
 [dependencies]
-thiserror.workspace = true
-bitflags.workspace = true
-tinyvec.workspace = true
+aes = { workspace = true }
+bitflags = { workspace = true }
+cmac = { workspace = true }
+ecdsa = { workspace = true }
+p256 = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+scion-protobuf = { workspace = true }
+serde = { workspace = true }
+serde_with = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tinyvec = { workspace = true }
+utoipa = { workspace = true }
+
+# Feature: proptest
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
+
+[features]
+default = ["proptest"]
+proptest = ["dep:proptest", "dep:proptest-derive"]
 
 [dev-dependencies]
-proptest.workspace = true
-proptest-derive.workspace = true
+base64 = { workspace = true }
 
 [lints]
 workspace = true

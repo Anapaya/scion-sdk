@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Bucket for SCION packet parsing and serialization libraries.
+//! SCION packet parsing and serialization.
 
 /// SCION header interpretation
 pub mod header;
@@ -22,5 +22,3 @@ pub mod packet;
 pub mod path;
 /// payload interpretation
 pub mod payload;
-/// General SCION types
-pub mod types;

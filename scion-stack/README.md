@@ -18,6 +18,7 @@ receiving data over the SCION network.
 
 ```rust
 use scion_proto::address::SocketAddr;
+use scion_stack::resolver::{ScionDnsResolver, txt::ScionTxtDnsResolver};
 use scion_stack::scionstack::{ScionStack, ScionStackBuilder};
 use url::Url;
 
@@ -28,7 +29,11 @@ async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
     let scion_stack = builder.build().await?;
     let socket = scion_stack.bind(None).await?;
 
-    let destination: SocketAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
+    let resolver = ScionTxtDnsResolver::new()?;
+    let addresses = resolver.resolve("example.com").await?;
+    let address = addresses.first().expect("no addresses resolved");
+
+    let destination = SocketAddr::new(*address, 8080);
 
     socket.send_to(b"hello", destination).await?;
     let mut buffer = [0u8; 1024];
@@ -38,5 +43,3 @@ async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
-Refer to the crate documentation for more details and advanced usage.

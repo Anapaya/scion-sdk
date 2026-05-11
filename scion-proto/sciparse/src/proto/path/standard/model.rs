@@ -14,30 +14,35 @@
 
 //! SCION standard path models
 
+use tinyvec::{ArrayVec, TinyVec};
+
 use crate::{
     core::{
         encode::{InvalidStructureError, WireEncode},
         layout::Layout,
         write::unchecked_bit_range_be_write,
     },
-    path::standard::{
-        layout::{HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathMetaLayout},
-        types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
-        view::{HopFieldView, InfoFieldView, StandardPathView},
+    path::{
+        layout::ScionHeaderPathLayout,
+        standard::{
+            layout::{HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathMetaLayout},
+            mac::{ForwardingKey, HopMacCalculate, HopMacInput, HopMacInputSource},
+            types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
+            view::{HopFieldView, InfoFieldView, StandardPathView},
+        },
     },
 };
 
 /// Represents a standard SCION path
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StandardPath {
     /// The current info field index
     pub current_info_field: u8,
     /// The current hop field index
-    pub curr_hop_field: u8,
+    pub current_hop_field: u8,
     /// The segments of the path
-    pub segments: Vec<Segment>,
+    pub segments: ArrayVec<[Segment; 3]>,
 }
-
 impl StandardPath {
     /// Constructs a `StandardPath` from a `StandardPathView`
     pub fn from_view(view: &StandardPathView) -> Self {
@@ -45,7 +50,7 @@ impl StandardPath {
         let hop_fields = view.hop_fields();
         let segment_sizes = [view.seg0_len(), view.seg1_len(), view.seg2_len()];
 
-        let mut segments = Vec::with_capacity(info_fields.len());
+        let mut segments = ArrayVec::new();
         let mut hop_fields_iter = hop_fields.iter();
 
         for (info_field, segment_size) in info_fields.iter().zip(segment_sizes.iter()) {
@@ -63,12 +68,11 @@ impl StandardPath {
 
         StandardPath {
             current_info_field: view.curr_info_field(),
-            curr_hop_field: view.curr_hop_field(),
+            current_hop_field: view.curr_hop_field(),
             segments,
         }
     }
 }
-
 // Utility
 impl StandardPath {
     /// Returns the total number of hop fields in the path
@@ -112,7 +116,6 @@ impl StandardPath {
         [seg0, seg1, seg2]
     }
 }
-
 impl WireEncode for StandardPath {
     fn required_size(&self) -> usize {
         let [seg0, seg1, seg2] = self.segment_sizes();
@@ -120,22 +123,30 @@ impl WireEncode for StandardPath {
     }
 
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
-        if self.curr_hop_field != 0 && self.curr_hop_field as usize >= self.hop_field_count() {
-            return Err("curr_hop_field exceeds total number of hop fields".into());
+        if self.required_size() > ScionHeaderPathLayout::MAX_SIZE_BYTES {
+            return Err("Encoded path size exceeds maximum allowed".into());
         }
 
-        if self.current_info_field != 0
-            && self.current_info_field as usize >= self.info_field_count()
-        {
-            return Err("current_info_field exceeds total number of info fields".into());
+        // Should never be hit since we are using an ArrayVec with a max length of 3.
+        // Compiler should optimize this check away.
+        if self.segments.len() > StdPathMetaLayout::MAX_SEGMENTS {
+            return Err("Number of segments exceeds maximum allowed".into());
         }
 
         if self.segments.is_empty() {
             return Err("Standard path must contain at least one segment".into());
         }
 
+        if self.current_hop_field as usize >= self.hop_field_count() {
+            return Err("curr_hop_field exceeds total number of hop fields".into());
+        }
+
+        if self.current_info_field as usize >= self.info_field_count() {
+            return Err("current_info_field exceeds total number of info fields".into());
+        }
+
         for segment in &self.segments {
-            if segment.hop_fields.len() > StdPathMetaLayout::MAX_SEGMENT_LENGTH {
+            if segment.hop_fields.len() > StdPathMetaLayout::MAX_SEGMENT_HOPS {
                 return Err("Number of hop fields in segment exceeds maximum allowed".into());
             }
 
@@ -161,7 +172,7 @@ impl WireEncode for StandardPath {
         // Encode standard path meta information
         unsafe {
             unchecked_bit_range_be_write(buf, SL::CURR_INFO_FIELD_RNG, self.current_info_field);
-            unchecked_bit_range_be_write(buf, SL::CURR_HOP_FIELD_RNG, self.curr_hop_field);
+            unchecked_bit_range_be_write(buf, SL::CURR_HOP_FIELD_RNG, self.current_hop_field);
             unchecked_bit_range_be_write(buf, SL::SEG0_LEN_RNG, seg0);
             unchecked_bit_range_be_write(buf, SL::SEG1_LEN_RNG, seg1);
             unchecked_bit_range_be_write(buf, SL::SEG2_LEN_RNG, seg2);
@@ -195,16 +206,30 @@ impl WireEncode for StandardPath {
 }
 
 /// Represents a segment in a standard SCION path
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Segment {
     /// Info field containing metadata about the segment
     pub info_field: InfoField,
     /// Hop fields representing the hops in the segment
-    pub hop_fields: Vec<HopField>,
+    // Note: As long as the total number of hops does not exceed the defined maximum, tinyvec will
+    // store the hop fields inline without heap allocation.
+    pub hop_fields: TinyVec<[HopField; 12]>,
+}
+impl Default for Segment {
+    fn default() -> Self {
+        Self {
+            info_field: InfoField {
+                flags: InfoFieldFlags::empty(),
+                segment_id: 0,
+                timestamp: 0,
+            },
+            hop_fields: TinyVec::new(),
+        }
+    }
 }
 
 /// Represents an info field in a standard SCION path
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InfoField {
     /// Info field flags
     pub flags: InfoFieldFlags,
@@ -220,7 +245,6 @@ pub struct InfoField {
     /// Used to determine if this segment currently valid.
     pub timestamp: u32,
 }
-
 impl InfoField {
     /// Constructs a `InfoField` from a `InfoFieldView`
     pub fn from_view(view: &InfoFieldView) -> Self {
@@ -231,7 +255,6 @@ impl InfoField {
         }
     }
 }
-
 impl WireEncode for InfoField {
     fn required_size(&self) -> usize {
         InfoFieldLayout::SIZE_BYTES
@@ -257,14 +280,14 @@ impl WireEncode for InfoField {
 /// Represents a hop field in a standard SCION path
 ///
 /// Hop fields contain information about individual hops in a SCION path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HopField {
     /// Hop field flags
     pub flags: HopFieldFlags,
     /// Hop field expiration units
     ///
     /// The expiration time of a hop field is determined by multiplying the value in this field
-    /// by [`EXP_TIME_UNIT`](super::types::EXP_TIME_UNIT)
+    /// by [`EXP_TIME_UNIT`](crate::path::standard::types::EXP_TIME_UNIT)
     ///
     /// After this duration has passed since the segment creation time (found in the info
     /// field), the hop field is considered expired and may not be used for forwarding.
@@ -297,7 +320,17 @@ pub struct HopField {
     /// It is computed when a segment is created and verified at each hop.
     pub mac: HopFieldMac,
 }
-
+impl Default for HopField {
+    fn default() -> Self {
+        Self {
+            flags: HopFieldFlags::empty(),
+            expiration_units: 0,
+            cons_ingress: 0,
+            cons_egress: 0,
+            mac: HopFieldMac([0; 6]),
+        }
+    }
+}
 impl HopField {
     /// Constructs a `HopField` from a `HopFieldView`
     pub fn from_view(view: &HopFieldView) -> Self {
@@ -310,7 +343,45 @@ impl HopField {
         }
     }
 }
-
+impl HopField {
+    /// Creates an empty `HopField` with zeroed fields.
+    pub fn empty() -> Self {
+        Self {
+            flags: HopFieldFlags::empty(),
+            expiration_units: 0,
+            cons_ingress: 0,
+            cons_egress: 0,
+            mac: HopFieldMac([0; 6]),
+        }
+    }
+}
+// MAC methods
+impl HopField {
+    /// Recalculates the MAC for this hop field and updates the `mac` field with the new value.
+    ///
+    /// See [`HopMacCalculate::calculate_mac`](crate::path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
+    pub fn with_calculated_mac(
+        mut self,
+        mac_chain_beta: u16,
+        timestamp_epoch: u32,
+        forwarding_key: &ForwardingKey,
+    ) -> Self {
+        self.mac = self.calculate_mac(mac_chain_beta, timestamp_epoch, forwarding_key);
+        self
+    }
+}
+/// Provides the necessary input for calculating the MAC of a hop field.
+/// Automatically implements [`HopMacCalculate`](crate::path::standard::mac::HopMacCalculate)
+impl HopMacInputSource for HopField {
+    #[inline]
+    fn get_mac_input(&self) -> HopMacInput {
+        HopMacInput {
+            exp_time: self.expiration_units,
+            cons_ingress: self.cons_ingress,
+            cons_egress: self.cons_egress,
+        }
+    }
+}
 impl WireEncode for HopField {
     fn required_size(&self) -> usize {
         HopFieldLayout::SIZE_BYTES
@@ -332,5 +403,141 @@ impl WireEncode for HopField {
                 .copy_from_slice(&self.mac.0);
         }
         self.required_size()
+    }
+}
+
+/// Support for [`proptest::arbitrary`].
+#[cfg(feature = "proptest")]
+pub mod ptest {
+    use ::proptest::prelude::*;
+
+    use super::*;
+
+    /// Configuration for generating arbitrary [`StandardPath`] values.
+    #[derive(Debug, Clone, Default)]
+    pub struct ArbitraryPathContext {
+        // Not implemented yet, but would allow providing ForwardingKeys for generating valid MACs,
+        // or even generating paths valid on a topology
+    }
+
+    impl Arbitrary for StandardPath {
+        type Parameters = ArbitraryPathContext;
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(ctx: Self::Parameters) -> Self::Strategy {
+            (
+                any::<u8>(),
+                prop::collection::vec(Segment::arbitrary_with(ctx), 1..=3),
+            )
+                .prop_map(|(curr_hop, segments): (u8, Vec<Segment>)| {
+                    // A full path can only address up to 63 hops due to the 6-bit limit of the
+                    // curr_hop_field.
+                    let max_total_hops = StdPathMetaLayout::MAX_TOTAL_HOPS;
+
+                    // ensure the total number of hops does not exceed the maximum allowed for the
+                    // number of segments
+                    let total_hops: usize = segments.iter().map(|s| s.hop_fields.len()).sum();
+                    let mut segments = segments;
+                    if total_hops > max_total_hops {
+                        let n = segments.len();
+                        let base = max_total_hops / n;
+                        let extra = max_total_hops % n;
+                        for (i, seg) in segments.iter_mut().enumerate() {
+                            let limit = base + if i < extra { 1 } else { 0 };
+                            seg.hop_fields.truncate(limit.max(1));
+                        }
+                    }
+
+                    // current_hop must be in range of total hops
+                    let total_hops: usize = segments.iter().map(|s| s.hop_fields.len()).sum();
+                    let curr_hop = match total_hops {
+                        0 => 0,
+                        _ => curr_hop % (total_hops as u8),
+                    };
+
+                    // current_info_field is defined by which segment the current_hop_field is in
+                    let mut hop_count = 0;
+                    let mut curr_info = 0;
+                    for (i, seg) in segments.iter().enumerate() {
+                        hop_count += seg.hop_fields.len();
+                        if (curr_hop as usize) < hop_count {
+                            curr_info = i as u8;
+                            break;
+                        }
+                    }
+
+                    let segments = segments.into_iter().collect();
+
+                    StandardPath {
+                        current_info_field: curr_info,
+                        current_hop_field: curr_hop,
+                        segments,
+                    }
+                })
+                .boxed()
+        }
+    }
+
+    impl Arbitrary for Segment {
+        type Parameters = ArbitraryPathContext;
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_ctx: Self::Parameters) -> Self::Strategy {
+            (
+                any::<InfoField>(),
+                prop::collection::vec(any::<HopField>(), 1..=63),
+            )
+                .prop_map(|(info_field, hop_fields)| {
+                    Segment {
+                        info_field,
+                        hop_fields: TinyVec::Heap(hop_fields),
+                    }
+                })
+                .boxed()
+        }
+    }
+
+    impl Arbitrary for InfoField {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (any::<InfoFieldFlags>(), any::<u16>(), any::<u32>())
+                .prop_map(|(flags, segment_id, timestamp)| {
+                    InfoField {
+                        flags,
+                        segment_id,
+                        timestamp,
+                    }
+                })
+                .boxed()
+        }
+    }
+
+    impl Arbitrary for HopField {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (
+                any::<HopFieldFlags>(),
+                any::<u8>(),
+                any::<u16>(),
+                any::<u16>(),
+                any::<[u8; 6]>(),
+            )
+                .prop_map(
+                    |(flags, expiration_units, cons_ingress, cons_egress, mac_bytes)| {
+                        HopField {
+                            flags,
+                            expiration_units,
+                            cons_ingress,
+                            cons_egress,
+                            mac: HopFieldMac(mac_bytes),
+                        }
+                    },
+                )
+                .boxed()
+        }
     }
 }

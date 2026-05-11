@@ -20,11 +20,10 @@ use std::{fmt::Debug, mem::transmute, ops::Range};
 
 use crate::{
     core::{
-        layout::Layout,
         read::unchecked_bit_range_be_read,
         view::{
             View, ViewConversionError,
-            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write},
+            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write, gen_view_impl},
         },
         write::unchecked_bit_range_be_write,
     },
@@ -32,6 +31,7 @@ use crate::{
         layout::{
             HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathLayout, StdPathMetaLayout,
         },
+        mac::{HopMacInput, HopMacInputSource},
         types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
     },
 };
@@ -39,41 +39,8 @@ use crate::{
 /// A view over a standard SCION path, including meta header and data
 #[repr(transparent)]
 pub struct StandardPathView([u8]);
-impl View for StandardPathView {
-    #[inline]
-    fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
-        let layout = StdPathLayout::from_slice(buf).map_err(ViewConversionError::from)?;
+gen_view_impl!(StandardPathView, StdPathLayout);
 
-        // Layout validation should already ensure that the buffer is large enough
-        // this is just a sanity check
-        debug_assert!(buf.len() >= layout.size_bytes());
-
-        Ok(layout.size_bytes())
-    }
-
-    #[inline]
-    unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
-        // SAFETY: see View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
-        // SAFETY: see View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
-        // SAFETY: see View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
 // Meta header
 impl StandardPathView {
     gen_field_read!(curr_info_field, StdPathMetaLayout::CURR_INFO_FIELD_RNG, u8);
@@ -368,6 +335,18 @@ impl View for InfoFieldView {
     }
 
     #[inline]
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    #[inline]
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+        // SAFETY: repr(transparent) over [u8; N]
+        let sized: Box<[u8; InfoFieldLayout::SIZE_BYTES]> = unsafe { transmute(self) };
+        sized
+    }
+
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -449,6 +428,18 @@ impl View for HopFieldView {
     }
 
     #[inline]
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    #[inline]
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+        // SAFETY: repr(transparent) over [u8; N]
+        let sized: Box<[u8; HopFieldLayout::SIZE_BYTES]> = unsafe { transmute(self) };
+        sized
+    }
+
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         &self.0
     }
@@ -480,6 +471,32 @@ impl HopFieldView {
         };
 
         HopFieldMac(mac)
+    }
+
+    /// Returns the ingress interface in the direction the packet is travelling.
+    ///
+    /// Reads `cons_ingress` when the `CONS_DIR` flag is set on `info_field`, and
+    /// `cons_egress` otherwise (reversed segment).
+    #[inline]
+    pub fn ingress_interface(&self, info_field: &InfoFieldView) -> u16 {
+        if info_field.flags().contains(InfoFieldFlags::CONS_DIR) {
+            self.cons_ingress()
+        } else {
+            self.cons_egress()
+        }
+    }
+
+    /// Returns the egress interface in the direction the packet is travelling.
+    ///
+    /// Reads `cons_egress` when the `CONS_DIR` flag is set on `info_field`, and
+    /// `cons_ingress` otherwise (reversed segment).
+    #[inline]
+    pub fn egress_interface(&self, info_field: &InfoFieldView) -> u16 {
+        if info_field.flags().contains(InfoFieldFlags::CONS_DIR) {
+            self.cons_egress()
+        } else {
+            self.cons_ingress()
+        }
     }
 }
 // Mutable
@@ -516,5 +533,17 @@ impl Debug for HopFieldView {
             .field("cons_egress", &self.cons_egress())
             .field("mac", &self.mac())
             .finish()
+    }
+}
+/// Provides the necessary input for calculating the MAC of a hop field.
+/// Automatically implements [`HopMacCalculate`](crate::path::standard::mac::HopMacCalculate)
+impl HopMacInputSource for HopFieldView {
+    #[inline]
+    fn get_mac_input(&self) -> HopMacInput {
+        HopMacInput {
+            exp_time: self.exp_time(),
+            cons_ingress: self.cons_ingress(),
+            cons_egress: self.cons_egress(),
+        }
     }
 }

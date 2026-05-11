@@ -20,21 +20,28 @@
 // construction buffer without checks. Need to check that no view would ever try to go beyond
 // that size first.
 
-use std::{fmt::Debug, mem::transmute};
+use std::fmt::Debug;
 
 use crate::{
     core::{
-        layout::Layout,
+        layout::{BitRange, Layout},
         read::unchecked_bit_range_be_read,
         view::{
             View, ViewConversionError,
-            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write},
+            macros::{gen_field_read, gen_field_write, gen_unsafe_field_write, gen_view_impl},
         },
         write::unchecked_bit_range_be_write,
     },
     header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
-    path::standard::{types::PathType, view::StandardPathView},
-    types::address::{Asn, HostAddressSizeError, Isd, ScionHostAddr, ScionHostAddrType},
+    path::{
+        standard::view::StandardPathView,
+        types::PathType,
+        view::{ScionPathView, ScionPathViewMut},
+    },
+    scion::{
+        address::host_addr::{HostAddressSizeError, WireHostAddr, WireHostAddrType},
+        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+    },
 };
 
 /// A view over the SCION headers
@@ -42,41 +49,8 @@ use crate::{
 /// Combines CommonHeader, AddressHeader and PathHeader
 #[repr(transparent)]
 pub struct ScionHeaderView([u8]);
-impl View for ScionHeaderView {
-    #[inline]
-    fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
-        let layout = ScionHeaderLayout::from_slice(buf)?;
+gen_view_impl!(ScionHeaderView, ScionHeaderLayout);
 
-        // Layout validation already ensures that the buffer is large enough
-        // this is just a sanity check
-        debug_assert!(buf.len() >= layout.size_bytes());
-
-        Ok(layout.size_bytes())
-    }
-
-    #[inline]
-    unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
-        // SAFETY: See View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
-        // SAFETY: See View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
-        // SAFETY: See View trait documentation
-        unsafe { transmute(buf) }
-    }
-
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-}
 // Common header
 impl ScionHeaderView {
     // Field readers
@@ -96,6 +70,14 @@ impl ScionHeaderView {
         }
     }
 
+    /// Returns the path type bit range
+    /// TODO(uniquefine): create constructors for SCMP messages that make this function
+    /// unnecessary.
+    #[inline]
+    pub fn path_type_range(&self) -> BitRange {
+        CommonHeaderLayout::PATH_TYPE_RNG
+    }
+
     /// Returns the path type
     #[inline]
     pub fn path_type(&self) -> PathType {
@@ -106,7 +88,7 @@ impl ScionHeaderView {
 
     /// Returns the destination address type
     #[inline]
-    pub fn dst_addr_type(&self) -> ScionHostAddrType {
+    pub fn dst_addr_type(&self) -> WireHostAddrType {
         // SAFETY: buffer size is checked on construction
         unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::DST_ADDR_INFO_RNG) }
             .into()
@@ -114,7 +96,7 @@ impl ScionHeaderView {
 
     /// Returns the source address type
     #[inline]
-    pub fn src_addr_type(&self) -> ScionHostAddrType {
+    pub fn src_addr_type(&self) -> WireHostAddrType {
         // SAFETY: buffer size is checked on construction
         unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::SRC_ADDR_INFO_RNG) }
             .into()
@@ -142,7 +124,10 @@ impl ScionHeaderView {
             len.is_multiple_of(4),
             "Header length must be a multiple of 4"
         );
-        debug_assert!(len <= 255 * 4, "Header length must be at most 1020 bytes");
+        debug_assert!(
+            len <= ScionHeaderLayout::MAX_SIZE_BYTES as u16,
+            "Header length must be at most 1020 bytes"
+        );
 
         let raw_len = (len / 4) as u8;
 
@@ -187,7 +172,7 @@ impl ScionHeaderView {
     /// surpasses the actual buffer size, out-of-bounds accesses can occur on subsequent accesses to
     /// the View.
     #[inline]
-    pub unsafe fn set_dst_addr_type(&mut self, addr_type: ScionHostAddrType) {
+    pub unsafe fn set_dst_addr_type(&mut self, addr_type: WireHostAddrType) {
         let addr_info: u8 = addr_type.into();
 
         // SAFETY: buffer size is checked on construction
@@ -211,7 +196,7 @@ impl ScionHeaderView {
     /// surpasses the actual buffer size, out-of-bounds accesses can occur on subsequent accesses to
     /// the View.
     #[inline]
-    pub unsafe fn set_src_addr_type(&mut self, addr_type: ScionHostAddrType) {
+    pub unsafe fn set_src_addr_type(&mut self, addr_type: WireHostAddrType) {
         let addr_info: u8 = addr_type.into();
 
         // SAFETY: buffer size is checked on construction
@@ -226,6 +211,20 @@ impl ScionHeaderView {
 }
 // Address header
 impl ScionHeaderView {
+    /// Returns the destination ISD-AS identifier.
+    #[inline]
+    pub fn dst_ia(&self) -> IsdAsn {
+        // SAFETY: buffer size is checked on construction
+        let val = unsafe {
+            unchecked_bit_range_be_read::<u64>(
+                &self.0,
+                AddressHeaderLayout::DST_IA_RNG.shift(CommonHeaderLayout::SIZE_BYTES),
+            )
+        };
+
+        IsdAsn::from_u64(val)
+    }
+
     /// Returns the destination ISD
     pub fn dst_isd(&self) -> Isd {
         // SAFETY: buffer size is checked on construction
@@ -250,6 +249,20 @@ impl ScionHeaderView {
         };
 
         Asn(val)
+    }
+
+    /// Returns the source ISD-AS identifier.
+    #[inline]
+    pub fn src_ia(&self) -> IsdAsn {
+        // SAFETY: buffer size is checked on construction
+        let val = unsafe {
+            unchecked_bit_range_be_read::<u64>(
+                &self.0,
+                AddressHeaderLayout::SRC_IA_RNG.shift(CommonHeaderLayout::SIZE_BYTES),
+            )
+        };
+
+        IsdAsn::from_u64(val)
     }
 
     /// Returns the source ISD
@@ -282,7 +295,7 @@ impl ScionHeaderView {
     ///
     /// If the address type and length do not match, an error is returned.
     #[inline]
-    pub fn dst_host_addr(&self) -> Result<ScionHostAddr, HostAddressSizeError> {
+    pub fn dst_host_addr(&self) -> Result<WireHostAddr, HostAddressSizeError> {
         let src_len = self.src_addr_type().size();
         let dst_len = self.dst_addr_type().size();
         let range = AddressHeaderLayout::new(src_len, dst_len)
@@ -292,24 +305,34 @@ impl ScionHeaderView {
         // SAFETY: buffer size is checked on construction
         let raw = unsafe { self.0.get_unchecked(range.aligned_byte_range()) };
 
-        ScionHostAddr::from_parts(self.dst_addr_type(), raw)
+        WireHostAddr::from_parts(self.dst_addr_type(), raw)
+    }
+
+    /// Returns the source host address range in the buffer.
+    /// If you need to read the host address, use [src_host_addr](Self::src_host_addr) instead,
+    /// which also checks that the address type and length match.
+    /// TODO(uniquefine): create constructors for SCMP messages that make this function
+    /// unnecessary.
+    #[inline]
+    pub fn src_host_addr_range(&self) -> BitRange {
+        let src_len = self.src_addr_type().size();
+        let dst_len = self.dst_addr_type().size();
+        AddressHeaderLayout::new(src_len, dst_len)
+            .src_host_addr_range()
+            .shift(CommonHeaderLayout::SIZE_BYTES)
     }
 
     /// Attempts to return the destination host address
     ///
     /// If the address type and length do not match, an error is returned.
     #[inline]
-    pub fn src_host_addr(&self) -> Result<ScionHostAddr, HostAddressSizeError> {
-        let src_len = self.src_addr_type().size();
-        let dst_len = self.dst_addr_type().size();
-        let range = AddressHeaderLayout::new(src_len, dst_len)
-            .src_host_addr_range()
-            .shift(CommonHeaderLayout::SIZE_BYTES);
+    pub fn src_host_addr(&self) -> Result<WireHostAddr, HostAddressSizeError> {
+        let range = self.src_host_addr_range();
 
         // SAFETY: buffer size is checked on construction
         let raw = unsafe { self.0.get_unchecked(range.aligned_byte_range()) };
 
-        ScionHostAddr::from_parts(self.src_addr_type(), raw)
+        WireHostAddr::from_parts(self.src_addr_type(), raw)
     }
 }
 // Address header mut
@@ -379,14 +402,25 @@ impl ScionHeaderView {
         match self.path_type() {
             PathType::Empty => ScionPathView::Empty,
             PathType::Scion => {
-                // SAFETY: buffer size is checked on construction
+                // SAFETY: min buffer size is checked on construction
                 let path_buf = unsafe { self.0.get_unchecked(path_offset..len) };
                 let path = unsafe { StandardPathView::from_slice_unchecked(path_buf) };
 
                 ScionPathView::Standard(path)
             }
+            PathType::OneHop => {
+                // SAFETY: min buffer size is checked on construction
+                let path_size = crate::proto::path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
+                let path_range = path_offset..path_offset + path_size;
+                let path_buf = unsafe { self.0.get_unchecked(path_range) };
+                let path = unsafe {
+                    crate::proto::path::onehop::view::OneHopPathView::from_slice_unchecked(path_buf)
+                };
+
+                ScionPathView::OneHop(path)
+            }
             pt => {
-                // SAFETY: buffer size is checked on construction
+                // SAFETY: min buffer size is checked on construction
                 let path_buf = unsafe { self.0.get_unchecked(path_offset..len) };
                 ScionPathView::Unsupported {
                     path_type: pt,
@@ -408,14 +442,27 @@ impl ScionHeaderView {
         match self.path_type() {
             PathType::Empty => ScionPathViewMut::Empty,
             PathType::Scion => {
-                // SAFETY: size is checked on construction of ScionHeaderView
+                // SAFETY: min size is checked on construction of ScionHeaderView
                 let path_buf = unsafe { self.0.get_unchecked_mut(path_offset..len) };
                 let path = unsafe { StandardPathView::from_mut_slice_unchecked(path_buf) };
 
                 ScionPathViewMut::Standard(path)
             }
+            PathType::OneHop => {
+                // SAFETY: min size is checked on construction of ScionHeaderView
+                let header_size = crate::proto::path::onehop::layout::OneHopPathLayout::SIZE_BYTES;
+                let path_range = path_offset..path_offset + header_size;
+                let path_buf = unsafe { self.0.get_unchecked_mut(path_range) };
+                let path = unsafe {
+                    crate::proto::path::onehop::view::OneHopPathView::from_mut_slice_unchecked(
+                        path_buf,
+                    )
+                };
+
+                ScionPathViewMut::OneHop(path)
+            }
             pt => {
-                // SAFETY: size is checked on construction of ScionHeaderView
+                // SAFETY: min size is checked on construction of ScionHeaderView
                 let path_buf = unsafe { self.0.get_unchecked_mut(path_offset..len) };
                 ScionPathViewMut::Unsupported {
                     path_type: pt,
@@ -447,36 +494,4 @@ impl Debug for ScionHeaderView {
             .field("path", &path)
             .finish()
     }
-}
-
-/// View over different path types
-#[derive(Debug)]
-pub enum ScionPathView<'a> {
-    /// View over a standard SCION path
-    Standard(&'a StandardPathView),
-    /// View over an unsupported path type
-    Unsupported {
-        /// The unsupported path type
-        path_type: PathType,
-        /// Raw path data
-        data: &'a [u8],
-    },
-    /// Empty path type
-    Empty,
-}
-
-/// Mutable view over different path types
-#[derive(Debug)]
-pub enum ScionPathViewMut<'a> {
-    /// Mutable view over a standard SCION path
-    Standard(&'a mut StandardPathView),
-    /// Mutable view over an unsupported path type
-    Unsupported {
-        /// The unsupported path type
-        path_type: PathType,
-        /// Raw path data
-        buf: &'a mut [u8],
-    },
-    /// Empty path type
-    Empty,
 }

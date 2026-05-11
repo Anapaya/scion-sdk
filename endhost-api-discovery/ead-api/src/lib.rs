@@ -14,3 +14,11 @@
 //! # SCION Endhost API Discovery
 
 pub mod routes;
+
+/// Re-exported dependencies for downstream users.
+pub mod reexport {
+    /// Axum client IP extraction utilities.
+    pub mod axum_client_ip {
+        pub use axum_client_ip::*;
+    }
+}

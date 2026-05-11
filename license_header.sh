@@ -5,7 +5,7 @@ set -eo pipefail
 # License header check exceptions (paths to exclude)
 EXCEPTIONS=(
     "src/proto/"          # Generated protobuf files
-    "src/protobuf/generated/" # Generated protobuf files
+    "/protobuf/generated/" # Generated protobuf files
     # Add more exceptions here as needed
 )
 

@@ -31,22 +31,22 @@ use ana_gotatun::{
     x25519,
 };
 
-/// The [SnapTunNgServer] manages one [Tunn] per remote socket address.
+/// The [SnapTunServer] manages one [Tunn] per remote socket address.
 ///
 /// The main structural difference between WireGuard (R) and snaptun-ng is that
 /// there is a one-to-one relation between a remote socket address (of the
-/// initiator) and a tunnel. The [SnapTunNgServer] manages that relation.
+/// initiator) and a tunnel. The [SnapTunServer] manages that relation.
 ///
 /// ## Scaling
 ///
-/// The main methods [SnapTunNgServer::handle_incoming_packet],
-/// [SnapTunNgServer::handle_outgoing_packet], and
-/// [SnapTunNgServer::update_timers] all require an exclusive reference to the
+/// The main methods [SnapTunServer::handle_incoming_packet],
+/// [SnapTunServer::handle_outgoing_packet], and
+/// [SnapTunServer::update_timers] all require an exclusive reference to the
 /// internal state. The reason is that processing both, incoming and outgoing
 /// packets requires access to the session state.
 ///
 /// One simple way to achieve load distribution across different cores/threads
-/// is to shard over multiple [SnapTunNgServer]-instances based on a hash of the
+/// is to shard over multiple [SnapTunServer]-instances based on a hash of the
 /// remote socket address.
 ///
 /// ## Future improvements
@@ -55,11 +55,11 @@ use ana_gotatun::{
 ///
 /// ## How to use
 ///
-/// The [SnapTunNgServer] is i/o-free; i.e. it only manages state. The following
+/// The [SnapTunServer] is i/o-free; i.e. it only manages state. The following
 /// is a pseudo-code like description of the simplest i/o-layer integration:
 ///
 /// ```text
-/// let mut server = SnapTunNgServer::new(/*...*/);
+/// let mut server = SnapTunServer::new(/*...*/);
 /// let mut send_to_network = VecDequeue::new();
 /// let mut current_sockaddr = ;
 /// loop {
@@ -81,7 +81,7 @@ use ana_gotatun::{
 ///   }
 /// }
 /// ```
-pub struct SnapTunNgServer<T> {
+pub struct SnapTunServer<T> {
     static_private: x25519::StaticSecret,
     static_public: x25519::PublicKey,
     active_tunnels: HashMap<SocketAddr, (x25519::PublicKey, Tunn)>,
@@ -89,8 +89,8 @@ pub struct SnapTunNgServer<T> {
     authz: Arc<T>,
 }
 
-impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
-    /// Creates a new [SnapTunNgServer] instance.
+impl<T: SnapTunAuthorization> SnapTunServer<T> {
+    /// Creates a new [SnapTunServer] instance.
     pub fn new(
         static_private: x25519::StaticSecret,
         rate_limiter: Arc<RateLimiter>,
@@ -116,6 +116,7 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
     ///
     /// If the rate limiter signals that the server is under load, at most one
     /// packet is added to the queue.
+    #[tracing::instrument(skip_all, fields(remote = %from))]
     pub fn handle_incoming_packet(
         &mut self,
         packet: Packet,
@@ -127,10 +128,14 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
         let parsed_packet = match self.rate_limiter.verify_packet(from.ip(), packet) {
             Ok(p) => p,
             Err(TunnResult::WriteToNetwork(c)) => {
+                tracing::debug!(remote = ?from, "rate limiter issued cookie reply");
                 send_to_network.push_back(c);
                 return TunnResult::Done;
             }
-            Err(e) => return e,
+            Err(e) => {
+                tracing::debug!(remote = ?from, err = ?e, "rate limiter rejected packet");
+                return e;
+            }
         };
 
         use std::collections::hash_map::Entry;
@@ -146,17 +151,23 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
                 //
                 // Will fix later.
                 if !self.authz.is_authorized(now, peer_static.as_bytes()) {
+                    tracing::debug!(remote = ?from, "rejected packet from unauthorized peer");
                     return TunnResult::Err(WireGuardError::UnexpectedPacket);
                 }
                 Self::handle_incoming_and_drain_queue(send_to_network, p, tunn)
             }
             (e, WgKind::HandshakeInit(wg_init)) => {
-                let peer =
-                    match parse_handshake_anon(&self.static_private, &self.static_public, &wg_init)
-                    {
-                        Ok(v) => v,
-                        Err(e) => return TunnResult::from(e),
-                    };
+                let peer = match parse_handshake_anon(
+                    &self.static_private,
+                    &self.static_public,
+                    &wg_init,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::debug!(remote = ?from, err = ?e, "failed to parse handshake init");
+                        return TunnResult::from(e);
+                    }
+                };
 
                 // TODO(dsd): if the socket is occupied, and tunnel.identity !=
                 // peer.identity, then send a cookie and abort
@@ -164,8 +175,10 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
                 // TODO(dsd): extend ana-gotatun::Tunn such that peer static
                 // identity can be retrieved
                 if !self.authz.is_authorized(now, &peer.peer_static_public) {
+                    tracing::debug!(remote = ?from, "rejected handshake from unauthorized peer");
                     return TunnResult::Err(WireGuardError::UnexpectedPacket);
                 }
+                tracing::debug!(remote = ?from, "accepted new handshake, inserting tunnel");
                 let peer_static = x25519::PublicKey::from(peer.peer_static_public);
                 let mut tunn = Tunn::new(
                     self.static_private.clone(),
@@ -184,12 +197,16 @@ impl<T: SnapTunAuthorization> SnapTunNgServer<T> {
                 e.insert_entry((peer_static, tunn));
                 res
             }
-            (_, _p) => TunnResult::Err(WireGuardError::InvalidPacket),
+            (_, _p) => {
+                tracing::debug!(remote = ?from, "received unexpected packet kind for new entry");
+                TunnResult::Err(WireGuardError::InvalidPacket)
+            }
         }
     }
 
     /// Handles an outgoing packet sent through the tunnel identified by the
     /// remote socket address `to`.
+    #[tracing::instrument(skip_all, fields(remote = %to))]
     pub fn handle_outgoing_packet(&mut self, packet: Packet, to: SocketAddr) -> Option<WgKind> {
         let Some((_, tunn)) = self.active_tunnels.get_mut(&to) else {
             tracing::error!(to=?to, "No tunnel for outgoing packet found.");
@@ -257,7 +274,7 @@ mod tests {
 
     use crate::{
         scion_packet::{Scion, ScionHeader},
-        server::{SnapTunAuthorization, SnapTunNgServer},
+        server::{SnapTunAuthorization, SnapTunServer},
     };
 
     type ResultT = Result<(), Box<dyn std::error::Error>>;
@@ -282,7 +299,7 @@ mod tests {
 
         let rate_limiter = Arc::new(RateLimiter::new(&static_server_public, 100));
         let mut snaptun_server =
-            SnapTunNgServer::new(static_server, rate_limiter.clone(), Arc::new(TrivialAuthz));
+            SnapTunServer::new(static_server, rate_limiter.clone(), Arc::new(TrivialAuthz));
 
         let mut send_to_network = VecDeque::<WgKind>::new();
 

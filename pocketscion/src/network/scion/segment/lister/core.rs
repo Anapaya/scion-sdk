@@ -14,7 +14,7 @@
 //! Listing segments at a Core AS
 
 use anyhow::{Context, bail};
-use scion_proto::address::{Asn, Isd, IsdAsn};
+use sciparse::identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn};
 
 use crate::network::scion::segment::{model::LinkSegment, registry::SegmentRegistry};
 
@@ -31,14 +31,15 @@ impl SegmentRegistry {
     ) -> anyhow::Result<Vec<&LinkSegment>> {
         let core_store = self.core_segments();
         let isd_store = self
-            .isd_segments(&local.isd())
+            .isd_segments(&local.isd().into())
             .context("missing ISD store for this AS")?;
 
-        if !core_store.is_known_as(local) {
+        if !core_store.is_known_as(local.into()) {
             bail!("only core ASes can use this function");
         }
 
-        let query_type = Query::classify(local, src_as, dst_as, core_store.is_known_as(dst_as))?;
+        let query_type =
+            Query::classify(local, src_as, dst_as, core_store.is_known_as(dst_as.into()))?;
 
         tracing::debug!(
             ?local,
@@ -51,22 +52,22 @@ impl SegmentRegistry {
         let res: Vec<&LinkSegment> = match query_type {
             Query::Core(dst_asn) => {
                 core_store
-                    .segments(local, dst_asn)
+                    .segments(local.into(), dst_asn.into())
                     .iter()
                     .by_ref()
                     .collect()
             }
             Query::CoreWildcard(isd) => {
                 core_store
-                    .segments_by_start_as(local)
+                    .segments_by_start_as(local.into())
                     .iter()
-                    .filter(|s| s.bucket.leaf_as.isd() == isd)
+                    .filter(|s| s.bucket.leaf_as.isd() == isd.into())
                     .filter_map(|s| core_store.segment(s))
                     .collect()
             }
             Query::Down(dst_asn) => {
                 isd_store
-                    .segments(local, IsdAsn::new(local.isd(), dst_asn))
+                    .segments(local.into(), IsdAsn::new(local.isd(), dst_asn).into())
                     .iter()
                     .by_ref()
                     .collect()

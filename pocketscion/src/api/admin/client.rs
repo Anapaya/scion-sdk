@@ -50,9 +50,32 @@ impl ApiClient {
         let api = url.join("api/v1/")?;
 
         let client = ClientBuilder::new()
+            .tls_certs_only(std::iter::empty())
             .timeout(Duration::from_secs(5))
             .build()?;
 
+        Ok(ApiClient { client, api })
+    }
+
+    /// Creates a new [`ApiClient`] with the given base URL and a custom `reqwest::Client`.
+    /// This can be used to customize the HTTP client, e.g., by setting a different timeout or TLS
+    /// configuration.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use pocketscion::api::admin::client::ApiClient;
+    /// use reqwest::ClientBuilder;
+    /// let url: url::Url = "http://localhost:9000".parse().unwrap();
+    /// let custom_client = ClientBuilder::new()
+    ///     .build()
+    ///     .expect("Failed to build custom reqwest client");
+    /// let client = ApiClient::new_with_client(&url, custom_client).expect(
+    ///     "Failed to create
+    /// ApiClient with custom client",
+    /// );
+    /// ```
+    pub fn new_with_client(url: &Url, client: reqwest::Client) -> Result<Self, ClientError> {
+        let api = url.join("api/v1/")?;
         Ok(ApiClient { client, api })
     }
 
@@ -184,6 +207,7 @@ mod tests {
         ($name:ident, $base_url:expr, $expected_url:expr) => {
             #[test]
             fn $name() {
+                scion_sdk_utils::rustls::select_ring_crypto_provider();
                 let client = ApiClient::new($base_url).expect("Failed to create ApiClient");
                 assert_eq!(client.api, Url::parse($expected_url).unwrap());
             }

@@ -280,7 +280,7 @@ async fn get_auth_server(
     )
 )]
 async fn get_io_config(
-    State((_, io_config)): State<(SharedPocketScionState, SharedPocketScionIoConfig)>,
+    State((_state, io_config)): State<(SharedPocketScionState, SharedPocketScionIoConfig)>,
 ) -> Json<IoConfigDto> {
     Json(io_config.to_dto())
 }
@@ -295,7 +295,7 @@ async fn get_io_config(
     )
 )]
 async fn get_system_state(
-    State((system_state, _)): State<(SharedPocketScionState, SharedPocketScionIoConfig)>,
+    State((system_state, _io_config)): State<(SharedPocketScionState, SharedPocketScionIoConfig)>,
 ) -> Json<SystemStateDto> {
     Json(system_state.to_dto())
 }

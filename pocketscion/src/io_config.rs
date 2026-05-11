@@ -15,11 +15,12 @@
 
 use std::{
     collections::BTreeMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock, RwLockReadGuard},
 };
 
 use anyhow::{Context, Ok};
+use scion_proto::address::{IsdAsn, ScionAddr};
 use serde::{Deserialize, Serialize};
 use snap_control::server::state::ControlPlaneIoConfig;
 use snap_dataplane::tunnel_gateway::state::TunnelGatewayIoConfig;
@@ -28,7 +29,8 @@ use crate::{
     authorization_server::api::IoAuthServerConfig,
     dto::{IoConfigDto, IoSnapConfigDto},
     endhost_api::EndhostApiId,
-    state::{RouterId, snap::SnapId},
+    state::{RouterId, endhost_api_discovery::EndhostApiDiscoveryApiId, snap::SnapId},
+    util::{map_btree_fallible, map_btree_ref},
 };
 
 /// PocketSCION I/O configuration.
@@ -42,6 +44,12 @@ pub struct IoConfig {
     router_sockets: BTreeMap<RouterId, SocketAddr>,
     /// Listen Socket for EndhostAPIs
     endhost_apis: BTreeMap<EndhostApiId, SocketAddr>,
+    /// Listen Socket for Endhost Discovery APIs
+    endhost_api_discovery_apis: BTreeMap<EndhostApiDiscoveryApiId, SocketAddr>,
+    /// Listen Socket for External ASes, keyed by (ISD-AS, interface ID)
+    external_ases: BTreeMap<(IsdAsn, u16), SocketAddr>,
+    /// Listen Socket for Network Forwarders
+    network_forwarders: BTreeMap<ScionAddr, SocketAddr>,
 }
 
 impl AsRef<IoConfig> for RwLockReadGuard<'_, IoConfig> {
@@ -54,40 +62,24 @@ impl TryFrom<IoConfigDto> for IoConfig {
     type Error = anyhow::Error;
 
     fn try_from(value: IoConfigDto) -> Result<Self, Self::Error> {
-        let snaps = value
-            .snaps
-            .into_iter()
-            .map(|(snap_id, snap_io_config)| {
-                Ok((
-                    snap_id,
-                    snap_io_config
-                        .try_into()
-                        .with_context(|| format!("invalid SNAP I/O config ({snap_id})"))?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
+        let snaps =
+            map_btree_fallible(value.snaps, |v| v.try_into()).context("invalid SNAP I/O config")?;
 
-        let router_sockets = value
-            .router_sockets
-            .into_iter()
-            .map(|(router_socket_id, addr)| {
-                Ok((
-                    router_socket_id,
-                    addr.parse().context("invalid router socket address")?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
+        let router_sockets = map_btree_fallible(value.router_sockets, |v| v.parse())
+            .context("invalid router socket address")?;
 
-        let endhost_apis = value
-            .endhost_apis
-            .into_iter()
-            .map(|(id, addr)| {
-                Ok((
-                    id,
-                    addr.parse().context("invalid endhost api socket address")?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
+        let endhost_apis = map_btree_fallible(value.endhost_apis, |v| v.parse())
+            .context("invalid endhost API socket address")?;
+
+        let endhost_discovery_apis =
+            map_btree_fallible(value.endhost_discovery_apis, |v| v.parse())
+                .context("invalid endhost discovery API socket address")?;
+
+        let external_ases = map_btree_fallible(value.external_ases, |v| v.parse())
+            .context("invalid external AS API socket address")?;
+
+        let network_forwarders = map_btree_fallible(value.network_forwarders, |v| v.parse())
+            .context("invalid network forwarder socket address")?;
 
         Ok(Self {
             snaps,
@@ -97,6 +89,9 @@ impl TryFrom<IoConfigDto> for IoConfig {
                 .try_into()
                 .context("invalid auth server I/O config")?,
             endhost_apis,
+            endhost_api_discovery_apis: endhost_discovery_apis,
+            external_ases,
+            network_forwarders,
         })
     }
 }
@@ -105,21 +100,14 @@ impl From<&IoConfig> for IoConfigDto {
     fn from(config: &IoConfig) -> Self {
         Self {
             auth_server: (&config.auth_server).into(),
-            snaps: config
-                .snaps
-                .iter()
-                .map(|(snap_id, snap_io_config)| (*snap_id, snap_io_config.into()))
-                .collect(),
-            router_sockets: config
-                .router_sockets
-                .iter()
-                .map(|(router_socket_id, addr)| (*router_socket_id, addr.to_string()))
-                .collect(),
-            endhost_apis: config
-                .endhost_apis
-                .iter()
-                .map(|(id, addr)| (*id, addr.to_string()))
-                .collect(),
+            snaps: map_btree_ref(&config.snaps, |v| v.into()),
+            router_sockets: map_btree_ref(&config.router_sockets, |v| v.to_string()),
+            endhost_apis: map_btree_ref(&config.endhost_apis, |v| v.to_string()),
+            endhost_discovery_apis: map_btree_ref(&config.endhost_api_discovery_apis, |v| {
+                v.to_string()
+            }),
+            external_ases: map_btree_ref(&config.external_ases, |v| v.to_string()),
+            network_forwarders: map_btree_ref(&config.network_forwarders, |v| v.to_string()),
         }
     }
 }
@@ -271,6 +259,81 @@ impl SharedPocketScionIoConfig {
     /// Sets the given endhost-api's socket address.
     pub fn set_endhost_api_addr(&self, id: EndhostApiId, addr: SocketAddr) {
         self.state.write().unwrap().endhost_apis.insert(id, addr);
+    }
+
+    /// Gets the given endhost API discovery API's socket address.
+    pub fn endhost_api_discovery_api_addr(
+        &self,
+        id: EndhostApiDiscoveryApiId,
+    ) -> Option<SocketAddr> {
+        self.state
+            .read()
+            .unwrap()
+            .endhost_api_discovery_apis
+            .get(&id)
+            .cloned()
+    }
+
+    /// Sets the given endhost API discovery API's socket address.
+    pub fn set_endhost_api_discovery_api_addr(
+        &self,
+        id: EndhostApiDiscoveryApiId,
+        addr: SocketAddr,
+    ) {
+        self.state
+            .write()
+            .unwrap()
+            .endhost_api_discovery_apis
+            .insert(id, addr);
+    }
+
+    /// Gets the socket address for an external AS interface, identified by the ISD-ASN and the
+    /// interface ID.
+    pub fn external_as_interface_addr(
+        &self,
+        isd_asn: IsdAsn,
+        interface_id: u16,
+    ) -> Option<SocketAddr> {
+        self.state
+            .read()
+            .unwrap()
+            .external_ases
+            .get(&(isd_asn, interface_id))
+            .cloned()
+    }
+
+    /// Sets the socket address for an external AS interface, identified by the ISD-ASN and the
+    /// interface ID.
+    pub fn set_external_as_interface_addr(
+        &self,
+        isd_asn: IsdAsn,
+        interface_id: u16,
+        addr: SocketAddr,
+    ) {
+        self.state
+            .write()
+            .unwrap()
+            .external_ases
+            .insert((isd_asn, interface_id), addr);
+    }
+
+    /// Gets the socket address for a network forwarder, identified by the SCION address.
+    pub fn network_forwarder_addr(&self, isd_asn: IsdAsn, ip_addr: IpAddr) -> Option<SocketAddr> {
+        self.state
+            .read()
+            .unwrap()
+            .network_forwarders
+            .get(&ScionAddr::new(isd_asn, ip_addr.into()))
+            .cloned()
+    }
+
+    /// Sets the socket address for a network forwarder
+    pub fn set_network_forwarder_addr(&self, isd_asn: IsdAsn, ip_addr: IpAddr, addr: SocketAddr) {
+        self.state
+            .write()
+            .unwrap()
+            .network_forwarders
+            .insert(ScionAddr::new(isd_asn, ip_addr.into()), addr);
     }
 }
 

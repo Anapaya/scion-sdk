@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "endhost-api/*",
     "endhost-api-discovery/*",
+    "anapaya-aa/*",
     "hsd-api/*",
     "libs/*",
     "pocketscion",
@@ -18,96 +19,113 @@ edition = "2024"
 
 [workspace.dependencies]
 # Local Crates
-dhsd = { path = "libs/dhsd", version = "0.4.0" }
+dhsd = { path = "libs/dhsd", version = "0.5.2" }
 
-endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.4.0" }
-endhost-api = { path = "endhost-api/endhost-api", version = "0.4.0" }
-endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.4.0" }
-endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.4.0" }
+endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.5.2" }
+endhost-api = { path = "endhost-api/endhost-api", version = "0.5.2" }
+endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.5.2" }
+endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.5.2" }
 
-endhost-api-discovery-client = { path = "endhost-api-discovery/ead-client", version = "0.4.0" }
-endhost-api-discovery-api = { path = "endhost-api-discovery/ead-api", version = "0.4.0" }
-endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", version = "0.4.0" }
+endhost-api-discovery-client = { path = "endhost-api-discovery/ead-client", version = "0.5.2" }
+endhost-api-discovery-api = { path = "endhost-api-discovery/ead-api", version = "0.5.2" }
+endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", version = "0.5.2" }
 
 
 # hsd-api = { path = "hsd-api/hsd-api", version = "0.2" }
 # hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.2" }
 # hsd-api-client = { path = "hsd-api/hsd-api-client", version = "0.3" }
-hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.4.0" }
+hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.5.2" }
 
-scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.4.0" }
+anapaya-aa-protobuf = { path = "anapaya-aa/anapaya-aa-protobuf", version = "0.5.2" }
+
+scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.5.2" }
 # scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
-scion-sdk-observability = { path = "libs/observability", version = "0.4.0" }
-scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.4.0" }
-scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.4.0" }
-scion-sdk-scion-connect-rpc = { path = "libs/scion-connect-rpc", version = "0.4.0" }
-scion-sdk-token-validator = { path = "libs/token-validator", version = "0.4.0" }
-scion-sdk-utils = { path = "libs/utils", version = "0.4.0" }
+scion-sdk-observability = { path = "libs/observability", version = "0.5.2" }
+scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.5.2" }
+scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.5.2" }
+scion-sdk-scion-connect-rpc = { path = "libs/scion-connect-rpc", version = "0.5.2" }
+scion-sdk-trc = { path = "libs/trc", version = "0.5.2" }
+scion-sdk-token-validator = { path = "libs/token-validator", version = "0.5.2" }
+scion-sdk-utils = { path = "libs/utils", version = "0.5.2" }
 
-pocketscion = { path = "pocketscion", version = "0.4.0" }
+pocketscion = { path = "pocketscion", version = "0.5.2" }
 
-scion-proto = { path = "scion-proto/scion-proto", version = "0.4.0" }
-scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.4.0" }
+scion-proto = { path = "scion-proto/scion-proto", version = "0.5.2" }
+scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.5.2" }
+sciparse = { path = "scion-proto/sciparse" , version = "0.5.2" }
 
-snap-control = { path = "snap/snap-control", version = "0.4.0" }
-snap-dataplane = { path = "snap/snap-dataplane", version = "0.4.0" }
-snap-tun = { path = "snap/snap-tun", version = "0.4.0" }
-snap-tokens = { path = "snap/snap-tokens", version = "0.4.0" }
+snap-control = { path = "snap/snap-control", version = "0.5.2" }
+snap-dataplane = { path = "snap/snap-dataplane", version = "0.5.2" }
+snap-tun = { path = "snap/snap-tun", version = "0.5.2" }
+snap-tokens = { path = "snap/snap-tokens", version = "0.5.2" }
 
-scion-stack = { path = "scion-stack", version = "0.4.0" }
+scion-stack = { path = "scion-stack", version = "0.5.2" }
 
 # General Dependencies
 aes = "0.8"
 # We use our own version here
 ana-gotatun = { version = "0.2.1-ana.0" }
 anyhow = { version = "1" }
+assert_matches = "1.5"
 arc-swap = "1.7"
+async-channel = "2.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["http2"] }
 axum-client-ip = "1.3.1"
 bitfield-struct = "0.12.1"
 base64 = "0.22.1"
+buffer-pool = "0.2.1"
+byteorder = "1.5"
 bytes = "1.10"
 bitflags = "2.10"
 chrono = { version = "0.4", features = ["serde"] }
 clap = "4.5"
 cmac = "0.7"
 cms = "0.2"
-criterion = "0.7"
+criterion = "0.8"
 derive_more = { version = "2.0", features = ["display", "deref"] }
 der = { version = "0.7", features = ["pem", "derive"] }
+ecdsa = { version = "0.16", features = ["arithmetic"] }
 ed25519-dalek = { version = "2.1", features = ["pkcs8", "pem"] }
+etherparse = "0.19"
 foldhash = "0.2"
 futures = "0.3"
+hickory-resolver = { version = "0.25", features = ["tokio", "system-config"] }
+hickory-server = "0.25"
 http = "1.3"
+httparse = "1.10"
 ipnet = "2.11"
-jsonwebtoken = "9.3"
-mockall = "0.13"
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+mockall = "0.14"
 num-traits = "0.2"
 ntest = "0.9"
+p256 = "0.13"
 pem = "3.0"
 pin-project-lite = "0.2"
 prometheus = { version = "0.14", features = ["process"] }
 proptest = "1.9"
-proptest-derive = "0.7"
+proptest-derive = "0.8"
 prost = "0.14"
 prost-build = "0.14"
 prost-types = "0.14"
+quinn-udp = "0.5.14"
 # We maintain our own fork of quinn. If you want to update the dependency,
 # follow the instructions in the documentation.
-quinn = { version = "0.11.9-ana.0", package = "anapaya-quinn" }
-rand = "0.9"
+anapaya-quinn = { version = "0.11.9-ana.0" }
+rand = "0.10"
 # rand_core = "0.9"
-rand_chacha = { version = "0.9", features = ["serde"] }
-rand_xorshift = "0.4"
+chacha20 = { version = "0.10" }
+rand_xorshift = "0.5"
 rcgen = "0.14"
 regex = "1.12.2"
-reqwest = { version = "0.12", features = [
+reqwest = { version = "0.13", features = [
     "charset",
     "http2",
     "json",
-    "rustls-tls",
-    "rustls-tls-native-roots",
+    "form",
+    # Don't use the "rustls" feature to avoid pulling in aws-lc-rs dependency,
+    # we explicitly depend on "ring" instead.
+    "rustls-no-provider",
 ], default-features = false }
 ring = "0.17.14"
 rustls = { version = "0.23", features = [
@@ -122,11 +140,11 @@ serde_with = "3.14"
 serde_yaml_ng = "0.10"
 sha2 = "0.10"
 socket2 = "0.6.1"
-squiche = "0.24.8-ana.0"
+squiche = "0.24.8-ana.2"
 tempfile = "3.23"
 test-log = { version = "0.2", features = ["trace"] }
 thiserror = "2.0"
-tinyvec = "1.10"
+tinyvec = { version = "1.10", features = ["alloc"]}
 tokio = { version = "1.45", features = ["full"] }
 tokio-util = "0.7"
 tonic = "0.14"
@@ -140,7 +158,7 @@ tracing-bunyan-formatter = "0.3"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
 tracing-log = "0.2"
 url = { version = "2.5", features = ["serde"] }
-utoipa = { version = "5.3", features = ["chrono", "url", "uuid"] }
+utoipa = { version = "5.4", features = ["chrono", "url", "uuid"] }
 utoipa-axum = "0.2"
 utoipa-redoc = { version = "6.0", features = ["axum"] }
 uuid = "1.16"
@@ -161,7 +179,6 @@ missing_docs = "warn"
 ignored = [
     "foldhash",
     "scion-proto",
-    #todo: remove once ead is in use
     "endhost-api-discovery-api",
     "endhost-api-discovery-client"
 ]

@@ -42,6 +42,7 @@ use tokio::time::timeout;
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn echo() {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let pocketscion = setup_pocketscion().await;
 
     let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
@@ -162,6 +163,7 @@ async fn echo() {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn send_scmp() {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let pocketscion = setup_pocketscion().await;
 
     // Bind sockets early to get allocated ports
@@ -378,6 +380,7 @@ fn scion_path() -> EncodedStandardPath {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn snap_interface_forwarding() {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     // Bind sockets
     let snap_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
         .await
@@ -549,6 +552,7 @@ async fn snap_interface_forwarding() {
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn snap_excluded_networks() {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     // Bind sockets
     let snap_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
         .await

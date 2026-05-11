@@ -54,6 +54,9 @@ impl Annotations {
     }
 
     /// Extend the annotations with another Annotations instance
+    ///
+    /// The added annotations will be offset by the current total bit length of the existing
+    /// annotations,
     pub fn extend(&mut self, other: Annotations) {
         for bucket in other.buckets {
             let ann = offset_annotations(bucket.annotations, self.current_offset);

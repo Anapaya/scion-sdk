@@ -19,8 +19,10 @@ use bytes::{Buf, BufMut};
 
 use crate::{
     address::{HostAddr, HostType},
+    datagram::UdpMessage,
     packet::{ByEndpoint, DecodeError, InadequateBufferSize},
     path::PathType,
+    scmp::SCMP_PROTOCOL_NUMBER,
     wire_encoding::{self, MaybeEncoded, WireDecode, WireEncode},
 };
 
@@ -147,6 +149,15 @@ impl Default for FlowId {
     fn default() -> Self {
         FlowId::new_unchecked(1)
     }
+}
+
+/// Non exhaustive protocol numbers
+pub struct NextHeader;
+impl NextHeader {
+    /// UDP protocol number
+    pub const UDP: u8 = UdpMessage::PROTOCOL_NUMBER;
+    /// SCMP protocol number
+    pub const SCMP: u8 = SCMP_PROTOCOL_NUMBER;
 }
 
 impl FlowId {

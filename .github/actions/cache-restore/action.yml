@@ -1,0 +1,77 @@
+# Copyright 2026 Anapaya Systems
+name: Cache Restore
+description: >
+  Restore a cache entry. Uses namespacelabs/nscloud-cache-action@v1 on
+  non-GitHub-hosted Linux runners and actions/cache/restore@v4 otherwise.
+
+  Note: Windows namespace lab runners are not supported yet so this is missing support for that.
+
+inputs:
+  key:
+    description: Cache key.
+    required: true
+  path:
+    description: Paths to cache (newline-separated).
+    required: true
+  restore-keys:
+    description: Ordered list of prefix-matched keys for restoring stale cache if no exact match was found.
+    default: ''
+
+outputs:
+  cache-hit:
+    description: "'true' if an exact cache key match was found."
+    value: ${{ steps.set-cache-hit.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cache (GitHub-hosted Linux)
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      id: restore-github-linux
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Restore cache (Namespace Labs Linux)
+      if: runner.os == 'Linux' && runner.environment != 'github-hosted'
+      id: restore-nslabs-linux
+      uses: namespacelabs/nscloud-cache-action@v1
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Restore cache (Windows)
+      if: runner.os == 'Windows'
+      id: restore-windows
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Restore cache (macOS)
+      if: runner.os == 'macOS'
+      id: restore-macos
+      uses: actions/cache/restore@v4
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Set cache-hit output
+      id: set-cache-hit
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          echo "cache-hit=${{ steps.restore-windows.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+        elif [[ "${{ runner.os }}" == "Linux" ]]; then
+          if [[ "${{ runner.environment }}" == "github-hosted" ]]; then
+            echo "cache-hit=${{ steps.restore-github-linux.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+          else
+            echo "cache-hit=${{ steps.restore-nslabs-linux.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+          fi
+        elif [[ "${{ runner.os }}" == "macOS" ]]; then
+          echo "cache-hit=${{ steps.restore-macos.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+        else
+          echo "Unsupported OS: $RUNNER_OS"
+          exit 1
+        fi

@@ -18,6 +18,7 @@ use std::{
     str::FromStr,
 };
 
+use sciparse::identifier::isd_asn::IsdAsn as SciparseIsdAsn;
 use utoipa::ToSchema;
 
 use super::{AddressParseError, Asn, Isd, error::AddressKind};
@@ -201,14 +202,6 @@ impl FromStr for IsdAsn {
     }
 }
 
-impl TryFrom<String> for IsdAsn {
-    type Error = AddressParseError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::from_str(&value)
-    }
-}
-
 impl From<IsdAsn> for u64 {
     fn from(value: IsdAsn) -> Self {
         value.to_u64()
@@ -218,6 +211,18 @@ impl From<IsdAsn> for u64 {
 impl From<u64> for IsdAsn {
     fn from(value: u64) -> Self {
         IsdAsn(value)
+    }
+}
+
+impl From<SciparseIsdAsn> for IsdAsn {
+    fn from(value: SciparseIsdAsn) -> Self {
+        IsdAsn(value.to_u64())
+    }
+}
+
+impl From<IsdAsn> for SciparseIsdAsn {
+    fn from(value: IsdAsn) -> Self {
+        SciparseIsdAsn::from_u64(value.to_u64())
     }
 }
 
@@ -323,7 +328,7 @@ mod tests {
         ]
     }
     fn try_from_str_parses_valid_strings(ia_str: &str, expected: IsdAsn) {
-        assert_eq!(IsdAsn::try_from(ia_str.to_string()), Ok(expected));
+        assert_eq!(IsdAsn::from_str(ia_str), Ok(expected));
     }
 
     #[test]

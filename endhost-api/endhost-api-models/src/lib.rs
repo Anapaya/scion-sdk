@@ -13,10 +13,9 @@
 // limitations under the License.
 //! Endhost API models library.
 
-use scion_proto::{
-    address::IsdAsn,
-    path::{SegmentsError, segment::SegmentsPage},
-};
+use std::borrow::Cow;
+
+use sciparse::{identifier::isd_asn::IsdAsn, segment::SegmentsPage};
 
 use crate::underlays::Underlays;
 
@@ -28,9 +27,18 @@ pub trait UnderlayDiscovery: Send + Sync {
     fn list_underlays(&self, isd_as: IsdAsn) -> Underlays;
 }
 
-/// Path discovery trait.
+/// Path segment error.
+#[derive(Debug)]
+pub enum SegmentsError {
+    /// Invalid argument.
+    InvalidArgument(Cow<'static, str>),
+    /// Internal error.
+    InternalError(Cow<'static, str>),
+}
+
+/// Segments discovery trait.
 #[async_trait::async_trait]
-pub trait PathDiscovery: Send + Sync {
+pub trait SegmentsDiscovery: Send + Sync {
     /// List path segments between the given source and destination ISD-ASes.
     async fn list_segments(
         &self,

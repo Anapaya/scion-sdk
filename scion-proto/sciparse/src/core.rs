@@ -17,7 +17,12 @@ pub mod encode;
 pub mod layout;
 pub mod view;
 
+pub(crate) mod macros;
 /// Utilities for reading unaligned values from byte buffers
 pub(crate) mod read;
 /// Utilities for writing unaligned values into byte buffers
 pub(crate) mod write;
+
+/// Test utilities
+#[cfg(test)]
+pub(crate) mod test;

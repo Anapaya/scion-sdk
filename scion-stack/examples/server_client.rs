@@ -44,6 +44,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig, rustls::RootCertStore};
 use anyhow::Context;
 use bytes::Bytes;
 use derive_more::Deref;
@@ -53,9 +54,7 @@ use pocketscion::{
     runtime::{PocketScionRuntime, PocketScionRuntimeBuilder},
     state::SharedPocketScionState,
 };
-use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig, rustls::RootCertStore};
 use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
-use scion_sdk_utils::test::install_rustls_crypto_provider;
 use scion_stack::{
     quic::{QuinnConn, ScionQuinnConn},
     scionstack::ScionStackBuilder,
@@ -79,7 +78,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let stat_tracker = Stats::default();
 
-    install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     // Config
     let cfg = ExampleConfig {
@@ -153,19 +152,20 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let (server_task, server_address, server_certificate) = async {
         // Create our SCION network stack - using the SNAP for the server as the Underlay
-        let server_network_stack =
-            ScionStackBuilder::new(cfg.get_snap_control_plane_host(&cfg.server.use_snap)?)
-                .with_auth_token(dummy_snap_token())
-                .build()
-                .in_current_span()
-                .await
-                .context("error building server SCION stack")?;
+        let server_network_stack = ScionStackBuilder::new()
+            .with_endhost_api(cfg.get_snap_control_plane_host(&cfg.server.use_snap)?)
+            .with_auth_token(dummy_snap_token())
+            .build()
+            .in_current_span()
+            .await
+            .context("error building server SCION stack")?;
 
         // Generate simple QUICK server config
         let (server_certificate, server_config) =
             scion_sdk_utils::test::generate_cert([42u8; 32], vec!["localhost".into()], vec![]);
 
         // Create a QUIC endpoint on top of the SCION network stack
+        #[allow(deprecated)]
         let server_quick_endpoint: scion_stack::scionstack::quic::Endpoint = server_network_stack
             .quic_endpoint(
                 Some(SocketAddr::new(
@@ -200,18 +200,19 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let client_task = async {
         // Create the SCION network stack - using the SNAP for the client as the underlay
-        let client_network_stack =
-            ScionStackBuilder::new(cfg.get_snap_control_plane_host(&cfg.client.use_snap)?)
-                .with_auth_token(dummy_snap_token())
-                .build()
-                .in_current_span()
-                .await
-                .context("error building client SCION stack")?;
+        let client_network_stack = ScionStackBuilder::new()
+            .with_endhost_api(cfg.get_snap_control_plane_host(&cfg.client.use_snap)?)
+            .with_auth_token(dummy_snap_token())
+            .build()
+            .in_current_span()
+            .await
+            .context("error building client SCION stack")?;
 
         let addr = client_network_stack.bind(None).await?.local_addr();
         tracing::info!("Client address: {}", addr);
 
         // Create a QUIC endpoint on top of the SCION network stack
+        #[allow(deprecated)]
         let mut client_socket = client_network_stack
             .quic_endpoint(None, EndpointConfig::default(), None, None)
             .in_current_span()
@@ -224,12 +225,13 @@ async fn main() -> Result<(), anyhow::Error> {
             .add(server_certificate)
             .context("error adding server certificate to root store")?;
 
-        let client_crypto = quinn::rustls::ClientConfig::builder()
+        let client_crypto = anapaya_quinn::rustls::ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
 
-        let client_config =
-            quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto).unwrap()));
+        let client_config = anapaya_quinn::ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(client_crypto).unwrap(),
+        ));
 
         client_socket.set_default_client_config(client_config);
 
@@ -240,7 +242,7 @@ async fn main() -> Result<(), anyhow::Error> {
         );
 
         // Connect to the server
-        let connected_client_socket: quinn::Connection = client_socket
+        let connected_client_socket: anapaya_quinn::Connection = client_socket
             .connect(server_address, "localhost")
             .context("error creating QUIC configuration")?
             .in_current_span()
@@ -363,7 +365,7 @@ async fn server_loop(server_quick_endpoint: scion_stack::scionstack::quic::Endpo
     }
 }
 
-async fn client_loop(conn: quinn::Connection, stats: Stats) {
+async fn client_loop(conn: anapaya_quinn::Connection, stats: Stats) {
     tracing::info!("Opening bidirectional stream to server...");
 
     loop {

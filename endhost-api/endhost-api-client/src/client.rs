@@ -26,7 +26,7 @@
 //! use std::{net::SocketAddr, str::FromStr};
 //!
 //! use endhost_api_client::client::{CrpcEndhostApiClient, EndhostApiClient};
-//! use scion_proto::address::IsdAsn;
+//! use sciparse::identifier::isd_asn::IsdAsn;
 //!
 //! pub async fn get_all_udp_sockaddrs() -> anyhow::Result<Vec<SocketAddr>> {
 //!     let crpc_client =
@@ -43,20 +43,22 @@
 //!     Ok(res)
 //! }
 //! ```
-
 use std::{ops::Deref, sync::Arc};
 
 use endhost_api::routes::{
-    ENDHOST_API_V1, LIST_PATHS, LIST_UNDERLAYS, PATH_SERVICE, UNDERLAY_SERVICE,
+    ENDHOST_API_V1, LIST_SEGMENTS, LIST_UNDERLAYS, SEGMENTS_SERVICE, UNDERLAY_SERVICE,
 };
 use endhost_api_models::underlays::Underlays;
-use endhost_api_protobuf::endhost::api_service::v1::{
+use endhost_api_protobuf::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
-use scion_proto::{address::IsdAsn, path::segment::SegmentsPage};
 use scion_sdk_reqwest_connect_rpc::{
     client::{CrpcClient, CrpcClientError},
     token_source::TokenSource,
+};
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    segment::{SegmentsPage, rpc::InvalidSegmentError},
 };
 
 /// Endhost API client trait.
@@ -157,7 +159,7 @@ impl EndhostApiClient for CrpcEndhostApiClient {
     ) -> Result<SegmentsPage, CrpcClientError> {
         self.client
             .unary_request::<ListSegmentsRequest, ListSegmentsResponse>(
-                &format!("{ENDHOST_API_V1}.{PATH_SERVICE}{LIST_PATHS}"),
+                &format!("{ENDHOST_API_V1}.{SEGMENTS_SERVICE}{LIST_SEGMENTS}"),
                 ListSegmentsRequest {
                     src_isd_as: src.0,
                     dst_isd_as: dst.0,
@@ -167,17 +169,20 @@ impl EndhostApiClient for CrpcEndhostApiClient {
             )
             .await?
             .try_into()
-            .map_err(
-                |e: scion_proto::path::convert::segment::InvalidSegmentError| {
-                    CrpcClientError::DecodeError {
-                        context: "decoding segments".into(),
-                        source: Some(e.into()),
-                        body: None,
-                    }
-                },
-            )
-            .inspect(|resp| {
-                tracing::debug!(%resp, "Listed segments");
+            .map_err(|e: InvalidSegmentError| {
+                CrpcClientError::DecodeError {
+                    context: "decoding segments".into(),
+                    source: Some(e.into()),
+                    body: None,
+                }
+            })
+            .inspect(|resp: &SegmentsPage| {
+                tracing::debug!(
+                    core=?resp.segments.core_segments.len(),
+                    down=?resp.segments.down_segments.len(),
+                    up=?resp.segments.up_segments.len(),
+                    "Listed segments"
+                );
             })
     }
 }

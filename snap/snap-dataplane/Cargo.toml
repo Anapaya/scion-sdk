@@ -1,6 +1,6 @@
 [package]
 name = "snap-dataplane"
-version = "0.4.0"
+version = "0.5.2"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
@@ -25,10 +25,13 @@ tracing = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
 
 # Local dependencies
-scion-proto = { workspace = true }
+sciparse = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-utils = { workspace = true }
 snap-tun = { workspace = true }
+
+[dev-dependencies]
+scion-proto = { workspace = true }
 
 [lints]
 workspace = true

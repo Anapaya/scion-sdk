@@ -17,4 +17,5 @@ pub mod routing;
 pub mod segment;
 pub mod simulator;
 pub mod topology;
+pub mod trust_store;
 pub mod util;

@@ -28,7 +28,7 @@ use derive_more::Display;
 use dhsd::DhsdSecret;
 use ipnet::IpNet;
 use pem::Pem;
-use scion_proto::address::IsdAsn;
+use scion_proto::address::{IsdAsn, ScionAddr, ServiceAddr};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use serde::{Deserialize, Serialize};
 use snap_dataplane::state::Id;
@@ -44,16 +44,31 @@ use crate::{
     dto::{AuthServerStateDto, RouterStateDto, SystemStateDto},
     endhost_api::{EndhostApiId, EndhostApiState},
     network::{
-        local::{receiver_registry::NetworkReceiverRegistry, receivers::Receiver},
+        local::{
+            external_as_registry::ExternalAsRegistry, receiver_registry::NetworkReceiverRegistry,
+            receivers::Receiver,
+        },
         scion::{
             segment::registry::SegmentRegistry,
             topology::{FastTopologyLookup, ScionTopology},
         },
     },
-    state::snap::{SnapId, SnapState},
+    state::{
+        control_service::ControlServiceState,
+        endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryState},
+        external_as::ExternalAsState,
+        network_forwarder::NetworkForwarderState,
+        snap::{SnapId, SnapState},
+    },
+    util::{map_btree, map_btree_fallible},
 };
 
+pub mod control_service;
+pub mod endhost_api_discovery;
 pub mod endhost_segment_lister;
+pub mod external_as;
+pub mod network_forwarder;
+pub mod sim_network_stack;
 pub mod simulation_dispatcher;
 pub mod snap;
 
@@ -241,7 +256,7 @@ impl SharedPocketScionState {
         let mut state_write_guard = self.system_state.write().unwrap();
 
         state_write_guard.topology = Some(topology);
-        state_write_guard.topology_segments = Some(segment_store);
+        state_write_guard.segment_registry = Some(segment_store);
     }
 
     /// Sets the state of a link in the topology.
@@ -293,6 +308,21 @@ impl SharedPocketScionState {
 
         Ok(())
     }
+
+    /// Adds a mapping from the given ISD-AS and ServiceAddr to the given transport and socket
+    /// address.
+    pub fn add_svc_mapping(
+        &self,
+        ia: IsdAsn,
+        dst_svc: ServiceAddr,
+        transport: String,
+        socket_addr: SocketAddr,
+    ) -> anyhow::Result<()> {
+        let mut state = self.system_state.write().unwrap();
+        state
+            .sim_receivers
+            .add_svc_mapping(ia, dst_svc, transport, socket_addr)
+    }
 }
 
 /// Pocket SCION system state.
@@ -306,9 +336,14 @@ pub struct SystemState {
     auth_server: Option<AuthServerState>,
     routers: BTreeMap<RouterId, RouterState>,
     endhost_apis: BTreeMap<EndhostApiId, EndhostApiState>,
+    endhost_api_discovery_api: BTreeMap<EndhostApiDiscoveryApiId, EndhostApiDiscoveryState>,
     topology: Option<ScionTopology>,
-    topology_segments: Option<SegmentRegistry>,
+    segment_registry: Option<SegmentRegistry>,
     sim_receivers: NetworkReceiverRegistry,
+    external_ases: BTreeMap<IsdAsn, ExternalAsState>,
+    extern_as_handlers: ExternalAsRegistry,
+    control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
+    network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
 }
 
 impl SystemState {
@@ -323,9 +358,14 @@ impl SystemState {
             routers: Default::default(),
             auth_server: Default::default(),
             topology: Default::default(),
-            topology_segments: Default::default(),
+            segment_registry: Default::default(),
             sim_receivers: Default::default(),
             endhost_apis: Default::default(),
+            endhost_api_discovery_api: Default::default(),
+            external_ases: Default::default(),
+            extern_as_handlers: Default::default(),
+            network_forwarders: Default::default(),
+            control_service_states: Default::default(),
         }
     }
 
@@ -376,6 +416,14 @@ impl From<&SystemState> for SystemStateDto {
                 .clone()
                 .map(|topology| topology.into()),
             endhost_apis: system_state.endhost_apis.clone(),
+            endhost_api_discovery_api: system_state
+                .endhost_api_discovery_api
+                .iter()
+                .map(|(id, discovery_state)| (*id, discovery_state.clone().into()))
+                .collect(),
+            external_ases: map_btree(system_state.external_ases.clone(), Into::into),
+            control_service_states: system_state.control_service_states.clone(),
+            network_forwarders: system_state.network_forwarders.clone(),
         }
     }
 }
@@ -397,16 +445,7 @@ impl TryFrom<SystemStateDto> for SystemState {
                 .transpose()?
                 .unwrap_or(DEFAULT_POCKET_SCION_ROOT_SECRET),
         );
-        let snaps = dto
-            .snaps
-            .into_iter()
-            .map(|(snap_id, snap_state)| {
-                Ok((
-                    snap_id,
-                    snap_state.try_into().context("invalid SNAP state")?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
+
         let auth_server = match dto.auth_server_state {
             Some(auth_server_state) => {
                 Some(
@@ -417,19 +456,9 @@ impl TryFrom<SystemStateDto> for SystemState {
             }
             None => None,
         };
+
         let snap_token_public_pem = Pem::from_str(&dto.snap_token_public_key)
             .context("invalid PEM format for SNAP token public key")?;
-
-        let router_sockets = dto
-            .routers
-            .into_iter()
-            .map(|(router_socket_id, router_state)| {
-                Ok((
-                    router_socket_id,
-                    router_state.try_into().context("invalid router state")?,
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
 
         let topology = dto
             .topology
@@ -441,7 +470,8 @@ impl TryFrom<SystemStateDto> for SystemState {
             .as_ref()
             .map(|topology| SegmentRegistry::new(&FastTopologyLookup::new(topology)));
 
-        let sim_receivers = NetworkReceiverRegistry::default();
+        let external_ases = map_btree_fallible(dto.external_ases, TryInto::try_into)
+            .context("invalid external AS states")?;
 
         Ok(SystemState {
             root_secret,
@@ -449,12 +479,19 @@ impl TryFrom<SystemStateDto> for SystemState {
             snaptun_keepalive_interval: dto.snaptun_keepalive_interval,
             auth_server,
             snap_token_public_pem,
-            snaps,
-            routers: router_sockets,
+            snaps: map_btree_fallible(dto.snaps, TryInto::try_into)
+                .context("invalid SNAP states")?,
+            routers: map_btree_fallible(dto.routers, TryInto::try_into)
+                .context("invalid router states")?,
             topology,
-            topology_segments,
-            sim_receivers,
+            segment_registry: topology_segments,
+            sim_receivers: Default::default(),
             endhost_apis: dto.endhost_apis,
+            endhost_api_discovery_api: map_btree(dto.endhost_api_discovery_api, Into::into),
+            external_ases,
+            extern_as_handlers: Default::default(),
+            control_service_states: dto.control_service_states,
+            network_forwarders: dto.network_forwarders,
         })
     }
 }

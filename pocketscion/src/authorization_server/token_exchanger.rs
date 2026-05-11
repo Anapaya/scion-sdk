@@ -20,7 +20,7 @@ use std::{
 
 use anyhow::Context;
 use jsonwebtoken::{
-    Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation, decode, encode,
+    Algorithm, EncodingKey, Header, TokenData, dangerous::insecure_decode, encode,
     errors::Error as JwtError,
 };
 use pem::Pem;
@@ -244,12 +244,7 @@ impl TokenExchange for TokenExchangeImpl {
         let id_token = &req.subject_token;
 
         // First decode the ID token to get the issuer of the ID token for verification.
-        let mut validator = Validation::new(Algorithm::EdDSA);
-        validator.insecure_disable_signature_validation();
-        validator.set_audience(&[EDGE_APP_CLIENT_ID.to_string()]);
-
-        let decoded_token =
-            decode::<OpenIdToken>(id_token, &DecodingKey::from_secret(b""), &validator)?;
+        let decoded_token = insecure_decode::<OpenIdToken>(id_token)?;
 
         tracing::debug!(token=?decoded_token, "Exchanging token");
 
@@ -283,6 +278,7 @@ impl TokenExchange for TokenExchangeImpl {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            jti: uuid::Uuid::new_v4().to_string(),
         };
 
         let snap_token_enc_key =

@@ -14,5 +14,13 @@
 
 //! QUIC over SCION transport.
 
-pub mod client;
+mod buf_factory;
 pub mod h3;
+pub mod quic;
+pub mod socket;
+
+/// UDP packet buffer size.
+pub const UDP_PACKET_BUFFER_SIZE: usize = 65535;
+
+/// Default max UDP payload size.
+pub const DEFAULT_MAX_UDP_PAYLOAD_SIZE: usize = 1200;

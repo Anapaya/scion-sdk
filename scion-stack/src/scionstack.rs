@@ -30,8 +30,7 @@
 //! # async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! let scion_stack = builder.build().await?;
 //! let socket = scion_stack.bind(None).await?;
@@ -58,8 +57,7 @@
 //! # async fn connected_socket_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! // Parse destination address
 //! let destination: SocketAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
@@ -85,8 +83,7 @@
 //! # async fn basic_socket_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! // Parse addresses
 //! let bind_addr: SocketAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
@@ -103,6 +100,23 @@
 //! let mut buffer = [0u8; 1024];
 //! let (len, sender) = socket.recv_from(&mut buffer).await?;
 //! println!("Received: {:?} from {:?}", &buffer[..len], sender);
+//!
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Resolving SCION TXT records
+//!
+//! ```
+//! use scion_stack::resolver::{ScionDnsResolver, txt::ScionTxtDnsResolver};
+//!
+//! # async fn resolve_example() -> Result<(), Box<dyn std::error::Error>> {
+//! let resolver = ScionTxtDnsResolver::new()?;
+//! let addresses = resolver.resolve("example.com").await?;
+//!
+//! for address in addresses {
+//!     println!("Resolved: {}", address);
+//! }
 //!
 //! # Ok(())
 //! # }
@@ -166,8 +180,9 @@
 //! # async fn custom_pather_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder =
-//!     ScionStackBuilder::new(control_plane_addr).with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new()
+//!     .with_endhost_api(control_plane_addr)
+//!     .with_auth_token("SNAP token".to_string());
 //!
 //! // Parse addresses
 //! let bind_addr: SocketAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
@@ -213,7 +228,9 @@ use scion_proto::{
     path::Path,
 };
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
+use snap_tun::client::ConnectSnapTunSocketError;
 pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
+use url::Url;
 
 // Re-export the main types from the modules
 pub use self::builder::ScionStackBuilder;
@@ -241,6 +258,7 @@ use crate::{
 /// The SCION stack abstracts over the underlay stack that is used for the underlying
 /// transport.
 pub struct ScionStack {
+    endhost_api: Option<Url>,
     client: Arc<dyn EndhostApiClient>,
     underlay: Arc<dyn DynUnderlayStack>,
     scmp_error_receivers: Subscribers<dyn ScmpErrorReceiver>,
@@ -258,10 +276,12 @@ impl fmt::Debug for ScionStack {
 
 impl ScionStack {
     pub(crate) fn new(
+        endhost_api: Option<Url>,
         client: Arc<dyn EndhostApiClient>,
         underlay: Arc<dyn DynUnderlayStack>,
     ) -> Self {
         Self {
+            endhost_api,
             client,
             underlay,
             scmp_error_receivers: Subscribers::new(),
@@ -311,9 +331,14 @@ impl ScionStack {
         if !socket_config.disable_endhost_api_segment_fetcher {
             let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
                 Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
-            socket_config.segment_fetchers.push(connect_rpc_fetcher);
+            socket_config
+                .segment_fetchers
+                .push(("Endhost API".into(), connect_rpc_fetcher));
         }
-        let fetcher = PathFetcherImpl::new(socket_config.segment_fetchers);
+        let fetcher = PathFetcherImpl::new(
+            socket_config.segment_fetchers,
+            socket_config.segment_fetcher_timeout,
+        );
 
         // Use default scorers if none are configured.
         if socket_config.path_strategy.scoring.is_empty() {
@@ -456,13 +481,18 @@ impl ScionStack {
     ///
     /// # Returns
     /// A QUIC endpoint that can be used to accept or create QUIC connections.
+    #[deprecated(
+        since = "0.4.0",
+        note = "will soon be removed; use the quic-scion crate instead"
+    )]
     pub async fn quic_endpoint(
         &self,
         bind_addr: Option<SocketAddr>,
-        config: quinn::EndpointConfig,
-        server_config: Option<quinn::ServerConfig>,
-        runtime: Option<Arc<dyn quinn::Runtime>>,
+        config: anapaya_quinn::EndpointConfig,
+        server_config: Option<anapaya_quinn::ServerConfig>,
+        runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
     ) -> anyhow::Result<Endpoint> {
+        #[allow(deprecated)]
         self.quic_endpoint_with_config(
             bind_addr,
             config,
@@ -487,12 +517,16 @@ impl ScionStack {
     ///
     /// # Returns
     /// A QUIC endpoint that can be used to accept or create QUIC connections.
+    #[deprecated(
+        since = "0.4.0",
+        note = "will soon be removed; use the quic-scion crate instead"
+    )]
     pub async fn quic_endpoint_with_config(
         &self,
         bind_addr: Option<SocketAddr>,
-        config: quinn::EndpointConfig,
-        server_config: Option<quinn::ServerConfig>,
-        runtime: Option<Arc<dyn quinn::Runtime>>,
+        config: anapaya_quinn::EndpointConfig,
+        server_config: Option<anapaya_quinn::ServerConfig>,
+        runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
         socket_config: SocketConfig,
     ) -> anyhow::Result<Endpoint> {
         let scmp_handlers: Vec<Box<dyn ScmpHandler>> = vec![Box::new(ScmpErrorHandler::new(
@@ -509,9 +543,10 @@ impl ScionStack {
             if !socket_config.disable_endhost_api_segment_fetcher {
                 let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
                     Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
-                segment_fetchers.push(connect_rpc_fetcher);
+                segment_fetchers.push(("Endhost API".into(), connect_rpc_fetcher));
             }
-            let fetcher = PathFetcherImpl::new(segment_fetchers);
+            let fetcher =
+                PathFetcherImpl::new(segment_fetchers, socket_config.segment_fetcher_timeout);
 
             // Use default scorers if none are configured.
             let mut strategy = socket_config.path_strategy;
@@ -538,7 +573,7 @@ impl ScionStack {
 
         let runtime = match runtime {
             Some(runtime) => runtime,
-            None => quinn::default_runtime().context("No runtime found")?,
+            None => anapaya_quinn::default_runtime().context("No runtime found")?,
         };
 
         Ok(Endpoint::new_with_abstract_socket(
@@ -561,11 +596,20 @@ impl ScionStack {
         self.underlay.local_ases()
     }
 
+    /// Get the currently selected endhost API URL, if any.
+    pub fn endhost_api(&self) -> Option<Url> {
+        self.endhost_api.clone()
+    }
+
     /// Creates a path manager with default configuration.
     pub fn create_path_manager(&self) -> MultiPathManager<PathFetcherImpl> {
-        let fetcher = PathFetcherImpl::new(vec![Box::new(EndhostApiSegmentFetcher::new(
-            self.client.clone(),
-        ))]);
+        let fetcher = PathFetcherImpl::new(
+            vec![(
+                "Endhost API".into(),
+                Box::new(EndhostApiSegmentFetcher::new(self.client.clone())),
+            )],
+            DEFAULT_SEGMENT_FETCHER_TIMEOUT,
+        );
         let mut strategy = PathStrategy::default();
 
         strategy.scoring.use_default_scorers();
@@ -578,13 +622,23 @@ impl ScionStack {
 /// Default timeout for creating a connected socket
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Default timeout for segment fetchers to avoid waiting indefinitely for slow or unresponsive
+/// fetchers.
+pub const DEFAULT_SEGMENT_FETCHER_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Configuration for a path aware socket.
-#[derive(Default)]
 pub struct SocketConfig {
-    pub(crate) segment_fetchers: Vec<Box<dyn SegmentFetcher>>,
+    pub(crate) segment_fetchers: Vec<(String, Box<dyn SegmentFetcher>)>,
+    pub(crate) segment_fetcher_timeout: Duration,
     pub(crate) disable_endhost_api_segment_fetcher: bool,
     pub(crate) path_strategy: PathStrategy,
     pub(crate) connect_timeout: Duration,
+}
+
+impl Default for SocketConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SocketConfig {
@@ -592,6 +646,7 @@ impl SocketConfig {
     pub fn new() -> Self {
         Self {
             segment_fetchers: Vec::new(),
+            segment_fetcher_timeout: DEFAULT_SEGMENT_FETCHER_TIMEOUT,
             disable_endhost_api_segment_fetcher: false,
             path_strategy: Default::default(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
@@ -636,14 +691,24 @@ impl SocketConfig {
     ///
     /// By default, only path segments retrieved via the endhost API are used. Adding additional
     /// segment fetchers enables to build paths from different segment sources.
-    pub fn with_segment_fetcher(mut self, fetcher: Box<dyn SegmentFetcher>) -> Self {
-        self.segment_fetchers.push(fetcher);
+    pub fn with_segment_fetcher(mut self, name: String, fetcher: Box<dyn SegmentFetcher>) -> Self {
+        self.segment_fetchers.push((name, fetcher));
         self
     }
 
     /// Disable fetching path segments from the endhost API.
     pub fn disable_endhost_api_segment_fetcher(mut self) -> Self {
         self.disable_endhost_api_segment_fetcher = true;
+        self
+    }
+
+    /// Sets the segment fetcher timeout. The timeout prevents waiting indefinitely for slow or
+    /// unresponsive segment fetchers. If a fetcher does not respond within the timeout, it will be
+    /// skipped for the current path lookup.
+    ///
+    /// Defaults to [DEFAULT_SEGMENT_FETCHER_TIMEOUT].
+    pub fn with_segment_fetcher_timeout(mut self, timeout: Duration) -> Self {
+        self.segment_fetcher_timeout = timeout;
         self
     }
 }
@@ -701,15 +766,15 @@ pub enum SnapConnectionError {
     /// Snap sockets cannot be bound without a SNAP token source.
     #[error("SNAP token source is missing")]
     SnapTokenSourceMissing,
+    /// Error establishing the SNAP tunnel.
+    #[error("error establishing SNAP tunnel: {0}")]
+    TunnelEstablishmentError(#[from] ConnectSnapTunSocketError),
     /// Failed to create the SNAP control plane client.
     #[error("failed to create SNAP control plane client: {0}")]
     ControlPlaneClientCreationError(anyhow::Error),
     /// Failed to discover the SNAP data plane.
     #[error("failed to discover SNAP data plane: {0}")]
     DataPlaneDiscoveryError(CrpcClientError),
-    /// Failed to establish the SNAP tunnel.
-    #[error("failed to establish SNAP tunnel: {0}")]
-    ConnectionEstablishmentError(anyhow::Error),
 }
 
 /// Available kinds of SCION sockets.
@@ -837,11 +902,18 @@ pub enum ScionSocketSendError {
     NotConnected,
 }
 
+/// Minimum size of the path buffer required by [`ScionSocketReceiveError::PathBufTooSmall`].
+///
+/// This constant can be used to allocate a correctly-sized path buffer when calling
+/// [`UdpScionSocket::recv_from_with_path`](crate::scionstack::UdpScionSocket::recv_from_with_path)
+/// or the corresponding method on [`PathUnawareUdpScionSocket`].
+pub const MIN_PATH_BUFFER_SIZE: usize = 1024;
+
 /// SCION socket receive errors.
 #[derive(Debug, thiserror::Error)]
 pub enum ScionSocketReceiveError {
     /// Path buffer too small.
-    #[error("provided path buffer is too small (at least 1024 bytes required)")]
+    #[error("provided path buffer is too small (at least {MIN_PATH_BUFFER_SIZE} bytes required)")]
     PathBufTooSmall,
     /// I/O error.
     #[error("i/o error: {0:?}")]
@@ -866,13 +938,18 @@ pub(crate) trait UnderlaySocket: 'static + Send + Sync {
     /// path to resolve the underlay next hop.
     fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError>;
 
+    /// Receive a raw SCION packet.
     fn recv<'a>(&'a self) -> BoxFuture<'a, Result<ScionPacketRaw, ScionSocketReceiveError>>;
 
+    /// Get the local socket address of this socket.
     fn local_addr(&self) -> SocketAddr;
+
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    fn snap_data_plane(&self) -> Option<net::SocketAddr>;
 }
 
 /// A trait that defines an asynchronous path unaware UDP socket.
-/// This can be used to implement the [quinn::AsyncUdpSocket] trait.
+/// This can be used to implement the [anapaya_quinn::AsyncUdpSocket] trait.
 pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn udp_polling::UdpPoller>>;
     /// Try to send a raw SCION UDP packet. Path resolution and packet encoding is
@@ -887,5 +964,14 @@ pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
         &self,
         cx: &mut Context,
     ) -> Poll<std::io::Result<(SocketAddr, Bytes, Path)>>;
+    /// Get the local socket address of this socket.
     fn local_addr(&self) -> SocketAddr;
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    fn snap_data_plane(&self) -> Option<net::SocketAddr>;
+}
+
+impl Drop for ScionStack {
+    fn drop(&mut self) {
+        tracing::warn!("ScionStack was dropped");
+    }
 }

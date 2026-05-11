@@ -1,0 +1,39 @@
+# Copyright 2026 Anapaya Systems
+name: Rust Cache Save
+description: >
+  Save the Rust toolchain and build artifact cache. Uses ./.github/actions/cache-save to select the
+  appropriate action based on the runner environment. Only runs on push events.
+
+inputs:
+  workspace:
+    description: Path to the cargo workspace (used for cache key and cache paths).
+    required: true
+  cache-key-suffix:
+    description: String appended to the Linux cache key (e.g. '-bpf-linker').
+    default: ''
+  cache-hit:
+    description: "Pass the cache-hit output from the restore action to skip saving when the exact key was already cached."
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Save cargo cache (Linux)
+      if: runner.os == 'Linux' && github.event_name == 'push'
+      uses: ./.github/actions/cache-save
+      with:
+        key: >-
+          ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', inputs.workspace)) }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', inputs.workspace)) }}${{ inputs.cache-key-suffix }}
+        path: |-
+          ~/.rustup
+          ~/.cargo
+          ${{ inputs.workspace }}/target/
+        cache-hit: ${{ inputs.cache-hit }}
+    - name: Save cargo cache (Windows)
+      if: runner.os == 'Windows' && github.event_name == 'push'
+      uses: ./.github/actions/cache-save
+      with:
+        key: >-
+          ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', inputs.workspace)) }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', inputs.workspace)) }}
+        path: C:\\rust_cache.vhdx
+        cache-hit: ${{ inputs.cache-hit }}

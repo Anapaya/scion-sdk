@@ -30,6 +30,7 @@ use snap_tokens::v0::dummy_snap_token;
 #[tokio::test]
 #[timeout(10_000)]
 async fn should_send_receive_with_topology() -> anyhow::Result<()> {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
     let server_ia = IsdAsn::from_str("1-3")?;
     let client_ia = IsdAsn::from_str("2-3")?;
 
@@ -93,7 +94,8 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     //
     // Setup server
-    let server_stack = ScionStackBuilder::new(server_control_plane_addr)
+    let server_stack = ScionStackBuilder::new()
+        .with_endhost_api(server_control_plane_addr)
         .with_auth_token(dummy_snap_token())
         .build()
         .await?;
@@ -103,7 +105,8 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     //
     // Setup client
-    let client_stack = ScionStackBuilder::new(client_control_plane_addr)
+    let client_stack = ScionStackBuilder::new()
+        .with_endhost_api(client_control_plane_addr)
         .with_auth_token(dummy_snap_token())
         .build()
         .await?;

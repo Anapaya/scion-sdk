@@ -21,16 +21,18 @@ use crate::{
         debug::Annotations,
         encode::WireEncode,
         layout::{BitRange, Layout, LayoutParseError, macros::gen_bitrange_const},
-        view::View,
+        view::{View, ViewConversionError},
     },
-    header::{
-        model::{Path, ScionPacketHeader},
-        view::ScionHeaderView,
-    },
-    path::standard::{
-        layout::{StdPathDataLayout, StdPathMetaLayout},
+    header::{model::ScionPacketHeader, view::ScionHeaderView},
+    path::{
+        layout::ScionHeaderPathLayout,
+        model::Path,
+        onehop::layout::OneHopPathLayout,
+        standard::{
+            layout::{StdPathDataLayout, StdPathMetaLayout},
+            view::StandardPathView,
+        },
         types::PathType,
-        view::StandardPathView,
     },
 };
 
@@ -60,6 +62,10 @@ impl ScionHeaderLayout {
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     // |                              Path                             |
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+    /// Maximum header size in bytes
+    /// (derived from header length field in common header: u8::MAX * 4)
+    pub const MAX_SIZE_BYTES: usize = 1020;
 
     /// Constructs the layout from its individual parts
     pub fn from_parts(
@@ -159,6 +165,7 @@ impl ScionHeaderLayout {
 
                 ScionHeaderPathLayout::Standard(StdPathMetaLayout, path_data_layout)
             }
+            PathType::OneHop => ScionHeaderPathLayout::OneHop(OneHopPathLayout),
             PathType::Empty => ScionHeaderPathLayout::Empty,
             path_type => {
                 // For unknown path types, we assume the rest of the header is path data
@@ -230,6 +237,7 @@ impl ScionHeaderLayout {
                     StdPathDataLayout::new(seg0, seg1, seg2),
                 )
             }
+            Path::OneHop(_) => ScionHeaderPathLayout::OneHop(OneHopPathLayout),
             Path::Empty => ScionHeaderPathLayout::Empty,
             Path::Unsupported { path_type, data } => {
                 let addr_end = common.size_bytes() + address.size_bytes();
@@ -267,6 +275,12 @@ impl Layout for ScionHeaderLayout {
     #[inline]
     fn size_bytes(&self) -> usize {
         self.header_len
+    }
+}
+impl TryFrom<&[u8]> for ScionHeaderLayout {
+    type Error = ViewConversionError;
+    fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
+        Self::from_slice(buf).map_err(ViewConversionError::from)
     }
 }
 
@@ -360,10 +374,21 @@ impl AddressHeaderLayout {
 
     gen_bitrange_const!(DST_ISD_RNG, 0, 16);
     gen_bitrange_const!(DST_AS_RNG, 16, 48);
+    gen_bitrange_const!(DST_IA_RNG, 0, 64);
     gen_bitrange_const!(SRC_ISD_RNG, 64, 16);
     gen_bitrange_const!(SRC_AS_RNG, 80, 48);
+    gen_bitrange_const!(SRC_IA_RNG, 64, 64);
 
     const FIXED_SIZE_BITS: usize = 128;
+    /// Maximum size of the AddressHeader in bits
+    pub const MAX_SIZE_BITS: usize = Self::FIXED_SIZE_BITS + (16 * 8) * 2; // Max 16 bytes for each host address
+    /// Maximum size of the AddressHeader in bytes
+    pub const MAX_SIZE_BYTES: usize = Self::MAX_SIZE_BITS / 8;
+
+    /// Minimum size of the AddressHeader in bits
+    pub const MIN_SIZE_BITS: usize = Self::FIXED_SIZE_BITS + (4 * 8) * 2; // Min 4 bytes for each host address
+    /// Minimum size of the AddressHeader in bytes
+    pub const MIN_SIZE_BYTES: usize = Self::MIN_SIZE_BITS / 8;
 
     /// Returns the bit range for the destination host address
     #[inline]
@@ -411,66 +436,6 @@ impl Layout for AddressHeaderLayout {
     }
 }
 
-/// Layout for the SCION path header
-pub enum ScionHeaderPathLayout {
-    /// Layout for the standard SCION path
-    Standard(StdPathMetaLayout, StdPathDataLayout),
-    /// Layout for an empty path
-    Empty,
-    /// Layout for an unknown path type
-    Unknown {
-        /// The type of the unknown path
-        path_type: PathType,
-        /// The bit range of the unknown path
-        range: BitRange,
-    },
-}
-impl ScionHeaderPathLayout {
-    /// Returns the path type of the layout
-    #[inline]
-    pub const fn path_type(&self) -> PathType {
-        match self {
-            ScionHeaderPathLayout::Standard(..) => PathType::Scion,
-            ScionHeaderPathLayout::Empty => PathType::Empty,
-            ScionHeaderPathLayout::Unknown { path_type, .. } => *path_type,
-        }
-    }
-
-    /// Returns annotations for the path header fields
-    pub fn annotations(&self) -> Annotations {
-        let mut annotations = Annotations::new();
-        match self {
-            ScionHeaderPathLayout::Standard(_, data_layout) => {
-                annotations.extend(StdPathMetaLayout.annotations());
-                annotations.extend(data_layout.annotations());
-            }
-            ScionHeaderPathLayout::Empty => {}
-            ScionHeaderPathLayout::Unknown { range, .. } => {
-                annotations.add("Unknown Path".to_string(), vec![(*range, "unknown")])
-            }
-        };
-
-        annotations
-    }
-}
-impl Layout for ScionHeaderPathLayout {
-    #[inline]
-    fn size_bytes(&self) -> usize {
-        match self {
-            ScionHeaderPathLayout::Standard(meta, data_layout) => {
-                meta.size_bytes() + data_layout.size_bytes()
-            }
-            ScionHeaderPathLayout::Empty => 0,
-            ScionHeaderPathLayout::Unknown { range, .. } => range.size_bytes(),
-        }
-    }
-}
-impl From<StdPathDataLayout> for ScionHeaderPathLayout {
-    fn from(data_layout: StdPathDataLayout) -> Self {
-        ScionHeaderPathLayout::Standard(StdPathMetaLayout, data_layout)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use proptest::{prelude::*, prop_assert_eq};
@@ -512,9 +477,9 @@ mod tests {
     // Ensure test coverage of edge cases for segment lengths
     fn seg() -> impl Strategy<Value = u8> {
         prop_oneof![
-        1 => Just(0),
-        1 => Just(63),
-        5 => 1u8..62,
+            1 => Just(0),
+            1 => Just(63),
+            5 => 1u8..62,
         ]
     }
 

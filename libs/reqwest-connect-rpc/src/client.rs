@@ -69,7 +69,7 @@ impl CrpcClient {
     /// Creates a new [`CrpcClient`] for the given base URL.
     pub fn new(base_url: &url::Url) -> anyhow::Result<Self> {
         let http_client = reqwest::ClientBuilder::new()
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
             .build()
             .context("error creating HTTP client")?;
 
@@ -140,6 +140,9 @@ impl CrpcClient {
             header::HeaderValue::from_static(APPLICATION_PROTO),
         );
         headers.insert(header::USER_AGENT, self.user_agent.clone());
+
+        tracing::trace!(?url, ?headers, "Sending crpc unary request");
+
         if let Some(token_source) = &self.token_source {
             let token = token_source.get_token().await?;
             let token_header = header::HeaderValue::from_str(&token_source.format_header(token))
@@ -151,8 +154,6 @@ impl CrpcClient {
 
             headers.insert(header::AUTHORIZATION, token_header);
         }
-
-        tracing::debug!("Sending request");
 
         let body = req.encode_to_vec();
         let response = self
@@ -169,7 +170,7 @@ impl CrpcClient {
                 }
             })?;
 
-        tracing::debug!(status=%response.status(), body_len=%response.content_length().unwrap_or(0), "Got response");
+        tracing::trace!(status=%response.status(), body_len=%response.content_length().unwrap_or(0), "Received crpc unary response");
 
         let status = response.status();
         if !status.is_success() {

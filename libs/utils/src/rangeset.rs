@@ -227,8 +227,8 @@ impl<T: Ord + Sub<Output = T> + Add<Output = T> + Copy + Unsigned> Range<T> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng};
-    use rand_chacha::ChaCha8Rng;
+    use chacha20::ChaCha8Rng;
+    use rand::{Rng, RngExt as _, SeedableRng};
 
     use super::*;
 

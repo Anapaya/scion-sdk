@@ -15,6 +15,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZero,
     sync::LazyLock,
 };
 
@@ -25,7 +26,7 @@ use crate::network::scion::{
         model::LinkSegment,
         visitors::{CoreSegmentCollector, DownSegmentCollector},
     },
-    topology::{FastTopologyLookup, ScionTopology, visitor::walk_all_links},
+    topology::{FastTopologyLookup, ScionTopology, visitor::walk_all_links_parallel},
 };
 
 /// Keeps all available [LinkSegment] for a topology.
@@ -39,6 +40,8 @@ pub struct SegmentRegistry {
 // Public
 impl SegmentRegistry {
     /// Creates a new [SegmentRegistry] containing all valid paths from given topology
+    ///
+    /// Will not generate Segments for External ASes
     pub fn new(topo_lookup: &FastTopologyLookup<'_>) -> Self {
         let mut isd_segments = HashMap::new();
 
@@ -58,8 +61,8 @@ impl SegmentRegistry {
                         .topology
                         .as_map
                         .values()
-                        .filter(|as_entry| as_entry.isd_as.isd() == isd)
-                        .map(|as_entry| as_entry.isd_as)
+                        .filter(|as_entry| as_entry.isd_as().isd() == isd)
+                        .map(|as_entry| as_entry.isd_as())
                         .collect(),
                 ),
             );
@@ -71,8 +74,8 @@ impl SegmentRegistry {
                 .topology
                 .as_map
                 .values()
-                .filter(|as_entry| as_entry.core)
-                .map(|as_entry| as_entry.isd_as)
+                .filter(|as_entry| as_entry.is_core())
+                .map(|as_entry| as_entry.isd_as())
                 .collect(),
         );
 
@@ -128,20 +131,32 @@ impl SegmentRegistry {
 // Computation
 impl SegmentRegistry {
     fn compute_core_segments(topo_lookup: &FastTopologyLookup<'_>) -> Vec<LinkSegment> {
-        // Get All Core ASes
+        // Get All Core ASes which are not external
         let core_ases: Vec<IsdAsn> = topo_lookup
             .topology
             .as_map
             .values()
-            .filter(|as_entry| as_entry.core)
-            .map(|as_entry| as_entry.isd_as)
+            .filter(|as_entry| !as_entry.is_external())
+            .filter(|as_entry| as_entry.is_core())
+            .map(|as_entry| as_entry.isd_as())
             .collect();
+
+        let threads = std::thread::available_parallelism()
+            .map(NonZero::get)
+            .unwrap_or(1);
+
+        tracing::debug!("Computing core segments with up to {} threads", threads);
 
         // For each core AS, find all segments
         core_ases
             .iter()
             .flat_map(|core_as| {
-                walk_all_links(CoreSegmentCollector::default(), *core_as, topo_lookup)
+                walk_all_links_parallel(
+                    CoreSegmentCollector::default(),
+                    *core_as,
+                    topo_lookup,
+                    threads,
+                )
             })
             .collect::<Vec<_>>()
     }
@@ -150,21 +165,35 @@ impl SegmentRegistry {
         topo_lookup: &FastTopologyLookup<'_>,
         isd: Isd,
     ) -> Vec<LinkSegment> {
-        // Get All Core ASes in the ISD
+        // Get All Core ASes in the ISD which are not external
         let core_ases: Vec<IsdAsn> = topo_lookup
             .topology
             .as_map
             .values()
-            .filter(|as_entry| as_entry.core && as_entry.isd_as.isd() == isd)
-            .map(|as_entry| as_entry.isd_as)
+            .filter(|as_entry| !as_entry.is_external())
+            .filter(|as_entry| as_entry.is_core() && as_entry.isd_as().isd() == isd)
+            .map(|as_entry| as_entry.isd_as())
             .collect();
 
         // For each core AS, find all segments that start at this AS
 
+        let threads = std::thread::available_parallelism()
+            .map(NonZero::get)
+            .unwrap_or(1);
+
+        tracing::debug!(
+            "Computing down segments for ISD {isd} with up to {} threads",
+            threads
+        );
         core_ases
             .iter()
             .flat_map(|core_as| {
-                walk_all_links(DownSegmentCollector::default(), *core_as, topo_lookup)
+                walk_all_links_parallel(
+                    DownSegmentCollector::default(),
+                    *core_as,
+                    topo_lookup,
+                    threads,
+                )
             })
             .collect::<Vec<_>>()
     }
@@ -251,7 +280,7 @@ impl LinkSegmentStore {
         };
 
         for segment in segments.into_iter() {
-            let bucket_id = AsPair::new(segment.start_as, segment.end_as);
+            let bucket_id = AsPair::new(segment.start_as.into(), segment.end_as.into());
 
             let all_segment_bucket = cache.all_segments.entry(bucket_id).or_default();
             let bucket_index = all_segment_bucket.len();
@@ -280,13 +309,13 @@ impl LinkSegmentStore {
 
             cache
                 .end_as_to_segment
-                .entry(segment.end_as)
+                .entry(segment.end_as.into())
                 .or_default()
                 .push(segment_id);
 
             cache
                 .start_as_to_segment
-                .entry(segment.start_as)
+                .entry(segment.start_as.into())
                 .or_default()
                 .push(segment_id);
 
@@ -588,7 +617,7 @@ mod tests {
                     .iter()
                     .map(|id| store.segment(id).unwrap())
                     .map(|s| {
-                        assert_eq!(s.end_as, ias, "Segment does not end at expected AS");
+                        assert_eq!(s.end_as, ias.into(), "Segment does not end at expected AS");
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(segments.len(), expected_count);
@@ -609,7 +638,11 @@ mod tests {
                     .iter()
                     .map(|id| store.segment(id).unwrap())
                     .map(|s| {
-                        assert_eq!(s.start_as, ias, "Segment does not start at expected AS");
+                        assert_eq!(
+                            s.start_as,
+                            ias.into(),
+                            "Segment does not start at expected AS"
+                        );
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(segments.len(), expected_count);
@@ -628,8 +661,12 @@ mod tests {
             let check = move |start: IsdAsn, end: IsdAsn, expected_count: usize| {
                 let segments = store.segments(start, end);
                 segments.iter().for_each(|s| {
-                    assert_eq!(s.start_as, start, "Segment does not start at expected AS");
-                    assert_eq!(s.end_as, end, "Segment does not end at expected AS");
+                    assert_eq!(
+                        s.start_as,
+                        start.into(),
+                        "Segment does not start at expected AS"
+                    );
+                    assert_eq!(s.end_as, end.into(), "Segment does not end at expected AS");
                 });
                 assert_eq!(segments.len(), expected_count);
             };

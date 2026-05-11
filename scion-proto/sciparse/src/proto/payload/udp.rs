@@ -12,4 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Todo: STUB - probably use etherparse
+//! UDP payload views and layouts.
+
+/// Layout definitions for UDP datagrams (bit ranges and sizes).
+pub mod layout;
+/// UDP payload models.
+pub mod model;
+/// Zero-copy views over UDP datagrams.
+pub mod view;

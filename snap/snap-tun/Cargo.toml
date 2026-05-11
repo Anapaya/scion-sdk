@@ -1,6 +1,6 @@
 [package]
 name = "snap-tun"
-version = "0.4.0"
+version = "0.5.2"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
@@ -11,22 +11,34 @@ categories = ["network-programming"]
 
 [dependencies]
 ana-gotatun = { workspace = true }
+async-channel = { workspace = true }
+async-trait = { workspace = true }
 bitfield-struct = { workspace = true }
 bytes = { workspace = true }
-prometheus = { workspace = true }
-quinn = { workspace = true }
+anapaya-quinn = { workspace = true }
+quinn-udp = { workspace = true }
 scion-proto = { workspace = true }
-scion-sdk-observability = { workspace = true }
+scion-sdk-utils = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 x509-cert = { workspace = true }
+scion-sdk-reqwest-connect-rpc = { workspace = true }
+url = { workspace = true }
 zerocopy = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
 pem = { workspace = true }
 rcgen = { workspace = true }
+mockall = "0.14"
+socket2 = { workspace = true }
+tokio-util = { workspace = true }
+test-log = { workspace = true }
+
+[[bench]]
+name = "udp_batch"
+harness = false
 
 [lints]
 workspace = true

@@ -15,9 +15,13 @@
 
 use std::{net, sync::Arc};
 
-use scion_proto::address::{Isd, IsdAsn, ScionAddr, SocketAddr};
+use ana_gotatun::packet::{Packet, PacketBufPool};
+use scion_proto::{
+    address::{Isd, IsdAsn, ScionAddr, SocketAddr},
+    wire_encoding::WireEncodeVec,
+};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
-use scion_sdk_utils::backoff::ExponentialBackoff;
+use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use url::Url;
@@ -43,8 +47,6 @@ pub struct SnapSocketConfig {
     /// Source for SNAP token. If this is None, no SNAP sockets
     /// can be bound.
     pub snap_token_source: Option<Arc<dyn TokenSource>>,
-    /// Backoff for reconnecting a SNAP tunnel.
-    pub reconnect_backoff: ExponentialBackoff,
 }
 
 /// Underlay stack.
@@ -54,11 +56,8 @@ pub struct UnderlayStack {
     /// Resolver for the local IP address for UDP underlay sockets.
     local_ip_resolver: Arc<dyn LocalIpResolver>,
     snap_socket_config: SnapSocketConfig,
-    // TODO(uniquefine): This should be handled by a
-    // global identity registration component.
-    // https://github.com/Anapaya/scion/issues/27486
-    // Generate an register an identity for this socket.
-    snap_static_identity: StaticSecret,
+    snap_tunnel_manager: Option<SnapTunEndpoint>,
+    pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
 }
 
 impl UnderlayStack {
@@ -67,14 +66,20 @@ impl UnderlayStack {
         preferred_underlay: PreferredUnderlay,
         underlay_discovery: Arc<dyn UnderlayDiscovery>,
         local_ip_resolver: Arc<dyn LocalIpResolver>,
-        snap_socket_config: SnapSocketConfig,
+        static_identity: StaticSecret,
+        default_snap_socket_config: SnapSocketConfig,
     ) -> Self {
+        let snap_tunnel_manager = default_snap_socket_config
+            .snap_token_source
+            .as_ref()
+            .map(|token_source| SnapTunEndpoint::new(token_source.clone(), static_identity));
         Self {
             preferred_underlay,
             underlay_discovery,
             local_ip_resolver,
-            snap_socket_config,
-            snap_static_identity: StaticSecret::random(),
+            snap_socket_config: default_snap_socket_config,
+            snap_tunnel_manager,
+            pool: PacketBufPool::new(64),
         }
     }
 
@@ -109,23 +114,40 @@ impl UnderlayStack {
 
     async fn bind_snap_socket(
         &self,
-        bind_addr: Option<scion_proto::address::SocketAddr>,
+        requested_addr: Option<scion_proto::address::SocketAddr>,
         isd_as: IsdAsn,
         cp_url: Url,
-        token_source: Option<Arc<dyn TokenSource>>,
     ) -> Result<snap::SnapUnderlaySocket, ScionSocketBindError> {
-        let token_source = token_source.ok_or(ScionSocketBindError::SnapConnectionError(
-            SnapConnectionError::SnapTokenSourceMissing,
-        ))?;
+        let (Some(token_source), Some(snap_tunnel_manager)) = (
+            self.snap_socket_config.snap_token_source.as_ref(),
+            self.snap_tunnel_manager.as_ref(),
+        ) else {
+            return Err(ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::SnapTokenSourceMissing,
+            ))?;
+        };
 
-        let local_addr = match bind_addr {
+        let local_addr = match requested_addr {
             Some(addr) => {
                 addr.local_address()
                     .ok_or(ScionSocketBindError::InvalidBindAddress(
                         InvalidBindAddressError::ServiceAddress(addr),
                     ))?
             }
-            None => "0.0.0.0:0".parse().unwrap(),
+            None => {
+                if let Some(cp_addr) = cp_url
+                    .socket_addrs(|| None)
+                    .ok()
+                    .and_then(|addrs| addrs.first().cloned())
+                    && let Some(ip) = source_ip_towards(cp_addr).await
+                {
+                    Ok(net::SocketAddr::new(ip, 0))
+                } else {
+                    Err(ScionSocketBindError::InvalidBindAddress(
+                        InvalidBindAddressError::NoLocalIpAddressFound,
+                    ))
+                }?
+            }
         };
 
         let bind_addr = SocketAddr::from_std(isd_as, local_addr);
@@ -136,15 +158,38 @@ impl UnderlayStack {
             bind_addr,
             cp_url,
             udp_socket,
-            token_source,
-            self.snap_static_identity.clone(),
+            snap_tunnel_manager,
+            token_source.clone(),
             1024,
+            self.pool.clone(),
         )
         .await?;
+
+        let assigned_addr = socket.local_addr();
+        // If the requested address is specified but does not match the assigned address, return an
+        // error.
+        if let Some(requested_addr) = requested_addr
+            // IsdAsn mismatch
+        && requested_addr.isd_asn().matches(assigned_addr.isd_asn())
+            // IP mismatch. Note, that both addresses will have ip addresses.
+        && let Some(requested_socket_addr) = requested_addr.local_address()
+        && let Some(assigned_socket_addr) = assigned_addr.local_address()
+        && ((!requested_socket_addr.ip().is_unspecified() && assigned_socket_addr.ip() != requested_socket_addr.ip())
+            // Port mismatch
+                || (requested_socket_addr.port() != 0 && assigned_socket_addr.port() != requested_socket_addr.port()))
+        {
+            return Err(crate::scionstack::ScionSocketBindError::InvalidBindAddress(
+                crate::scionstack::InvalidBindAddressError::AddressMismatch {
+                    assigned_addr: SocketAddr::from_std(bind_addr.isd_asn(), requested_socket_addr),
+                    bind_addr,
+                },
+            ));
+        }
+
         Ok(socket)
     }
 
-    fn resolve_udp_bind_addr(
+    async fn resolve_udp_bind_addr(
         &self,
         isd_as: IsdAsn,
         bind_addr: Option<SocketAddr>,
@@ -159,7 +204,7 @@ impl UnderlayStack {
                 addr
             }
             None => {
-                let local_address = *self.local_ip_resolver.local_ips().first().ok_or(
+                let local_address = *self.local_ip_resolver.local_ips().await.first().ok_or(
                     ScionSocketBindError::InvalidBindAddress(
                         InvalidBindAddressError::NoLocalIpAddressFound,
                     ),
@@ -175,7 +220,7 @@ impl UnderlayStack {
         isd_as: IsdAsn,
         bind_addr: Option<SocketAddr>,
     ) -> Result<(SocketAddr, UdpSocket), ScionSocketBindError> {
-        let bind_addr = self.resolve_udp_bind_addr(isd_as, bind_addr)?;
+        let bind_addr = self.resolve_udp_bind_addr(isd_as, bind_addr).await?;
         let local_addr: net::SocketAddr =
             bind_addr
                 .local_address()
@@ -211,15 +256,10 @@ impl DynUnderlayStack for UnderlayStack {
                 .unwrap_or(IsdAsn::WILDCARD);
             match self.select_underlay(requested_isd_as) {
                 Some((isd_as, UnderlayInfo::Snap(cp_url))) => {
-                    Ok(Box::new(
-                        self.bind_snap_socket(
-                            bind_addr,
-                            isd_as,
-                            cp_url,
-                            self.snap_socket_config.snap_token_source.clone(),
-                        )
-                        .await?,
-                    ) as Box<dyn UnderlaySocket>)
+                    Ok(
+                        Box::new(self.bind_snap_socket(bind_addr, isd_as, cp_url).await?)
+                            as Box<dyn UnderlaySocket>,
+                    )
                 }
                 Some((isd_as, UnderlayInfo::Udp(_))) => {
                     let (bind_addr, socket) = self.bind_udp_socket(isd_as, bind_addr).await?;
@@ -258,14 +298,7 @@ impl DynUnderlayStack for UnderlayStack {
                     .unwrap_or(IsdAsn::WILDCARD),
             ) {
                 Some((isd_as, UnderlayInfo::Snap(cp_url))) => {
-                    let socket = self
-                        .bind_snap_socket(
-                            bind_addr,
-                            isd_as,
-                            cp_url,
-                            self.snap_socket_config.snap_token_source.clone(),
-                        )
-                        .await?;
+                    let socket = self.bind_snap_socket(bind_addr, isd_as, cp_url).await?;
                     let async_udp_socket = snap::SnapAsyncUdpSocket::new(socket, scmp_handlers);
                     Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
                 }
@@ -372,4 +405,47 @@ fn bind_udp_underlay_socket(
 
     tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(socket))
         .map_err(|e| ScionSocketBindError::Other(Box::new(e)))
+}
+
+// XXX(dsd): This function exists to avoid unnecessary vec-allocations when
+// dealing with the scion-proto API.
+//
+// # Arguments
+// * `packet`: the packet to be serialized
+// * `temp_buf`: a temporary buffer that is used for internal packet assembly
+// * `target_buf`: the buffer that will contain the final result
+#[inline]
+pub(crate) fn wire_encode<W, const N: usize>(
+    packet: &W,
+    temp_buf: &mut Packet,
+    target_buf: &mut Packet,
+) -> Result<(), W::Error>
+where
+    W: WireEncodeVec<N>,
+{
+    temp_buf.truncate(0);
+    let parts = packet.encode_with(temp_buf.buf_mut())?;
+
+    let mut n = 0;
+    parts.iter().for_each(|x| {
+        target_buf.as_mut()[n..(n + x.len())].copy_from_slice(x);
+        n += x.len();
+    });
+    target_buf.truncate(n);
+    Ok(())
+}
+
+/// Returns the local source IP address that can reach the given destination address.
+pub(crate) async fn source_ip_towards(dst: net::SocketAddr) -> Option<net::IpAddr> {
+    let bind_addr = match dst.ip() {
+        net::IpAddr::V4(_) => net::Ipv4Addr::UNSPECIFIED.into(),
+        net::IpAddr::V6(_) => net::Ipv6Addr::UNSPECIFIED.into(),
+    };
+    if let Ok(socket) = tokio::net::UdpSocket::bind(net::SocketAddr::new(bind_addr, 0)).await
+        && socket.connect(dst).await.is_ok()
+        && let Ok(addr) = socket.local_addr()
+    {
+        return Some(addr.ip());
+    }
+    None
 }

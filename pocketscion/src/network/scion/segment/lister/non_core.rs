@@ -14,7 +14,7 @@
 //! Listing segments at a Non-Core AS
 
 use anyhow::{Context, bail};
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 
 use crate::network::scion::segment::{
     lister::model::{QueryTarget, Scope},
@@ -35,8 +35,8 @@ impl SegmentRegistry {
     ) -> anyhow::Result<Vec<&LinkSegment>> {
         let core_store = self.core_segments();
 
-        let src_is_core = core_store.is_known_as(src_as);
-        let dst_is_core = core_store.is_known_as(dst_as);
+        let src_is_core = core_store.is_known_as(src_as.into());
+        let dst_is_core = core_store.is_known_as(dst_as.into());
 
         let src = QueryTarget::new(src_as, src_is_core).context("query source is invalid")?;
         let dst = QueryTarget::new(dst_as, dst_is_core).context("query destination is invalid")?;
@@ -56,12 +56,12 @@ impl SegmentRegistry {
             Query::Core(Scope::Wildcard(isd), dst) => {
                 let isd_cores = core_store
                     .iter_known_ases()
-                    .filter(|&ias| ias.isd() == isd)
+                    .filter(|&ias| ias.isd() == isd.into())
                     .copied();
 
                 let mut res = Vec::new();
                 for core in isd_cores {
-                    res.extend(forward_request(self, core, core, dst.ias())?);
+                    res.extend(forward_request(self, core.into(), core.into(), dst.ias())?);
                 }
 
                 Ok(res)
@@ -71,12 +71,12 @@ impl SegmentRegistry {
             Query::Down(Scope::Wildcard(src), dst) => {
                 let isd_cores = core_store
                     .iter_known_ases()
-                    .filter(|&ias| ias.isd() == src)
+                    .filter(|&ias| ias.isd() == src.into())
                     .copied();
 
                 let mut res = Vec::new();
                 for core in isd_cores {
-                    res.extend(forward_request(self, core, core, dst)?);
+                    res.extend(forward_request(self, core.into(), core.into(), dst)?);
                 }
 
                 Ok(res)
@@ -87,12 +87,12 @@ impl SegmentRegistry {
             Query::Up(Scope::Wildcard(isd)) => {
                 let isd_core_ases = core_store
                     .iter_known_ases()
-                    .filter(|&ias| ias.isd() == isd)
+                    .filter(|&ias| ias.isd() == isd.into())
                     .copied();
 
                 let mut res = Vec::new();
                 for core in isd_core_ases {
-                    res.extend(forward_request(self, core, core, local)?);
+                    res.extend(forward_request(self, core.into(), core.into(), local)?);
                 }
 
                 Ok(res)

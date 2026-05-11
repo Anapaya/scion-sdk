@@ -1,6 +1,6 @@
 [package]
 name = "scion-stack"
-version = "0.4.0"
+version = "0.5.2"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
@@ -11,19 +11,25 @@ keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
 [dependencies]
+ana-gotatun = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 endhost-api-client = { workspace = true }
+endhost-api-discovery-client = { workspace = true }
+endhost-api-discovery-models = { workspace = true }
 foldhash = { workspace = true }
 futures = { workspace = true }
+hickory-resolver = { workspace = true }
 pin-project-lite = { workspace = true }
 prost = { workspace = true }
-quinn = { workspace = true }
+anapaya-quinn = { workspace = true }
+rand = { workspace = true }
 scc = { workspace = true }
 scion-proto = { workspace = true }
+scion-sdk-quic-scion = { workspace = true }
 scion-sdk-reqwest-connect-rpc = { workspace = true }
 scion-sdk-utils = { workspace = true }
 snap-control = { workspace = true }
@@ -38,6 +44,8 @@ x25519-dalek = { workspace = true }
 
 [dev-dependencies]
 derive_more = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+hickory-server = { workspace = true }
 mockall = { workspace = true }
 ntest = { workspace = true }
 pocketscion = { workspace = true }

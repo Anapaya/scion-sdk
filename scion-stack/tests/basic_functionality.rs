@@ -24,8 +24,8 @@ use pocketscion::topologies::{
     IA132, IA212, PocketScionHandle, UnderlayType, minimal::two_path_topology,
 };
 use scion_proto::{
-    address::{ScionAddr, SocketAddr},
-    packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp},
+    address::{IsdAsn, ScionAddr, SocketAddr},
+    packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
     path::DataPlanePath,
     scmp::{ScmpEchoReply, ScmpMessage},
     wire_encoding::WireEncodeVec,
@@ -101,10 +101,10 @@ async fn test_quic_endpoint_creation_udp() {
 #[test(tokio::test)]
 #[ntest::timeout(5_000)]
 async fn test_bind_two_endpoints_socket_already_in_use() {
-    let first_endpoint = quinn::Endpoint::client(("0.0.0.0:0").parse().unwrap()).unwrap();
+    let first_endpoint = anapaya_quinn::Endpoint::client(("0.0.0.0:0").parse().unwrap()).unwrap();
     let local_addr = first_endpoint.local_addr().unwrap();
     info!("Local address: {local_addr:?}");
-    let second_endpoint = quinn::Endpoint::client(local_addr);
+    let second_endpoint = anapaya_quinn::Endpoint::client(local_addr);
     assert!(
         second_endpoint.is_err(),
         "expected error but got {second_endpoint:?}"
@@ -113,13 +113,15 @@ async fn test_bind_two_endpoints_socket_already_in_use() {
 }
 
 async fn test_bind_two_sockets_send_receive_impl(ps_handle: PocketScionHandle) {
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build SCION stack");
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -165,7 +167,8 @@ async fn test_bind_two_sockets_send_receive_impl(ps_handle: PocketScionHandle) {
 }
 
 async fn test_bind_with_specific_address_impl(ps_handle: PocketScionHandle) {
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -191,7 +194,8 @@ async fn test_bind_with_specific_address_impl(ps_handle: PocketScionHandle) {
 }
 
 async fn test_bind_port_already_in_use_impl(ps_handle: PocketScionHandle) {
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -215,14 +219,16 @@ async fn test_bind_port_already_in_use_impl(ps_handle: PocketScionHandle) {
 }
 
 async fn test_quic_endpoint_creation_impl(ps_handle: PocketScionHandle) {
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build SCION stack");
 
+    #[allow(deprecated)]
     let endpoint = stack
-        .quic_endpoint(None, quinn::EndpointConfig::default(), None, None)
+        .quic_endpoint(None, anapaya_quinn::EndpointConfig::default(), None, None)
         .await;
 
     assert!(endpoint.is_ok());
@@ -230,13 +236,15 @@ async fn test_quic_endpoint_creation_impl(ps_handle: PocketScionHandle) {
 
 /// Test that an SCMP socket receives SCMP messages.
 async fn test_scmp_with_port_is_received_scmp_impl(ps_handle: PocketScionHandle) {
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build sender SCION stack");
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -316,13 +324,15 @@ async fn test_scmp_with_port_is_received_scmp_snap_impl() {
 
 /// Test that a Raw socket receives SCMP messages.
 async fn test_scmp_with_port_is_received_raw_impl(ps_handle: PocketScionHandle) {
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build sender SCION stack");
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -437,7 +447,8 @@ async fn send_raw_packet_directly(
 /// Test that a UDP socket ignores packets with unknown next_header (67).
 async fn test_udp_socket_ignores_unknown_next_header_impl() {
     let ps_handle = two_path_topology(UnderlayType::Udp).await;
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -474,7 +485,8 @@ async fn test_udp_socket_ignores_unknown_next_header_impl() {
 /// Test that an SCMP socket ignores packets with unknown next_header (67).
 async fn test_scmp_socket_ignores_unknown_next_header_impl() {
     let ps_handle = two_path_topology(UnderlayType::Udp).await;
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -507,7 +519,8 @@ async fn test_scmp_socket_ignores_unknown_next_header_impl() {
 /// Test that a RAW socket receives packets with unknown next_header (67).
 async fn test_raw_socket_receives_unknown_next_header_impl() {
     let ps_handle = two_path_topology(UnderlayType::Udp).await;
-    let stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -568,4 +581,130 @@ async fn test_scmp_socket_ignores_unknown_next_header() {
 #[ntest::timeout(10_000)]
 async fn test_raw_socket_receives_unknown_next_header() {
     test_raw_socket_receives_unknown_next_header_impl().await;
+}
+
+/// Test that AS-local packets are correctly received or filtered.
+///
+/// Tests:
+/// 1. Packet with correct ISD-AS → received
+/// 2. Packet with ISD-AS 0-0 (wildcard/unset) → dropped
+/// 3. Packet with wrong destination IP → dropped
+/// 4. Packet with wrong destination port → dropped
+async fn test_as_local_packets_impl(ps_handle: PocketScionHandle) {
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .expect("build sender SCION stack");
+
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_auth_token(dummy_snap_token())
+        .build()
+        .await
+        .expect("build receiver SCION stack");
+
+    let sender_raw = sender_stack.bind_raw(None).await.unwrap();
+    let receiver_udp = receiver_stack.bind(None).await.unwrap();
+
+    let sender_addr = sender_raw.local_addr();
+    let receiver_addr = receiver_udp.local_addr();
+
+    info!("Sender raw socket: {sender_addr:?}");
+    info!("Receiver UDP socket: {receiver_addr:?}");
+
+    let receiver_ip = receiver_addr
+        .local_address()
+        .expect("receiver must have local address")
+        .ip();
+
+    // Helper to create a UDP-over-SCION packet as ScionPacketRaw.
+    let local_packet = |dst: SocketAddr, payload: &[u8]| -> ScionPacketRaw {
+        ScionPacketUdp::new(
+            ByEndpoint {
+                source: sender_addr,
+                destination: dst,
+            },
+            DataPlanePath::EmptyPath,
+            Bytes::copy_from_slice(payload),
+        )
+        .expect("create UDP packet")
+        .into()
+    };
+
+    let mut recv_buf = [0u8; 1024];
+
+    // Test 1: Correct ISD-AS → should be received.
+    {
+        let payload = b"correct IA";
+        let dst = SocketAddr::new(
+            ScionAddr::new(IA132, receiver_ip.into()),
+            receiver_addr.port(),
+        );
+        let pkt = local_packet(dst, payload);
+        sender_raw.send(pkt).await.unwrap();
+        let (len, src) = within_duration!(MS_100, receiver_udp.recv_from(&mut recv_buf)).unwrap();
+        assert_eq!(
+            &recv_buf[..len],
+            payload.as_slice(),
+            "should receive packet with correct ISD-AS"
+        );
+        assert_eq!(src.isd_asn(), sender_addr.isd_asn());
+    }
+
+    // Test 2: ISD-AS 0-0 (wildcard/unset) → should be dropped.
+    {
+        let payload = b"wildcard IA";
+        let dst = SocketAddr::new(
+            ScionAddr::new(IsdAsn::WILDCARD, receiver_ip.into()),
+            receiver_addr.port(),
+        );
+        let pkt = local_packet(dst, payload);
+        let result = sender_raw.send(pkt).await;
+        assert!(
+            result.is_err(),
+            "sending packet with wildcard ISD-AS should fail",
+        );
+    }
+
+    // Test 3: Wrong destination IP → should be dropped.
+    {
+        let wrong_ip: IpAddr = "127.0.0.2".parse().unwrap();
+        let dst = SocketAddr::new(ScionAddr::new(IA132, wrong_ip.into()), receiver_addr.port());
+        let pkt = local_packet(dst, b"wrong ip");
+        sender_raw.send(pkt).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            receiver_udp.recv_from(&mut recv_buf),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "should not receive packet with wrong destination IP"
+        );
+    }
+
+    // Test 4: Wrong destination port → should be dropped.
+    {
+        let wrong_port = receiver_addr.port().wrapping_add(1);
+        let dst = SocketAddr::new(receiver_addr.scion_address(), wrong_port);
+        let pkt = local_packet(dst, b"wrong port");
+        sender_raw.send(pkt).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            receiver_udp.recv_from(&mut recv_buf),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "should not receive packet with wrong destination port"
+        );
+    }
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(10_000)]
+async fn test_as_local_packets() {
+    test_as_local_packets_impl(two_path_topology(UnderlayType::Udp).await).await;
 }

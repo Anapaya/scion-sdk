@@ -14,6 +14,11 @@
 
 //! SCMP (SCION Control Message Protocol) payload views, layouts, and models.
 
+/// Layout definitions for SCMP messages (bit ranges and sizes).
 pub mod layout;
+/// SCMP payload models.
 pub mod model;
+/// Types and enums used by SCMP messages (e.g. codes and message types).
+pub mod types;
+/// Zero-copy views over SCMP messages and headers.
 pub mod view;

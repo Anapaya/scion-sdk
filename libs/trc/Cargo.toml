@@ -1,6 +1,6 @@
 [package]
 name = "scion-sdk-trc"
-version = "0.4.0"
+version = "0.5.2"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
@@ -11,7 +11,7 @@ keywords = ["SCION", "networking"]
 [dependencies]
 cms = { workspace = true }
 der = { workspace = true, features = ["pem", "derive"] }
-scion-proto = { workspace = true }
+sciparse = { workspace = true }
 thiserror = { workspace = true }
 x509-cert = { workspace = true }
 

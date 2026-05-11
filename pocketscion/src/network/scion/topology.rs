@@ -16,11 +16,17 @@
 use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
     fmt::{Display, Formatter},
+    hash::Hash,
+    net::IpAddr,
     str::FromStr,
 };
 
 use anyhow::{Context, bail};
 use scion_proto::address::{Isd, IsdAsn};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
+use crate::network::scion::trust_store::TrustStore;
 
 pub mod dto;
 pub mod visitor;
@@ -28,24 +34,63 @@ pub mod visitor;
 /// General representation of a SCION Topology.
 #[derive(Eq, PartialEq, Debug, Clone, Default)]
 pub struct ScionTopology {
+    pub(crate) trust_store: TrustStore,
     pub(crate) as_map: BTreeMap<IsdAsn, ScionAs>,
     pub(crate) link_map: BTreeMap<ScionLinkId, ScionLink>,
+    pub(crate) router_map: BTreeMap<IsdAsn, Vec<ScionRouter>>,
 }
 
 impl ScionTopology {
     /// Creates a new, empty SCION topology.
     pub fn new() -> Self {
         Self {
+            trust_store: TrustStore::new(),
             as_map: Default::default(),
             link_map: Default::default(),
+            router_map: Default::default(),
         }
+    }
+
+    /// Sets the trust store to use for this topology.
+    ///
+    /// The trust store must contain certificates for all ASes in the topology, or this will return
+    /// an error.
+    ///
+    /// If setting the trust store before adding ASes, the trust store will be used to issue
+    /// certificates for ASes as they are added.
+    pub fn set_trust_store(&mut self, trust_store: TrustStore) -> anyhow::Result<&mut Self> {
+        // Apply certificates from trust store to ASes in the topology, if they exist. If an AS does
+        // not have a certificate in the trust store, this will fail
+        for sas in self.as_map.values_mut() {
+            let sas @ ScionAs::Simulated { .. } = sas else {
+                continue;
+            };
+
+            // Check that AS identity exists
+            trust_store.as_key_pair(&sas.isd_as()).with_context(|| {
+                format!(
+                    "AS '{}' does not have a certificate in the trust store",
+                    sas.isd_as()
+                )
+            })?;
+        }
+
+        self.trust_store = trust_store;
+
+        Ok(self)
     }
 
     /// Add a new AS to the topology.
     ///
+    /// If a Trust Store is set, this will issue a certificate for the AS and add it to the trust
+    /// store, or use the existing certificate if it already exists in the trust store.
+    ///
     /// Validates that the AS does not already exist.
     pub fn add_as(&mut self, scion_as: ScionAs) -> anyhow::Result<&mut Self> {
-        match self.as_map.entry(scion_as.isd_as) {
+        // Ensure AS has identity in the trust store
+        let _identity = self.trust_store.get_or_issue_as_key_pair(scion_as.isd_as());
+
+        match self.as_map.entry(scion_as.isd_as()) {
             Entry::Occupied(occupied_entry) => {
                 bail!("AS '{}' already exists", occupied_entry.key())
             }
@@ -83,7 +128,7 @@ impl ScionTopology {
             }
 
             // Validate Link Type usage
-            let same_isd_link = lower_as.isd_as.isd() == higher_as.isd_as.isd();
+            let same_isd_link = lower_as.isd_as().isd() == higher_as.isd_as().isd();
             match same_isd_link {
                 true => {
                     // | From AS  | To AS     | Allowed Link Type     |
@@ -92,7 +137,7 @@ impl ScionTopology {
                     // | Core     | Non-Core  | `Parent`, `Peer`      |
                     // | Non-Core | Core      | `Child`, `Peer`       |
                     // | Non-Core | Non-Core  | all Except `Core`     |
-                    match (lower_as.core, higher_as.core, new_link.link_type) {
+                    match (lower_as.is_core(), higher_as.is_core(), new_link.link_type) {
                         //(FromAS, ToAS, LinkType)
                         (true, true, ScionLinkType::Core | ScionLinkType::Peer) => {}
                         (true, false, ScionLinkType::Parent | ScionLinkType::Peer) => {}
@@ -108,8 +153,8 @@ impl ScionTopology {
 
                             bail!(
                                 "{left} '{}' and {right} '{}' can not be linked with '{link}'",
-                                lower_as.isd_as,
-                                higher_as.isd_as,
+                                lower_as.isd_as(),
+                                higher_as.isd_as(),
                             );
                         }
                     }
@@ -121,7 +166,7 @@ impl ScionTopology {
                     // | Core     | Non-Core  | `Peer`                |
                     // | Non-Core | Core      | `Peer`                |
                     // | Non-Core | Non-Core  | `Peer`                |
-                    match (lower_as.core, higher_as.core, new_link.link_type) {
+                    match (lower_as.is_core(), higher_as.is_core(), new_link.link_type) {
                         //(FromAS, ToAS, LinkType)
                         (true, true, ScionLinkType::Core | ScionLinkType::Peer) => {}
                         (_, _, ScionLinkType::Peer) => {}
@@ -131,8 +176,8 @@ impl ScionTopology {
 
                             bail!(
                                 "{left} '{}' and {right} '{}' can not be linked across ISDs with '{link}'",
-                                lower_as.isd_as,
-                                higher_as.isd_as,
+                                lower_as.isd_as(),
+                                higher_as.isd_as(),
                             );
                         }
                     }
@@ -180,8 +225,8 @@ impl ScionTopology {
                         // If it is the same link
                         bail!(
                             "Another between '{}' and '{}' already exists and using a different type: '{}'",
-                            lower_as.isd_as,
-                            higher_as.isd_as,
+                            lower_as.isd_as(),
+                            higher_as.isd_as(),
                             existing_link.link_type
                         );
                     }
@@ -196,6 +241,34 @@ impl ScionTopology {
             }
             Entry::Vacant(vacant_entry) => vacant_entry.insert(new_link),
         };
+
+        Ok(self)
+    }
+
+    /// Add a new router to the topology, associated with the given AS.
+    ///
+    /// Adding routers is optional, if no routers are added to an AS, it is assumed that the AS has
+    /// a single router managing all interfaces.
+    pub fn add_router(&mut self, isd_as: IsdAsn, router: ScionRouter) -> anyhow::Result<&mut Self> {
+        if !self.as_map.contains_key(&isd_as) {
+            bail!("AS '{}' does not exist", isd_as);
+        }
+
+        let routers = self.router_map.entry(isd_as).or_default();
+
+        // No other router should have the same interface IDs assigned
+        for existing_router in routers.iter() {
+            if existing_router.interfaces.collides(&router.interfaces) {
+                bail!(
+                    "Router for AS '{}' has conflicting interface IDs with an existing router, existing router: {:?}, new router: {:?}",
+                    isd_as,
+                    existing_router.interfaces,
+                    router.interfaces
+                );
+            }
+        }
+
+        routers.push(router);
 
         Ok(self)
     }
@@ -235,6 +308,36 @@ impl ScionTopology {
                 || link.id.higher.if_id == interface_id && link.id.higher.isd_as == *isd_as
         })
     }
+
+    /// Returns the ScionRouter for the given AS and ingress interface ID.
+    ///
+    /// If no router is found for the given AS a fallback router is returned.
+    pub fn get_router(&self, isd_as: &IsdAsn, ingress_interface: u16) -> &ScionRouter {
+        static FALLBACK_ROUTER: ScionRouter = ScionRouter {
+            interfaces: ScionRouterInterface::Fallback,
+            ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+        };
+
+        let mut fallback = &FALLBACK_ROUTER;
+        for router in self.router_map.get(isd_as).into_iter().flatten() {
+            match router.interfaces {
+                // If the router is a fallback router, store it as a potential fallback if no better
+                // match is found
+                ScionRouterInterface::Fallback => {
+                    fallback = router;
+                }
+                // If the router has specific interface IDs assigned, check if it matches the
+                // ingress interface
+                ScionRouterInterface::Ids(ref ids) => {
+                    if ids.contains(&ingress_interface) {
+                        return router;
+                    }
+                }
+            }
+        }
+
+        fallback
+    }
 }
 // Visualization
 impl ScionTopology {
@@ -245,12 +348,15 @@ impl ScionTopology {
 
         // Group ASes by ISD
         for scion_as in self.as_map.values() {
-            let isd = scion_as.isd_as.isd();
+            let isd = scion_as.isd_as().isd();
 
-            isd_maps.entry(isd).or_default().push(scion_as.isd_as);
+            isd_maps.entry(isd).or_default().push(scion_as.isd_as());
 
-            if scion_as.core {
-                isd_core_maps.entry(isd).or_default().push(scion_as.isd_as);
+            if scion_as.is_core() {
+                isd_core_maps
+                    .entry(isd)
+                    .or_default()
+                    .push(scion_as.isd_as());
             };
         }
 
@@ -299,20 +405,31 @@ impl ScionTopology {
 }
 
 /// Representation of a SCION Autonomous System (AS).
-#[derive(Hash, Copy, Eq, PartialEq, Debug, Clone)]
-pub struct ScionAs {
-    /// The ISD-AS number of the SCION AS.
-    pub isd_as: IsdAsn,
-    /// Whether the AS is a core AS.
-    pub core: bool,
-    /// Forwarding key for the AS - if not defined, falls back to all 0
-    pub forwarding_key: [u8; 16],
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+pub enum ScionAs {
+    /// Representation of a simulated AS, which can be linked to other simulated ASes and external
+    /// ASes.
+    Simulated {
+        /// The ISD-AS number of the SCION AS.
+        isd_as: IsdAsn,
+        /// Whether the AS is a core AS.
+        core: bool,
+        /// Forwarding key for the AS - if not defined, falls back to all 0
+        forwarding_key: [u8; 16],
+    },
+    /// Representation of an external AS, external ASes are not simulated
+    External {
+        /// The ISD-AS number of the SCION AS.
+        isd_as: IsdAsn,
+        /// Whether the AS is a core AS.
+        core: bool,
+    },
 }
 
 impl ScionAs {
     /// Creates a new core SCION AS.
     pub fn new_core(isd_as: IsdAsn) -> Self {
-        Self {
+        Self::Simulated {
             isd_as,
             core: true,
             forwarding_key: Self::default_forwarding_key(isd_as),
@@ -321,16 +438,36 @@ impl ScionAs {
 
     /// Creates a new non-core SCION AS.
     pub fn new(isd_as: IsdAsn) -> Self {
-        Self {
+        Self::Simulated {
             isd_as,
             core: false,
             forwarding_key: Self::default_forwarding_key(isd_as),
         }
     }
 
+    /// Creates a new SCION AS outside of the simulation.
+    pub fn new_external(isd_as: IsdAsn) -> Self {
+        Self::External {
+            isd_as,
+            core: false,
+        }
+    }
+
+    /// Creates a new core SCION AS outside of the simulation.
+    pub fn new_external_core(isd_as: IsdAsn) -> Self {
+        Self::External { isd_as, core: true }
+    }
+
     /// Sets a custom forwarding key for the AS.
+    ///
+    /// If this AS is an external AS, this is a no-op.
     pub fn with_forwarding_key(mut self, forwarding_key: [u8; 16]) -> Self {
-        self.forwarding_key = forwarding_key;
+        match &mut self {
+            ScionAs::Simulated {
+                forwarding_key: fk, ..
+            } => *fk = forwarding_key,
+            ScionAs::External { .. } => {}
+        }
         self
     }
 
@@ -342,6 +479,37 @@ impl ScionAs {
     }
 }
 
+impl ScionAs {
+    /// Returns the ISD-AS number of the AS.
+    pub fn isd_as(&self) -> IsdAsn {
+        match self {
+            ScionAs::Simulated { isd_as, .. } | ScionAs::External { isd_as, .. } => *isd_as,
+        }
+    }
+
+    /// Returns true if the AS is a core AS, false otherwise.
+    pub fn is_core(&self) -> bool {
+        match self {
+            ScionAs::Simulated { core, .. } | ScionAs::External { core, .. } => *core,
+        }
+    }
+
+    /// Returns the forwarding key for the AS. For simulated ASes, this is always defined.
+    ///
+    /// For external ASes, this is None, as the forwarding key is not known.
+    pub fn forwarding_key(&self) -> Option<[u8; 16]> {
+        match self {
+            ScionAs::Simulated { forwarding_key, .. } => Some(*forwarding_key),
+            ScionAs::External { .. } => None,
+        }
+    }
+
+    /// Returns true if the AS is an external AS, false otherwise.
+    pub fn is_external(&self) -> bool {
+        matches!(self, ScionAs::External { .. })
+    }
+}
+
 impl From<IsdAsn> for ScionAs {
     fn from(isd_as: IsdAsn) -> Self {
         Self::new(isd_as)
@@ -349,11 +517,32 @@ impl From<IsdAsn> for ScionAs {
 }
 
 /// Globally unique identifier for a SCION interface.
-#[derive(Hash, Copy, Eq, PartialEq, Debug, Clone, PartialOrd, Ord)]
+#[derive(Hash, Copy, Eq, PartialEq, Debug, Clone, PartialOrd, Ord, ToSchema)]
+#[schema(example = "1-1#0")]
 pub struct ScionGlobalInterfaceId {
-    pub(crate) isd_as: IsdAsn,
+    /// ISD-AS number of the AS the interface belongs to.
+    pub isd_as: IsdAsn,
     /// Interface ID within the AS.
-    pub(crate) if_id: u16,
+    pub if_id: u16,
+}
+
+impl Serialize for ScionGlobalInterfaceId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&format!("{}#{}", self.isd_as, self.if_id))
+    }
+}
+
+impl<'de> Deserialize<'de> for ScionGlobalInterfaceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        ScionGlobalInterfaceId::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Display for ScionGlobalInterfaceId {
@@ -641,7 +830,8 @@ pub struct DirectedScionLink {
 }
 
 /// Link type of a SCION link
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum ScionLinkType {
     /// ASes are Peers without any parent-child relationship.
     Peer,
@@ -672,6 +862,59 @@ impl ScionLinkType {
             ScionLinkType::Parent => ScionLinkType::Child,
             ScionLinkType::Child => ScionLinkType::Parent,
             ScionLinkType::Core => ScionLinkType::Core,
+        }
+    }
+}
+
+/// Representation of a SCION Router, which can be associated with an AS in the topology.
+#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ScionRouter {
+    /// The interface IDs of the router within the AS.
+    pub interfaces: ScionRouterInterface,
+    /// The IP address of the router.
+
+    #[schema(value_type = String, example = "192.168.1.1")]
+    pub ip: IpAddr,
+}
+impl ScionRouter {
+    /// Creates a new SCION router with the given interface IDs and IP address.
+    pub fn new(interfaces: Vec<u16>, ip: IpAddr) -> Self {
+        Self {
+            interfaces: ScionRouterInterface::Ids(interfaces),
+            ip,
+        }
+    }
+
+    /// Creates a new SCION router with the given IP address and no associated interfaces.
+    ///
+    /// This router can be used as a default router for an AS, which is used if no other router is
+    /// explicitly associated with the ingress interface.
+    pub fn new_fallback(ip: IpAddr) -> Self {
+        Self {
+            interfaces: ScionRouterInterface::Fallback,
+            ip,
+        }
+    }
+}
+
+/// Defines the interfaces associated with a SCION router.
+#[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub enum ScionRouterInterface {
+    /// The router is not explicitly associated with any interface, and should be used as a fallback
+    /// for the AS unless another router is explicitly assigned.
+    Fallback,
+    /// The router is associated with the given interface IDs.
+    Ids(Vec<u16>),
+}
+impl ScionRouterInterface {
+    /// Checks if the interface id collides with this interface id.
+    pub fn collides(&self, other: &ScionRouterInterface) -> bool {
+        match (self, other) {
+            (ScionRouterInterface::Fallback, ScionRouterInterface::Fallback) => true,
+            (ScionRouterInterface::Ids(ids), ScionRouterInterface::Ids(other_ids)) => {
+                ids.iter().any(|id| other_ids.contains(id))
+            }
+            _ => false,
         }
     }
 }

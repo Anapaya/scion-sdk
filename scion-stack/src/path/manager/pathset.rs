@@ -500,7 +500,7 @@ impl<F: PathFetcher> PathSet<F> {
 
         paths.retain(|p| manager.0.path_strategy.predicate(p));
 
-        tracing::info!(
+        tracing::debug!(
             total_paths = before_filter_count,
             filtered_paths = paths.len(),
             "Fetched and filtered paths"
@@ -749,7 +749,7 @@ impl<F: PathFetcher> PathSet<F> {
                 ActivePathDecision::ForceReplace(reason) | ActivePathDecision::Replace(reason),
                 Some(best_path),
             ) => {
-                tracing::info!(%active_fp, %best_fp, %reason, "Replacing active path");
+                tracing::debug!(%active_fp, %best_fp, %reason, "Replacing active path");
 
                 // Try printing score details
                 if let Some(active_entry) = self.active_path_entry() {

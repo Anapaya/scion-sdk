@@ -26,11 +26,14 @@ use der::{
     Decode, DecodeValue, EncodeValue, Error as DerError, PemReader, Sequence, SliceReader,
     asn1::{GeneralizedTime, Int, PrintableString},
 };
-use scion_proto::address::{AddressParseError, Asn, Isd, IsdAsn};
+use sciparse::{
+    address::AddressParseError,
+    identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+};
 use thiserror::Error;
 
 /// Trust root certificate (TRC).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Trc {
     id: TrcId,
     trc_payload: TrcPayload,
@@ -60,12 +63,12 @@ impl Trc {
 
         let id = TrcId::from_trc_payload(&trc_payload.id)?;
 
-        let core_ases = trc_payload
+        let core_ases: Vec<IsdAsn> = trc_payload
             .core_ases
             .iter()
             .map(|s| -> Result<IsdAsn, ParseTrcError> {
                 let isd = der_int_to_isd(&trc_payload.id.isd)?;
-                let asn = Asn::from_str(s.as_str()).map_err(ParseTrcError::AddressParseError)?;
+                let asn = Asn::from_str(s.as_str())?;
                 Ok(IsdAsn::new(isd, asn))
             })
             .collect::<Result<_, _>>()?;
@@ -84,7 +87,7 @@ impl Trc {
 
     /// Returns an iterator over the core ASes.
     pub fn core_ases(&self) -> impl Iterator<Item = IsdAsn> {
-        self.core_ases.iter().map(ToOwned::to_owned)
+        self.core_ases.iter().cloned()
     }
 
     /// Returns the TRC payload.
@@ -155,7 +158,7 @@ impl TrcId {
 ///
 /// [1]: <https://docs.scion.org/en/v0.11.0/cryptography/trc.html>
 /// [2]: <https://github.com/scionproto/scion/blob/v0.12.0/pkg/scrypto/cppki/trc_asn1.go#L215>
-#[derive(Debug, PartialEq, Sequence)]
+#[derive(Debug, PartialEq, Sequence, Clone)]
 pub struct TrcPayload {
     /// Version number.
     pub version: Int,
@@ -182,7 +185,7 @@ pub struct TrcPayload {
 }
 
 /// TRC ID payload.
-#[derive(Debug, PartialEq, Sequence)]
+#[derive(Debug, PartialEq, Sequence, Clone)]
 pub struct TrcIdPayload {
     /// ISD number.
     pub isd: Int,
@@ -193,7 +196,7 @@ pub struct TrcIdPayload {
 }
 
 /// Validity period.
-#[derive(Debug, PartialEq, Sequence)]
+#[derive(Debug, PartialEq, Sequence, Clone)]
 pub struct Validity {
     /// Not before time.
     pub not_before: GeneralizedTime,
@@ -208,7 +211,7 @@ pub struct Validity {
 /// an error is returned.
 ///
 /// [1]: <https://www.itu.int/rec/T-REC-X.690-202102-I/en>
-fn der_int_to_u64(asn_int: &Int) -> Result<u64, ParseTrcError> {
+pub fn der_int_to_u64(asn_int: &Int) -> Result<u64, ParseTrcError> {
     const U64_SIZE: usize = std::mem::size_of::<u64>();
     let bytes = asn_int.as_bytes();
     if bytes.is_empty() || bytes.len() > U64_SIZE + 1 {
@@ -234,14 +237,14 @@ fn der_int_to_isd(asn_int: &Int) -> Result<Isd, ParseTrcError> {
     der_int_to_u64(asn_int)
         .and_then(|value| u16::try_from(value).map_err(|_| ParseTrcError::InvalidIsd()))
         .map_err(|_| ParseTrcError::InvalidIsd())
-        .map(Isd)
+        .map(Isd::new)
 }
 
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use scion_proto::address::{Isd, IsdAsn};
+    use sciparse::identifier::{isd::Isd, isd_asn::IsdAsn};
 
     use super::{Trc, TrcId};
 
@@ -295,14 +298,11 @@ mod tests {
             assert_eq!(trc.id(), trc_id, "TRC ID should match expected value");
 
             let core_ases: Vec<_> = trc.core_ases().collect();
-            assert_eq!(
-                core_ases.as_slice(),
-                expected_core_ases
-                    .iter()
-                    .map(|&s| IsdAsn::from_str(s))
-                    .collect::<Result<Vec<IsdAsn>, _>>()
-                    .unwrap()
-            );
+            let expected: Vec<IsdAsn> = expected_core_ases
+                .iter()
+                .map(|&s| IsdAsn::from_str(s).expect("isd-asn"))
+                .collect();
+            assert_eq!(core_ases.as_slice(), expected.as_slice());
         }
         Ok(())
     }

@@ -79,7 +79,7 @@ pub async fn minimal_topology(underlay: UnderlayType) -> PocketScionHandle {
 
 /// PocketSCION topology with three ASes and two paths from [IA132] to [IA212].
 pub async fn two_path_topology(underlay: UnderlayType) -> PocketScionHandle {
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let mut pstate = SharedPocketScionState::new(SystemTime::now());
 

@@ -27,6 +27,21 @@
 //!
 //! Thanks to this, mutability and ownership is fully handled by Rust's built-in types.
 //!
+//! ### Correctness
+//!
+//! Views only guarantee that the access to the buffers is safe and doesn't exceed the buffer
+//! bounds.
+//!
+//! They do not guarantee that the fields of the view are semantically correct, e.g. that the
+//! next_header field on a scion udp packet view actually contains the value for udp.
+//!
+//! Checking and upholding the semantic correctness of the fields is the responsibility of the
+//! caller.
+//! If valid data is required, the caller is responsible for checking the respective fields of the
+//! view.
+//! The same applies to mutating fields of the view, the caller is responsible for ensuring
+//! that a mutation does not semantically invalidate the view.
+//!
 //! ### Safety
 //!
 //! Core invariant needing to be upheld is that the buffer which the view points to, is large enough
@@ -55,9 +70,11 @@ use crate::core::layout::LayoutParseError;
 /// A view must implement methods to check the required size of the buffer
 pub trait View {
     /// Asserts that the buffer has the required size for the view.
-    /// Returns the range of bytes used by the view in the buffer.
     ///
     /// If the buffer is too small, returns a ViewConversionError.
+    ///
+    /// Returns the required size in bytes for the view if the buffer is large enough.
+    /// The returned size must be exactly the size required to hold the view.
     ///
     /// # Important
     ///
@@ -115,6 +132,16 @@ pub trait View {
 
     /// Returns the underlying byte representation of the view
     fn as_bytes(&self) -> &[u8];
+
+    /// Returns the underlying mutable byte representation of the view
+    ///
+    /// # Safety
+    /// The caller must ensure that the buffer is not mutated in a way that would invalidate the
+    /// view. e.g. by changing the fields that have an effect on `has_required_size`.
+    unsafe fn as_bytes_mut(&mut self) -> &mut [u8];
+
+    /// Returns the underlying byte representation of the view as a boxed slice.
+    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]>;
 
     /// Converts the view into an owned boxed slice
     #[inline]
@@ -186,6 +213,21 @@ impl From<LayoutParseError> for ViewConversionError {
 }
 
 pub(crate) mod macros {
+    /// Macro to generate unaligned field read and writers
+    ///
+    /// - $name: name of the generated function
+    /// - $bit_range: bit range of the field
+    /// - $repr: representation type of the field
+    ///
+    /// Repr can be any integer from u8 to u64, u128 can only be read if it is aligned.
+    macro_rules! gen_field_read_and_write {
+        ($get_name:ident, $set_name:ident, $bit_range:expr, $repr:ty) => {
+            gen_field_read!($get_name, $bit_range, $repr);
+            gen_field_write!($set_name, $bit_range, $repr);
+        };
+    }
+    pub(crate) use gen_field_read_and_write;
+
     /// Macro to generate unaligned field readers - expects self to be a wrapper around [u8]
     ///
     /// - $name: name of the generated function
@@ -247,4 +289,45 @@ pub(crate) mod macros {
         };
     }
     pub(crate) use gen_unsafe_field_write;
+
+    macro_rules! gen_view_impl {
+        ($name:ident, $layout:ident) => {
+            impl View for $name {
+                fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
+                    use crate::core::layout::Layout;
+                    let layout = $layout::try_from(buf)?;
+                    Ok(layout.size_bytes())
+                }
+
+                fn as_bytes(&self) -> &[u8] {
+                    &self.0
+                }
+
+                unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+                    &mut self.0
+                }
+
+                fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+                    // SAFETY: repr(transparent) over [u8], identical fat pointer layout
+                    unsafe { std::mem::transmute(self) }
+                }
+
+                unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
+                    // SAFETY: see View trait documentation
+                    unsafe { std::mem::transmute(buf) }
+                }
+
+                unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
+                    // SAFETY: see View trait documentation
+                    unsafe { std::mem::transmute(buf) }
+                }
+
+                unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
+                    // SAFETY: see View trait documentation
+                    unsafe { std::mem::transmute(buf) }
+                }
+            }
+        };
+    }
+    pub(crate) use gen_view_impl;
 }

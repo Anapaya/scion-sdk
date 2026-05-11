@@ -1,6 +1,12 @@
 syntax = "proto3";
 
-package endhost.api_service.v1;
+package scion.endhost.v1;
+
+/// Service for underlay discovery.
+service UnderlayService {
+  /// ListUnderlays discovers available transport underlays for endhosts.
+  rpc ListUnderlays(ListUnderlaysRequest) returns (ListUnderlaysResponse);
+}
 
 // ListUnderlaysRequest is used to discover available transport underlays.
 message ListUnderlaysRequest {

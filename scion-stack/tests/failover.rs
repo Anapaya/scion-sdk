@@ -15,10 +15,10 @@
 
 use std::{sync::Arc, time::Duration};
 
+use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use anyhow::Context as _;
 use bytes::Bytes;
 use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::two_path_topology};
-use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use rustls::ClientConfig;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
@@ -34,13 +34,15 @@ use tracing::info;
 async fn should_failover_on_link_error() {
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -156,7 +158,7 @@ async fn should_failover_on_link_error() {
 /// Sends data from client to server and server to client concurrently, then receives on both
 /// sides concurrently.
 async fn verify_quic_bidirectional_communication(
-    client_conn: &quinn::Connection,
+    client_conn: &anapaya_quinn::Connection,
     server_conn: &scion_stack::quic::ScionQuinnConn,
     test_data: Bytes,
     timeout_duration: Duration,
@@ -225,7 +227,7 @@ async fn verify_quic_bidirectional_communication(
 ///       +-----------------------+
 #[test(tokio::test)]
 async fn should_quic_failover_on_link_error() {
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
@@ -236,13 +238,15 @@ async fn should_quic_failover_on_link_error() {
         .await
         .unwrap();
 
-    let sender_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA132).await.unwrap())
+    let sender_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
-    let receiver_stack = ScionStackBuilder::new(ps_handle.endhost_api(IA212).await.unwrap())
+    let receiver_stack = ScionStackBuilder::new()
+        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -253,6 +257,7 @@ async fn should_quic_failover_on_link_error() {
         scion_sdk_utils::test::generate_cert([42u8; 32], vec!["localhost".into()], vec![]);
 
     // Create server QUIC endpoint
+    #[allow(deprecated)]
     let server_endpoint = receiver_stack
         .quic_endpoint(None, EndpointConfig::default(), Some(server_config), None)
         .await
@@ -267,9 +272,11 @@ async fn should_quic_failover_on_link_error() {
         .with_root_certificates(roots)
         .with_no_client_auth();
 
-    let client_config =
-        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto).unwrap()));
+    let client_config = anapaya_quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(client_crypto).unwrap(),
+    ));
 
+    #[allow(deprecated)]
     let mut client_endpoint = sender_stack
         .quic_endpoint(None, EndpointConfig::default(), None, None)
         .await

@@ -320,6 +320,7 @@ mod tests {
 
     #[test(tokio::test)]
     async fn should_exchange_oidc_token_for_snap_token() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let (snap_token_private_pem, snap_token_public_pem) = insecure_const_ed25519_key_pair_pem();
 
         let token = oidc_id_token("test-user".to_string());

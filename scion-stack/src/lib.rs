@@ -13,8 +13,10 @@
 // limitations under the License.
 //! SCION stack library.
 
+pub mod ea_source;
 pub mod path;
 pub mod quic;
+pub mod resolver;
 pub mod scionstack;
 pub mod types;
 pub mod underlays;

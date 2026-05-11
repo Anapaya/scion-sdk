@@ -19,7 +19,7 @@ mod common_header;
 use std::num::NonZeroU8;
 
 use bytes::{BufMut, Bytes};
-pub use common_header::{AddressInfo, CommonHeader, FlowId, Version};
+pub use common_header::{AddressInfo, CommonHeader, FlowId, NextHeader, Version};
 
 mod address_header;
 pub use address_header::{AddressHeader, RawHostAddress};

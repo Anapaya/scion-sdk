@@ -72,6 +72,23 @@ impl<'de> Deserialize<'de> for AnyClaims {
         }
     }
 }
+impl AnyClaims {
+    /// Returns the PSSID as string from the token claims.
+    pub fn pssid(&self) -> String {
+        match self {
+            AnyClaims::V1(c) => c.pssid.to_string(),
+            AnyClaims::V0(c) => c.pssid.to_string(),
+        }
+    }
+
+    /// Returns the JWT ID.
+    pub fn jti(&self) -> String {
+        match self {
+            AnyClaims::V1(c) => c.jti.clone(),
+            AnyClaims::V0(c) => c.jti.clone(),
+        }
+    }
+}
 
 impl Token for AnyClaims {
     fn id(&self) -> String {

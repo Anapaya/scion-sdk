@@ -13,16 +13,22 @@
 // limitations under the License.
 //! SCION stack builder.
 
-use std::{borrow::Cow, net, sync::Arc, time::Duration};
+mod priority_connect;
+
+use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 
 use endhost_api_client::client::CrpcEndhostApiClient;
-// Re-export for consumer
+use rand::seq::IndexedRandom;
 pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_reqwest_connect_rpc::token_source::{TokenSource, static_token::StaticTokenSource};
-use scion_sdk_utils::backoff::{BackoffConfig, ExponentialBackoff};
+use scion_sdk_utils::backoff::ExponentialBackoff;
 use url::Url;
+use x25519_dalek::StaticSecret;
 
 use crate::{
+    ea_source::{
+        EndhostApiSource, EndhostApiSourceError, StaticEndhostApiDiscovery, StaticEndhostApis,
+    },
     scionstack::ScionStack,
     underlays::{
         SnapSocketConfig, UnderlayStack,
@@ -32,12 +38,9 @@ use crate::{
 };
 
 const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_secs(600);
-const DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF: BackoffConfig = BackoffConfig {
-    minimum_delay_secs: 0.5,
-    maximum_delay_secs: 10.0,
-    factor: 1.2,
-    jitter_secs: 0.1,
-};
+const DEFAULT_ENDHOST_API_DISCOVERY_MAX_GROUPS: usize = 5;
+const DEFAULT_ENDHOST_API_DISCOVERY_APIS_PER_GROUP: usize = 2;
+const DEFAULT_ENDHOST_API_DISCOVERY_PER_GROUP_DELAY: Duration = Duration::from_millis(500);
 
 /// Builder for creating a [ScionStack].
 ///
@@ -50,7 +53,8 @@ const DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF: BackoffConfig = BackoffConfig {
 /// async fn setup_scion_stack() {
 ///     let control_plane_url: Url = "http://127.0.0.1:1234".parse().unwrap();
 ///
-///     let scion_stack = ScionStackBuilder::new(control_plane_url)
+///     let scion_stack = ScionStackBuilder::new()
+///         .with_endhost_api(control_plane_url)
 ///         .with_auth_token("snap_token".to_string())
 ///         .build()
 ///         .await
@@ -58,10 +62,11 @@ const DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF: BackoffConfig = BackoffConfig {
 /// }
 /// ```
 pub struct ScionStackBuilder {
-    endhost_api_url: Url,
     endhost_api_token_source: Option<Arc<dyn TokenSource>>,
     auth_token_source: Option<Arc<dyn TokenSource>>,
+    endhost_api_source: Arc<dyn EndhostApiSource>,
     preferred_underlay: PreferredUnderlay,
+    endhost_api_discovery: EndhostApiDiscoveryConfig,
     snap: SnapUnderlayConfig,
     udp: UdpUnderlayConfig,
 }
@@ -71,12 +76,13 @@ impl ScionStackBuilder {
     ///
     /// The stack uses the the endhost API to discover the available data planes.
     /// By default, udp dataplanes are preferred over snap dataplanes.
-    pub fn new(endhost_api_url: Url) -> Self {
+    pub fn new() -> Self {
         Self {
-            endhost_api_url,
             endhost_api_token_source: None,
             auth_token_source: None,
+            endhost_api_source: Arc::new(StaticEndhostApiDiscovery::global()),
             preferred_underlay: PreferredUnderlay::Udp,
+            endhost_api_discovery: EndhostApiDiscoveryConfig::default(),
             snap: SnapUnderlayConfig::default(),
             udp: UdpUnderlayConfig::default(),
         }
@@ -91,6 +97,26 @@ impl ScionStackBuilder {
     /// When discovering data planes, prefer UDP data planes if available.
     pub fn with_prefer_udp(mut self) -> Self {
         self.preferred_underlay = PreferredUnderlay::Udp;
+        self
+    }
+
+    /// Set a static endhost API
+    ///
+    /// Replaces existing endhost API source.
+    ///
+    /// See [Self::with_endhost_api_discovery_source] for more flexible configuration
+    pub fn with_endhost_api(mut self, endhost_api_url: Url) -> Self {
+        let source = StaticEndhostApis::new().add_group(vec![endhost_api_url]);
+        self.endhost_api_source = Arc::new(source);
+
+        self
+    }
+
+    /// Sets how the client will find its endhost APIs.
+    ///
+    /// If none is set, the stack will fall back to using the global discovery API.
+    pub fn with_endhost_api_discovery_source(mut self, source: impl EndhostApiSource) -> Self {
+        self.endhost_api_source = Arc::new(source);
         self
     }
 
@@ -122,6 +148,40 @@ impl ScionStackBuilder {
         self
     }
 
+    /// Set the maximum number of API groups to probe during endhost API
+    /// discovery.
+    ///
+    /// Groups are ordered by priority; only the first `max_groups` non-empty
+    /// groups returned by the discovery source are considered. Defaults to 5.
+    pub fn with_endhost_api_discovery_max_groups(mut self, max_groups: usize) -> Self {
+        self.endhost_api_discovery.max_groups = max_groups;
+        self
+    }
+
+    /// Set the maximum number of APIs to probe per group during endhost API
+    /// discovery.
+    ///
+    /// APIs are selected at random within each group. Setting this to a higher
+    /// value increases redundancy at the cost of additional concurrent
+    /// connections. Defaults to 2.
+    pub fn with_endhost_api_discovery_apis_per_group(mut self, apis_per_group: usize) -> Self {
+        self.endhost_api_discovery.apis_per_group = apis_per_group;
+        self
+    }
+
+    /// Set the delay before APIs in group `k` begin connecting, measured from
+    /// the start of discovery.
+    ///
+    /// Group `k` starts after `k × per_group_delay` **or** as soon as group
+    /// `k-1` is fully exhausted, whichever comes first. A shorter delay reduces
+    /// time-to-connect when a high-priority group is slow, at the cost of
+    /// additional concurrent connections to lower-priority groups. Defaults to
+    /// 500 ms.
+    pub fn with_endhost_api_discovery_per_group_delay(mut self, per_group_delay: Duration) -> Self {
+        self.endhost_api_discovery.per_group_delay = per_group_delay;
+        self
+    }
+
     /// Set SNAP underlay specific configuration for the SCION stack.
     pub fn with_snap_underlay_config(mut self, config: SnapUnderlayConfig) -> Self {
         self.snap = config;
@@ -141,33 +201,81 @@ impl ScionStackBuilder {
     /// A new SCION stack.
     pub async fn build(self) -> Result<ScionStack, BuildScionStackError> {
         let ScionStackBuilder {
-            endhost_api_url,
             endhost_api_token_source,
             auth_token_source,
+            endhost_api_source,
             preferred_underlay,
+            endhost_api_discovery,
             snap,
             udp,
         } = self;
 
-        let endhost_api_client = {
-            let mut client = CrpcEndhostApiClient::new(&endhost_api_url)
-                .map_err(BuildScionStackError::EndhostApiClientSetupError)?;
-            if let Some(token_source) = endhost_api_token_source.or(auth_token_source.clone()) {
-                client.use_token_source(token_source);
-            }
-            Arc::new(client)
+        // Race a random sample of APIs from each of the first N groups,
+        // staggered by group priority. Group k starts after k *
+        // per_group_delay or when group k-1 is fully exhausted, whichever
+        // comes first.
+        let api_groups = endhost_api_source.endhost_apis().await?;
+        let api_groups: Vec<Vec<Url>> = {
+            let mut rng = rand::rng();
+            api_groups
+                .into_iter()
+                .map(|g| g.apis.into_iter().map(|a| a.address).collect::<Vec<_>>())
+                .filter(|group| !group.is_empty())
+                .take(endhost_api_discovery.max_groups)
+                .map(|group: Vec<Url>| {
+                    group
+                        .sample(&mut rng, endhost_api_discovery.apis_per_group)
+                        .cloned()
+                        .collect()
+                })
+                .collect()
         };
 
-        // XXX(bunert): Add support for statically configured underlays.
+        if api_groups.is_empty() {
+            return Err(BuildScionStackError::EndhostApiSourceError(
+                EndhostApiSourceError {
+                    error: anyhow::anyhow!("Endhost API discovery returned no APIs"),
+                    // Likely not transient, since it indicates a misconfiguration on client or
+                    // server side.
+                    transient: false,
+                },
+            ));
+        }
 
-        let underlay_discovery = PeriodicUnderlayDiscovery::new(
-            endhost_api_client.clone(),
-            udp.udp_next_hop_resolver_fetch_interval,
-            // TODO(uniquefine): make this configurable.
-            ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
-        )
-        .await
-        .map_err(BuildScionStackError::UnderlayDiscoveryError)?;
+        let token_source: Option<Arc<dyn TokenSource>> =
+            endhost_api_token_source.or(auth_token_source.clone());
+        let discover_underlays = move |url: Url| {
+            let token_source = token_source.clone();
+            let url = url.clone();
+            async move {
+                let mut client =
+                    CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::ClientSetup)?;
+                if let Some(token_source) = &token_source {
+                    client.use_token_source(token_source.clone());
+                }
+                let client = Arc::new(client);
+                let discovery = PeriodicUnderlayDiscovery::new(
+                    client.clone(),
+                    udp.udp_next_hop_resolver_fetch_interval,
+                    ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
+                )
+                .await
+                .map_err(ApiAttemptError::UnderlayDiscovery)?;
+                Ok((client, discovery))
+            }
+        };
+
+        let (api_url, (endhost_api_client, underlay_discovery)) =
+            priority_connect::try_priority_groups(
+                api_groups,
+                discover_underlays,
+                endhost_api_discovery.per_group_delay,
+            )
+            .await
+            .map_err(|errors| {
+                BuildScionStackError::AllEndhostApisFailed(AllEndhostApisFailed(errors))
+            })?;
+        tracing::info!(%api_url, "Successfully selected endhost API");
 
         // Use the endhost API URL to resolve the local IP addresses for the UDP underlay
         // sockets.
@@ -177,7 +285,7 @@ impl ScionStackBuilder {
             Some(ips) => Arc::new(ips),
             None => {
                 Arc::new(
-                    TargetAddrLocalIpResolver::new(endhost_api_url.clone())
+                    TargetAddrLocalIpResolver::new(api_url.clone())
                         .map_err(BuildUdpScionStackError::LocalIpResolutionError)?,
                 )
             }
@@ -187,18 +295,23 @@ impl ScionStackBuilder {
             preferred_underlay,
             Arc::new(underlay_discovery),
             local_ip_resolver,
+            snap.static_identity.unwrap_or_else(StaticSecret::random),
             SnapSocketConfig {
                 snap_token_source: snap.snap_token_source.or(auth_token_source),
-                reconnect_backoff: ExponentialBackoff::new_from_config(
-                    snap.tunnel_reconnect_backoff,
-                ),
             },
         );
 
         Ok(ScionStack::new(
+            Some(api_url),
             endhost_api_client,
             Arc::new(underlay_stack),
         ))
+    }
+}
+
+impl Default for ScionStackBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -208,14 +321,12 @@ pub enum BuildScionStackError {
     /// Discovery returned no underlay or no underlay was provided.
     #[error("no underlay available: {0}")]
     UnderlayUnavailable(Cow<'static, str>),
-    /// Error making the underlay discovery request to the endhost API.
-    /// E.g. because the endhost API is not reachable.
-    /// This error is only returned if the underlay is not statically configured.
-    #[error("underlay discovery request error: {0:#}")]
-    UnderlayDiscoveryError(CrpcClientError),
-    /// Error setting up the endhost API client.
-    #[error("endhost API client setup error: {0:#}")]
-    EndhostApiClientSetupError(anyhow::Error),
+    /// All endhost APIs failed during client setup or underlay discovery.
+    #[error(transparent)]
+    AllEndhostApisFailed(#[from] AllEndhostApisFailed),
+    /// Failed to retrieve any endhost APIs from the discovery source.
+    #[error("endhost api source error: {0:#}")]
+    EndhostApiSourceError(#[from] EndhostApiSourceError),
     /// Error building the SNAP SCION stack.
     /// This error is only returned if a SNAP underlay is used.
     #[error(transparent)]
@@ -251,6 +362,61 @@ pub enum BuildUdpScionStackError {
     LocalIpResolutionError(anyhow::Error),
 }
 
+/// Error returned when every attempted endhost API fails.
+///
+/// Formats as a single-line summary suitable for use in structured logs.
+#[derive(Debug)]
+pub struct AllEndhostApisFailed(pub Vec<(Url, ApiAttemptError)>);
+
+impl fmt::Display for AllEndhostApisFailed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "all {} endhost API(s) failed", self.0.len())?;
+        let mut sep = ": ";
+        for (url, err) in &self.0 {
+            write!(f, "{sep}{url} ({err})")?;
+            sep = "; ";
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for AllEndhostApisFailed {}
+
+/// Error for a single endhost API connection attempt.
+#[derive(thiserror::Error, Debug)]
+pub enum ApiAttemptError {
+    /// The API client could not be instantiated (e.g. invalid URL scheme).
+    #[error("client setup: {0:#}")]
+    ClientSetup(anyhow::Error),
+    /// Underlay discovery against the API failed (e.g. server unreachable).
+    #[error("underlay discovery: {0:#}")]
+    UnderlayDiscovery(CrpcClientError),
+}
+
+/// Configuration for endhost API discovery during stack building.
+///
+/// Controls how many API groups and endpoints are probed in parallel, and
+/// how long to wait before falling through to the next priority group.
+pub struct EndhostApiDiscoveryConfig {
+    /// Maximum number of API groups to consider, in priority order.
+    max_groups: usize,
+    /// Maximum number of APIs to probe per group, selected at random.
+    apis_per_group: usize,
+    /// Delay before group `k` begins connecting (`k × per_group_delay`),
+    /// unless the previous group is exhausted sooner.
+    per_group_delay: Duration,
+}
+
+impl Default for EndhostApiDiscoveryConfig {
+    fn default() -> Self {
+        Self {
+            max_groups: DEFAULT_ENDHOST_API_DISCOVERY_MAX_GROUPS,
+            apis_per_group: DEFAULT_ENDHOST_API_DISCOVERY_APIS_PER_GROUP,
+            per_group_delay: DEFAULT_ENDHOST_API_DISCOVERY_PER_GROUP_DELAY,
+        }
+    }
+}
+
 /// Preferred underlay type (if available).
 pub enum PreferredUnderlay {
     /// SNAP underlay.
@@ -260,20 +426,12 @@ pub enum PreferredUnderlay {
 }
 
 /// SNAP underlay configuration.
+#[derive(Default)]
 pub struct SnapUnderlayConfig {
     snap_token_source: Option<Arc<dyn TokenSource>>,
     snap_dp_index: usize,
-    tunnel_reconnect_backoff: BackoffConfig,
-}
-
-impl Default for SnapUnderlayConfig {
-    fn default() -> Self {
-        Self {
-            snap_token_source: None,
-            snap_dp_index: 0,
-            tunnel_reconnect_backoff: DEFAULT_SNAP_TUNNEL_RECONNECT_BACKOFF,
-        }
-    }
+    /// Private key used for snap-tun connections. If unset, a random static identity is generated.
+    static_identity: Option<StaticSecret>,
 }
 
 impl SnapUnderlayConfig {
@@ -309,27 +467,10 @@ impl SnapUnderlayConfigBuilder {
         self
     }
 
-    /// Set the parameters for the exponential backoff configuration for reconnecting a SNAP tunnel.
-    ///
-    /// # Arguments
-    ///
-    /// * `minimum_delay_secs` - The minimum delay in seconds.
-    /// * `maximum_delay_secs` - The maximum delay in seconds.
-    /// * `factor` - The factor to multiply the delay by.
-    /// * `jitter_secs` - The jitter in seconds.
-    pub fn with_tunnel_reconnect_backoff(
-        mut self,
-        minimum_delay_secs: Duration,
-        maximum_delay_secs: Duration,
-        factor: f32,
-        jitter_secs: Duration,
-    ) -> Self {
-        self.0.tunnel_reconnect_backoff = BackoffConfig {
-            minimum_delay_secs: minimum_delay_secs.as_secs_f32(),
-            maximum_delay_secs: maximum_delay_secs.as_secs_f32(),
-            factor,
-            jitter_secs: jitter_secs.as_secs_f32(),
-        };
+    /// Set the static identity to use for snap-tun connections.
+    /// If unset, a random static identity is generated.
+    pub fn with_static_identity(mut self, identity: StaticSecret) -> Self {
+        self.0.static_identity = Some(identity);
         self
     }
 

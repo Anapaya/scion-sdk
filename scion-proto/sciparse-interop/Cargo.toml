@@ -1,0 +1,14 @@
+[package]
+name = "sciparse-interop"
+publish = false
+edition = { workspace = true }
+
+[dependencies]
+bytes = { workspace = true }
+sciparse = { workspace = true }
+scion-proto = { workspace = true }
+proptest = { workspace = true }
+
+
+[lints]
+workspace = true

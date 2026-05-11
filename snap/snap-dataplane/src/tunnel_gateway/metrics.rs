@@ -16,25 +16,6 @@
 use prometheus::{IntCounter, IntGauge};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 
-/// Tunnel gateway metrics.
-#[derive(Debug, Clone)]
-pub struct TunnelGatewayMetrics {
-    /// Total number of active snaptun connections.
-    pub snaptun_connections_active: IntGauge,
-}
-
-impl TunnelGatewayMetrics {
-    /// Create new tunnel gateway metrics instance with the given registry.
-    pub fn new(metrics_registry: &MetricsRegistry) -> Self {
-        TunnelGatewayMetrics {
-            snaptun_connections_active: metrics_registry.int_gauge(
-                "snap_snaptun_active_connections",
-                "Total number of active snaptun connections.",
-            ),
-        }
-    }
-}
-
 /// Tunnel gateway dispatcher metrics.
 #[derive(Debug, Clone)]
 pub struct TunnelGatewayDispatcherMetrics {

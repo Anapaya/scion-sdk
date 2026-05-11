@@ -1,0 +1,76 @@
+# Copyright 2026 Anapaya Systems
+name: Rust Cache Restore
+description: >
+  Restore the Rust toolchain and build artifact cache. Uses ./.github/actions/cache-restore to
+  select the appropriate action based on the runner environment.
+
+inputs:
+  workspace:
+    description: Path to the cargo workspace (used for cache key and cache paths).
+    required: true
+  cache-key-suffix:
+    description: String appended to the Linux cache key (e.g. '-bpf-linker').
+    default: ''
+
+outputs:
+  cache-hit:
+    description: "'true' if the exact cache key was hit, 'false' otherwise."
+    value: ${{ steps.set-cache-hit.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cargo cache (Linux)
+      if: runner.os == 'Linux'
+      id: cargo-cache-linux
+      uses: ./.github/actions/cache-restore
+      with:
+        key: >-
+          ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', inputs.workspace)) }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', inputs.workspace)) }}${{ inputs.cache-key-suffix }}
+        path: |-
+          ~/.rustup
+          ~/.cargo
+          ${{ inputs.workspace }}/target/
+        restore-keys: |-
+          ${{ runner.os }}-cargo-shear-1.3.2
+          ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', inputs.workspace)) }}
+    - name: Restore cargo cache (Windows)
+      if: runner.os == 'Windows'
+      id: cargo-cache-windows
+      uses: ./.github/actions/cache-restore
+      with:
+        key: >-
+          ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', inputs.workspace)) }}-cargo-${{ hashFiles(format('{0}/**/Cargo.lock', inputs.workspace)) }}
+        path: C:\\rust_cache.vhdx
+        restore-keys: |-
+          ${{ runner.os }}-80GB
+          ${{ runner.os }}-80GB-cargo-shear-1.3.2
+          ${{ runner.os }}-80GB-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', inputs.workspace)) }}
+    - name: Set cache-hit output
+      id: set-cache-hit
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Linux" ]]; then
+          echo "cache-hit=${{ steps.cargo-cache-linux.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+        else
+          echo "cache-hit=${{ steps.cargo-cache-windows.outputs.cache-hit }}" >> $GITHUB_OUTPUT
+        fi
+    - name: Setup dev drive (Windows)
+      if: runner.os == 'Windows'
+      uses: samypr100/setup-dev-drive@v3
+      with:
+        drive-path: C:\\rust_cache.vhdx
+        drive-size: 100GB
+        # XXX(uniquefine): revert to ReFS after https://github.com/rust-lang/rust/pull/138133 is merged.
+        drive-format: NTFS
+        trusted-dev-drive: true
+        mount-if-exists: true
+        env-mapping: |-
+          CARGO_HOME,{{ DEV_DRIVE }}/.cargo
+          RUSTUP_HOME,{{ DEV_DRIVE }}/.rustup
+          CARGO_TARGET_DIR,{{ DEV_DRIVE }}/target
+          CARGO_BUILD_BUILD_DIR,{{ DEV_DRIVE }}/target
+    - name: Disk space with dev drive (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: Get-PSDrive -PSProvider FileSystem

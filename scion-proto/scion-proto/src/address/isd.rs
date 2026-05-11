@@ -18,6 +18,7 @@ use std::{
     str::FromStr,
 };
 
+use sciparse::identifier::isd::Isd as SciparseIsd;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -110,6 +111,18 @@ impl FromStr for Isd {
         u16::from_str(string)
             .map(Isd::new)
             .or(Err(AddressKind::Isd.into()))
+    }
+}
+
+impl From<SciparseIsd> for Isd {
+    fn from(value: SciparseIsd) -> Self {
+        Isd::new(value.to_u16())
+    }
+}
+
+impl From<Isd> for SciparseIsd {
+    fn from(value: Isd) -> Self {
+        SciparseIsd::new(value.to_u16())
     }
 }
 

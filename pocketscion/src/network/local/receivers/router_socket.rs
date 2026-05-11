@@ -16,10 +16,8 @@
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use ipnet::IpNet;
-use scion_proto::{
-    packet::{ScionPacketRaw, classify_scion_packet},
-    wire_encoding::WireDecode,
-};
+use scion_proto::packet::{ScionPacketRaw, classify_scion_packet};
+use sciparse::{core::view::View, packet::view::ScionPacketView};
 use snap_dataplane::dispatcher::Dispatcher;
 
 use crate::network::local::receivers::Receiver;
@@ -68,14 +66,14 @@ impl<D: Dispatcher> RouterSocket<D> {
         loop {
             match self.socket.recv_from(&mut buf).await {
                 Ok((size, src)) => {
-                    let packet = match ScionPacketRaw::decode(&mut buf[..size].as_ref()) {
-                        Ok(packet) => packet,
+                    let view = match ScionPacketView::from_slice(&buf[..size]) {
+                        Ok((view, _)) => view,
                         Err(e) => {
-                            tracing::error!(error = %e, ?src, "Failed to decode SCION packet");
+                            tracing::error!(error = ?e, ?src, "Failed to parse SCION packet");
                             continue;
                         }
                     };
-                    self.dispatcher.try_dispatch(packet);
+                    self.dispatcher.try_dispatch(view);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to receive packet");

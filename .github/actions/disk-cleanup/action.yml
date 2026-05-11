@@ -1,0 +1,31 @@
+# Copyright 2026 Anapaya Systems
+name: Storage cleanup
+description: Clean up unused tools to free disk space before building on github runners.
+
+runs:
+  using: composite
+  steps:
+    - name: Disk space before cleanup
+      if: runner.environment == 'github-hosted'
+      shell: bash
+      run: df -h
+    - name: Remove unused tools to free up disk space (Linux)
+      if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+      shell: bash
+      run: >-
+        sudo rm -rf
+        /usr/lib/jvm
+        /usr/share/dotnet
+        /usr/share/swift
+        /usr/local/.ghcup
+        /usr/local/julia*
+        /usr/local/share/chromium
+        /opt/microsoft
+        /opt/google
+        /opt/hostedtoolcache/CodeQ
+        /opt/az
+        /usr/local/share/powershell
+    - name: Disk space after cleanup
+      if: runner.environment == 'github-hosted' && runner.os == 'Linux'
+      shell: bash
+      run: df -h

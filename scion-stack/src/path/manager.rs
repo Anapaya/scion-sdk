@@ -62,7 +62,7 @@ use std::{
 };
 
 use scc::HashIndex;
-use scion_proto::{address::IsdAsn, path::Path, scmp::ScmpErrorMessage};
+use scion_proto::{address::IsdAsn, packet::ByEndpoint, path::Path, scmp::ScmpErrorMessage};
 use scion_sdk_utils::backoff::BackoffConfig;
 use tokio::sync::broadcast::{self};
 
@@ -248,6 +248,13 @@ impl<F: PathFetcher> MultiPathManager<F> {
         dst: IsdAsn,
         now: SystemTime,
     ) -> Result<Path, Arc<PathFetchError>> {
+        if src == dst {
+            return Ok(Path::empty(ByEndpoint {
+                source: src,
+                destination: dst,
+            }));
+        }
+
         let try_path = self
             .0
             .managed_paths
@@ -327,7 +334,11 @@ impl<F: PathFetcher> MultiPathManager<F> {
                     dst,
                     self.weak_ref(),
                     self.0.config,
-                    self.0.issue_manager.lock().unwrap().issues_subscriber(),
+                    self.0
+                        .issue_manager
+                        .lock()
+                        .expect("lock poisoned")
+                        .issues_subscriber(),
                 );
 
                 vacant.insert_entry(managed.manage())
@@ -366,7 +377,7 @@ impl<F: PathFetcher> MultiPathManager<F> {
 
         // Push to issues cache
         {
-            let mut issues_guard = self.0.issue_manager.lock().unwrap();
+            let mut issues_guard = self.0.issue_manager.lock().expect("lock poisoned");
             issues_guard.add_issue(issue, issue_marker.clone());
         }
     }
@@ -1165,10 +1176,11 @@ mod tests {
         pub const BASE_TIME: SystemTime = SystemTime::UNIX_EPOCH;
 
         pub fn dummy_path(hop_count: u16, timestamp: u32, exp_units: u8, seed: u32) -> Path {
-            let mut builder: TestPathBuilder = TestPathBuilder::new(SRC_ADDR, DST_ADDR)
-                .using_info_timestamp(timestamp)
-                .with_hop_expiry(exp_units)
-                .up();
+            let mut builder: TestPathBuilder =
+                TestPathBuilder::new(SRC_ADDR.into(), DST_ADDR.into())
+                    .using_info_timestamp(timestamp)
+                    .with_hop_expiry(exp_units)
+                    .up();
 
             builder = builder.add_hop(0, 1);
 

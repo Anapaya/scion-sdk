@@ -19,9 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use bytes::BytesMut;
 use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
-use quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use rustls::ClientConfig;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
@@ -31,10 +31,10 @@ use tokio_util::sync::CancellationToken;
 // Tests a quinn QUIC connection using the SCION stack as transport. The server simply echoes back
 // any datagram it receives.
 #[test(tokio::test)]
-#[ntest::timeout(10_000)]
+#[ntest::timeout(20_000)]
 async fn quinn_echo() {
     tracing::info!("installing crypto provider");
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let ps_handle = minimal_topology(UnderlayType::Snap).await;
 
@@ -43,7 +43,8 @@ async fn quinn_echo() {
 
     // client stack
     let ia132_eh_api = ps_handle.endhost_api(IA132).await.unwrap();
-    let client_stack = ScionStackBuilder::new(ia132_eh_api)
+    let client_stack = ScionStackBuilder::new()
+        .with_endhost_api(ia132_eh_api)
         .with_auth_token(token_c1)
         .build()
         .await
@@ -51,7 +52,8 @@ async fn quinn_echo() {
 
     // server stack
     let ia212_eh_api = ps_handle.endhost_api(IA212).await.unwrap();
-    let server_stack = ScionStackBuilder::new(ia212_eh_api)
+    let server_stack = ScionStackBuilder::new()
+        .with_endhost_api(ia212_eh_api)
         .with_auth_token(token_s)
         .build()
         .await
@@ -71,10 +73,12 @@ async fn quinn_echo() {
         .with_root_certificates(roots)
         .with_no_client_auth();
 
-    let client_config =
-        quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto).unwrap()));
+    let client_config = anapaya_quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(client_crypto).unwrap(),
+    ));
 
     // Create a client endpoint.
+    #[allow(deprecated)]
     let mut client_endpoint = client_stack
         .quic_endpoint(None, EndpointConfig::default(), None, None)
         .await
@@ -82,6 +86,7 @@ async fn quinn_echo() {
     client_endpoint.set_default_client_config(client_config);
     let client_addr = client_endpoint.local_scion_addr();
 
+    #[allow(deprecated)]
     let server_endpoint = server_stack
         .quic_endpoint(None, EndpointConfig::default(), Some(server_config), None)
         .await

@@ -31,7 +31,7 @@ use url::Url;
 // Test creating the SCION stack with the SNAP token obtained from the auth server.
 #[test(tokio::test)]
 async fn with_auth_server() {
-    scion_sdk_utils::test::install_rustls_crypto_provider();
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let (snap_token_private_pem, snap_token_public_pem) = insecure_const_ed25519_key_pair_pem();
 
@@ -77,7 +77,8 @@ async fn with_auth_server() {
         .expect("get snap")
         .control_plane_api
         .clone();
-    let _client_stack = ScionStackBuilder::new(snap_cp_addr)
+    let _client_stack = ScionStackBuilder::new()
+        .with_endhost_api(snap_cp_addr)
         .with_auth_token(snap_token_resp.access_token)
         .build()
         .await

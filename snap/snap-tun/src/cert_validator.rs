@@ -13,7 +13,7 @@
 // limitations under the License.
 //! Module containing an implementation of a certificate validator.
 
-use quinn::rustls::{self, client::danger::ServerCertVerified};
+use anapaya_quinn::rustls::{self, client::danger::ServerCertVerified};
 use x509_cert::{Certificate, der::Decode, spki::ObjectIdentifier};
 
 /// Validation only succeeds if the subject's Ed25519 public key matches the
@@ -110,8 +110,8 @@ fn verify_ed25519_public_key(
 
 #[cfg(test)]
 mod tests {
+    use anapaya_quinn::rustls::pki_types::CertificateDer;
     use ed25519_dalek::pkcs8::EncodePrivateKey;
-    use quinn::rustls::pki_types::CertificateDer;
 
     use super::verify_ed25519_public_key;
 
