@@ -361,21 +361,20 @@ where
                     network_remote=?at.tunnel_ident.network_remote,
                     "evicting tunnel: authorization revoked"
                 );
+                return false;
             } else if !is_active {
                 tracing::debug!(
                     tunnel_remote=?at.tunnel_ident.tunnel_remote,
                     "evicting tunnel: session expired"
                 );
+                return false;
             }
 
-            if is_active && is_authz {
-                match at.session_state.update_timers() {
-                    Ok(Some(p)) => keep_alives.push((at.tunnel_ident.network_remote.clone(), p)),
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(err=?e, "error when updating timers");
-                        return false;
-                    }
+            match at.session_state.update_timers() {
+                Ok(Some(p)) => keep_alives.push((at.tunnel_ident.network_remote.clone(), p)),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(err=?e, "error when updating timers");
                 }
             }
             true
