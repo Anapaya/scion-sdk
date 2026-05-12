@@ -24,3 +24,8 @@ pub const UDP_PACKET_BUFFER_SIZE: usize = 65535;
 
 /// Default max UDP payload size.
 pub const DEFAULT_MAX_UDP_PAYLOAD_SIZE: usize = 1200;
+
+/// Re-exports
+pub mod reexport {
+    pub use squiche;
+}

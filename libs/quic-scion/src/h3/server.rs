@@ -16,7 +16,12 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::{Mutex, Notify};
+use futures::StreamExt;
+use squiche::h3;
+use tokio::{
+    sync::{Mutex, Notify},
+    time::{sleep, timeout},
+};
 
 use crate::{
     UDP_PACKET_BUFFER_SIZE,
@@ -44,15 +49,8 @@ impl H3Server {
 
         let h3_conn = {
             // Wait until the connection is established
-            let mut conn_locked = loop {
-                let guard = conn.conn.lock().await;
-
-                if guard.is_established() {
-                    break guard;
-                }
-                drop(guard);
-                tokio::task::yield_now().await;
-            };
+            conn.wait_established().await;
+            let mut conn_locked = conn.conn.lock().await;
 
             // Check ALPN
             let alpn = conn_locked.application_proto().to_vec();
@@ -76,18 +74,54 @@ impl H3Server {
         };
 
         Some(H3ServerConnection {
-            quic_conn: conn,
-            h3_conn: Arc::new(Mutex::new(h3_conn)),
+            quic_h3_conn: QuicH3Connection {
+                quic_conn: conn,
+                h3_conn: Arc::new(Mutex::new(h3_conn)),
+            },
             partial_requests: HashMap::new(),
             buffer: vec![0u8; UDP_PACKET_BUFFER_SIZE],
         })
     }
 }
 
-/// A connection on the HTTP/3 server.
-pub struct H3ServerConnection {
+#[derive(Clone)]
+struct QuicH3Connection {
     quic_conn: QuicServerConnection,
     h3_conn: Arc<Mutex<squiche::h3::Connection>>,
+}
+
+impl QuicH3Connection {
+    /// Acquires the locks for both the QUIC and H3 connections.
+    ///
+    /// Ensures lock ordering to prevent deadlocks and includes a timeout for the H3 lock to avoid
+    /// waiting indefinitely.
+    pub async fn get_locked(
+        &self,
+    ) -> (
+        tokio::sync::MutexGuard<'_, squiche::Connection>,
+        tokio::sync::MutexGuard<'_, squiche::h3::Connection>,
+    ) {
+        loop {
+            // Quic is more contended, so we acquire that lock first
+            let quic_guard = self.quic_conn.conn.lock().await;
+            let h3_guard =
+                match timeout(std::time::Duration::from_secs(1), self.h3_conn.lock()).await {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        tracing::error!("Timed out waiting for H3 connection lock, retrying");
+                        tokio::task::yield_now().await;
+                        continue;
+                    }
+                };
+
+            return (quic_guard, h3_guard);
+        }
+    }
+}
+
+/// A connection on the HTTP/3 server.
+pub struct H3ServerConnection {
+    quic_h3_conn: QuicH3Connection,
     partial_requests: HashMap<u64, H3Request>,
     buffer: Vec<u8>,
 }
@@ -96,11 +130,14 @@ impl H3ServerConnection {
     /// Polls the H3 connection until a new H3 request is received.
     pub async fn handle_request(&mut self) -> Option<(H3Request, H3ResponseSender)> {
         loop {
+            tokio::task::coop::consume_budget().await;
             // Process H3
-            let event = {
-                let mut quic = self.quic_conn.conn.lock().await;
-                let mut h3 = self.h3_conn.lock().await;
 
+            // Grab notification before acquiring locks to avoid missing any.
+            let tx_notif = self.quic_h3_conn.quic_conn.quic_rx_notif.notified();
+
+            let event = {
+                let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
                 h3.poll(&mut quic)
             };
 
@@ -134,9 +171,8 @@ impl H3ServerConnection {
                         false => {
                             let sender = H3ResponseSender {
                                 stream_id,
-                                quic_conn: self.quic_conn.conn.clone(),
-                                h3_conn: self.h3_conn.clone(),
-                                waker: self.quic_conn.quic_rx_notifier.clone(),
+                                quic_h3_conn: self.quic_h3_conn.clone(),
+                                quic_tx_notify: self.quic_h3_conn.quic_conn.quic_tx_notif.clone(),
                             };
                             return Some((req, sender));
                         }
@@ -146,8 +182,7 @@ impl H3ServerConnection {
                     tracing::debug!(?stream_id, "Receiving H3 request body");
                     if let Some(req) = self.partial_requests.get_mut(&stream_id) {
                         let res = {
-                            let mut quic = self.quic_conn.conn.lock().await;
-                            let mut h3 = self.h3_conn.lock().await;
+                            let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
                             h3.recv_body(&mut quic, stream_id, &mut self.buffer)
                         };
                         match res {
@@ -177,9 +212,8 @@ impl H3ServerConnection {
                     if let Some(req) = self.partial_requests.remove(&stream_id) {
                         let sender = H3ResponseSender {
                             stream_id,
-                            quic_conn: self.quic_conn.conn.clone(),
-                            h3_conn: self.h3_conn.clone(),
-                            waker: self.quic_conn.quic_rx_notifier.clone(),
+                            quic_h3_conn: self.quic_h3_conn.clone(),
+                            quic_tx_notify: self.quic_h3_conn.quic_conn.quic_tx_notif.clone(),
                         };
                         return Some((req, sender));
                     }
@@ -195,7 +229,8 @@ impl H3ServerConnection {
                     tracing::warn!("Received PRIORITY_UPDATE, ignoring");
                 }
                 Err(squiche::h3::Error::Done) => {
-                    tokio::task::yield_now().await;
+                    // Sleep until new data arrives.
+                    tx_notif.await;
                 }
                 Err(err) => {
                     tracing::error!(?err, "H3 connection error, closing connection");
@@ -209,9 +244,8 @@ impl H3ServerConnection {
 /// Sender for HTTP/3 response.
 pub struct H3ResponseSender {
     stream_id: u64,
-    quic_conn: Arc<Mutex<squiche::Connection>>,
-    h3_conn: Arc<Mutex<squiche::h3::Connection>>,
-    waker: Arc<Notify>,
+    quic_h3_conn: QuicH3Connection,
+    quic_tx_notify: Arc<Notify>,
 }
 
 impl H3ResponseSender {
@@ -234,15 +268,139 @@ impl H3ResponseSender {
             ));
         }
 
-        let mut h3 = self.h3_conn.lock().await;
-        let mut quic = self.quic_conn.lock().await;
+        let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
 
         h3.send_response(&mut quic, self.stream_id, &headers, false)?;
         h3.send_body(&mut quic, self.stream_id, body, true)?;
 
         // Notify that there is new data to send. Can we get rid of that?
-        self.waker.notify_one();
+        self.quic_tx_notify.notify_one();
 
         Ok(())
     }
+
+    /// Sends a streaming response, where the body is sent in chunks from the provided stream.
+    pub async fn send_streaming_response<
+        StreamData: AsRef<[u8]>,
+        StreamError: std::error::Error,
+    >(
+        &mut self,
+        status: http::StatusCode,
+        mut stream: impl futures::Stream<Item = Result<StreamData, StreamError>> + Unpin,
+    ) -> Result<(), StreamingResponseError<StreamError>> {
+        let headers = vec![squiche::h3::Header::new(
+            b":status",
+            status.as_u16().to_string().as_bytes(),
+        )];
+
+        // Send headers
+        loop {
+            let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
+            match h3.send_response(&mut quic, self.stream_id, &headers, false) {
+                Ok(_) => {
+                    self.quic_tx_notify.notify_one();
+                    break;
+                }
+                Err(squiche::h3::Error::StreamBlocked) => {
+                    drop(h3);
+                    drop(quic);
+                    // This is bad, but there is currently no way for us to be notified when the
+                    // stream is unblocked.
+                    sleep(std::time::Duration::from_millis(5)).await;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        // Send body frames
+        while let Some(stream_res) = stream.next().await {
+            let chunk = match stream_res {
+                Ok(data) => data,
+                Err(err) => {
+                    let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
+                    // Finish the stream with an empty body.
+                    h3.send_body(&mut quic, self.stream_id, &[], true)?;
+                    self.quic_tx_notify.notify_one();
+                    return Err(StreamingResponseError::StreamError(err));
+                }
+            };
+
+            let mut chunk_slice = chunk.as_ref();
+
+            let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
+            loop {
+                match h3.send_body(&mut quic, self.stream_id, chunk_slice, false) {
+                    Ok(written) => {
+                        self.quic_tx_notify.notify_one();
+
+                        if written == chunk_slice.len() {
+                            break;
+                        } else {
+                            // Partial write, update the chunk slice and try again
+                            chunk_slice = &chunk_slice[written..];
+                            drop(h3);
+                            drop(quic);
+
+                            // This is bad, but there is currently no way for us to be notified when
+                            // the stream is unblocked.
+                            sleep(std::time::Duration::from_millis(5)).await;
+
+                            let (fresh_quic, fresh_h3) = self.quic_h3_conn.get_locked().await;
+                            quic = fresh_quic;
+                            h3 = fresh_h3;
+                        }
+                    }
+                    Err(h3::Error::Done) | Err(h3::Error::StreamBlocked) => {
+                        drop(h3);
+                        drop(quic);
+
+                        // This is bad, but there is currently no way for us to be notified when the
+                        // stream is unblocked.
+                        sleep(std::time::Duration::from_millis(5)).await;
+
+                        let (fresh_quic, fresh_h3) = self.quic_h3_conn.get_locked().await;
+                        quic = fresh_quic;
+                        h3 = fresh_h3;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+
+        // Stream exhausted finish the response
+        let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
+        loop {
+            match h3.send_body(&mut quic, self.stream_id, &[], true) {
+                Ok(_) => {
+                    self.quic_tx_notify.notify_one();
+                    return Ok(());
+                }
+                // Stream blocked
+                Err(h3::Error::Done) | Err(h3::Error::StreamBlocked) => {
+                    drop(h3);
+                    drop(quic);
+
+                    // This is bad, but there is currently no way for us to be notified when the
+                    // stream is unblocked.
+                    sleep(std::time::Duration::from_millis(5)).await;
+
+                    let (fresh_quic, fresh_h3) = self.quic_h3_conn.get_locked().await;
+                    quic = fresh_quic;
+                    h3 = fresh_h3;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+}
+
+/// Errors that can occur when sending a streaming response.
+#[derive(Debug, thiserror::Error)]
+pub enum StreamingResponseError<T: std::error::Error> {
+    /// Error returned by the response body stream.
+    #[error("Error from response body stream: {0}")]
+    StreamError(T),
+    /// Error returned by the H3 layer.
+    #[error("H3 error: {0}")]
+    H3Error(#[from] squiche::h3::Error),
 }

@@ -84,7 +84,15 @@ impl QuicServer {
     }
 }
 
-type ConnectionMap = HashMap<ConnectionId<'static>, Arc<Mutex<squiche::Connection>>>;
+struct ConnectionEntry {
+    conn: Arc<Mutex<squiche::Connection>>,
+    /// Wakes the `SendDriver` when new outbound data might exist.
+    quic_tx_notif: Arc<Notify>,
+    /// Wakes stream readers when new inbound data arrives.
+    quic_rx_notif: Arc<Notify>,
+}
+
+type ConnectionMap = HashMap<ConnectionId<'static>, ConnectionEntry>;
 
 /// Active component that listens for incoming packets on the socket, demultiplexes them to the
 /// correct connection based on the DCID, and creates new connections for incoming Initial packets
@@ -135,7 +143,7 @@ impl ConnectionManager {
                     continue;
                 }
             };
-            tracing::debug!(
+            tracing::trace!(
                 ?from,
                 ?len,
                 "Server received packet on the underlying socket"
@@ -173,7 +181,7 @@ impl ConnectionManager {
         let hdr = squiche::Header::from_slice(pkt, squiche::MAX_CONN_ID_LEN)
             .map_err(PacketProcessError::InvalidHeader)?;
 
-        tracing::debug!(?hdr.scid, ?hdr.dcid, ?from, "Received QUIC packet");
+        tracing::trace!(?hdr.scid, ?hdr.dcid, ?from, "Received QUIC packet");
 
         let (remote_addr, local_addr) =
             match (from.socket_addr(), self.socket.local_addr().socket_addr()) {
@@ -187,11 +195,17 @@ impl ConnectionManager {
         };
 
         // Dispatch packet to existing connection.
-        if let Some(conn) = self.connection_map.lock().await.get(&hdr.dcid) {
-            let mut conn = conn.lock().await;
+        if let Some(entry) = self.connection_map.lock().await.get(&hdr.dcid) {
+            let mut conn = entry.conn.lock().await;
             if let Err(err) = conn.recv(pkt, recv_info) {
                 tracing::debug!(?err, "Connection recv error");
             }
+
+            // Recv may create tx packets, so notify the send driver to check if there are packets
+            // to send.
+            entry.quic_tx_notif.notify_one();
+            // Notify stream readers that new data may be available.
+            entry.quic_rx_notif.notify_one();
 
             return Ok(0);
         }
@@ -231,7 +245,7 @@ impl ConnectionManager {
 
         // Do stateless retry if the client didn't send a token.
         if token.is_empty() {
-            tracing::debug!("Doing stateless retry");
+            tracing::trace!("Doing stateless retry");
             let new_token = self.token_manager.generate(&hdr.dcid, remote_addr);
 
             let len =
@@ -274,32 +288,44 @@ impl ConnectionManager {
 
         let conn = Arc::new(Mutex::new(conn));
 
+        let quic_tx_notif = Arc::new(Notify::new());
+        let quic_rx_notif = Arc::new(Notify::new());
+
         // Add to connection map using the server SCID as key, so that incoming packets with
         // this SCID as DCID can be routed to this connection.
         {
             let mut conns = self.connection_map.lock().await;
             tracing::debug!(?scid, "Adding new connection to connection map");
-            conns.insert(scid.clone(), conn.clone());
+            conns.insert(
+                scid.clone(),
+                ConnectionEntry {
+                    conn: conn.clone(),
+                    quic_tx_notif: quic_tx_notif.clone(),
+                    quic_rx_notif: quic_rx_notif.clone(),
+                },
+            );
         }
 
-        let quic_rx_notifier = Arc::new(Notify::new());
         let server_conn = QuicServerConnection {
             conn: conn.clone(),
-            quic_rx_notifier: quic_rx_notifier.clone(),
+            quic_tx_notif: quic_tx_notif.clone(),
+            quic_rx_notif: quic_rx_notif.clone(),
         };
 
         // Start send driver
         let driver = SendDriver {
             conn: conn.clone(),
             socket: self.socket.clone(),
-            send_notifier: quic_rx_notifier.clone(),
+            send_notifier: quic_tx_notif.clone(),
             remote_isd_as: from.isd_asn(),
             server_scid: scid,
             connections_map: self.connection_map.clone(),
         };
+
         tokio::spawn(driver.run());
 
-        quic_rx_notifier.notify_one();
+        quic_tx_notif.notify_one();
+        quic_rx_notif.notify_one();
 
         if let Err(err) = self.new_connections_tx.send(server_conn).await {
             tracing::error!(?err, "Failed to send new connection to server listener");
@@ -314,8 +340,13 @@ impl ConnectionManager {
 pub struct QuicServerConnection {
     /// The underlying squiche connection.
     pub conn: Arc<Mutex<squiche::Connection>>,
-    /// Notifier that gets notified if new packets arrived on the socket.
-    pub quic_rx_notifier: Arc<Notify>,
+    /// Notifier used by the SendDriver to wake up when new outbound data might be available after
+    /// processing an incoming packet.
+    pub quic_tx_notif: Arc<Notify>,
+    /// Notifier for H3/stream readers — fired when new inbound data arrives so that
+    /// `handle_request`, `stream_recv`, and `wait_established` can wake up instead of
+    /// spinning.
+    pub quic_rx_notif: Arc<Notify>,
 }
 
 impl QuicServerConnection {
@@ -329,7 +360,7 @@ impl QuicServerConnection {
         let mut conn = self.conn.lock().await;
         conn.stream_send(stream_id, data, fin)?;
 
-        self.quic_rx_notifier.notify_one();
+        self.quic_tx_notif.notify_one();
         Ok(())
     }
 
@@ -340,13 +371,20 @@ impl QuicServerConnection {
         buf: &mut [u8],
     ) -> Result<(usize, bool), squiche::Error> {
         loop {
-            let mut conn = self.conn.lock().await;
+            // Create notifier before acquiring the lock to avoid missing notifications.
+            let notif = self.quic_rx_notif.notified();
 
-            match conn.stream_recv(stream_id, buf) {
-                Ok(v) => return Ok(v),
-                Err(squiche::Error::Done) => {}
-                Err(e) => return Err(e),
-            };
+            {
+                let mut conn = self.conn.lock().await;
+                match conn.stream_recv(stream_id, buf) {
+                    Ok(v) => return Ok(v),
+                    Err(squiche::Error::Done) => {}
+                    Err(e) => return Err(e),
+                };
+            }
+
+            // Sleep until new data arrives
+            notif.await;
         }
     }
 
@@ -358,8 +396,10 @@ impl QuicServerConnection {
 
     /// Waits until the connection is established.
     pub async fn wait_established(&self) {
+        let mut notif = self.quic_rx_notif.notified();
         while !self.conn.lock().await.is_established() {
-            tokio::task::yield_now().await;
+            notif.await;
+            notif = self.quic_rx_notif.notified();
         }
     }
 }

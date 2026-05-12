@@ -229,6 +229,8 @@ impl QuicConnectionDriver {
 
         // Main loop
         loop {
+            // Ensure we yield in case of a busy connection.
+            tokio::task::coop::consume_budget().await;
             // Determine timeout based on QUIC state
             let timeout = self
                 .conn
@@ -247,8 +249,6 @@ impl QuicConnectionDriver {
             }
 
             tokio::select! {
-                biased;
-
                 // Handle QUIC Timers.
                 _ = tokio::time::sleep(timeout) => {
                     tracing::trace!("QUIC timeout elapsed");

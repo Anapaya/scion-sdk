@@ -23,6 +23,7 @@ in rec {
       m4
       cmake
       ninja
+      clang
 
       # Libs
       zlib
