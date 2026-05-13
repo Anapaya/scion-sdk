@@ -296,7 +296,7 @@ impl ScionStackBuilder {
             .map_err(|errors| {
                 BuildScionStackError::AllEndhostApisFailed(AllEndhostApisFailed(errors))
             })?;
-        tracing::info!(%api_url, "Successfully selected endhost API");
+        tracing::info!(url=%api_url, "Selected endhost API");
 
         // Use the endhost API URL to resolve the local IP addresses for the UDP underlay
         // sockets.

@@ -194,6 +194,7 @@ impl ConnectRpcClient for CrpcClient {
             }
         }
         tracing::debug!(
+            status = %response.status,
             body_len = response.body.len(),
             "received Connect-RPC response"
         );

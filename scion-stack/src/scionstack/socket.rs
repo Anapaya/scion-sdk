@@ -13,7 +13,7 @@
 // limitations under the License.
 //! SCION socket types.
 
-use std::{sync::Arc, time::Duration};
+use std::{net, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use chrono::Utc;
@@ -246,6 +246,11 @@ impl PathUnawareUdpScionSocket {
     fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr()
     }
+
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        self.inner.snap_data_plane()
+    }
 }
 
 /// A SCMP SCION socket.
@@ -357,6 +362,11 @@ impl ScmpScionSocket {
     pub fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr()
     }
+
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        self.inner.snap_data_plane()
+    }
 }
 
 /// A raw SCION socket.
@@ -387,6 +397,11 @@ impl RawScionSocket {
     /// Return the local socket address.
     pub fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr()
+    }
+
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        self.inner.snap_data_plane()
     }
 }
 
@@ -608,6 +623,11 @@ impl<P: PathManager> UdpScionSocket<P> {
     /// Returns the local socket address.
     pub fn local_addr(&self) -> SocketAddr {
         self.socket.local_addr()
+    }
+
+    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
+    pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        self.socket.snap_data_plane()
     }
 }
 

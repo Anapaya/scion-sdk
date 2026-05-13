@@ -185,7 +185,7 @@ impl QuicConnectionDriver {
 
     /// Runs the QUIC connection driver event loop.
     pub async fn run(mut self) {
-        tracing::debug!("QUIC connection driver started");
+        tracing::trace!("QUIC connection driver started");
 
         let mut send_buffer = [0; DEFAULT_MAX_UDP_PAYLOAD_SIZE];
 
@@ -328,7 +328,7 @@ impl QuicConnectionDriver {
             }
         }
 
-        tracing::debug!("QUIC connection driver shutting down");
+        tracing::trace!("QUIC connection driver shutting down");
     }
 }
 

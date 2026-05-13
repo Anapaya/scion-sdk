@@ -23,6 +23,7 @@ use scion_sdk_quic_scion::{h3::client::H3ConnectionError, socket::GenericScionUd
 use scion_sdk_scion_connect_rpc::client::CrpcClient;
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use sciparse::address::socket_addr::ScionSocketAddr;
+use tracing::instrument;
 
 use crate::{
     fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
@@ -186,6 +187,14 @@ pub enum EdgeTunnelError {
     /// The server did not assign an address.
     #[error("no address assigned by server")]
     NoAddressAssigned,
+    /// The server assigned a different address on re-registration.
+    #[error("assigned address changed on re-registration")]
+    AssignedAddressChanged {
+        /// The previously assigned address.
+        old_addr: IpAddr,
+        /// The newly assigned address.
+        new_addr: Option<IpAddr>,
+    },
     /// Periodic identity re-registration failed after exhausting retries.
     #[error("periodic identity registration task failed after {retries} retries")]
     IdentityRegistration {
@@ -221,6 +230,7 @@ impl EdgeTunnel {
     /// obtains an assigned address and routes, fetches the data plane config,
     /// and spawns the data plane client. The WireGuard handshake is initiated
     /// asynchronously when data is sent; this method does **not** wait for it to complete.
+    #[instrument(name = "edge_tunnel::connect", skip_all)]
     pub async fn connect(
         control_address: ScionSocketAddr,
         control_socket: Arc<dyn GenericScionUdpSocket>,
@@ -247,6 +257,7 @@ impl EdgeTunnel {
             .await
             .map_err(EdgeTunnelError::ControlAuthToken)?;
 
+        tracing::debug!("Creating edge app server control plane client");
         let control_client = Self::create_control_plane_client(
             control_address,
             control_socket.clone(),
@@ -256,18 +267,21 @@ impl EdgeTunnel {
         )
         .await?;
 
+        tracing::debug!("Registering identity to edge app server");
         // Register identity.
         let (server_static, _) = control_client
             .register_edge_tun_identity(static_public, None)
             .await?;
 
         // Assign address.
+        tracing::debug!("Requesting address assignment from edge app server");
         let assigned_addr = control_client
             .assign_address(static_public, requested_ip)
             .await?
             .ok_or(EdgeTunnelError::NoAddressAssigned)?;
 
         // Get announced routes.
+        tracing::debug!(%assigned_addr, "Fetching announced routes from edge app server");
         let announced_routes = control_client
             .get_route_advertisement(static_public)
             .await?;
@@ -346,6 +360,7 @@ impl EdgeTunnel {
     /// This method runs until an unrecoverable error occurs (e.g., all
     /// re-registration retry attempts exhausted). The caller should tear down
     /// the tunnel when this returns.
+    #[instrument(name = "edge_tunnel::main_loop", skip_all)]
     pub async fn main_loop(&self) -> Result<(), EdgeTunnelError> {
         let backoff = ExponentialBackoff::new(2.5, 30.0, 1.3, 0.5);
 
@@ -357,6 +372,10 @@ impl EdgeTunnel {
                 match self.register_identity_once().await {
                     Ok(()) => {
                         last_err = None;
+                        tracing::debug!(
+                            attempt = attempt + 1,
+                            "identity re-registration successful"
+                        );
                         break;
                     }
                     Err(e) => {
@@ -394,11 +413,21 @@ impl EdgeTunnel {
         control_client
             .register_edge_tun_identity(self.static_public, None)
             .await?;
+        let new_assigned_address = control_client
+            .assign_address(self.static_public, Some(self.assigned_addr))
+            .await?;
+        if Some(self.assigned_addr) != new_assigned_address {
+            return Err(EdgeTunnelError::AssignedAddressChanged {
+                old_addr: self.assigned_addr,
+                new_addr: new_assigned_address,
+            });
+        }
         // control_client and its CrpcClient are dropped here.
         Ok(())
     }
 
     /// Send an IP packet through the tunnel.
+    #[instrument(name = "edge_tunnel::send", skip_all)]
     pub async fn send(
         &self,
         packet: ana_gotatun::packet::Packet,
@@ -407,6 +436,7 @@ impl EdgeTunnel {
     }
 
     /// Receive the next decrypted IP packet from the tunnel.
+    #[instrument(name = "edge_tunnel::recv", skip_all)]
     pub async fn recv(&self) -> Result<Bytes, EdgeTunClientRecvError> {
         self.data_plane_client.recv().await
     }
@@ -419,10 +449,5 @@ impl EdgeTunnel {
     /// The routes announced by the server.
     pub fn announced_routes(&self) -> &[IpNet] {
         &self.announced_routes
-    }
-
-    /// The underlying data plane client.
-    pub fn client(&self) -> &EdgeTunClient {
-        &self.data_plane_client
     }
 }
