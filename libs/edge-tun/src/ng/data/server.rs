@@ -207,7 +207,7 @@ where
             // Exactly one packet is queued; the contract says "at most one".
             Err(TunnResult::WriteToNetwork(c)) => {
                 send_to_network.push_back(c);
-                tracing::debug!("rate limiter under load: sending cookie reply");
+                tracing::debug!(network_remote=?network_remote, "rate limiter under load: sending cookie reply");
                 return TunnResult::Done;
             }
             Err(e) => return e,
@@ -241,7 +241,7 @@ where
                 };
                 let peer_static = x25519::PublicKey::from(hs.peer_static_public);
                 let Some(t) = self.authz.is_authorized(now, &peer_static) else {
-                    tracing::debug!("dropping HandshakeInit: peer not authorized");
+                    tracing::debug!(network_remote=?network_remote, "dropping HandshakeInit: peer not authorized");
                     return TunnResult::Err(WireGuardError::InvalidPacket);
                 };
                 let Some(tunn) =
@@ -274,6 +274,7 @@ where
                         })
                 else {
                     tracing::debug!(
+                        network_remote=?network_remote,
                         "dropping HandshakeInit: could not create or retrieve tunnel (network/tunnel address conflict?)"
                     );
                     return TunnResult::Err(WireGuardError::InvalidPacket);
@@ -304,7 +305,7 @@ where
             Some(t) => t,
             // No authorised tunnel found; silently drop.
             None => {
-                tracing::debug!("dropping packet: no authorized tunnel found for index");
+                tracing::debug!(network_remote=?network_remote, "dropping packet: no authorized tunnel found for index");
                 return TunnResult::Done;
             }
         };
@@ -320,6 +321,7 @@ where
                             pkt.payload,
                         ) {
                             tracing::trace!(
+                                network_remote=?network_remote,
                                 tunnel_remote=?tunn.tunnel_ident.tunnel_remote,
                                 len=pkt.payload.len(),
                                 "inbound packet passed policy, forwarding to tunnel"
@@ -328,6 +330,7 @@ where
                             return TunnResult::WriteToTunnel(pkt);
                         }
                         tracing::debug!(
+                            network_remote=?network_remote,
                             tunnel_remote=?tunn.tunnel_ident.tunnel_remote,
                             "inbound packet dropped by policy"
                         );
@@ -364,6 +367,7 @@ where
                 return false;
             } else if !is_active {
                 tracing::debug!(
+                    network_remote=?at.tunnel_ident.network_remote,
                     tunnel_remote=?at.tunnel_ident.tunnel_remote,
                     "evicting tunnel: session expired"
                 );
@@ -374,7 +378,7 @@ where
                 Ok(Some(p)) => keep_alives.push((at.tunnel_ident.network_remote.clone(), p)),
                 Ok(None) => {}
                 Err(e) => {
-                    tracing::warn!(err=?e, "error when updating timers");
+                    tracing::warn!(network_remote=?at.tunnel_ident.network_remote, tunnel_remote=?at.tunnel_ident.tunnel_remote, err=?e, "error when updating timers");
                 }
             }
             true
@@ -494,7 +498,7 @@ where
         }
     }
 
-    /// Returns the active tunnel for given `local_idx`. The `should_remove`
+    /// Returns the active tunnel for given `local_idx`. The `should_retain`
     /// allows the caller to immediately remove a stale entry.
     fn get_by_idx_or_remove<F>(
         &mut self,
