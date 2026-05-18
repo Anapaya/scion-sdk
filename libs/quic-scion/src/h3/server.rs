@@ -16,7 +16,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use squiche::h3;
 use tokio::{
     sync::{Mutex, Notify},
@@ -126,16 +126,54 @@ pub struct H3ServerConnection {
     buffer: Vec<u8>,
 }
 
+/// Closes the stream and cleans up any state associated with the stream.
+///
+/// Shuts down both the read and write side of the stream.
+///
+/// Note: Currently a macro because of borrowing issues on the QUIC connection.
+macro_rules! close_stream {
+    ($self:expr, $quic:expr, $stream_id:expr, $error_code:expr) => {{
+        tracing::debug!(
+            stream_id = $stream_id,
+            "closing stream and cleaning up state"
+        );
+        match $quic.stream_shutdown($stream_id, squiche::Shutdown::Read, $error_code) {
+            Ok(_) => {}
+            Err(err) => {
+                tracing::debug!(
+                    ?err,
+                    stream_id = $stream_id,
+                    "Error shutting down stream for reading when closing stream"
+                );
+            }
+        }
+        match $quic.stream_shutdown($stream_id, squiche::Shutdown::Write, $error_code) {
+            Ok(_) => {}
+            Err(err) => {
+                tracing::debug!(
+                    ?err,
+                    stream_id = $stream_id,
+                    "Error shutting down stream for writing when closing stream"
+                );
+            }
+        }
+
+        $self.partial_requests.remove(&$stream_id);
+    }};
+}
+
 impl H3ServerConnection {
     /// Polls the H3 connection until a new H3 request is received.
+    #[tracing::instrument(skip_all, fields(scid = tracing::field::Empty))]
     pub async fn handle_request(&mut self) -> Option<(H3Request, H3ResponseSender)> {
+        {
+            let quic = self.quic_h3_conn.quic_conn.conn.lock().await;
+            tracing::Span::current().record("scid", tracing::field::debug(quic.source_id()));
+        }
+
         loop {
             tokio::task::coop::consume_budget().await;
             // Process H3
-
-            // Grab notification before acquiring locks to avoid missing any.
-            let tx_notif = self.quic_h3_conn.quic_conn.quic_rx_notif.notified();
-
             let event = {
                 let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
                 h3.poll(&mut quic)
@@ -158,6 +196,7 @@ impl H3ServerConnection {
                             continue;
                         }
                     };
+
                     let req = H3Request {
                         headers,
                         body: None,
@@ -209,6 +248,22 @@ impl H3ServerConnection {
                 }
                 Ok((stream_id, squiche::h3::Event::Finished)) => {
                     tracing::debug!(?stream_id, "Finished receiving H3 request");
+
+                    // Finished receiving the request, close Read side of the stream
+                    {
+                        let (mut quic, _) = self.quic_h3_conn.get_locked().await;
+                        match quic.stream_shutdown(stream_id, squiche::Shutdown::Read, 0) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                tracing::warn!(
+                                    ?err,
+                                    ?stream_id,
+                                    "Error shutting down stream for reading after receiving Finished event"
+                                );
+                            }
+                        }
+                    }
+
                     if let Some(req) = self.partial_requests.remove(&stream_id) {
                         let sender = H3ResponseSender {
                             stream_id,
@@ -223,14 +278,52 @@ impl H3ServerConnection {
                     return None;
                 }
                 Ok((stream_id, squiche::h3::Event::Reset(_))) => {
+                    tracing::debug!(
+                        ?stream_id,
+                        "Received Reset for stream, cleaning up stream state"
+                    );
                     self.partial_requests.remove(&stream_id);
+
+                    // Stream was reset, close both read and write side of the stream to ensure all
+                    // resources are cleaned up.
+                    let (mut quic, _) = self.quic_h3_conn.get_locked().await;
+                    close_stream!(self, quic, stream_id, 0);
                 }
                 Ok((_stream_id, squiche::h3::Event::PriorityUpdate)) => {
                     tracing::warn!("Received PRIORITY_UPDATE, ignoring");
                 }
                 Err(squiche::h3::Error::Done) => {
-                    // Sleep until new data arrives.
-                    tx_notif.await;
+                    // Check if any streams are to be cleaned up.
+                    {
+                        let (mut quic, _h3) = self.quic_h3_conn.get_locked().await;
+                        // Eagerly check if any writeable streams are blocked
+                        for stream_id in quic.writable() {
+                            tracing::trace!(?stream_id, "H3 stream is writable, processing events");
+                            match quic.stream_capacity(stream_id) {
+                                Ok(_) => {}
+                                Err(squiche::Error::StreamStopped(e)) => {
+                                    tracing::debug!(
+                                        ?e,
+                                        ?stream_id,
+                                        "Stream is stopped, closing stream and cleaning up state"
+                                    );
+                                    close_stream!(self, quic, stream_id, 0);
+                                }
+                                Err(err) => {
+                                    tracing::trace!(
+                                        ?err,
+                                        ?stream_id,
+                                        "Failed to get stream capacity for writable stream"
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Sleep until new data
+                    // Since we are using notify_one, this will trigger on old notifications which
+                    // might cause some unnecessary wakeups.
+                    self.quic_h3_conn.quic_conn.quic_rx_notif.notified().await;
                 }
                 Err(err) => {
                     tracing::error!(?err, "H3 connection error, closing connection");
@@ -240,7 +333,6 @@ impl H3ServerConnection {
         }
     }
 }
-
 /// Sender for HTTP/3 response.
 pub struct H3ResponseSender {
     stream_id: u64,
@@ -286,88 +378,17 @@ impl H3ResponseSender {
     >(
         &mut self,
         status: http::StatusCode,
-        mut stream: impl futures::Stream<Item = Result<StreamData, StreamError>> + Unpin,
+        response_headers: &http::HeaderMap,
+        stream: impl futures::Stream<Item = Result<StreamData, StreamError>> + Unpin,
     ) -> Result<(), StreamingResponseError<StreamError>> {
-        let headers = vec![squiche::h3::Header::new(
-            b":status",
-            status.as_u16().to_string().as_bytes(),
-        )];
-
-        // Send headers
-        loop {
-            let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
-            match h3.send_response(&mut quic, self.stream_id, &headers, false) {
-                Ok(_) => {
-                    self.quic_tx_notify.notify_one();
-                    break;
-                }
-                Err(squiche::h3::Error::StreamBlocked) => {
-                    drop(h3);
-                    drop(quic);
-                    // This is bad, but there is currently no way for us to be notified when the
-                    // stream is unblocked.
-                    sleep(std::time::Duration::from_millis(5)).await;
-                }
-                Err(err) => return Err(err.into()),
+        match write_streaming(self, status, response_headers, stream).await {
+            Ok(_) => {}
+            Err(err) => {
+                tracing::error!(?err, "Error sending streaming response");
             }
         }
 
-        // Send body frames
-        while let Some(stream_res) = stream.next().await {
-            let chunk = match stream_res {
-                Ok(data) => data,
-                Err(err) => {
-                    let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
-                    // Finish the stream with an empty body.
-                    h3.send_body(&mut quic, self.stream_id, &[], true)?;
-                    self.quic_tx_notify.notify_one();
-                    return Err(StreamingResponseError::StreamError(err));
-                }
-            };
-
-            let mut chunk_slice = chunk.as_ref();
-
-            let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
-            loop {
-                match h3.send_body(&mut quic, self.stream_id, chunk_slice, false) {
-                    Ok(written) => {
-                        self.quic_tx_notify.notify_one();
-
-                        if written == chunk_slice.len() {
-                            break;
-                        } else {
-                            // Partial write, update the chunk slice and try again
-                            chunk_slice = &chunk_slice[written..];
-                            drop(h3);
-                            drop(quic);
-
-                            // This is bad, but there is currently no way for us to be notified when
-                            // the stream is unblocked.
-                            sleep(std::time::Duration::from_millis(5)).await;
-
-                            let (fresh_quic, fresh_h3) = self.quic_h3_conn.get_locked().await;
-                            quic = fresh_quic;
-                            h3 = fresh_h3;
-                        }
-                    }
-                    Err(h3::Error::Done) | Err(h3::Error::StreamBlocked) => {
-                        drop(h3);
-                        drop(quic);
-
-                        // This is bad, but there is currently no way for us to be notified when the
-                        // stream is unblocked.
-                        sleep(std::time::Duration::from_millis(5)).await;
-
-                        let (fresh_quic, fresh_h3) = self.quic_h3_conn.get_locked().await;
-                        quic = fresh_quic;
-                        h3 = fresh_h3;
-                    }
-                    Err(err) => return Err(err.into()),
-                }
-            }
-        }
-
-        // Stream exhausted finish the response
+        // Always try to finish the stream, even if there was an error sending the body frames.
         let (mut quic, mut h3) = self.quic_h3_conn.get_locked().await;
         loop {
             match h3.send_body(&mut quic, self.stream_id, &[], true) {
@@ -388,8 +409,101 @@ impl H3ResponseSender {
                     quic = fresh_quic;
                     h3 = fresh_h3;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    // If we fail to send the final body frame, we close the stream.
+                    let _ = quic.stream_shutdown(self.stream_id, squiche::Shutdown::Write, 500);
+                    return Err(err.into());
+                }
             }
+        }
+
+        async fn write_streaming<StreamData: AsRef<[u8]>, StreamError: std::error::Error>(
+            this: &mut H3ResponseSender,
+            status: http::StatusCode,
+            response_headers: &http::HeaderMap,
+            mut stream: impl Stream<Item = Result<StreamData, StreamError>> + Unpin,
+        ) -> Result<(), StreamingResponseError<StreamError>> {
+            let mut headers = vec![squiche::h3::Header::new(
+                b":status",
+                status.as_u16().to_string().as_bytes(),
+            )];
+            for (name, value) in response_headers.iter() {
+                headers.push(squiche::h3::Header::new(
+                    name.as_str().as_bytes(),
+                    value.as_bytes(),
+                ));
+            }
+            // Send headers
+            loop {
+                let (mut quic, mut h3) = this.quic_h3_conn.get_locked().await;
+                match h3.send_response(&mut quic, this.stream_id, &headers, false) {
+                    Ok(_) => {
+                        this.quic_tx_notify.notify_one();
+                        break;
+                    }
+                    Err(squiche::h3::Error::StreamBlocked) => {
+                        drop(h3);
+                        drop(quic);
+                        // This is bad, but there is currently no way for us to be notified when the
+                        // stream is unblocked.
+                        sleep(std::time::Duration::from_millis(5)).await;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+
+            // Send body frames
+            while let Some(stream_res) = stream.next().await {
+                let chunk = match stream_res {
+                    Ok(data) => data,
+                    Err(err) => {
+                        return Err(StreamingResponseError::StreamError(err));
+                    }
+                };
+
+                let mut chunk_slice = chunk.as_ref();
+
+                let (mut quic, mut h3) = this.quic_h3_conn.get_locked().await;
+                loop {
+                    match h3.send_body(&mut quic, this.stream_id, chunk_slice, false) {
+                        Ok(written) => {
+                            this.quic_tx_notify.notify_one();
+
+                            if written == chunk_slice.len() {
+                                break;
+                            } else {
+                                // Partial write, update the chunk slice and try again
+                                chunk_slice = &chunk_slice[written..];
+                                drop(h3);
+                                drop(quic);
+
+                                // This is bad, but there is currently no way for us to be notified
+                                // when the stream is unblocked.
+                                sleep(std::time::Duration::from_millis(5)).await;
+
+                                let (fresh_quic, fresh_h3) = this.quic_h3_conn.get_locked().await;
+                                quic = fresh_quic;
+                                h3 = fresh_h3;
+                            }
+                        }
+                        Err(h3::Error::Done) | Err(h3::Error::StreamBlocked) => {
+                            drop(h3);
+                            drop(quic);
+
+                            // This is bad, but there is currently no way for us to be notified when
+                            // the stream is unblocked.
+                            sleep(std::time::Duration::from_millis(5)).await;
+
+                            let (fresh_quic, fresh_h3) = this.quic_h3_conn.get_locked().await;
+                            quic = fresh_quic;
+                            h3 = fresh_h3;
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+            }
+
+            Ok(())
         }
     }
 }
