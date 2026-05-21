@@ -80,6 +80,7 @@ pub trait HsdApiClient: Send + Sync {
 }
 
 /// HSD API client.
+#[derive(Debug, Clone)]
 pub struct HsdClient<C: ConnectRpcClient> {
     pub(crate) client: C,
     base_url: Url,

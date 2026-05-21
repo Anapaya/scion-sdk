@@ -77,6 +77,7 @@ pub trait ConnectRpcClient {
 ///
 /// This client provides a high-level interface for making Connect-RPC requests
 /// over HTTP/3, using QUIC as the transport protocol and SCION for networking.
+#[derive(Clone)]
 pub struct CrpcClient {
     h3_client: H3Client,
     authorization_token: Option<String>,

@@ -63,6 +63,7 @@ type AuthTokenFuture = std::pin::Pin<
 type AuthTokenGetter = dyn Fn() -> AuthTokenFuture + Send + Sync;
 
 /// Options for creating an [`EdgeTunnel`].
+#[derive(Debug, Clone)]
 pub struct EdgeTunnelOptions {
     /// Optional server name for TLS certificate verification.
     pub control_server_name: Option<String>,
