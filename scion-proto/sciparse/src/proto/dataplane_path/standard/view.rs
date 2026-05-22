@@ -27,12 +27,16 @@ use crate::{
         },
         write::unchecked_bit_range_be_write,
     },
-    dataplane_path::standard::{
-        layout::{
-            HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathLayout, StdPathMetaLayout,
+    dataplane_path::{
+        standard::{
+            layout::{
+                HopFieldLayout, InfoFieldLayout, StdPathDataLayout, StdPathLayout,
+                StdPathMetaLayout,
+            },
+            mac::{HopMacInput, HopMacInputSource},
+            types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, exp_time_to_duration},
         },
-        mac::{HopMacInput, HopMacInputSource},
-        types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, exp_time_to_duration},
+        types::PathReverseError,
     },
 };
 
@@ -43,8 +47,16 @@ gen_view_impl!(StandardPathView, StdPathLayout);
 
 // Meta header
 impl StandardPathView {
-    gen_field_read!(curr_info_field, StdPathMetaLayout::CURR_INFO_FIELD_RNG, u8);
-    gen_field_read!(curr_hop_field, StdPathMetaLayout::CURR_HOP_FIELD_RNG, u8);
+    gen_field_read!(
+        curr_info_field_idx,
+        StdPathMetaLayout::CURR_INFO_FIELD_RNG,
+        u8
+    );
+    gen_field_read!(
+        curr_hop_field_idx,
+        StdPathMetaLayout::CURR_HOP_FIELD_RNG,
+        u8
+    );
     gen_field_read!(seg0_len, StdPathMetaLayout::SEG0_LEN_RNG, u8);
     gen_field_read!(seg1_len, StdPathMetaLayout::SEG1_LEN_RNG, u8);
     gen_field_read!(seg2_len, StdPathMetaLayout::SEG2_LEN_RNG, u8);
@@ -116,6 +128,14 @@ impl StandardPathView {
 }
 // Data
 impl StandardPathView {
+    /// Returns a view over the current info field, or None if the current info field index is out
+    /// of bounds
+    #[inline]
+    pub fn curr_info_field(&self) -> Option<&InfoFieldView> {
+        let index = self.curr_info_field_idx() as usize;
+        self.info_field(index)
+    }
+
     /// Returns a view over the info field at the given index, or None if the index is out of bounds
     #[inline]
     pub fn info_field(&self, index: usize) -> Option<&InfoFieldView> {
@@ -129,6 +149,14 @@ impl StandardPathView {
             unsafe { InfoFieldView::from_slice_unchecked(self.0.get_unchecked(field_range)) };
 
         Some(field)
+    }
+
+    /// Returns a view over the current hop field, or None if the current hop field index is out of
+    /// bounds
+    #[inline]
+    pub fn curr_hop_field(&self) -> Option<&HopFieldView> {
+        let index = self.curr_hop_field_idx() as usize;
+        self.hop_field(index)
     }
 
     /// Returns a view over the hop field at the given index, or None if the index is out of bounds
@@ -197,6 +225,14 @@ impl StandardPathView {
 }
 // Data mut
 impl StandardPathView {
+    /// Returns a view over the current info field, or None if the current info field index is out
+    /// of bounds
+    #[inline]
+    pub fn curr_info_field_mut(&mut self) -> Option<&mut InfoFieldView> {
+        let index = self.curr_info_field_idx() as usize;
+        self.info_field_mut(index)
+    }
+
     /// Returns a view over the info field at the given index, or None if the index is out of bounds
     #[inline]
     pub fn info_field_mut(&mut self, index: usize) -> Option<&mut InfoFieldView> {
@@ -211,6 +247,14 @@ impl StandardPathView {
         };
 
         Some(field)
+    }
+
+    /// Returns a view over the current hop field, or None if the current hop field index is out of
+    /// bounds
+    #[inline]
+    pub fn curr_hop_field_mut(&mut self) -> Option<&mut HopFieldView> {
+        let index = self.curr_hop_field_idx() as usize;
+        self.hop_field_mut(index)
     }
 
     /// Returns a view over the hop field at the given index, or None if the index is out of bounds
@@ -277,7 +321,103 @@ impl StandardPathView {
             )
         }
     }
+
+    /// Reverses the path in-place
+    ///
+    /// This function preserves the current logical position in the path.
+    pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
+        let seg0 = self.seg0_len();
+        let seg1 = self.seg1_len();
+        let seg2 = self.seg2_len();
+
+        let seg_count;
+
+        // Update current info and hop field indices
+        let curr_hop_idx = self.curr_hop_field_idx() as usize;
+        let curr_info_idx = self.curr_info_field_idx() as usize;
+
+        // Reverse order of segment lengths
+        {
+            match (seg0, seg1, seg2) {
+                (0, ..) => {
+                    // Invalid path, no segments present, nothing to do
+                    return Err(PathReverseError::new(
+                        "Cannot reverse a path with no segments",
+                    ));
+                }
+                (_, 0, _) => {
+                    seg_count = 1;
+                    // Only seg0 is present, nothing to do
+                }
+                (_, _, 0) => {
+                    seg_count = 2;
+                    // Swap seg0 and seg1
+                    // SAFETY: Total number of hop fields is unchanged
+                    unsafe {
+                        self.set_seg0_len(seg1);
+                        self.set_seg1_len(seg0);
+                    }
+                }
+                (..) => {
+                    seg_count = 3;
+                    // All segments are present, swap seg0 with seg2, and keep seg1 in the middle
+                    // SAFETY: Total number of hop fields is unchanged
+                    unsafe {
+                        self.set_seg0_len(seg2);
+                        self.set_seg1_len(seg1);
+                        self.set_seg2_len(seg0);
+                    }
+                }
+            }
+        }
+
+        // Check if path is valid
+        let total_hops = seg0 as usize + seg1 as usize + seg2 as usize;
+        if curr_hop_idx >= total_hops {
+            return Err(PathReverseError::new(
+                "Current hop field index is out of bounds",
+            ));
+        }
+        if curr_info_idx >= seg_count {
+            return Err(PathReverseError::new(
+                "Current info field index is out of bounds",
+            ));
+        }
+
+        debug_assert!(
+            total_hops > 0,
+            "0 hops should have been caught by the check at the beginning of the function"
+        );
+        debug_assert!(
+            seg_count > 0,
+            "0 segments should have been caught by the check at the beginning of the function"
+        );
+
+        // Swap Construction dir and reverse order of info fields
+        {
+            let info_fields = self.info_fields_mut();
+
+            for info_field in info_fields.iter_mut() {
+                let mut flags = info_field.flags();
+                flags.toggle(InfoFieldFlags::CONS_DIR);
+                info_field.set_flags(flags);
+            }
+
+            info_fields.reverse();
+        }
+
+        // Reverse order of hop fields
+        self.hop_fields_mut().reverse();
+
+        let new_hop_idx = (total_hops - curr_hop_idx) - 1;
+        let new_info_idx = (seg_count - curr_info_idx) - 1;
+        self.set_curr_hop_field(new_hop_idx as u8);
+        self.set_curr_info_field(new_info_idx as u8);
+
+        Ok(())
+    }
 }
+
 // Utility
 impl StandardPathView {
     /// Returns a iterator over the segments of the path, where each segment is represented as a
@@ -333,8 +473,8 @@ impl Debug for StandardPathView {
         let hop_fields = self.hop_fields();
         let info_fields = self.info_fields();
         f.debug_struct("StandardPathMetaHeaderView")
-            .field("current_info_field", &self.curr_info_field())
-            .field("curr_hop_field", &self.curr_hop_field())
+            .field("current_info_field", &self.curr_info_field_idx())
+            .field("curr_hop_field", &self.curr_hop_field_idx())
             .field("seg0_len", &self.seg0_len())
             .field("seg1_len", &self.seg1_len())
             .field("seg2_len", &self.seg2_len())
@@ -416,6 +556,7 @@ impl<'a> Iterator for SegmentIterator<'a> {
 
 /// A view over a standard SCION path info field
 #[repr(transparent)]
+#[derive(Clone, Copy)]
 pub struct InfoFieldView([u8; InfoFieldLayout::SIZE_BYTES]);
 impl View for InfoFieldView {
     #[inline]
@@ -520,6 +661,7 @@ impl Debug for InfoFieldView {
 
 /// A view over a standard SCION path hop field
 #[repr(transparent)]
+#[derive(Clone, Copy)]
 pub struct HopFieldView([u8; HopFieldLayout::SIZE_BYTES]);
 impl View for HopFieldView {
     #[inline]

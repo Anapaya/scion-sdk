@@ -17,8 +17,11 @@
 use crate::{
     core::encode::{InvalidStructureError, WireEncode},
     dataplane_path::{
-        layout::ScionHeaderPathLayout, onehop::model::OneHopPath, standard::model::StandardPath,
-        types::PathType, view::ScionDpPathViewRef,
+        layout::ScionHeaderPathLayout,
+        onehop::model::OneHopPath,
+        standard::model::StandardPath,
+        types::{PathReverseError, PathType},
+        view::ScionDpPathViewRef,
     },
 };
 
@@ -82,6 +85,22 @@ impl DpPath {
         match self {
             DpPath::Standard(path) => Some(path),
             _ => None,
+        }
+    }
+
+    /// Attempts to reverse the path in place, if supported.
+    ///
+    /// Returns an error if the path type is unsupported or if the path is invalid for reversal.
+    pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
+        match self {
+            DpPath::Standard(path) => path.try_reverse(),
+            DpPath::OneHop(path) => path.try_reverse(),
+            DpPath::Empty => Ok(()),
+            DpPath::Unsupported { .. } => {
+                Err(PathReverseError::new(
+                    "Cannot reverse an unsupported path type",
+                ))
+            }
         }
     }
 }

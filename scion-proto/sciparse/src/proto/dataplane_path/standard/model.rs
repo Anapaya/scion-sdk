@@ -31,6 +31,7 @@ use crate::{
             types::{HopFieldFlags, HopFieldMac, InfoFieldFlags, exp_time_to_duration},
             view::{HopFieldView, InfoFieldView, StandardPathView},
         },
+        types::PathReverseError,
     },
 };
 
@@ -79,8 +80,8 @@ impl StandardPath {
         }
 
         StandardPath {
-            current_info_field: view.curr_info_field(),
-            current_hop_field: view.curr_hop_field(),
+            current_info_field: view.curr_info_field_idx(),
+            current_hop_field: view.curr_hop_field_idx(),
             segments,
         }
     }
@@ -166,7 +167,51 @@ impl StandardPath {
 
         min_expiry
     }
+
+    /// Reverses the path in place.
+    pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
+        let seg_count = self.segments.len();
+        if seg_count == 0 {
+            return Err(PathReverseError::new(
+                "Cannot reverse a path with no segments",
+            ));
+        }
+
+        if self.current_hop_field as usize >= self.hop_field_count() {
+            return Err(PathReverseError::new(
+                "Cannot reverse a path with invalid current hop field index",
+            ));
+        }
+
+        if self.current_info_field as usize >= seg_count {
+            return Err(PathReverseError::new(
+                "Cannot reverse a path with invalid current info field index",
+            ));
+        }
+
+        // Reverse order of segment lengths (by reversing the segments slice itself)
+        // and toggle CONS_DIR on every info field
+        for segment in self.segments.iter_mut() {
+            segment.info_field.flags.toggle(InfoFieldFlags::CONS_DIR);
+        }
+        self.segments.reverse();
+
+        // Reverse hop fields within each segment
+        for segment in self.segments.iter_mut() {
+            segment.hop_fields.reverse();
+        }
+
+        // Update current info and hop field indices
+        let total_hops = self.hop_field_count();
+        let new_hop_idx = (total_hops - self.current_hop_field as usize) - 1;
+        let new_info_idx = (seg_count - self.current_info_field as usize) - 1;
+        self.current_hop_field = new_hop_idx as u8;
+        self.current_info_field = new_info_idx as u8;
+
+        Ok(())
+    }
 }
+
 impl WireEncode for StandardPath {
     fn required_size(&self) -> usize {
         let [seg0, seg1, seg2] = self.segment_sizes();

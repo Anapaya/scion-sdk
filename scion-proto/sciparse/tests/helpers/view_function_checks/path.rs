@@ -135,8 +135,9 @@ pub fn exec_standard_path_view_mut(view: &mut StandardPathView) {
     exec_standard_path_view(view);
 
     // Meta header setters (safe ones)
-    view.set_curr_info_field(view.curr_info_field());
-    view.set_curr_hop_field(view.curr_hop_field());
+    view.set_curr_info_field(view.curr_info_field_idx());
+    view.set_curr_hop_field(view.curr_hop_field_idx());
+
     // Safety: setting to the same value.
     unsafe {
         view.set_seg0_len(view.seg0_len());

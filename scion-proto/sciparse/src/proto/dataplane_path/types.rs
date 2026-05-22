@@ -14,7 +14,7 @@
 
 //! Standard SCION path types and related structures.
 
-use std::fmt::Debug;
+use std::{borrow::Cow, fmt::Debug};
 
 /// Path types used in SCION packets.
 ///
@@ -116,6 +116,22 @@ pub mod ptest {
                 params.other => (5u8..=255).prop_map(PathType::Other),
             ]
             .boxed()
+        }
+    }
+}
+
+/// Error type for path reversal failures.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("Cannot reverse path: {reason}")]
+pub struct PathReverseError {
+    /// A human-readable reason for the failure.
+    pub reason: Cow<'static, str>,
+}
+impl PathReverseError {
+    /// Creates a new `PathReverseError` with the given reason.
+    pub fn new(reason: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            reason: reason.into(),
         }
     }
 }

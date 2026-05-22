@@ -159,7 +159,7 @@ mod wire_manipulation {
                 // ── Path-level mutations ──────────────────────────────
                 if let ScionDpPathViewRefMut::Standard(path_view) = view.path_mut() {
                     if let Some(hf_overflow) = self.hop_field_overflow {
-                        let curr = path_view.curr_hop_field();
+                        let curr = path_view.curr_hop_field_idx();
                         let overflow = curr.saturating_add(hf_overflow).min(255 >> 2);
                         path_view.set_curr_hop_field(overflow);
                     }

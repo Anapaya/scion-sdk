@@ -17,7 +17,9 @@
 use crate::{
     core::{macros::impl_from, view::View},
     dataplane_path::{
-        onehop::view::OneHopPathView, standard::view::StandardPathView, types::PathType,
+        onehop::view::OneHopPathView,
+        standard::view::StandardPathView,
+        types::{PathReverseError, PathType},
     },
 };
 
@@ -92,6 +94,23 @@ impl ScionDpPathViewExt for ScionDpPathViewRefMut<'_> {
         }
     }
 }
+impl ScionDpPathViewExtMut for ScionDpPathViewRefMut<'_> {
+    fn as_mut(&mut self) -> ScionDpPathViewRefMut<'_> {
+        // XXX(ake): looks a bit weird, but this allows reborrowing the mutable reference while
+        // preserving the lifetime.
+        match self {
+            ScionDpPathViewRefMut::Standard(v) => ScionDpPathViewRefMut::Standard(v),
+            ScionDpPathViewRefMut::OneHop(v) => ScionDpPathViewRefMut::OneHop(v),
+            ScionDpPathViewRefMut::Unsupported { path_type, buf } => {
+                ScionDpPathViewRefMut::Unsupported {
+                    path_type: *path_type,
+                    buf,
+                }
+            }
+            ScionDpPathViewRefMut::Empty => ScionDpPathViewRefMut::Empty,
+        }
+    }
+}
 impl<'a> From<&'a mut StandardPathView> for ScionDpPathViewRef<'a> {
     fn from(value: &'a mut StandardPathView) -> Self {
         ScionDpPathViewRef::Standard(value)
@@ -140,6 +159,25 @@ impl ScionDpPathViewExt for ScionDpPathView {
         }
     }
 }
+impl ScionDpPathViewExtMut for ScionDpPathView {
+    fn as_mut(&mut self) -> ScionDpPathViewRefMut<'_> {
+        match self {
+            ScionDpPathView::Standard(standard_path_view) => {
+                ScionDpPathViewRefMut::Standard(standard_path_view.as_mut())
+            }
+            ScionDpPathView::OneHop(one_hop_path_view) => {
+                ScionDpPathViewRefMut::OneHop(one_hop_path_view)
+            }
+            ScionDpPathView::Unsupported { path_type, data } => {
+                ScionDpPathViewRefMut::Unsupported {
+                    path_type: *path_type,
+                    buf: data.as_mut(),
+                }
+            }
+            ScionDpPathView::Empty => ScionDpPathViewRefMut::Empty,
+        }
+    }
+}
 impl_from!(Box<StandardPathView>, ScionDpPathView, |v| {
     ScionDpPathView::Standard(v)
 });
@@ -183,6 +221,68 @@ pub trait ScionDpPathViewExt {
             ScionDpPathViewRef::OneHop(one_hop_path_view) => Some(one_hop_path_view.expiration()),
             ScionDpPathViewRef::Empty => Some(u32::MAX),
             ScionDpPathViewRef::Unsupported { .. } => None,
+        }
+    }
+
+    /// Returns the first egress interface of the path, if available.
+    fn first_egress_interface(&self) -> Option<u16> {
+        match self.as_ref() {
+            ScionDpPathViewRef::Standard(standard_path_view) => {
+                Some(standard_path_view.hop_fields().first()?.cons_egress())
+            }
+            ScionDpPathViewRef::OneHop(one_hop_path_view) => {
+                Some(one_hop_path_view.hop_fields().first()?.cons_egress())
+            }
+            ScionDpPathViewRef::Empty => None,
+            ScionDpPathViewRef::Unsupported { .. } => None,
+        }
+    }
+
+    /// Returns the last ingress interface of the path, if available.
+    fn last_ingress_interface(&self) -> Option<u16> {
+        match self.as_ref() {
+            ScionDpPathViewRef::Standard(standard_path_view) => {
+                Some(standard_path_view.hop_fields().last()?.cons_ingress())
+            }
+            ScionDpPathViewRef::OneHop(one_hop_path_view) => {
+                Some(one_hop_path_view.hop_fields().last()?.cons_ingress())
+            }
+            ScionDpPathViewRef::Empty => None,
+            ScionDpPathViewRef::Unsupported { .. } => None,
+        }
+    }
+}
+
+/// Helper trait for working with mutable references to [`ScionDpPathView`], providing common
+/// functionality across different path types.
+pub trait ScionDpPathViewExtMut: ScionDpPathViewExt {
+    /// Returns a mutable view over the path data.
+    fn as_mut(&mut self) -> ScionDpPathViewRefMut<'_>;
+
+    /// Attempts to reverse the path in place, if supported by the path type.
+    ///
+    /// Returns an error if the path type does not support reversal.
+    fn try_reverse(&mut self) -> Result<&mut Self, PathReverseError>
+    where
+        Self: Sized,
+    {
+        let mut_self = self.as_mut();
+
+        match mut_self {
+            ScionDpPathViewRefMut::Standard(standard_path_view) => {
+                standard_path_view.try_reverse()?;
+                Ok(self)
+            }
+            ScionDpPathViewRefMut::OneHop(one_hop_path_view) => {
+                one_hop_path_view.try_reverse()?;
+                Ok(self)
+            }
+            ScionDpPathViewRefMut::Empty => Ok(self),
+            ScionDpPathViewRefMut::Unsupported { .. } => {
+                Err(PathReverseError::new(
+                    "Cannot reverse unsupported path type",
+                ))
+            }
         }
     }
 }

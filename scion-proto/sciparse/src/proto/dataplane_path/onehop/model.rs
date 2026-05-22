@@ -25,6 +25,7 @@ use crate::{
             model::{HopField, InfoField, Segment, StandardPath},
             types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
         },
+        types::PathReverseError,
     },
 };
 
@@ -143,6 +144,23 @@ impl OneHopPath {
         };
 
         Ok(standard_path)
+    }
+
+    /// Reverses the one-hop path in place by swapping the two hop fields.
+    ///
+    /// Returns an error if the second hop field has not been set yet (i.e., its ingress
+    /// interface is still 0, meaning the path is incomplete).
+    pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
+        if self.hops[1].cons_ingress == 0 {
+            return Err(PathReverseError::new(
+                "Cannot reverse a one-hop path whose second hop has not been set yet",
+            ));
+        }
+
+        self.hops.swap(0, 1);
+        self.info.flags ^= InfoFieldFlags::CONS_DIR;
+
+        Ok(())
     }
 }
 impl OneHopPath {

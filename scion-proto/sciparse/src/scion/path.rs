@@ -24,10 +24,11 @@ use crate::{
     core::view::View,
     dataplane_path::{
         standard::view::StandardPathView,
-        view::{ScionDpPathView, ScionDpPathViewExt},
+        types::PathReverseError,
+        view::{ScionDpPathView, ScionDpPathViewExt, ScionDpPathViewExtMut},
     },
     identifier::isd_asn::IsdAsn,
-    path::metadata::{geo::GeoCoordinates, link::LinkMeta},
+    path::metadata::{geo::GeoCoordinates, link::LinkMeta, path_interface::PathInterface},
     rpc::FromRpcError,
 };
 
@@ -114,6 +115,92 @@ impl ScionPath {
                 None,
             ))
         }
+    }
+}
+// utility
+impl ScionPath {
+    /// Returns the egress interface of the first hop of the path.
+    pub fn first_egress_interface(&self) -> Option<PathInterface> {
+        // Try from dataplane path first
+        if let Some(if_id) = self.dp_path.first_egress_interface() {
+            return Some(PathInterface {
+                isd_asn: self.src_ia,
+                id: if_id,
+            });
+        }
+
+        // Then try from metadata
+        if let Some(meta_if) = self
+            .metadata
+            .as_ref()
+            .as_ref()
+            .and_then(|m| m.interfaces.as_ref())
+            .and_then(|interfaces| interfaces.first())
+            .map(|meta| meta.interface)
+        {
+            return Some(meta_if);
+        }
+
+        None
+    }
+
+    /// Returns the ingress interface of the last hop of the path, if metadata is available.
+    pub fn last_ingress_interface(&self) -> Option<PathInterface> {
+        // Try from dataplane path first
+        if let Some(if_id) = self.dp_path.last_ingress_interface() {
+            return Some(PathInterface {
+                isd_asn: self.dst_ia,
+                id: if_id,
+            });
+        }
+
+        // Then try from metadata
+        if let Some(meta_if) = self
+            .metadata
+            .as_ref()
+            .as_ref()
+            .and_then(|m| m.interfaces.as_ref())
+            .and_then(|interfaces| interfaces.last())
+            .map(|meta| meta.interface)
+        {
+            return Some(meta_if);
+        }
+
+        None
+    }
+
+    /// Attempts to reverse the path by reversing the dataplane path and swapping the source and
+    /// destination ISD-AS.
+    ///
+    /// If the dataplane path type does not support reversal, returns an error.
+    pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
+        self.dp_path.try_reverse()?;
+        std::mem::swap(&mut self.src_ia, &mut self.dst_ia);
+
+        // Next hop is not valid after reversal.
+        self.next_hop = None;
+
+        if let Some(metadata) = self.metadata.as_mut() {
+            if let Some(interfaces) = metadata.interfaces.as_mut() {
+                interfaces.reverse();
+            }
+
+            if let Some(notes) = metadata.notes.as_mut() {
+                notes.reverse();
+            }
+
+            let cp_fingerprint =
+                fingerprint::control_plane::PathFingerprint::from_scion_path(self).ok();
+            self._cp_fingerprint = cp_fingerprint;
+        }
+
+        self._fingerprint = fingerprint::data_plane::DpPathFingerprint::from_dp_path(
+            self.dp_path.as_ref(),
+            self.src_ia,
+            self.dst_ia,
+        );
+
+        Ok(())
     }
 }
 // accessors

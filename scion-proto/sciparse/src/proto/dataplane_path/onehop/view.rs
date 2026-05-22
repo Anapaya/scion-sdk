@@ -22,9 +22,10 @@ use crate::{
         onehop::layout::OneHopPathLayout,
         standard::{
             mac::{ForwardingKey, HopMacCalculate, algo::mac_beta_step},
-            types::exp_time_to_duration,
+            types::{InfoFieldFlags, exp_time_to_duration},
             view::{HopFieldView, InfoFieldView},
         },
+        types::PathReverseError,
     },
 };
 
@@ -121,6 +122,27 @@ impl OneHopPathView {
 
         let mac = hop2.calculate_mac(beta, timestamp, &forwarding_key);
         hop2.set_mac(mac);
+    }
+
+    /// Reverses the one-hop path in place.
+    ///
+    /// Returns an error if the second hop field has not been set yet (i.e., its ingress
+    /// interface is still 0, meaning the path is incomplete).
+    pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
+        if self.hop_fields()[1].cons_ingress() == 0 {
+            return Err(PathReverseError::new(
+                "Cannot reverse a one-hop path whose second hop has not been set yet",
+            ));
+        }
+
+        let [hop1, hop2] = self.mut_hop_fields();
+        std::mem::swap(hop1, hop2);
+
+        let mut flags = self.info_field().flags();
+        flags.toggle(InfoFieldFlags::CONS_DIR);
+        self.info_field_mut().set_flags(flags);
+
+        Ok(())
     }
 }
 // Util
