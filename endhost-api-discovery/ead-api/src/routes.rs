@@ -13,15 +13,49 @@
 // limitations under the License.
 //! Endhost API endpoint definitions and endpoint handlers.
 
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
-use axum::{extract::State, routing::post};
+use axum::{
+    extract::{FromRequestParts, State},
+    http::request::Parts,
+    routing::post,
+};
 use axum_client_ip::{ClientIp, ClientIpSource};
 use endhost_api_discovery_models::{
     EndhostApiDiscovery, RpcEndhostApiDiscoveryService,
     proto::endhost::discovery::v1::{RpcGetEndhostApisRequest, RpcGetEndhostApisResponse},
 };
 use scion_sdk_axum_connect_rpc::extractor::ConnectRpc;
+
+struct GcpClientIp(pub IpAddr);
+
+impl<S> FromRequestParts<S> for GcpClientIp
+where
+    S: Send + Sync,
+{
+    type Rejection = axum::response::Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // 1. Try to extract from X-Forwarded-For specifically for GCP (second to last IP)
+        if let Some(forwarded_for) = parts.headers.get("x-forwarded-for")
+            && let Ok(value) = forwarded_for.to_str()
+        {
+            let ips: Vec<&str> = value.split(',').map(|s| s.trim()).collect();
+            if ips.len() >= 2 {
+                let second_to_last = ips[ips.len() - 2];
+                if let Ok(ip) = second_to_last.parse::<IpAddr>() {
+                    return Ok(GcpClientIp(ip));
+                }
+            }
+        }
+
+        // 2. Fallback to standard axum client IP extraction
+        match ClientIp::from_request_parts(parts, state).await {
+            Ok(ClientIp(ip)) => Ok(GcpClientIp(ip)),
+            Err(rej) => Err(axum::response::IntoResponse::into_response(rej)),
+        }
+    }
+}
 
 /// Nests the endhost API routes into the provided `base_router`.
 ///
@@ -50,7 +84,7 @@ pub fn nest_endhost_discovery_api(
 
 async fn get_endhost_apis(
     State(discovery_service): State<Arc<dyn EndhostApiDiscovery>>,
-    ClientIp(client_ip): ClientIp,
+    GcpClientIp(client_ip): GcpClientIp,
     ConnectRpc(_): ConnectRpc<RpcGetEndhostApisRequest>,
 ) -> ConnectRpc<RpcGetEndhostApisResponse> {
     let apis = discovery_service.discover_endhost_apis(client_ip).await;
