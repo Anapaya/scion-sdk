@@ -97,7 +97,7 @@ impl EndhostApiDiscoveryClient for CrpcEndhostApiDiscoveryClient {
                 }
             })
             .inspect(|res| {
-                tracing::debug!("Discovered {} endhost APIs", res.len());
+                tracing::debug!(?res, "Discovered endhost APIs");
             })
     }
 }
