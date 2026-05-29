@@ -20,7 +20,10 @@ use ring::rand::SystemRandom;
 use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
 use squiche::ConnectionId;
 use thiserror::Error;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::{
+    sync::{Mutex, Notify, mpsc},
+    time::timeout,
+};
 
 use crate::{
     DEFAULT_MAX_UDP_PAYLOAD_SIZE, UDP_PACKET_BUFFER_SIZE,
@@ -143,6 +146,7 @@ impl ConnectionManager {
                     continue;
                 }
             };
+
             tracing::trace!(
                 ?from,
                 ?len,
@@ -327,8 +331,13 @@ impl ConnectionManager {
         quic_tx_notif.notify_one();
         quic_rx_notif.notify_one();
 
-        if let Err(err) = self.new_connections_tx.send(server_conn).await {
-            tracing::error!(?err, "Failed to send new connection to server listener");
+        if let Err(err) = self.new_connections_tx.try_send(server_conn) {
+            // XXX(ake): This and many other places should properly close the connection and clean
+            // up the connection map entry instead of just leaking it.
+            tracing::error!(
+                ?err,
+                "New Connection channel is full, dropping new connection"
+            );
         }
 
         Ok(0)
@@ -394,13 +403,36 @@ impl QuicServerConnection {
         conn.readable().collect()
     }
 
-    /// Waits until the connection is established.
-    pub async fn wait_established(&self) {
-        let mut notif = self.quic_rx_notif.notified();
-        while !self.conn.lock().await.is_established() {
-            notif.await;
-            notif = self.quic_rx_notif.notified();
-        }
+    /// Waits until the connection is established or the timeout expires.
+    ///
+    /// Also wakes up when the connection is closed, so that callers can stop waiting if the client
+    /// closes the connection before it is established.
+    ///
+    /// Returns `Ok(())` if the connection is established, or `Err(squiche::Error::Timeout)` if the
+    /// timeout expires before the connection is established.
+    pub async fn wait_established(
+        &self,
+        max_duration: Duration,
+    ) -> Result<(), tokio::time::error::Elapsed> {
+        timeout(max_duration, async {
+            loop {
+                // XXX(ake): this function is a band-aid, whenever a client stops connecting before
+                // this finishes, it will hang until the timeout expires.
+                let conn_is_establishing = {
+                    let conn_lock = self.conn.lock().await;
+                    !(conn_lock.is_established()
+                        || conn_lock.is_closed()
+                        || conn_lock.is_draining())
+                };
+
+                if !conn_is_establishing {
+                    return;
+                }
+
+                self.quic_rx_notif.notified().await;
+            }
+        })
+        .await
     }
 }
 

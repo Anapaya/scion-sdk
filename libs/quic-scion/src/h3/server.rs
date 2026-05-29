@@ -14,12 +14,13 @@
 
 //! HTTP/3 server over SCION transport.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{Stream, StreamExt};
 use squiche::h3;
 use tokio::{
     sync::{Mutex, Notify},
+    task::JoinSet,
     time::{sleep, timeout},
 };
 
@@ -29,58 +30,129 @@ use crate::{
     quic::server::{QuicServer, QuicServerConnection},
 };
 
+#[derive(Debug, thiserror::Error)]
+enum HandshakeErrors {
+    #[error("timeout waiting for handshake")]
+    Timeout,
+    #[error("ALPN mismatch")]
+    AlpnMismatch,
+    #[error("H3 connection error: {0}")]
+    H3ConnectionError(squiche::h3::Error),
+    #[error("connection closed")]
+    ConnectionClosed,
+}
+
 /// HTTP/3 server.
 pub struct H3Server {
     quic_server: QuicServer,
+    handshakes_in_progress: JoinSet<Result<H3ServerConnection, HandshakeErrors>>,
 }
 
 impl H3Server {
+    const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+    const MAX_CONCURRENT_HANDSHAKES: usize = 200;
+
     /// Creates a new HTTP/3 server.
     pub fn new(quic_server: QuicServer) -> Self {
-        Self { quic_server }
+        Self {
+            quic_server,
+            handshakes_in_progress: JoinSet::new(),
+        }
     }
 
     /// Accepts the next incoming H3 connection.
     pub async fn accept(&mut self) -> Option<H3ServerConnection> {
-        let conn = match self.quic_server.accept().await {
-            Some(quic_conn) => quic_conn,
-            None => return None,
-        };
-
-        let h3_conn = {
-            // Wait until the connection is established
-            conn.wait_established().await;
-            let mut conn_locked = conn.conn.lock().await;
-
-            // Check ALPN
-            let alpn = conn_locked.application_proto().to_vec();
-
-            // Check if the the application protocol of the connection is H3
-            if alpn != b"h3" {
-                // TODO: close connection?
-                tracing::error!(?alpn, "Connection ALPN is not h3");
-                return None;
-            }
-
-            // Create H3 config
-            let h3_config = squiche::h3::Config::new().expect("default H3 config should be valid");
-            match squiche::h3::Connection::with_transport(&mut conn_locked, &h3_config) {
-                Ok(c) => c,
-                Err(err) => {
-                    tracing::error!(?err, "Failed to create H3 connection");
-                    return None;
+        loop {
+            tokio::select! {
+                accept_res = self.quic_server.accept() => {
+                    match accept_res {
+                        Some(quic_conn) => {
+                            tracing::debug!("Accepted new QUIC connection, spawning handshake future");
+                            if self.handshakes_in_progress.len() >= Self::MAX_CONCURRENT_HANDSHAKES {
+                                tracing::warn!(max= Self::MAX_CONCURRENT_HANDSHAKES, "Too many concurrent handshakes in progress, rejecting new connection");
+                                continue;
+                            }
+                            self.handshakes_in_progress.spawn(handshake(quic_conn, Self::HANDSHAKE_TIMEOUT));
+                        }
+                        None => {
+                            tracing::trace!("No more QUIC connections to accept");
+                            return None;
+                        }
+                    }
+                }
+                Some(handshake_res) = self.handshakes_in_progress.join_next() => {
+                    let in_progress = self.handshakes_in_progress.len();
+                    match handshake_res {
+                        Ok(Ok(h3_conn)) => {
+                            tracing::debug!(in_progress, "Handshake successful, returning new H3 connection");
+                            return Some(h3_conn);
+                        }
+                        Ok(Err(err)) => {
+                            tracing::debug!(in_progress, ?err, "Handshake failed for QUIC connection");
+                        }
+                        Err(err) => {
+                            tracing::error!(in_progress, ?err, "Handshake task panicked");
+                        }
+                    }
                 }
             }
-        };
+        }
 
-        Some(H3ServerConnection {
-            quic_h3_conn: QuicH3Connection {
-                quic_conn: conn,
-                h3_conn: Arc::new(Mutex::new(h3_conn)),
-            },
-            partial_requests: HashMap::new(),
-            buffer: vec![0u8; UDP_PACKET_BUFFER_SIZE],
-        })
+        async fn handshake(
+            conn: QuicServerConnection,
+            max_wait: Duration,
+        ) -> Result<H3ServerConnection, HandshakeErrors> {
+            let h3_conn = {
+                // Wait until the connection is established
+                match conn.wait_established(max_wait).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        tracing::error!("Timed out waiting for QUIC connection to be established");
+                        return Err(HandshakeErrors::Timeout);
+                    }
+                }
+
+                if !conn.conn.lock().await.is_established() {
+                    tracing::error!(
+                        "QUIC connection was not established after waiting, closing connection"
+                    );
+                    return Err(HandshakeErrors::ConnectionClosed);
+                }
+
+                let mut conn_locked = conn.conn.lock().await;
+                tracing::trace!("QUIC connection established, checking ALPN");
+
+                // Check ALPN
+                let alpn = conn_locked.application_proto().to_vec();
+
+                // Check if the the application protocol of the connection is H3
+                if alpn != b"h3" {
+                    // TODO: close connection?
+                    tracing::error!(?alpn, "Connection ALPN is not h3");
+                    return Err(HandshakeErrors::AlpnMismatch);
+                }
+
+                // Create H3 config
+                let h3_config =
+                    squiche::h3::Config::new().expect("default H3 config should be valid");
+                match squiche::h3::Connection::with_transport(&mut conn_locked, &h3_config) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        tracing::error!(?err, "Failed to create H3 connection");
+                        return Err(HandshakeErrors::H3ConnectionError(err));
+                    }
+                }
+            };
+
+            Ok(H3ServerConnection {
+                quic_h3_conn: QuicH3Connection {
+                    quic_conn: conn,
+                    h3_conn: Arc::new(Mutex::new(h3_conn)),
+                },
+                partial_requests: HashMap::new(),
+                buffer: vec![0u8; UDP_PACKET_BUFFER_SIZE],
+            })
+        }
     }
 }
 
