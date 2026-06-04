@@ -54,6 +54,7 @@ impl ScionNetworkSim {
         now: ScionNetworkTime,
         ingress_asn: IsdAsn,
         ingress_interface: u16,
+        ignore_macs: bool,
     ) -> anyhow::Result<ScionNetworkSimOutput> {
         let iter = ScionNetworkSimIter::<RoutingImpl>::new(
             topology,
@@ -61,6 +62,7 @@ impl ScionNetworkSim {
             now,
             ingress_asn,
             ingress_interface,
+            ignore_macs,
         )?;
         let iter_result = iter
             .last()
@@ -99,8 +101,16 @@ impl ScionNetworkSim {
         now: ScionNetworkTime,
         ingress_asn: IsdAsn,
         ingress_interface: u16,
+        ignore_macs: bool,
     ) -> anyhow::Result<ScionNetworkSimIter<'input, AsRoutingImpl>> {
-        ScionNetworkSimIter::new(topology, scion_packet, now, ingress_asn, ingress_interface)
+        ScionNetworkSimIter::new(
+            topology,
+            scion_packet,
+            now,
+            ingress_asn,
+            ingress_interface,
+            ignore_macs,
+        )
     }
 }
 
@@ -117,6 +127,9 @@ pub struct ScionNetworkSimIter<'input, AsRoutingImpl: RoutingLogic> {
     current_forwarding_key: ForwardingKey,
 
     finished: bool,
+
+    /// Whether to ignore MAC authentication during simulation
+    ignore_macs: bool,
 
     _phantom: std::marker::PhantomData<AsRoutingImpl>,
 }
@@ -138,6 +151,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
         now: ScionNetworkTime,
         ingress_as: IsdAsn,
         ingress_interface: u16,
+        ignore_macs: bool,
     ) -> anyhow::Result<Self> {
         let current_as = topology
             .as_map
@@ -162,6 +176,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
             current_ingress_interface_id: ingress_interface,
             current_forwarding_key,
             finished: false,
+            ignore_macs,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -212,6 +227,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
                     is_up: link.is_up,
                 })
             },
+            self.ignore_macs,
         );
 
         let processing_result: AsRoutingAction = processing_result.into();
@@ -372,6 +388,7 @@ mod tests {
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
             0,
+            false,
         )
         .expect("should not fail to route");
 
@@ -438,6 +455,7 @@ mod tests {
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
             0,
+            false,
         )
         .expect("should not fail to simulate");
 
@@ -495,6 +513,7 @@ mod tests {
             ScionNetworkTime::from_timestamp_secs(0),
             src_addr.isd_asn(),
             0,
+            false,
         )
         .expect("should not fail to route");
 
@@ -590,6 +609,7 @@ mod tests {
                 _now: ScionNetworkTime,
                 _as_forwarding_key: &ForwardingKey,
                 interface_link_type_lookup: impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+                _ignore_macs: bool,
             ) -> Result<AsRoutingAction, ScmpErrorMessage> {
                 if ingress_interface_id == 6 {
                     // Simulate a decision to handle the packet as a SCMP request at the ingress

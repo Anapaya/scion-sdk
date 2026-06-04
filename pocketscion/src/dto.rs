@@ -67,9 +67,7 @@ pub struct SystemStateDto {
     /// Endhost API discovery state
     pub endhost_api_discovery_api: BTreeMap<EndhostApiDiscoveryApiId, EndhostApiDiscoveryStateDto>,
     /// Scion Topology used for routing
-    #[schema(nullable = false)]
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub topology: Option<ScionTopologyDto>,
+    pub topology: ScionTopologyDto,
     /// The list of external ASes, keyed by ISD-AS.
     pub external_ases: BTreeMap<IsdAsn, ExternalAsStateDto>,
     /// The state of the control service for each ISD-AS
@@ -77,6 +75,8 @@ pub struct SystemStateDto {
     /// The list of network forwarders, keyed by the SCION address of the forwarder on the network
     /// simulation.
     pub network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
+    /// Whether to ignore MAC authentication during routing in the Network Simulator.
+    pub ignore_macs: bool,
 }
 
 fn default_snaptun_keepalive_interval() -> Duration {

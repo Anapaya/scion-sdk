@@ -88,7 +88,7 @@ fn default_segments((start_as, end_as): (IsdAsn, IsdAsn)) -> Segments {
                     hop_field: SegmentHopField {
                         expiration_units: 60,
                         cons_ingress: 0,
-                        cons_egress: 2,
+                        cons_egress: 1,
                         mac: HopFieldMac::zero(),
                     },
                 },
@@ -113,7 +113,7 @@ fn default_segments((start_as, end_as): (IsdAsn, IsdAsn)) -> Segments {
                     ingress_mtu: 1480,
                     hop_field: SegmentHopField {
                         expiration_units: 60,
-                        cons_ingress: 201,
+                        cons_ingress: 1,
                         cons_egress: 0,
                         mac: HopFieldMac::zero(),
                     },

@@ -67,6 +67,7 @@ pub trait RoutingLogic {
     /// * `interface_lookup` - Callback to get interface state by interface ID
     /// * `now` - current Unix Epoch in seconds
     /// * `as_forwarding_key` - Optional cryptographic key for MAC verification
+    /// * `ignore_macs` - Whether to ignore MAC authentication during routing
     ///
     /// # Returns
     /// * Ok([AsRoutingAction]) - How the packet should be handled next
@@ -80,6 +81,7 @@ pub trait RoutingLogic {
         now: ScionNetworkTime,
         as_forwarding_key: &ForwardingKey,
         interface_lookup: impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        ignore_macs: bool,
     ) -> Result<AsRoutingAction, ScmpErrorMessage>;
 }
 

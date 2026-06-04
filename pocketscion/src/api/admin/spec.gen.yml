@@ -852,9 +852,11 @@ components:
       - routers
       - endhost_apis
       - endhost_api_discovery_api
+      - topology
       - external_ases
       - control_service_states
       - network_forwarders
+      - ignore_macs
       properties:
         auth_server_state:
           $ref: '#/components/schemas/AuthServerStateDto'
@@ -923,6 +925,9 @@ components:
             examples:
             - 1-ff00:0:110
             pattern: ^\d+-([a-f0-9]{1,4}:){2}([a-f0-9]{1,4})|\d+$
+        ignore_macs:
+          type: boolean
+          description: Whether to ignore MAC authentication during routing in the Network Simulator.
         network_forwarders:
           type: object
           description: |-

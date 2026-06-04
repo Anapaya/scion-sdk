@@ -137,14 +137,9 @@ impl ControlService {
                 let now = SystemTime::now();
                 let state_guard = self.app_state.system_state.read().unwrap();
 
-                let segment_registry = state_guard
-                    .segment_registry
-                    .as_ref()
-                    .expect("Segment registry must be available in system state for beaconing");
-                let topology = state_guard
-                    .topology
-                    .as_ref()
-                    .expect("Topology must be available in system state for beaconing");
+                let segment_registry = &state_guard.segment_registry;
+                let topology = &state_guard.topology;
+
                 self.app_state
                     .get_control_service_state(self.isd_asn)
                     .expect("Control Service state must exist for own ISD-AS")
@@ -159,8 +154,6 @@ impl ControlService {
                             .app_state
                             .system_state()
                             .topology
-                            .as_ref()
-                            .expect("Topology must be available in system state for beaconing")
                             .scion_link(&our_interface.isd_as, our_interface.if_id)
                             .expect("Interface should exist in topology")
                             .get_directed_from(&our_interface.isd_as)
@@ -200,14 +193,8 @@ impl ControlService {
                         let crpc_client = {
                             let dst_cert_chain: Vec<StoreCertificateDer> = {
                                 let state_guard = self.app_state.system_state.read().unwrap();
-                                let Some(certs) = state_guard
-                                    .topology
-                                    .as_ref()
-                                    .expect(
-                                        "Topology must be available in system state for beaconing",
-                                    )
-                                    .trust_store
-                                    .ca_certs(&dst_as.isd())
+                                let Some(certs) =
+                                    state_guard.topology.trust_store.ca_certs(&dst_as.isd())
                                 else {
                                     tracing::warn!(
                                         interface = %our_interface,
@@ -336,10 +323,7 @@ impl ControlService {
 
         let (this_as, peer_as_if) = {
             let state_guard = self.app_state.system_state.read().unwrap();
-            let topo = state_guard
-                .topology
-                .as_ref()
-                .expect("Topology must be available in system state for service resolution");
+            let topo = &state_guard.topology;
 
             let this_as = topo
                 .as_map

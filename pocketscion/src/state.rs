@@ -50,7 +50,7 @@ use crate::{
         },
         scion::{
             segment::registry::SegmentRegistry,
-            topology::{FastTopologyLookup, ScionTopology},
+            topology::{FastTopologyLookup, ScionAs, ScionLink, ScionTopology},
         },
     },
     state::{
@@ -255,27 +255,21 @@ impl SharedPocketScionState {
         let segment_store = SegmentRegistry::new(&FastTopologyLookup::new(&topology));
         let mut state_write_guard = self.system_state.write().unwrap();
 
-        state_write_guard.topology = Some(topology);
-        state_write_guard.segment_registry = Some(segment_store);
+        state_write_guard.topology = topology;
+        state_write_guard.segment_registry = segment_store;
     }
 
     /// Sets the state of a link in the topology.
     /// If no topology is set, or the link does not exist, None is returned.
     pub fn set_link_state(&self, isd_asn: IsdAsn, link_id: u16, up: bool) -> Option<bool> {
         let mut state_write_guard = self.system_state.write().unwrap();
-        if let Some(topology) = &mut state_write_guard.topology {
-            topology.mut_scion_link(&isd_asn, link_id).map(|link| {
+        state_write_guard
+            .topology
+            .mut_scion_link(&isd_asn, link_id)
+            .map(|link| {
                 link.set_is_up(up);
                 up
             })
-        } else {
-            None
-        }
-    }
-
-    /// Returns true if a topology is set.
-    pub fn has_topology(&self) -> bool {
-        self.system_state.read().unwrap().topology.is_some()
     }
 
     /// Adds a wildcard receiver for the given ISD-AS to the network simulation.
@@ -337,13 +331,14 @@ pub struct SystemState {
     routers: BTreeMap<RouterId, RouterState>,
     endhost_apis: BTreeMap<EndhostApiId, EndhostApiState>,
     endhost_api_discovery_api: BTreeMap<EndhostApiDiscoveryApiId, EndhostApiDiscoveryState>,
-    topology: Option<ScionTopology>,
-    segment_registry: Option<SegmentRegistry>,
+    pub(crate) topology: ScionTopology,
+    pub(crate) segment_registry: SegmentRegistry,
     sim_receivers: NetworkReceiverRegistry,
     external_ases: BTreeMap<IsdAsn, ExternalAsState>,
     extern_as_handlers: ExternalAsRegistry,
     control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
     network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
+    ignore_macs: bool,
 }
 
 impl SystemState {
@@ -357,8 +352,10 @@ impl SystemState {
             snaptun_keepalive_interval: DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL,
             routers: Default::default(),
             auth_server: Default::default(),
-            topology: Default::default(),
-            segment_registry: Default::default(),
+            topology: Self::default_topology(),
+            segment_registry: SegmentRegistry::new(&FastTopologyLookup::new(
+                &Self::default_topology(),
+            )),
             sim_receivers: Default::default(),
             endhost_apis: Default::default(),
             endhost_api_discovery_api: Default::default(),
@@ -366,6 +363,7 @@ impl SystemState {
             extern_as_handlers: Default::default(),
             network_forwarders: Default::default(),
             control_service_states: Default::default(),
+            ignore_macs: false,
         }
     }
 
@@ -382,6 +380,28 @@ impl SystemState {
     /// Returns the root secret of the system state.
     pub fn root_secret(&self) -> DhsdSecret {
         self.root_secret.clone()
+    }
+
+    /// Returns a default topology
+    fn default_topology() -> ScionTopology {
+        let mut topo = ScionTopology::new();
+        topo.add_as(ScionAs::new_core("1-ff00:0:132".parse().unwrap()))
+            .unwrap()
+            .add_as(ScionAs::new_core("2-ff00:0:212".parse().unwrap()))
+            .unwrap()
+            .add_link(
+                ScionLink::new(
+                    "1-ff00:0:132".parse().unwrap(),
+                    1,
+                    crate::network::scion::topology::ScionLinkType::Core,
+                    "2-ff00:0:212".parse().unwrap(),
+                    1,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        topo
     }
 }
 
@@ -411,10 +431,7 @@ impl From<&SystemState> for SystemStateDto {
                 .iter()
                 .map(|(router_socket_id, router_state)| (*router_socket_id, router_state.into()))
                 .collect(),
-            topology: system_state
-                .topology
-                .clone()
-                .map(|topology| topology.into()),
+            topology: system_state.topology.clone().into(),
             endhost_apis: system_state.endhost_apis.clone(),
             endhost_api_discovery_api: system_state
                 .endhost_api_discovery_api
@@ -424,6 +441,7 @@ impl From<&SystemState> for SystemStateDto {
             external_ases: map_btree(system_state.external_ases.clone(), Into::into),
             control_service_states: system_state.control_service_states.clone(),
             network_forwarders: system_state.network_forwarders.clone(),
+            ignore_macs: system_state.ignore_macs,
         }
     }
 }
@@ -460,15 +478,9 @@ impl TryFrom<SystemStateDto> for SystemState {
         let snap_token_public_pem = Pem::from_str(&dto.snap_token_public_key)
             .context("invalid PEM format for SNAP token public key")?;
 
-        let topology = dto
-            .topology
-            .map(|topology_dto| topology_dto.try_into())
-            .transpose()
-            .context("invalid topology state")?;
+        let topology: ScionTopology = dto.topology.try_into().context("invalid topology state")?;
 
-        let topology_segments = topology
-            .as_ref()
-            .map(|topology| SegmentRegistry::new(&FastTopologyLookup::new(topology)));
+        let topology_segments = SegmentRegistry::new(&FastTopologyLookup::new(&topology));
 
         let external_ases = map_btree_fallible(dto.external_ases, TryInto::try_into)
             .context("invalid external AS states")?;
@@ -492,6 +504,7 @@ impl TryFrom<SystemStateDto> for SystemState {
             extern_as_handlers: Default::default(),
             control_service_states: dto.control_service_states,
             network_forwarders: dto.network_forwarders,
+            ignore_macs: dto.ignore_macs,
         })
     }
 }

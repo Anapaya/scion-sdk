@@ -22,7 +22,6 @@ use sciparse::{
     identifier::isd_asn::IsdAsn,
     segment::{Segments, SegmentsPage},
 };
-use snap_control::server::mock_segment_lister::MockSegmentLister;
 
 use crate::state::SharedPocketScionState;
 
@@ -31,7 +30,6 @@ use crate::state::SharedPocketScionState;
 /// This is scoped per Endhost API
 pub struct StateEndhostSegmentLister {
     app_state: SharedPocketScionState,
-    fallback: MockSegmentLister,
     /// Valid local ASes of this segment lister
     /// If None, the segment lister will list segments from any AS
     local_ases: BTreeSet<IsdAsn>,
@@ -48,7 +46,6 @@ impl StateEndhostSegmentLister {
         local_ases: BTreeSet<scion_proto::address::IsdAsn>,
     ) -> Self {
         Self {
-            fallback: MockSegmentLister::default(),
             app_state,
             local_ases: local_ases.into_iter().map(Into::into).collect(),
         }
@@ -61,28 +58,13 @@ impl SegmentsDiscovery for StateEndhostSegmentLister {
         &self,
         src: sciparse::identifier::isd_asn::IsdAsn,
         dst: sciparse::identifier::isd_asn::IsdAsn,
-        page_size: i32,
-        page_token: String,
+        _page_size: i32,
+        _page_token: String,
     ) -> Result<SegmentsPage, SegmentsError> {
-        if !self.app_state.has_topology() {
-            tracing::debug!("No topology available, falling back to mock segment lister");
-            return self
-                .fallback
-                .list_segments(src, dst, page_size, page_token)
-                .await;
-        }
-
         let state_guard = self.app_state.system_state.read().unwrap();
-
-        let Some(ref segments) = state_guard.segment_registry else {
-            tracing::error!("Cannot list segments: topology store is missing");
-            return Err(SegmentsError::InternalError(
-                "missing topology store".into(),
-            ));
-        };
+        let segments = &state_guard.segment_registry;
 
         // Select correct local as
-
         let Some(local_as) = self.local_ases.iter().find(|ia| **ia == src) else {
             return Err(SegmentsError::InvalidArgument(
                 format!(
@@ -109,15 +91,7 @@ impl SegmentsDiscovery for StateEndhostSegmentLister {
         let segment_id = (src.0 ^ (dst.0) << 8) as u16;
 
         let segments = resolved
-            .into_path_segments(
-                state_guard
-                    .topology
-                    .as_ref()
-                    .expect("Topology should be present"),
-                Utc::now(),
-                segment_id,
-                255,
-            )
+            .into_path_segments(&state_guard.topology, Utc::now(), segment_id, 255)
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to convert segments");
                 SegmentsError::InternalError(e.to_string().into())

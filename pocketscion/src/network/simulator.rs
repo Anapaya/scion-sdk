@@ -24,9 +24,9 @@ use crate::network::{
         simulator::{DispatchEffect, LocalNetworkSimulation},
     },
     scion::{
-        routing::{LocalAsRoutingAction, ScionNetworkTime, spec::SpecRoutingLogic},
-        simulator::{ScionNetworkSim, ScionNetworkSimOutput},
-        topology::{ScionRouter, ScionRouterInterface, ScionTopology},
+        routing::{ScionNetworkTime, spec::SpecRoutingLogic},
+        simulator::ScionNetworkSim,
+        topology::ScionTopology,
     },
 };
 
@@ -40,7 +40,9 @@ pub struct NetworkSimulator<'input> {
     /// Registry of external ASes, needed for forwarding to external ASes
     external_ases: &'input ExternalAsRegistry,
     /// Topology to simulate, if none routing just works
-    topology: Option<&'input ScionTopology>,
+    topology: &'input ScionTopology,
+    /// Whether to ignore MAC authentication during simulation
+    ignore_macs: bool,
 }
 // General
 impl NetworkSimulator<'_> {
@@ -48,12 +50,14 @@ impl NetworkSimulator<'_> {
     pub fn new<'input>(
         lan_ip_targets: &'input NetworkReceiverRegistry,
         external_ases: &'input ExternalAsRegistry,
-        topology: Option<&'input ScionTopology>,
+        topology: &'input ScionTopology,
+        ignore_macs: bool,
     ) -> NetworkSimulator<'input> {
         NetworkSimulator {
             network_receivers: lan_ip_targets,
             external_ases,
             topology,
+            ignore_macs,
         }
     }
 }
@@ -82,42 +86,19 @@ impl NetworkSimulator<'_> {
 
             // Simulate routing
             tracing::trace!(%local_as, "Dispatching packet at AS");
-            let routing_output = match self.topology {
-                Some(topology) => {
-                    ScionNetworkSim::simulate_traversal::<SpecRoutingLogic>(
-                        topology,
-                        &mut packet,
-                        now,
-                        local_as,
-                        local_interface,
-                    )
-                    .context("error simulating packet traversal")?
-                }
-                // If no topology is provided, we just skip routing and dispatch the packet directly
-                // to the destination
-                None => {
-                    let dst = packet
-                        .headers
-                        .address
-                        .destination()
-                        .context("no destination address in packet")?;
-
-                    ScionNetworkSimOutput {
-                        at_as: dst.isd_asn(),
-                        at_ingress_interface: 1,
-                        action: LocalAsRoutingAction::ForwardLocal {
-                            target_address: dst,
-                        },
-                    }
-                }
-            };
+            let routing_output = ScionNetworkSim::simulate_traversal::<SpecRoutingLogic>(
+                self.topology,
+                &mut packet,
+                now,
+                local_as,
+                local_interface,
+                self.ignore_macs,
+            )
+            .context("error simula`ting packet traversal")?;
 
             let router = self
                 .topology
-                .map(|topo| {
-                    topo.get_router(&routing_output.at_as, routing_output.at_ingress_interface)
-                })
-                .unwrap_or(&FALLBACK_ROUTER);
+                .get_router(&routing_output.at_as, routing_output.at_ingress_interface);
 
             // Simulate Local Handling
             if let Some(reply) = LocalNetworkSimulation::new(
@@ -155,10 +136,7 @@ impl NetworkSimulator<'_> {
         local_router_if: u16,
         packet: ScionPacketRaw,
     ) -> Option<DispatchEffect> {
-        let router = self
-            .topology
-            .map(|topo| topo.get_router(&local_as, local_router_if))
-            .unwrap_or(&FALLBACK_ROUTER);
+        let router = self.topology.get_router(&local_as, local_router_if);
 
         LocalNetworkSimulation::new(
             local_as,
@@ -170,11 +148,6 @@ impl NetworkSimulator<'_> {
         .dispatch(packet)
     }
 }
-
-static FALLBACK_ROUTER: ScionRouter = ScionRouter {
-    interfaces: ScionRouterInterface::Fallback,
-    ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-};
 
 #[cfg(test)]
 mod test {
@@ -271,7 +244,7 @@ mod test {
             let topology = test.ctx.build_topology();
 
             println!("{}", topology.format_mermaid());
-            NetworkSimulator::new(&test.targets, &Default::default(), Some(&topology)).dispatch(
+            NetworkSimulator::new(&test.targets, &Default::default(), &topology, false).dispatch(
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
@@ -383,7 +356,7 @@ mod test {
             )
             .unwrap();
 
-            NetworkSimulator::new(&network_receivers, &Default::default(), Some(&topology))
+            NetworkSimulator::new(&network_receivers, &Default::default(), &topology, false)
                 .dispatch(src_ia, 0, ScionNetworkTime(0), req_packet.into());
 
             let recv = src_receiver
@@ -434,33 +407,7 @@ mod test {
             );
             let topology = test.ctx.build_topology();
             let ext_as_registry = ExternalAsRegistry::new();
-            let sim = NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology));
-
-            sim.dispatch(
-                test.src.isd_asn(),
-                0,
-                ScionNetworkTime(test.ctx.timestamp),
-                test.packet.clone(),
-            );
-
-            assert_eq!(test.dst_dp.rx_count(), 1, "Should have received one packet");
-            assert_eq!(test.src_dp.rx_count(), 0, "Src should not have rx");
-        }
-
-        #[test_log::test]
-        fn should_dispatch_outgoing_packet_without_topo() {
-            let test = setup(
-                |src, dst| {
-                    TestPathBuilder::new(src, dst)
-                        .up()
-                        .add_hop(0, 1)
-                        .add_hop(1, 0)
-                },
-                0,
-                None,
-            );
-            let ext_as_registry = ExternalAsRegistry::new();
-            let sim = NetworkSimulator::new(&test.targets, &ext_as_registry, None);
+            let sim = NetworkSimulator::new(&test.targets, &ext_as_registry, &topology, false);
 
             sim.dispatch(
                 test.src.isd_asn(),
@@ -488,52 +435,7 @@ mod test {
 
             let topology = test.ctx.build_topology();
             let ext_as_registry = ExternalAsRegistry::new();
-            NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology)).dispatch(
-                test.src.isd_asn(),
-                0,
-                ScionNetworkTime(test.ctx.timestamp),
-                test.packet.clone(),
-            );
-
-            assert_eq!(test.dst_dp.rx_count(), 0, "Dst should not have rx");
-            assert_eq!(test.src_dp.rx_count(), 1, "Should have received one packet");
-            assert_eq!(
-                test.src_dp.rx_scmp(),
-                1,
-                "Should have received one SCMP packet"
-            );
-
-            let scmp_packet = test.src_dp.last_recv().unwrap();
-            let scmp = classify_scion_packet(scmp_packet.clone())
-                .expect("Should classify SCMP packet")
-                .try_into_scmp()
-                .expect("Should convert to SCMP packet");
-
-            let ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable {
-                code: DestinationUnreachableCode::AddressUnreachable,
-                ..
-            }) = scmp.message
-            else {
-                panic!(
-                    "Expected SCMP Destination Unreachable message with AddressUnreachable code"
-                );
-            };
-        }
-
-        #[test_log::test]
-        fn should_respond_with_destination_unreachable_when_ip_not_bound_with_topo() {
-            let test = setup(
-                |src, dst| {
-                    TestPathBuilder::new(src, dst)
-                        .up()
-                        .add_hop(0, 1)
-                        .add_hop(1, 0)
-                },
-                0,
-                Some("1-99,1.2.3.4".parse().unwrap()), // Invalid destination IP
-            );
-            let ext_as_registry = ExternalAsRegistry::new();
-            NetworkSimulator::new(&test.targets, &ext_as_registry, None).dispatch(
+            NetworkSimulator::new(&test.targets, &ext_as_registry, &topology, false).dispatch(
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
@@ -577,7 +479,7 @@ mod test {
 
             let topology = test.ctx.build_topology();
             let ext_as_registry = ExternalAsRegistry::new();
-            NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology)).dispatch(
+            NetworkSimulator::new(&test.targets, &ext_as_registry, &topology, false).dispatch(
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
@@ -603,7 +505,7 @@ mod test {
 
             let topology = test.ctx.build_topology();
             let ext_as_registry = ExternalAsRegistry::new();
-            NetworkSimulator::new(&test.targets, &ext_as_registry, Some(&topology)).dispatch(
+            NetworkSimulator::new(&test.targets, &ext_as_registry, &topology, false).dispatch(
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),

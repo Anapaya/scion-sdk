@@ -89,9 +89,7 @@ impl ExternalAsService {
         // Validate that the topology and External AS state are consistent with each other.
         let topo_as = {
             let state_guard = app_state.system_state.read().unwrap();
-            let topo = state_guard.topology.as_ref().context(
-                "To start External AS Service, a topology must be present in the system state",
-            )?;
+            let topo = &state_guard.topology;
 
             let topo_as = topo
                 .as_map
@@ -106,13 +104,7 @@ impl ExternalAsService {
                 );
             }
 
-            let link_iter = state_guard
-                .topology
-                .as_ref()
-                .context(
-                    "To start External AS Service, a topology must be present in the system state",
-                )?
-                .iter_scion_links_by_as(&ext_isd_as);
+            let link_iter = topo.iter_scion_links_by_as(&ext_isd_as);
 
             for link in link_iter {
                 let link = link
@@ -379,8 +371,6 @@ impl SharedPocketScionState {
         let mut sstate = self.system_state.write().unwrap();
         let is_external = sstate
             .topology
-            .as_ref()
-            .context("To add an External AS, a topology must be present")?
             .as_map
             .get(&isd_asn)
             .context(

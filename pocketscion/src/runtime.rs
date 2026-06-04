@@ -23,8 +23,13 @@ use std::{
 };
 
 use anyhow::Context;
+use bytes::Bytes;
 use jsonwebtoken::DecodingKey;
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
+use scion_proto::{
+    address::IsdAsn,
+    packet::ScionPacketRaw,
+    path::{Path as ScionPath, combinator::combine},
+};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use scion_sdk_utils::{
     io::{get_tmp_path, read_file, write_file},
@@ -49,7 +54,7 @@ use crate::{
     management_api,
     network::{
         local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
-        scion::routing::ScionNetworkTime,
+        scion::{routing::ScionNetworkTime, segment::lister::endhost::SnapListPathSegments},
     },
     state::{
         RouterId, SharedPocketScionState, SystemState,
@@ -530,6 +535,68 @@ impl PocketScionRuntime {
     /// Returns a handle to the shared state of the PocketSCION runtime.
     pub fn state(&self) -> SharedPocketScionState {
         self.state.clone()
+    }
+
+    /// Returns valid Segments from `src` to `dst` as raw SCION packets, if they exist.
+    ///
+    /// ### Parameters
+    /// - `src`: Source ISD-AS for the path lookup.
+    /// - `dst`: Destination ISD-AS for the path lookup.
+    /// - `valid_after`: Returned paths are valid after this timestamp.
+    pub fn segments(
+        &self,
+        src: IsdAsn,
+        dst: IsdAsn,
+        valid_after: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<SnapListPathSegments> {
+        let sguard = self.state.system_state();
+        let segments =
+            sguard
+                .segment_registry
+                .endhost_list_segments(src.into(), src.into(), dst.into())?;
+
+        segments.into_path_segments(&sguard.topology, valid_after, 0, 255)
+    }
+
+    /// Returns valid Paths from `src` to `dst` as raw SCION packets, if they exist.
+    ///
+    /// ### Parameters
+    /// - `src`: Source ISD-AS for the path lookup.
+    /// - `dst`: Destination ISD-AS for the path lookup.
+    /// - `valid_after`: Returned paths are valid after this timestamp.
+    pub fn paths(
+        &self,
+        src: IsdAsn,
+        dst: IsdAsn,
+        valid_after: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<Vec<ScionPath<Bytes>>> {
+        let sguard = self.state.system_state();
+        let segments =
+            sguard
+                .segment_registry
+                .endhost_list_segments(src.into(), src.into(), dst.into())?;
+
+        let (core_segments, non_core_segments) = {
+            let sciparse_segments =
+                segments.into_path_segments(&sguard.topology, valid_after, 0, 255)?;
+
+            // TODO: once sciparse is the norm, this should be removed
+            (
+                sciparse_segments
+                    .core
+                    .into_iter()
+                    .map(|seg| seg.into())
+                    .collect(),
+                sciparse_segments
+                    .down
+                    .into_iter()
+                    .chain(sciparse_segments.up)
+                    .map(|seg| seg.into())
+                    .collect(),
+            )
+        };
+
+        Ok(combine(src, dst, core_segments, non_core_segments))
     }
 }
 

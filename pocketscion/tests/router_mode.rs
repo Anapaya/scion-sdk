@@ -21,6 +21,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use chrono::Utc;
 use ipnet::IpNet;
 use pocketscion::{
     runtime::PocketScionRuntimeBuilder,
@@ -30,7 +31,6 @@ use pocketscion::{
 use scion_proto::{
     address::{ScionAddr, SocketAddr},
     packet::{ByEndpoint, ScionPacketScmp, ScionPacketUdp},
-    path::{DataPlanePath, EncodedStandardPath, HopField, InfoField, StandardPath},
     scmp::{ScmpEchoRequest, ScmpExternalInterfaceDown, ScmpMessage},
     wire_encoding::{WireDecode as _, WireEncodeVec as _},
 };
@@ -107,6 +107,13 @@ async fn echo() {
             .expect("Failed to send packet");
     });
 
+    let dp_path = pocketscion
+        .runtime
+        .paths(IA132, IA212, Utc::now())
+        .unwrap()
+        .remove(0)
+        .data_plane_path;
+
     // Spawn a task for the client.
     let client_task = tokio::spawn(async move {
         // Construct a simple SCION UDP packet.
@@ -115,7 +122,7 @@ async fn echo() {
                 source: SocketAddr::from_std(IA132, client_addr),
                 destination: SocketAddr::from_std(IA212, server_addr),
             },
-            DataPlanePath::Standard(scion_path()),
+            dp_path,
             b"Hello SCION!".as_ref().into(),
         )
         .expect("Failed to create SCION packet");
@@ -236,9 +243,14 @@ async fn send_scmp() {
 
     // Spawn a task for the sender.
     let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
-    let sender_task = tokio::spawn(async move {
-        let dp_path = DataPlanePath::Standard(scion_path());
+    let dp_path = pocketscion
+        .runtime
+        .paths(IA132, IA212, Utc::now())
+        .unwrap()
+        .remove(0)
+        .data_plane_path;
 
+    let sender_task = tokio::spawn(async move {
         // Send SCMP echo request with correct identifier (receiver's port)
         let echo_request = ScmpMessage::EchoRequest(ScmpEchoRequest::new(
             receiver_addr.port(),
@@ -329,26 +341,6 @@ async fn send_scmp() {
     })
     .await
     .expect("SCMP test timed out");
-}
-
-fn scion_path() -> EncodedStandardPath {
-    let info = InfoField {
-        cons_dir: true,
-        ..Default::default()
-    };
-    let hop1 = HopField {
-        cons_egress: 2,
-        ..Default::default()
-    };
-    let hop2 = HopField {
-        cons_ingress: 3,
-        ..Default::default()
-    };
-
-    let mut path = StandardPath::new();
-    path.add_segment(info, vec![hop1, hop2])
-        .expect("Failed to add segment to SCION path");
-    path.into()
 }
 
 // Test 1: SNAP interface forwarding
@@ -469,13 +461,20 @@ async fn snap_interface_forwarding() {
         tracing::info!("SNAP socket sent response");
     });
 
+    let dp_path = pocketscion
+        .runtime
+        .paths(IA212, IA132, Utc::now())
+        .unwrap()
+        .remove(0)
+        .data_plane_path;
+
     // Test Case 1a: remote → endhost behind SNAP
     let packet_to_snap = ScionPacketUdp::new(
         ByEndpoint {
             source: remote_scion_addr,
             destination: endhost_behind_snap_scion_addr,
         },
-        DataPlanePath::Standard(scion_path()),
+        dp_path,
         test_payload_1.as_ref().into(),
     )
     .expect("Failed to create packet to endhost behind SNAP");
@@ -651,13 +650,20 @@ async fn snap_excluded_networks() {
         tracing::info!("Excluded socket sent response");
     });
 
+    let dp_path = pocketscion
+        .runtime
+        .paths(IA212, IA132, Utc::now())
+        .unwrap()
+        .remove(0)
+        .data_plane_path;
+
     // Test Case 2a: remote → Excluded Socket
     let packet_to_excluded = ScionPacketUdp::new(
         ByEndpoint {
             source: remote_scion_addr,
             destination: excluded_scion_addr,
         },
-        DataPlanePath::Standard(scion_path()),
+        dp_path,
         test_payload_1.as_ref().into(),
     )
     .expect("Failed to create packet to excluded");

@@ -102,6 +102,28 @@ impl std::fmt::Display for Segments {
     }
 }
 
+impl From<sciparse::segment::Segments> for Segments {
+    fn from(value: sciparse::segment::Segments) -> Self {
+        Segments {
+            up_segments: value
+                .up_segments
+                .into_iter()
+                .map(PathSegment::from)
+                .collect(),
+            down_segments: value
+                .down_segments
+                .into_iter()
+                .map(PathSegment::from)
+                .collect(),
+            core_segments: value
+                .core_segments
+                .into_iter()
+                .map(PathSegment::from)
+                .collect(),
+        }
+    }
+}
+
 /// Segments containing up, down, and core segments along with a next page token.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct SegmentsPage {
@@ -124,26 +146,7 @@ impl std::fmt::Display for SegmentsPage {
 impl From<sciparse::segment::SegmentsPage> for SegmentsPage {
     fn from(value: sciparse::segment::SegmentsPage) -> Self {
         SegmentsPage {
-            segments: Segments {
-                up_segments: value
-                    .segments
-                    .up_segments
-                    .into_iter()
-                    .map(PathSegment::from)
-                    .collect(),
-                down_segments: value
-                    .segments
-                    .down_segments
-                    .into_iter()
-                    .map(PathSegment::from)
-                    .collect(),
-                core_segments: value
-                    .segments
-                    .core_segments
-                    .into_iter()
-                    .map(PathSegment::from)
-                    .collect(),
-            },
+            segments: value.segments.into(),
             next_page_token: value.next_page_token,
         }
     }

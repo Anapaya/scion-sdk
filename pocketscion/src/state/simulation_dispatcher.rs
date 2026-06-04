@@ -90,6 +90,12 @@ impl Dispatcher for NetSimDispatcher {
 }
 
 impl SharedPocketScionState {
+    /// Sets whether to ignore MAC authentication during routing in the Network Simulator.
+    pub fn set_ignore_macs(&self, ignore: bool) {
+        let mut state_guard = self.system_state.write().unwrap();
+        state_guard.ignore_macs = ignore;
+    }
+
     /// Dispatches a packet into the Network Simulator, using the given AS as the source.
     ///
     /// ## Parameters:
@@ -110,7 +116,8 @@ impl SharedPocketScionState {
         NetworkSimulator::new(
             &state_guard.sim_receivers,
             &state_guard.extern_as_handlers,
-            state_guard.topology.as_ref(),
+            &state_guard.topology,
+            state_guard.ignore_macs,
         )
         .dispatch(local_as, local_interface, now, packet);
     }

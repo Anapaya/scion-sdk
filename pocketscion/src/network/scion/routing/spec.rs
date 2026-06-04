@@ -53,6 +53,7 @@ impl RoutingLogic for SpecRoutingLogic {
         now: ScionNetworkTime,
         as_forwarding_key: &ForwardingKey,
         interface_link_type_lookup: impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        ignore_macs: bool,
     ) -> Result<super::AsRoutingAction, scion_proto::scmp::ScmpErrorMessage> {
         // Extract path from the packet
 
@@ -75,7 +76,7 @@ impl RoutingLogic for SpecRoutingLogic {
                         ingress_interface_id,
                         now,
                         as_forwarding_key,
-                        &interface_link_type_lookup,
+                        &interface_link_type_lookup,ignore_macs,
                     );
 
                     // always update packet path
@@ -129,6 +130,7 @@ impl RoutingLogic for SpecRoutingLogic {
                                 now,
                                 as_forwarding_key,
                                 &interface_link_type_lookup,
+                                ignore_macs,
                             );
 
                             // always update packet path
@@ -180,6 +182,7 @@ impl SpecRoutingLogic {
         now: ScionNetworkTime,
         as_forwarding_key: &ForwardingKey,
         interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        ignore_macs: bool,
     ) -> Result<AsRoutingAction, ScmpErrorMessage> {
         // TODO: We skip all non required checks at the moment as well as SCMP handling
 
@@ -194,6 +197,7 @@ impl SpecRoutingLogic {
                     now,
                     as_forwarding_key,
                     interface_link_type_lookup,
+                    ignore_macs,
                 )
             })?;
 
@@ -216,6 +220,7 @@ impl SpecRoutingLogic {
                 now,
                 as_forwarding_key,
                 interface_link_type_lookup,
+                ignore_macs,
             )
         })
     }
@@ -229,6 +234,7 @@ impl SpecRoutingLogic {
         _now: ScionNetworkTime,
         as_forwarding_key: &ForwardingKey,
         _interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        _ignore_macs: bool,
     ) -> Result<IngressNextAction, ScmpErrorMessage> {
         // TODO: We skip all non required checks at the moment, as well as SCMP handling and
         // interface down handling
@@ -295,6 +301,7 @@ impl SpecRoutingLogic {
         _now: ScionNetworkTime,
         _forwarding_key: &ForwardingKey,
         _interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        _ignore_macs: bool,
     ) -> Result<AsRoutingAction, ScmpErrorMessage> {
         // TODO: We skip all non required checks at the moment, as well as SCMP handling and
         // interface down handling
@@ -337,6 +344,7 @@ impl SpecRoutingLogic {
         now: ScionNetworkTime,
         as_forwarding_key: &ForwardingKey,
         interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        ignore_macs: bool,
     ) -> Result<AsRoutingAction, ScmpErrorMessage> {
         // Ingress checks are not run for packets coming from inside the AS
         if ingress_interface_id != 0 {
@@ -350,6 +358,7 @@ impl SpecRoutingLogic {
                     now,
                     as_forwarding_key,
                     interface_link_type_lookup,
+                    ignore_macs,
                 )
             })?;
 
@@ -367,6 +376,7 @@ impl SpecRoutingLogic {
                 now,
                 as_forwarding_key,
                 interface_link_type_lookup,
+                ignore_macs,
             )
         })
     }
@@ -383,6 +393,7 @@ impl SpecRoutingLogic {
         now: ScionNetworkTime,
         forwarding_key: &ForwardingKey,
         interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        ignore_macs: bool,
     ) -> Result<IngressNextAction, ScmpErrorMessage> {
         let StandardPath {
             hop_fields,
@@ -467,7 +478,9 @@ impl SpecRoutingLogic {
         }
 
         // CHECK: MAC Auth
-        if calculate_hop_mac(current_hop, current_info, forwarding_key) != current_hop.mac {
+        if !ignore_macs
+            && calculate_hop_mac(current_hop, current_info, forwarding_key) != current_hop.mac
+        {
             return Err(mac_error(
                 scion_packet,
                 current_hop_index,
@@ -672,6 +685,7 @@ impl SpecRoutingLogic {
         now: ScionNetworkTime,
         forwarding_key: &ForwardingKey,
         interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
+        ignore_macs: bool,
     ) -> Result<AsRoutingAction, ScmpErrorMessage> {
         let StandardPath {
             hop_fields,
@@ -738,7 +752,9 @@ impl SpecRoutingLogic {
         )?;
 
         // CHECK: MAC Auth
-        if calculate_hop_mac(current_hop, current_info, forwarding_key) != current_hop.mac {
+        if !ignore_macs
+            && calculate_hop_mac(current_hop, current_info, forwarding_key) != current_hop.mac
+        {
             return Err(mac_error(
                 scion_packet,
                 current_hop_index,
@@ -1245,6 +1261,7 @@ mod tests {
                 ScionNetworkTime::from_timestamp_secs(0),
                 &src_forwarding_key,
                 lookup_fn,
+                false,
             )
             .unwrap();
 
@@ -1263,6 +1280,7 @@ mod tests {
                 ScionNetworkTime::from_timestamp_secs(0),
                 &dst_forwarding_key,
                 lookup_fn,
+                false,
             )
             .unwrap();
 
@@ -1310,6 +1328,7 @@ mod tests {
                 ScionNetworkTime::from_timestamp_secs(0),
                 &dst_forwarding_key,
                 lookup_fn,
+                false,
             )
             .unwrap();
 
@@ -1330,6 +1349,7 @@ mod tests {
                 ScionNetworkTime::from_timestamp_secs(0),
                 &src_forwarding_key,
                 lookup_fn,
+                false,
             )
             .unwrap();
 
@@ -1366,6 +1386,7 @@ mod tests {
                 ScionNetworkTime::from_timestamp_secs(test_ctx.timestamp),
                 &ForwardingKey::default(),
                 |_| None,
+                false,
             )
             .expect("Empty path should not fail");
 
@@ -1932,6 +1953,7 @@ mod tests {
                             interface_id,
                         )
                     },
+                    false,
                 )
                 .inspect_err(|e| {
                     tracing::warn!(
@@ -1993,6 +2015,7 @@ mod tests {
                             interface_id,
                         )
                     },
+                    false,
                 )
                 .inspect_err(|e| {
                     tracing::info!(
