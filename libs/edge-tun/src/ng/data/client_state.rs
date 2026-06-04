@@ -195,6 +195,8 @@ pub struct EdgeTunClientConfig {
     pub mtu: u16,
     /// Number of defragmentation queues for incoming packet reassembly.
     pub defrag_queue_counts: usize,
+    /// Persistent keep alive.
+    pub persistent_keep_alive: Option<u16>,
 }
 
 #[cfg(test)]
@@ -253,6 +255,7 @@ mod tests {
             rate_limit: 100,
             mtu: 1420,
             defrag_queue_counts: 8,
+            persistent_keep_alive: None,
         }
     }
 

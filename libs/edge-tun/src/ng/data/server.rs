@@ -754,6 +754,7 @@ mod tests {
             rate_limit: 100,
             mtu: 1420,
             defrag_queue_counts: 8,
+            persistent_keep_alive: None,
         };
         EdgeTunClientState::new(
             pool,

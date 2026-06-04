@@ -43,6 +43,7 @@ use crate::{
 const DEFAULT_RECEIVE_QUEUE_CAPACITY: usize = 256;
 const REGISTRATION_INTERVAL: Duration = Duration::from_secs(150); // 2.5 minutes
 const MAX_REGISTRATION_RETRIES: u32 = 5;
+const DEFAULT_PERSISTENT_KEEP_ALIVE_SEC: u16 = 15; // 0.25 minutes
 
 /// Generate a random static private key for WireGuard identity.
 pub fn random_static_private() -> x25519::StaticSecret {
@@ -82,6 +83,8 @@ pub struct EdgeTunnelOptions {
     pub fragmenter_metrics: FragmentMetrics,
     /// Metrics for the defragmenter.
     pub defragmenter_metrics: DefragmentMetrics,
+    /// Persistent keep alive.
+    pub persistent_keep_alive: Option<u16>,
 }
 
 impl EdgeTunnelOptions {
@@ -110,6 +113,7 @@ impl Default for EdgeTunnelOptionsBuilder {
                 defrag_queue_counts: 64,
                 fragmenter_metrics: FragmentMetrics::new(&metrics),
                 defragmenter_metrics: DefragmentMetrics::new(&metrics),
+                persistent_keep_alive: Some(DEFAULT_PERSISTENT_KEEP_ALIVE_SEC),
             },
         }
     }
@@ -250,6 +254,7 @@ impl EdgeTunnel {
             defrag_queue_counts,
             fragmenter_metrics,
             defragmenter_metrics,
+            persistent_keep_alive,
         } = opts;
 
         let static_public = PublicKey::from(&static_private);
@@ -304,6 +309,7 @@ impl EdgeTunnel {
                 rate_limit,
                 mtu,
                 defrag_queue_counts,
+                persistent_keep_alive,
             },
             data_socket,
             data_plane_scion_sockaddr,
