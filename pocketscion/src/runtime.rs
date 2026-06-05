@@ -160,8 +160,6 @@ impl PocketScionRuntimeBuilder {
 
         // Start Control plane API for each SNAP
         for (snap_id, snap_state) in pstate.snaps() {
-            let token = task_set.cancellation_token();
-
             let listener = match io_config.snap_control_addr(snap_id) {
                 Some(addr) => {
                     TcpListener::bind(&addr).await.map_err(|e| {
@@ -190,21 +188,50 @@ impl PocketScionRuntimeBuilder {
             let segment_lister =
                 StateEndhostSegmentLister::new(pstate.clone(), local_ases.into_iter().collect());
 
-            task_set.join_set.spawn({
+            let snap_cp_api = match listener.local_addr() {
+                Ok(addr) => addr_to_http_url(addr),
+                Err(e) => {
+                    return Err(PocketScionRuntimeError::IoError(io::Error::other(format!(
+                        "Failed to get local address for SNAP control plane API: {e}"
+                    ))));
+                }
+            };
+
+            let router = snap_control::server::build_router(
+                dp_discovery,
+                snap_cp_api,
+                segment_lister,
+                snap_resolver,
+                identity_registry.clone(),
+                token_verifier,
+                snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
+            )?;
+
+            task_set.spawn_cancellable_task({
                 let identity_registry = identity_registry.clone();
                 async move {
-                    snap_control::server::start(
-                        token,
-                        listener,
-                        dp_discovery,
-                        segment_lister,
-                        snap_resolver,
-                        identity_registry,
-                        token_verifier,
-                        snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
-                    )
-                    .await
+                    let mut interval = tokio::time::interval(Duration::from_secs(30));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+                    loop {
+                        interval.tick().await;
+                        identity_registry.remove_expired(std::time::Instant::now());
+                    }
                 }
+            });
+
+            task_set.join_set.spawn(async move {
+                axum_server::from_tcp(listener.into_std().expect("no fail"))
+                    .map_err(|e| {
+                        io::Error::other(format!("failed to build server from TCP listener: {e}"))
+                    })?
+                    .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                    .await
+                    .map_err(|e| {
+                        io::Error::other(format!(
+                            "SNAP control plane API server stopped unexpectedly: {e}"
+                        ))
+                    })
             });
             snap_authz_map.insert(snap_id, identity_registry);
         }
@@ -425,7 +452,7 @@ impl PocketScionRuntimeBuilder {
             let system_state = pstate.clone();
             let io_config = io_config.clone();
 
-            let listener = TcpListener::bind(
+            let listener = tokio::net::TcpListener::bind(
                 self.mgmt_listen_addr
                     .unwrap_or(SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_MGMT_PORT))),
             )

@@ -37,6 +37,7 @@ endhost-api-discovery-models = { workspace = true }
 # General Dependencies
 async-trait = { workspace = true }
 axum = { workspace = true }
+axum-server = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }

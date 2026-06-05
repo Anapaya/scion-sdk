@@ -13,11 +13,7 @@
 // limitations under the License.
 //! SNAP control plane API server.
 
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 
 use axum::{BoxError, Router, error_handling::HandleErrorLayer};
 use endhost_api::routes::nest_endhost_api;
@@ -28,8 +24,6 @@ use endhost_api_models::{
 use http::StatusCode;
 use scion_sdk_observability::info_trace_layer;
 use sciparse::identifier::isd_asn::IsdAsn;
-use tokio::net::TcpListener;
-use tokio_util::sync::CancellationToken;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};
 use url::Url;
 
@@ -56,81 +50,39 @@ pub mod token_verifier;
 pub use token_verifier::SnapTokenVerifier;
 
 const CONTROL_PLANE_API_TIMEOUT: Duration = Duration::from_secs(30);
-const IDENTITY_REGISTRY_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
-const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Start the SNAP control plane API server.
-pub async fn start<UD, SL, SR, IR>(
-    cancellation_token: CancellationToken,
-    listener: TcpListener,
+/// Builds the SNAP control plane router.
+pub fn build_router<UD, SL, SR, IR>(
     underlay_discovery: UD,
+    snap_cp_api: Url,
     segment_lister: SL,
     snap_resolver: SR,
     identity_registry: Arc<IR>,
     token_verifier: SnapTokenVerifier,
     metrics: Metrics,
-) -> std::io::Result<()>
+) -> std::io::Result<Router>
 where
     UD: UnderlayDiscovery + 'static + Send + Sync,
     SL: SegmentsDiscovery + 'static + Send + Sync,
     SR: SnapDataPlaneResolver + 'static + Send + Sync,
     IR: SnapTunIdentityRegistry + 'static + Send + Sync,
 {
-    let router = Router::new();
-
-    let dp_discovery = Arc::new(underlay_discovery);
-    let segment_lister = Arc::new(segment_lister);
-    let snap_resolver = Arc::new(snap_resolver);
-
-    let snap_cp_addr = listener
-        .local_addr()
-        .map_err(|e| std::io::Error::other(format!("Failed to get own local address: {e}")))?;
-
-    let snap_cp_api = match snap_cp_addr {
-        SocketAddr::V4(addr) => {
-            Url::parse(&format!("http://{addr}"))
-                .expect("It is safe to format a SocketAddr as a URL")
-        }
-        SocketAddr::V6(addr) => {
-            Url::parse(&format!("http://[{}]:{}", addr.ip(), addr.port()))
-                .expect("It is safe to format a SocketAddr as a URL")
-        }
-    };
-
     let router = nest_endhost_api(
-        router,
+        Router::new(),
         Arc::new(UnderlayDiscoveryAdapter::new(
-            dp_discovery.clone(),
+            Arc::new(underlay_discovery),
             snap_cp_api,
         )),
-        segment_lister.clone(),
+        Arc::new(segment_lister),
     );
 
-    // Use a child token so the cleanup loop can be stopped after an
-    // unexpected server exit without canceling the caller-owned token.
-    let cleanup_token = cancellation_token.child_token();
-    let cleanup_task_token = cleanup_token.clone();
-    let cleanup_identity_registry = identity_registry.clone();
-    let cleanup_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(IDENTITY_REGISTRY_CLEANUP_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        loop {
-            tokio::select! {
-                _ = cleanup_task_token.cancelled() => break,
-                _ = interval.tick() => cleanup_identity_registry.remove_expired(Instant::now()),
-            }
-        }
-    });
-
-    let router = nest_snap_control_api(router, snap_resolver, identity_registry);
+    let router = nest_snap_control_api(router, Arc::new(snap_resolver), identity_registry);
 
     let router = router.layer(
         ServiceBuilder::new()
             .layer(HandleErrorLayer::new(|err: BoxError| {
                 async move {
                     tracing::error!(error=%err, "Control plane API error");
-
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("Unhandled error: {err}"),
@@ -143,34 +95,7 @@ where
             .layer(AuthMiddlewareLayer::new(token_verifier)),
     );
 
-    tracing::info!(addr=%snap_cp_addr, "Starting control plane API");
-
-    if let Err(e) = axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(cancellation_token.cancelled_owned())
-    .await
-    {
-        tracing::error!(error=%e, "Control plane API server unexpectedly stopped");
-    }
-
-    cleanup_token.cancel();
-    let mut cleanup_task = cleanup_task;
-    match tokio::time::timeout(CLEANUP_TASK_SHUTDOWN_TIMEOUT, &mut cleanup_task).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            tracing::warn!(error = %e, "Control plane cleanup task failed while shutting down")
-        }
-        Err(_) => {
-            cleanup_task.abort();
-            tracing::warn!("Control plane cleanup task exceeded shutdown timeout")
-        }
-    }
-
-    tracing::info!("Shutting down control plane API server");
-
-    Ok(())
+    Ok(router)
 }
 
 /// Adapter implementing UnderlayDiscovery for any DataPlaneDiscovery.

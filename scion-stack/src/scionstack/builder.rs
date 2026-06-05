@@ -25,16 +25,13 @@ use scion_sdk_utils::backoff::ExponentialBackoff;
 use url::Url;
 use x25519_dalek::StaticSecret;
 
+pub use crate::underlays::udp::{LocalIpResolver, TargetAddrLocalIpResolver};
 use crate::{
     ea_source::{
         EndhostApiSource, EndhostApiSourceError, StaticEndhostApiDiscovery, StaticEndhostApis,
     },
     scionstack::ScionStack,
-    underlays::{
-        SnapSocketConfig, UnderlayStack,
-        discovery::PeriodicUnderlayDiscovery,
-        udp::{LocalIpResolver, TargetAddrLocalIpResolver},
-    },
+    underlays::{SnapSocketConfig, UnderlayStack, discovery::PeriodicUnderlayDiscovery},
 };
 
 const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_secs(600);
@@ -70,6 +67,7 @@ pub struct ScionStackBuilder {
     endhost_api_discovery: EndhostApiDiscoveryConfig,
     snap: SnapUnderlayConfig,
     udp: UdpUnderlayConfig,
+    local_ip_resolver: Option<Arc<dyn LocalIpResolver>>,
 }
 
 impl ScionStackBuilder {
@@ -87,6 +85,7 @@ impl ScionStackBuilder {
             endhost_api_discovery: EndhostApiDiscoveryConfig::default(),
             snap: SnapUnderlayConfig::default(),
             udp: UdpUnderlayConfig::default(),
+            local_ip_resolver: None,
         }
     }
 
@@ -205,11 +204,21 @@ impl ScionStackBuilder {
         self
     }
 
-    /// Override the socket address used to determine the local outbound IP for UDP.
+    /// Set a custom local IP resolver for the UDP underlay.
     ///
-    /// By default the builder resolves the endhost API hostname via OS DNS to find the socket
-    /// address. Use this method when the hostname is only resolvable through a custom DNS
-    /// override (e.g. a reqwest `resolve` entry) that is invisible to the OS resolver.
+    /// By default, [TargetAddrLocalIpResolver] is used, which resolves the endhost API hostname via
+    /// OS DNS. Use this method when the hostname is only resolvable through a custom DNS override
+    /// that is invisible to the OS resolver, or to provide a fully custom resolution strategy.
+    pub fn with_local_ip_resolver(mut self, resolver: impl LocalIpResolver + 'static) -> Self {
+        self.local_ip_resolver = Some(Arc::new(resolver));
+        self
+    }
+
+    /// Build the SCION stack.
+    ///
+    /// # Returns
+    ///
+    /// A new SCION stack.
     pub async fn build(self) -> Result<ScionStack, BuildScionStackError> {
         let ScionStackBuilder {
             crpc_client,
@@ -220,6 +229,7 @@ impl ScionStackBuilder {
             endhost_api_discovery,
             snap,
             udp,
+            local_ip_resolver,
         } = self;
 
         // Race a random sample of APIs from each of the first N groups,
@@ -298,17 +308,16 @@ impl ScionStackBuilder {
             })?;
         tracing::info!(url=%api_url, "Selected endhost API");
 
-        // Use the endhost API URL to resolve the local IP addresses for the UDP underlay
-        // sockets.
-        // Here we assume that the interface used to reach the endhost API is
-        // the same as the interface used to reach the data planes.
+        // Resolve the local IP addresses for the UDP underlay sockets.
+        // We assume that the interface used to reach the endhost API is the same as
+        // the interface used to reach the data planes.
         let local_ip_resolver: Arc<dyn LocalIpResolver> = match udp.local_ips {
             Some(ips) => Arc::new(ips),
             None => {
-                Arc::new(
-                    TargetAddrLocalIpResolver::from_url(api_url.clone())
-                        .map_err(BuildUdpScionStackError::LocalIpResolutionError)?,
-                )
+                match local_ip_resolver {
+                    Some(resolver) => resolver,
+                    None => Arc::new(TargetAddrLocalIpResolver::new(vec![])),
+                }
             }
         };
 
@@ -316,6 +325,7 @@ impl ScionStackBuilder {
             preferred_underlay,
             Arc::new(underlay_discovery),
             local_ip_resolver,
+            api_url.clone(),
             snap.static_identity.unwrap_or_else(StaticSecret::random),
             SnapSocketConfig {
                 crpc_client: snap.crpc_client.or(crpc_client),
@@ -353,10 +363,6 @@ pub enum BuildScionStackError {
     /// This error is only returned if a SNAP underlay is used.
     #[error(transparent)]
     Snap(#[from] BuildSnapScionStackError),
-    /// Error building the UDP SCION stack.
-    /// This error is only returned if a UDP underlay is used.
-    #[error(transparent)]
-    Udp(#[from] BuildUdpScionStackError),
     /// Internal error, this should never happen.
     #[error("internal error: {0:#}")]
     Internal(anyhow::Error),
@@ -374,14 +380,6 @@ pub enum BuildSnapScionStackError {
     /// Error making the data plane discovery request to the SNAP control plane.
     #[error("data plane discovery request error: {0:#}")]
     DataPlaneDiscoveryError(CrpcClientError),
-}
-
-/// Build UDP SCION stack errors.
-#[derive(thiserror::Error, Debug)]
-pub enum BuildUdpScionStackError {
-    /// Error resolving the local IP addresses.
-    #[error("local IP resolution error: {0:#}")]
-    LocalIpResolutionError(anyhow::Error),
 }
 
 /// Error returned when every attempted endhost API fails.

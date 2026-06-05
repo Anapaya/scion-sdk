@@ -57,6 +57,8 @@ pub struct UnderlayStack {
     underlay_discovery: Arc<dyn UnderlayDiscovery>,
     /// Resolver for the local IP address for UDP underlay sockets.
     local_ip_resolver: Arc<dyn LocalIpResolver>,
+    /// The winning endhost API URL used to determine the local IP address.
+    api_url: Url,
     snap_socket_config: SnapSocketConfig,
     snap_tunnel_manager: Option<SnapTunEndpoint>,
     pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
@@ -68,6 +70,7 @@ impl UnderlayStack {
         preferred_underlay: PreferredUnderlay,
         underlay_discovery: Arc<dyn UnderlayDiscovery>,
         local_ip_resolver: Arc<dyn LocalIpResolver>,
+        api_url: Url,
         static_identity: StaticSecret,
         default_snap_socket_config: SnapSocketConfig,
     ) -> Self {
@@ -79,6 +82,7 @@ impl UnderlayStack {
             preferred_underlay,
             underlay_discovery,
             local_ip_resolver,
+            api_url,
             snap_socket_config: default_snap_socket_config,
             snap_tunnel_manager,
             pool: PacketBufPool::new(64),
@@ -207,11 +211,14 @@ impl UnderlayStack {
                 addr
             }
             None => {
-                let local_address = *self.local_ip_resolver.local_ips().await.first().ok_or(
-                    ScionSocketBindError::InvalidBindAddress(
+                let local_address = *self
+                    .local_ip_resolver
+                    .local_ips(&self.api_url)
+                    .await
+                    .first()
+                    .ok_or(ScionSocketBindError::InvalidBindAddress(
                         InvalidBindAddressError::NoLocalIpAddressFound,
-                    ),
-                )?;
+                    ))?;
                 SocketAddr::new(ScionAddr::new(isd_as, local_address.into()), 0)
             }
         };

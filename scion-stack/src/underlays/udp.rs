@@ -46,57 +46,71 @@ const UDP_DATAGRAM_BUFFER_SIZE: usize = 65535;
 /// Local IP resolver.
 #[async_trait::async_trait]
 pub trait LocalIpResolver: Send + Sync {
-    /// Returns the local IP addresses of the host.
-    async fn local_ips(&self) -> Vec<net::IpAddr>;
+    /// Returns the local IP addresses of the host that can be used to reach the URL.
+    async fn local_ips(&self, url: &url::Url) -> Vec<net::IpAddr>;
 }
 
 #[async_trait::async_trait]
 impl LocalIpResolver for Vec<net::IpAddr> {
-    async fn local_ips(&self) -> Vec<net::IpAddr> {
+    async fn local_ips(&self, _url: &url::Url) -> Vec<net::IpAddr> {
         self.clone()
     }
 }
 
-// XXX(uniquefine): This should use impl ToSocketAddrs as argument and
-// try to connect to all addresses.
-pub(crate) struct TargetAddrLocalIpResolver {
-    api_socket_address: net::SocketAddr,
+/// A local IP resolver that resolves the local IP address that can be used to reach a target API
+/// address.
+///
+/// DNS overrides in `host_overrides` take precedence over the OS resolver. This allows
+/// the resolver to be used in environments where the OS resolver is not aware of custom
+/// hostname-to-IP mappings (e.g. when `ConnectParameters::hosts` is set).
+pub struct TargetAddrLocalIpResolver {
+    host_overrides: Vec<(String, net::IpAddr)>,
 }
 
 impl TargetAddrLocalIpResolver {
-    /// Create an IP resolver for URLs.
+    /// Create a local IP resolver with a set of hostname-to-IP overrides.
     ///
-    /// If the URL contains an IP address, it is used directly. If it contains a hostname, the
-    /// hostname is resolved using the OS resolver.
-    pub fn from_url(api_address: url::Url) -> anyhow::Result<Self> {
-        let host = api_address
-            .host_str()
-            .ok_or_else(|| anyhow::anyhow!("missing host"))?;
-        let port = api_address.port_or_known_default().unwrap_or(0);
-
-        let socket_addr = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-            net::SocketAddr::new(ip, port)
-        } else {
-            api_address
-                .socket_addrs(|| None)
-                .context("invalid api address")?
-                .first()
-                .ok_or(anyhow::anyhow!("failed to resolve api socket address"))?
-                .to_owned()
-        };
-
-        Ok(Self {
-            api_socket_address: socket_addr,
-        })
+    /// When resolving an API URL, entries in `host_overrides` are checked before
+    /// the OS resolver. Pass an empty slice when no overrides are needed.
+    pub fn new(host_overrides: Vec<(String, net::IpAddr)>) -> Self {
+        Self { host_overrides }
     }
 }
 
 #[async_trait::async_trait]
 impl LocalIpResolver for TargetAddrLocalIpResolver {
-    /// Binds to Ipv4 and Ipv6 unspecified addresses and returns the local addresses
-    /// that can reach the endhost API.
-    async fn local_ips(&self) -> Vec<net::IpAddr> {
-        match source_ip_towards(self.api_socket_address).await {
+    /// Returns the local IP address that can reach the endhost API at `url`.
+    ///
+    /// Resolution order:
+    /// 1. `host_overrides` map
+    /// 2. Literal IP in the URL
+    /// 3. OS DNS resolver
+    async fn local_ips(&self, url: &url::Url) -> Vec<net::IpAddr> {
+        let host = match url.host_str() {
+            Some(h) => h,
+            None => return vec![],
+        };
+        let port = url.port_or_known_default().unwrap_or(0);
+
+        let target = if let Some((_, ip)) = self.host_overrides.iter().find(|(h, _)| h == host) {
+            net::SocketAddr::new(*ip, port)
+        } else if let Ok(ip) = host.parse::<net::IpAddr>() {
+            net::SocketAddr::new(ip, port)
+        } else {
+            match url
+                .socket_addrs(|| None)
+                .ok()
+                .and_then(|addrs| addrs.into_iter().next())
+            {
+                Some(addr) => addr,
+                None => {
+                    tracing::warn!(url = %url, "failed to resolve API URL for local IP detection");
+                    return vec![];
+                }
+            }
+        };
+
+        match source_ip_towards(target).await {
             Some(ip) => vec![ip],
             None => vec![],
         }
