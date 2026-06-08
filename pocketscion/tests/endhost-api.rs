@@ -14,16 +14,17 @@
 
 //! Simple end-to-end test for PocketScion using an EndhostAPI
 
-use std::{str::FromStr, time::SystemTime};
+use std::str::FromStr;
 
 use anyhow::Context;
+use chrono::Utc;
 use endhost_api_client::client::{CrpcEndhostApiClient, EndhostApiClient};
 use ntest::timeout;
 use pocketscion::{
     self,
     network::scion::topology::{ScionAs, ScionTopology},
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
+    runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
 };
 use scion_proto::address::IsdAsn;
 use url::Url;
@@ -32,7 +33,7 @@ use url::Url;
 #[timeout(10_000)]
 async fn should_have_working_eh_api() -> anyhow::Result<()> {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
-    let mut state = SharedPocketScionState::new(SystemTime::now());
+    let mut state = PocketScionState::new(Utc::now());
 
     let ia1 = IsdAsn::from_str("1-1")?;
     let ia2 = IsdAsn::from_str("2-3")?;
@@ -62,17 +63,16 @@ async fn should_have_working_eh_api() -> anyhow::Result<()> {
 
     // Start PocketScion
     let ps_rt = PocketScionRuntimeBuilder::new()
-        .with_system_state(state.into_state())
+        .with_system_state(state)
         .start()
         .await
         .context("error starting runtime")?;
 
     tracing::info!("Runtime started");
 
-    let ps_api = ps_rt.api_client().get_io_config().await?;
-    let eh_addr = ps_api
-        .endhost_apis
-        .get(&eh_api_id)
+    let io_cfg = ps_rt.io_config();
+    let eh_addr = io_cfg
+        .endhost_api_addr(eh_api_id)
         .expect("missing addr for endhost api");
 
     tracing::info!(%eh_addr, "Got endhost api addr");

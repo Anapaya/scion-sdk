@@ -14,7 +14,7 @@
 
 //! Simple end-to-end test for PocketScion utilizing a topology
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::{Context, Ok};
 use bytes::Bytes;
@@ -22,8 +22,9 @@ use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
     network::scion::topology::{ScionAs, ScionTopology},
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
+    runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
+    util::addr_to_http_url,
 };
 use scion_proto::{
     address::{IsdAsn, SocketAddr},
@@ -33,6 +34,7 @@ use scion_proto::{
 use scion_stack::{path::manager::traits::PathManager as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
+use url::Url;
 
 #[test(tokio::test)]
 #[timeout(10_000)]
@@ -40,7 +42,7 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
     let server_ia: IsdAsn = "1-1".parse().unwrap();
 
-    let mut state = SharedPocketScionState::new(SystemTime::now());
+    let mut state = PocketScionState::new(Utc::now());
 
     //
     // Setup minimal topology
@@ -54,31 +56,25 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     //
     // Setup snap
     let snap_id = state.add_snap(server_ia)?;
+    let _eh_api_id = state.add_endhost_api(vec![server_ia]);
 
     //
     // Start PocketScion
     let ps_rt = PocketScionRuntimeBuilder::new()
-        .with_system_state(state.into_state())
+        .with_system_state(state)
         .start()
         .await
         .context("starting runtime")?;
 
-    let ps_api = ps_rt.api_client();
-
     //
     // Get the Assigned addresses for the snaps
-    let all_snaps = ps_api.get_snaps().await.context("error getting snaps")?;
-    let snap_cp_addr = all_snaps
-        .snaps
-        .get(&snap_id)
-        .context("snap not found")?
-        .control_plane_api
-        .clone();
+    let snap_cp_addr = ps_rt.snap_control_addr(snap_id).context("snap not found")?;
+    let snap_cp_url: Url = addr_to_http_url(snap_cp_addr);
 
     //
     // Setup client
     let client_stack = ScionStackBuilder::new()
-        .with_endhost_api(snap_cp_addr)
+        .with_endhost_api(snap_cp_url)
         .with_auth_token(dummy_snap_token())
         .build()
         .await

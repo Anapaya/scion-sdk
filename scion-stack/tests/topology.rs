@@ -14,18 +14,20 @@
 
 //! Simple end-to-end test for PocketScion utilizing a topology
 
-use std::{str::FromStr, time::SystemTime};
+use std::str::FromStr;
 
 use anyhow::{Context, Ok};
+use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
     network::scion::topology::{ScionAs, ScionTopology},
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
+    runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
 };
 use scion_proto::address::IsdAsn;
 use scion_stack::scionstack::ScionStackBuilder;
 use snap_tokens::v0::dummy_snap_token;
+use url::Url;
 
 #[tokio::test]
 #[timeout(10_000)]
@@ -36,7 +38,7 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     const MESSAGE_LEN: usize = 64;
 
-    let mut state = SharedPocketScionState::new(SystemTime::now());
+    let mut state = PocketScionState::new(Utc::now());
 
     //
     // Setup minimal topology
@@ -58,44 +60,37 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     //
     // Setup snaps
-    let (server_snap_id, client_snap_id) = {
-        let server_snap_id = state.add_snap(server_ia)?;
-        let client_snap_id = state.add_snap(client_ia)?;
+    let server_snap_id = state.add_snap(server_ia)?;
+    let client_snap_id = state.add_snap(client_ia)?;
 
-        (server_snap_id, client_snap_id)
-    };
+    // Setup endhost APIs
+    let _server_eh = state.add_endhost_api(vec![server_ia]);
+    let _client_eh = state.add_endhost_api(vec![client_ia]);
 
     //
     // Start PocketScion
     let ps_rt = PocketScionRuntimeBuilder::new()
-        .with_system_state(state.into_state())
+        .with_system_state(state)
         .start()
         .await
         .context("starting runtime")?;
 
-    let ps_api = ps_rt.api_client();
-
     //
     // Get the Assigned addresses for the snaps
-    let all_snaps = ps_api.get_snaps().await.context("getting snaps")?;
-    let client_control_plane_addr = all_snaps
-        .snaps
-        .get(&client_snap_id)
-        .context("client snap not found")?
-        .control_plane_api
-        .clone();
+    let client_cp_addr = ps_rt
+        .snap_control_addr(client_snap_id)
+        .context("client snap not found")?;
+    let client_cp_url: Url = format!("http://{client_cp_addr}").parse().unwrap();
 
-    let server_control_plane_addr = all_snaps
-        .snaps
-        .get(&server_snap_id)
-        .context("server snap not found")?
-        .control_plane_api
-        .clone();
+    let server_cp_addr = ps_rt
+        .snap_control_addr(server_snap_id)
+        .context("server snap not found")?;
+    let server_cp_url: Url = format!("http://{server_cp_addr}").parse().unwrap();
 
     //
     // Setup server
     let server_stack = ScionStackBuilder::new()
-        .with_endhost_api(server_control_plane_addr)
+        .with_endhost_api(server_cp_url)
         .with_auth_token(dummy_snap_token())
         .build()
         .await?;
@@ -106,7 +101,7 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
     //
     // Setup client
     let client_stack = ScionStackBuilder::new()
-        .with_endhost_api(client_control_plane_addr)
+        .with_endhost_api(client_cp_url)
         .with_auth_token(dummy_snap_token())
         .build()
         .await?;

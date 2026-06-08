@@ -16,7 +16,7 @@
 
 use std::{
     collections::BTreeMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     sync::Arc,
 };
 
@@ -30,21 +30,17 @@ use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, task::JoinHandle};
 use utoipa::ToSchema;
 
-use crate::{
-    addr_to_http_url, io_config::SharedPocketScionIoConfig, state::SharedPocketScionState,
-};
+use crate::{io_config::IoConfig, state::PocketScionState, util::addr_to_http_url};
 
 /// Implements Endhost API discovery through pocketscion state
-///
-/// Accesses [EndhostApiDiscoveryState] through [SharedPocketScionState]
 #[derive(Clone)]
 pub struct EndhostApiDiscoveryService {
     /// ID of the Endhost API Discovery API instance, used to retrieve the relevant state and
     /// config.
     #[expect(unused)]
     id: EndhostApiDiscoveryApiId,
-    app_state: SharedPocketScionState,
-    io_config: SharedPocketScionIoConfig,
+    app_state: PocketScionState,
+    io_config: IoConfig,
 }
 
 #[async_trait::async_trait]
@@ -84,42 +80,30 @@ impl EndhostApiDiscovery for EndhostApiDiscoveryService {
 }
 
 impl EndhostApiDiscoveryService {
-    /// Starts the Endhost API Discovery service for the given API ID, if it exists in the state.
+    /// Starts the Endhost API Discovery service for the given API ID on the provided listener.
     ///
-    /// Will return after the server has stopped (e.g. due to an error).
+    /// ### Parameters
+    /// - `id`: ID of the Endhost API Discovery API instance to start the service for. Must exist in
+    ///   the application state.
+    /// - `listener`: TCP listener to serve the API on. Must already be bound to the desired
+    ///   address.
+    /// - `app_state`: The application state, used to access the Endhost API Discovery API state and
+    ///   Endhost API state.
+    /// - `io_config`: The I/O configuration, used to discover addresses the Endhost API returns.
     pub async fn start(
         id: EndhostApiDiscoveryApiId,
-        app_state: SharedPocketScionState,
-        io_config: SharedPocketScionIoConfig,
+        listener: TcpListener,
+        app_state: PocketScionState,
+        io_config: IoConfig,
     ) -> anyhow::Result<(Arc<EndhostApiDiscoveryService>, JoinHandle<()>)> {
         // Must exist in state to be started
         if app_state.endhost_api_discovery_api(id).is_none() {
             anyhow::bail!("No Endhost API Discovery API configured with the given ID");
         }
 
-        // Prepare IO
-        let (listener, local_addr) = {
-            let listen_addr = match io_config.endhost_api_discovery_api_addr(id) {
-                Some(addr) => addr,
-                None => {
-                    // If no address is configured, let the OS assign one and update the config
-                    SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 0)
-                }
-            };
-
-            let listener = TcpListener::bind(listen_addr)
-                .await
-                .context("error binding tcp listener for Endhost API Discovery API")?;
-
-            let local_addr = listener.local_addr().context(
-                "error getting local address of listen socket for Endhost API Discovery API",
-            )?;
-
-            // Update IoConfig with the actual address
-            io_config.set_endhost_api_discovery_api_addr(id, local_addr);
-
-            (listener, local_addr)
-        };
+        let local_addr = listener.local_addr().context(
+            "error getting local address of listen socket for Endhost API Discovery API",
+        )?;
 
         // Prepare API
         let (app, service) = {
@@ -165,24 +149,8 @@ impl EndhostApiDiscoveryService {
 }
 
 /// State for EndhostApiDiscoveryApp, stored in PocketScionState
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct EndhostApiDiscoveryState;
-
-/// Serialized state for EndhostApiDiscoveryState
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct EndhostApiDiscoveryStateDto;
-
-impl From<EndhostApiDiscoveryState> for EndhostApiDiscoveryStateDto {
-    fn from(_value: EndhostApiDiscoveryState) -> Self {
-        EndhostApiDiscoveryStateDto
-    }
-}
-
-impl From<EndhostApiDiscoveryStateDto> for EndhostApiDiscoveryState {
-    fn from(_value: EndhostApiDiscoveryStateDto) -> Self {
-        EndhostApiDiscoveryState
-    }
-}
 
 /// Endhost Discovery API instance identifier.
 #[derive(
@@ -209,10 +177,10 @@ impl EndhostApiDiscoveryApiId {
     }
 }
 
-impl SharedPocketScionState {
+impl PocketScionState {
     /// Adds a new Endhost API Discovery API to the system state and returns its id.
     pub fn add_endhost_api_discovery_api(&mut self) -> EndhostApiDiscoveryApiId {
-        let mut sstate = self.system_state.write().unwrap();
+        let mut sstate = self.write();
         let id = sstate.endhost_api_discovery_api.len().into();
 
         sstate
@@ -226,11 +194,7 @@ impl SharedPocketScionState {
     pub(crate) fn endhost_api_discovery_apis(
         &self,
     ) -> BTreeMap<EndhostApiDiscoveryApiId, EndhostApiDiscoveryState> {
-        self.system_state
-            .read()
-            .unwrap()
-            .endhost_api_discovery_api
-            .clone()
+        self.read().endhost_api_discovery_api.clone()
     }
 
     /// Returns the state of the Endhost API Discovery API with the given id, if it exists.
@@ -238,24 +202,20 @@ impl SharedPocketScionState {
         &self,
         id: EndhostApiDiscoveryApiId,
     ) -> Option<EndhostApiDiscoveryState> {
-        self.system_state
-            .read()
-            .unwrap()
-            .endhost_api_discovery_api
-            .get(&id)
-            .cloned()
+        self.read().endhost_api_discovery_api.get(&id).cloned()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::net::Ipv4Addr;
 
+    use chrono::Utc;
     use scion_proto::address::IsdAsn;
     use url::Url;
 
     use super::*;
-    use crate::endhost_api::{EndhostApiId, EndhostApiState};
+    use crate::comp::endhost_api::{EndhostApiId, EndhostApiState};
 
     #[tokio::test]
     async fn should_return_apis_grouped_by_local_as() {
@@ -263,9 +223,9 @@ mod tests {
         let as2: IsdAsn = "1-ff00:0:111".parse().unwrap();
         let as3: IsdAsn = "1-ff00:0:112".parse().unwrap();
 
-        let app_state = SharedPocketScionState::new(SystemTime::now());
+        let app_state = PocketScionState::new(Utc::now());
         {
-            let mut state = app_state.system_state.write().unwrap();
+            let mut state = app_state.write();
             state.endhost_apis.insert(
                 EndhostApiId::from(1),
                 EndhostApiState {
@@ -286,7 +246,7 @@ mod tests {
             );
         }
 
-        let io_config = SharedPocketScionIoConfig::default();
+        let io_config = IoConfig::default();
         io_config.set_endhost_api_addr(
             EndhostApiId::from(1),
             SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 1),

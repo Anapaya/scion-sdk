@@ -30,11 +30,32 @@ use crate::network::local::receivers::Receiver;
 /// Receivers are bound to:
 /// 1. Wildcard ISD-AS (all addresses in the ISD-AS)
 /// 2. Specific IP ranges within an ISD-AS
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct NetworkReceiverRegistry {
+    /// The receivers available to the network simulation.
+    ///
+    /// Receivers are stored in a BTreeMap keyed by ISD-AS. Each ISD-AS can have either a wildcard
+    /// receiver, or multiple receivers for specific IP ranges, but not both.
     receivers: BTreeMap<IsdAsn, LocalNetworkReceivers>,
+    /// SVC Address mappings available in the network simulation.
     /// Mapping of ISD-AS -> SVC -> Protocol Name -> SocketAddr
     svc_mapping: BTreeMap<IsdAsn, BTreeMap<ServiceAddr, BTreeMap<String, SocketAddr>>>,
+}
+impl PartialEq for LocalNetworkReceivers {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                LocalNetworkReceivers::ByAddressRanges { receivers: r1 },
+                LocalNetworkReceivers::ByAddressRanges { receivers: r2 },
+            ) => r1.len() == r2.len(), /* We only compare the number of receivers, not the actual */
+            // receivers
+            (
+                LocalNetworkReceivers::WildcardReceiver { .. },
+                LocalNetworkReceivers::WildcardReceiver { .. },
+            ) => true, // We consider all wildcard receivers as equal
+            _ => false,
+        }
+    }
 }
 
 impl NetworkReceiverRegistry {

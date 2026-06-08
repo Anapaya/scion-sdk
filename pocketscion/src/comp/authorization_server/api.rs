@@ -13,8 +13,6 @@
 // limitations under the License.
 //! PocketSCION Authorization Server API.
 
-use std::net::{Ipv4Addr, SocketAddr};
-
 use axum::{Form, Json, Router, extract::State, response::IntoResponse};
 use http::StatusCode;
 use scion_sdk_observability::info_trace_layer;
@@ -27,73 +25,18 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
 
 use super::token_exchanger::{ID_TOKEN_TYPE, TOKEN_EXCHANGE_GRANT_TYPE, TokenExchange};
-use crate::{
-    authorization_server::token_exchanger::TokenExchangeError, dto::IoAuthServerConfigDto,
-    io_config::SharedPocketScionIoConfig, state::AuthorizationServerHandle,
+use crate::comp::authorization_server::{
+    AuthorizationServerHandle, token_exchanger::TokenExchangeError,
 };
 
-/// I/O configuration for the authorization server.
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Clone)]
-pub struct IoAuthServerConfig {
-    pub(crate) addr: Option<SocketAddr>,
-}
-
-impl From<&IoAuthServerConfig> for IoAuthServerConfigDto {
-    fn from(config: &IoAuthServerConfig) -> Self {
-        Self {
-            addr: config.addr.map(|addr| addr.to_string()),
-        }
-    }
-}
-
-impl TryFrom<IoAuthServerConfigDto> for IoAuthServerConfig {
-    type Error = std::io::Error;
-
-    fn try_from(value: IoAuthServerConfigDto) -> Result<Self, Self::Error> {
-        let addr = match value.addr {
-            Some(addr) => {
-                match addr.parse() {
-                    Ok(addr) => Some(addr),
-                    Err(e) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            format!("Invalid auth server address: {e}"),
-                        ));
-                    }
-                }
-            }
-            None => None,
-        };
-
-        Ok(Self { addr })
-    }
-}
-
-/// Starts the authorization server.
+/// Starts the authorization server on the provided listener.
 pub(crate) async fn start(
     cancellation_token: CancellationToken,
     token_exchanger: AuthorizationServerHandle,
-    io_config: SharedPocketScionIoConfig,
+    listener: TcpListener,
 ) -> std::io::Result<()> {
-    let listener = match io_config.auth_server_addr() {
-        Some(addr) => {
-            TcpListener::bind(&addr).await.map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!("Failed to bind to authorization server address {addr}: {e}"),
-                )
-            })?
-        }
-        None => {
-            tracing::debug!("No authorization server API address specified");
-            let listener = TcpListener::bind(&SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
-            io_config.set_auth_server_addr(listener.local_addr()?);
-            listener
-        }
-    };
-
     let logging_layer = ServiceBuilder::new().layer(info_trace_layer());
-    let (router, openapi) = OpenApiRouter::with_openapi(AuhtorizationServerApi::openapi())
+    let (router, openapi) = OpenApiRouter::with_openapi(AuthorizationServerApi::openapi())
         .routes(routes!(post_token))
         .with_state(token_exchanger)
         .layer(logging_layer)
@@ -131,7 +74,7 @@ pub(crate) async fn start(
         (url = "http://{host}:{port}/api/v1"),
     ),
 )]
-struct AuhtorizationServerApi;
+struct AuthorizationServerApi;
 
 /// Token exchange request.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -298,9 +241,13 @@ fn handle_token_exchange_error(error: TokenExchangeError) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        time::SystemTime,
+    };
 
     use axum::Router;
+    use chrono::Utc;
     use jsonwebtoken::DecodingKey;
     use scion_sdk_token_validator::validator::{
         TokenValidator, Validator, insecure_const_ed25519_key_pair_pem,
@@ -310,12 +257,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        authorization_server::{
+        comp::authorization_server::{
             client::ApiClient,
             fake_idp::oidc_id_token,
             token_exchanger::{JWT_TOKEN_TYPE, NO_ACCESS_TOKEN_TYPE},
         },
-        state::SharedPocketScionState,
+        state::PocketScionState,
     };
 
     #[test(tokio::test)]
@@ -325,7 +272,7 @@ mod tests {
 
         let token = oidc_id_token("test-user".to_string());
 
-        let mut pstate = SharedPocketScionState::new(SystemTime::now());
+        let mut pstate = PocketScionState::new(Utc::now());
         pstate.set_auth_server(snap_token_private_pem);
 
         let app = Router::new()

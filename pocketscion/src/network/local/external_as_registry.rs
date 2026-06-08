@@ -31,6 +31,14 @@ pub struct ExternalAsRegistry {
     external_as_mapping: HashMap<IsdAsn, Arc<dyn ExternalAsHandler>>,
 }
 
+impl PartialEq for ExternalAsRegistry {
+    fn eq(&self, other: &Self) -> bool {
+        self.external_as_mapping
+            .keys()
+            .eq(other.external_as_mapping.keys())
+    }
+}
+
 impl Debug for ExternalAsRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExternalAsRegistry")

@@ -32,7 +32,7 @@ use crate::network::scion::{
 /// Keeps all available [LinkSegment] for a topology.
 ///
 /// A [LinkSegment] is a more general representation of a [scion_proto::path::PathSegment]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentRegistry {
     core_segments: LinkSegmentStore,
     isd_segments: HashMap<Isd, LinkSegmentStore>,
@@ -243,7 +243,7 @@ impl SegmentId {
 pub type UniquePathHash = u64;
 
 /// Store of many [LinkSegment] across multiple ASes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkSegmentStore {
     all_segments: HashMap<AsPair, Vec<LinkSegment>>,
 

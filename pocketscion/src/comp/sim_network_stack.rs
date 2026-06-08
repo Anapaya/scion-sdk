@@ -34,7 +34,7 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::{
     network::{local::receivers::Receiver, scion::routing::ScionNetworkTime},
-    state::SharedPocketScionState,
+    state::PocketScionState,
 };
 
 /// A in-memory network stack, allowing binding to a specific AS and IP address, and sending and
@@ -43,7 +43,7 @@ use crate::{
 pub struct NetSimStack(Arc<NetSimStackInner>);
 
 struct NetSimStackInner {
-    state: SharedPocketScionState,
+    state: PocketScionState,
 
     udp_receivers: RwLock<HashMap<u16, mpsc::Sender<ScionPacketUdp>>>,
     raw_recevers: RwLock<Vec<mpsc::Sender<ScionPacketRaw>>>,
@@ -63,7 +63,7 @@ impl NetSimStack {
     ///
     /// If a receiver for the given AS and IP address already exists, an error is returned.
     pub fn bind(
-        state: SharedPocketScionState,
+        state: PocketScionState,
         local_as: IsdAsn,
         bind_addr: IpAddr,
         queue_size: usize,
@@ -537,7 +537,7 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
     }
 }
 
-impl SharedPocketScionState {
+impl PocketScionState {
     /// Creates a new Network Simulator Stack bound to the given AS and IP address, with the given
     /// receive queue size.
     ///
@@ -556,9 +556,10 @@ impl SharedPocketScionState {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::IpAddr, time::SystemTime};
+    use std::net::IpAddr;
 
     use bytes::Bytes;
+    use chrono::Utc;
     use scion_proto::{
         address::{IsdAsn, ScionAddr, SocketAddr},
         packet::{ByEndpoint, ScionPacketUdp},
@@ -571,11 +572,11 @@ mod tests {
             routing::ScionNetworkTime,
             topology::{ScionAs, ScionTopology},
         },
-        state::SharedPocketScionState,
+        state::PocketScionState,
     };
 
-    fn setup_state(isd_as: IsdAsn) -> SharedPocketScionState {
-        let mut state = SharedPocketScionState::new(SystemTime::now());
+    fn setup_state(isd_as: IsdAsn) -> PocketScionState {
+        let mut state = PocketScionState::new(Utc::now());
         let mut topology = ScionTopology::new();
         topology
             .add_as(ScionAs::new_core(isd_as))

@@ -19,10 +19,10 @@ use std::{
     net::Ipv4Addr,
     str::FromStr,
     sync::{Arc, Mutex},
-    time::SystemTime,
 };
 
 use anyhow::{Context, bail};
+use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
     self,
@@ -33,8 +33,8 @@ use pocketscion::{
             topology::{ScionAs, ScionTopology},
         },
     },
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
+    runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
 };
 use scion_proto::{
     address::{IsdAsn, ScionAddr},
@@ -48,7 +48,7 @@ use tokio::{net::UdpSocket, task::yield_now, time::timeout};
 #[timeout(10_000)]
 async fn external_as_should_work() -> anyhow::Result<()> {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
-    let mut state = SharedPocketScionState::new(SystemTime::now());
+    let mut state = PocketScionState::new(Utc::now());
 
     let external_as_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await?);
 
@@ -89,7 +89,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
 
     // Start PocketScion
     let ps_rt = PocketScionRuntimeBuilder::new()
-        .with_system_state(state.into_state())
+        .with_system_state(state)
         .start()
         .await
         .context("error starting runtime")?;

@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 //! GRPC handler for listing segments
 
 use std::collections::BTreeSet;
@@ -23,13 +24,13 @@ use sciparse::{
     segment::{Segments, SegmentsPage},
 };
 
-use crate::state::SharedPocketScionState;
+use crate::state::PocketScionState;
 
 /// GRPC handler for listing segments
 ///
 /// This is scoped per Endhost API
 pub struct StateEndhostSegmentLister {
-    app_state: SharedPocketScionState,
+    app_state: PocketScionState,
     /// Valid local ASes of this segment lister
     /// If None, the segment lister will list segments from any AS
     local_ases: BTreeSet<IsdAsn>,
@@ -42,7 +43,7 @@ impl StateEndhostSegmentLister {
     /// - `local_ases`: The local ASes of this segment lister. Only segments from these ASes will be
     ///   listed.
     pub fn new(
-        app_state: SharedPocketScionState,
+        app_state: PocketScionState,
         local_ases: BTreeSet<scion_proto::address::IsdAsn>,
     ) -> Self {
         Self {
@@ -61,7 +62,7 @@ impl SegmentsDiscovery for StateEndhostSegmentLister {
         _page_size: i32,
         _page_token: String,
     ) -> Result<SegmentsPage, SegmentsError> {
-        let state_guard = self.app_state.system_state.read().unwrap();
+        let state_guard = self.app_state.read();
         let segments = &state_guard.segment_registry;
 
         // Select correct local as

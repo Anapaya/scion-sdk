@@ -14,13 +14,14 @@
 
 //! Simple end-to-end test with PocketScion checking Endhost API discovery
 
-use std::{net::SocketAddr, str::FromStr, time::SystemTime};
+use std::{net::SocketAddr, str::FromStr};
 
 use anyhow::{Context, Ok};
+use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
-    network::scion::util::test_helper::test_topology, runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
+    network::scion::util::test_helper::test_topology, runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
 };
 use scion_proto::address::IsdAsn;
 use scion_stack::{ea_source::StaticEndhostApiDiscovery, scionstack::ScionStackBuilder};
@@ -36,7 +37,7 @@ async fn should_successfully_connect_with_endhost_api_discovery() -> anyhow::Res
 
     const MESSAGE_LEN: usize = 64;
 
-    let mut state = SharedPocketScionState::new(SystemTime::now());
+    let mut state = PocketScionState::new(Utc::now());
 
     let topo = test_topology().expect("creating test topology");
     state.set_topology(topo);
@@ -54,7 +55,7 @@ async fn should_successfully_connect_with_endhost_api_discovery() -> anyhow::Res
 
     // Start PocketScion
     let ps = PocketScionRuntimeBuilder::new()
-        .with_system_state(state.into_state())
+        .with_system_state(state)
         .start()
         .await
         .context("starting runtime")?;

@@ -13,20 +13,15 @@
 // limitations under the License.
 //! Integration tests for PocketSCION in router mode.
 
-use std::{
-    collections::BTreeMap,
-    num::NonZeroU16,
-    time::{Duration, SystemTime},
-    vec,
-};
+use std::{collections::BTreeMap, num::NonZeroU16, time::Duration, vec};
 
 use bytes::Bytes;
 use chrono::Utc;
 use ipnet::IpNet;
 use pocketscion::{
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
-    topologies::{IA132, IA212, PocketScionHandle},
+    runtime::{PocketScionRuntime, builder::PocketScionRuntimeBuilder},
+    state::PocketScionState,
+    util::topologies::{IA132, IA212},
 };
 use scion_proto::{
     address::{ScionAddr, SocketAddr},
@@ -45,7 +40,7 @@ async fn echo() {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
     let pocketscion = setup_pocketscion().await;
 
-    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
+    let ia132_router_addr = pocketscion.router_ia132_addr;
 
     // Bind sockets early to get allocated ports
     let client_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
@@ -242,7 +237,7 @@ async fn send_scmp() {
     });
 
     // Spawn a task for the sender.
-    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
+    let ia132_router_addr = pocketscion.router_ia132_addr;
     let dp_path = pocketscion
         .runtime
         .paths(IA132, IA212, Utc::now())
@@ -389,8 +384,8 @@ async fn snap_interface_forwarding() {
         setup_pocketscion_router(vec![], BTreeMap::from([("dp-0".to_string(), snap_addr)])).await;
 
     // Router socket addresses
-    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
-    let ia212_router_addr = pocketscion.router_addr(IA212).await.unwrap();
+    let ia132_router_addr = pocketscion.router_ia132_addr;
+    let ia212_router_addr = pocketscion.router_ia212_addr;
 
     // Hypothetical endhost behind the SNAP (packets to this address are forwarded to snap_socket)
     let endhost_behind_snap_addr = "10.0.0.42:8080".parse::<std::net::SocketAddr>().unwrap();
@@ -586,8 +581,8 @@ async fn snap_excluded_networks() {
     let test_payload_1 = b"Test from remote to excluded";
     let test_payload_2 = b"Response from excluded to remote";
 
-    let ia132_router_addr = pocketscion.router_addr(IA132).await.unwrap();
-    let ia212_router_addr = pocketscion.router_addr(IA212).await.unwrap();
+    let ia132_router_addr = pocketscion.router_ia132_addr;
+    let ia212_router_addr = pocketscion.router_ia212_addr;
 
     // Spawn excluded receiver task
     let excluded_task = tokio::spawn(async move {
@@ -703,23 +698,29 @@ async fn snap_excluded_networks() {
     tracing::info!("SNAP excluded networks test completed successfully");
 }
 
-async fn setup_pocketscion() -> PocketScionHandle {
+async fn setup_pocketscion() -> PocketScionSetup {
     setup_pocketscion_router(vec![], BTreeMap::new()).await
+}
+
+struct PocketScionSetup {
+    runtime: PocketScionRuntime,
+    router_ia132_addr: std::net::SocketAddr,
+    router_ia212_addr: std::net::SocketAddr,
 }
 
 async fn setup_pocketscion_router(
     snap_data_plane_excludes: Vec<IpNet>,
     snap_data_plane_interfaces: BTreeMap<String, std::net::SocketAddr>,
-) -> PocketScionHandle {
-    let mut pstate = SharedPocketScionState::new(SystemTime::now());
+) -> PocketScionSetup {
+    let mut pstate = PocketScionState::new(Utc::now());
 
-    let _router1 = pstate.add_router(
+    let router132 = pstate.add_router(
         IA132,
         vec![NonZeroU16::new(1).unwrap(), NonZeroU16::new(2).unwrap()],
         snap_data_plane_excludes,
         snap_data_plane_interfaces,
     );
-    let _router2 = pstate.add_router(
+    let router212 = pstate.add_router(
         IA212,
         vec![NonZeroU16::new(3).unwrap(), NonZeroU16::new(4).unwrap()],
         vec![],
@@ -727,13 +728,17 @@ async fn setup_pocketscion_router(
     );
 
     let pocketscion = PocketScionRuntimeBuilder::new()
-        .with_system_state(pstate.into_state())
-        .with_mgmt_listen_addr("127.0.0.1:0".parse().unwrap())
+        .with_system_state(pstate)
         .start()
         .await
         .expect("Failed to start PocketScion runtime");
 
-    let api_client = pocketscion.api_client();
+    let ia132_router_addr = pocketscion.router_socket_addr(router132).unwrap();
+    let ia212_router_addr = pocketscion.router_socket_addr(router212).unwrap();
 
-    PocketScionHandle::new(pocketscion, api_client)
+    PocketScionSetup {
+        runtime: pocketscion,
+        router_ia132_addr: ia132_router_addr,
+        router_ia212_addr: ia212_router_addr,
+    }
 }

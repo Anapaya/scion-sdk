@@ -11,145 +11,192 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! PocketSCION runtime.
+
+//! PocketSCION Runtime - the main runtime that manages the state and tasks of a PocketSCION
+//! simulation.
+//!
+//! The runtime is responsible for starting and stopping all components of the simulation, such as
+//! the control plane, data plane, APIs, and network forwarders. It holds the shared state of the
+//! simulation and a set of tasks that are running.
+//!
+//! To create a runtime, use [PocketScionRuntimeBuilder](builder::PocketScionRuntimeBuilder) to
+//! configure the desired state and then call `start()` to start the runtime.
+
+pub mod api;
+pub mod builder;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool},
-    time::{Duration, SystemTime},
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
 };
 
-use anyhow::Context;
-use bytes::Bytes;
+use anyhow::{Context, bail};
+use dhsd::DhsdSecret;
 use jsonwebtoken::DecodingKey;
-use scion_proto::{
-    address::IsdAsn,
-    packet::ScionPacketRaw,
-    path::{Path as ScionPath, combinator::combine},
-};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
-use scion_sdk_utils::{
-    io::{get_tmp_path, read_file, write_file},
-    task_handler::{CancelTaskSet, InProcess},
-};
+use scion_sdk_utils::task_handler::CancelTaskSet;
 use snap_control::server::identity_registry::IdentityRegistry;
 use snap_dataplane::tunnel_gateway::{
     NoopTunnelGatewayObserver, dispatcher::TunnelGatewayDispatcher,
     metrics::TunnelGatewayDispatcherMetrics, start_tunnel_gateway,
 };
-use thiserror::Error;
-use tokio::{net::TcpListener, time::sleep};
+use tokio::{net::TcpListener, task::JoinSet};
+use tokio_util::sync::CancellationToken;
 use x25519_dalek::StaticSecret;
 
 use crate::{
-    addr_to_http_url,
-    api::admin,
-    authorization_server,
-    dto::{self, SystemStateDto},
-    endhost_api::{EndhostApiId, PsEndhostApi},
-    io_config::{IoConfig, SharedPocketScionIoConfig},
-    management_api,
-    network::{
-        local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
-        scion::{routing::ScionNetworkTime, segment::lister::endhost::SnapListPathSegments},
-    },
-    state::{
-        RouterId, SharedPocketScionState, SystemState,
+    comp::{
+        authorization_server,
         control_service::ControlService,
-        endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryService},
+        endhost_api::PsEndhostApi,
+        endhost_api_discovery::EndhostApiDiscoveryService,
         endhost_segment_lister::StateEndhostSegmentLister,
         external_as::ExternalAsService,
         network_forwarder::NetworkForwarder,
-        sim_network_stack::NetSimStack,
         simulation_dispatcher::{AsNetSimDispatcher, NetSimDispatcher},
         snap::{SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL, SnapId},
     },
+    io_config::IoConfig,
+    network::local::receivers::router_socket::{RouterSocket, SharedRouterSocket},
+    state::PocketScionState,
+    util::addr_to_http_url,
 };
 
-/// Default management API port.
-pub const DEFAULT_MGMT_PORT: u16 = 9000;
-
-/// Builder for a PocketSCION runtime.
-pub struct PocketScionRuntimeBuilder {
-    system_state: PathOrObject<SystemState>,
-    io_config: PathOrObject<IoConfig>,
-    mgmt_listen_addr: Option<SocketAddr>,
-    start_time: TimestampOrNow,
+/// PocketSCION Runtime
+///
+/// This struct represents a running instance of PocketSCION. It holds the state of the simulation
+/// and the tasks that are running.
+///
+/// Use [PocketScionRuntimeBuilder](builder::PocketScionRuntimeBuilder) to create an instance of
+/// pocketscion.
+///
+/// Dropping the runtime will stop all tasks. Store the runtime in a variable to keep it running.
+#[must_use = "Immediately dropping the runtime will stop all tasks. Store the runtime in a variable to keep it running."]
+pub struct PocketScionRuntime {
+    join_set: JoinSet<Result<(), io::Error>>,
+    _cancel_token: CancellationToken,
+    state: PocketScionState,
+    io_config: IoConfig,
 }
 
-impl PocketScionRuntimeBuilder {
-    /// Create a new PocketSCION runtime builder.
-    pub fn new() -> Self {
-        Self {
-            system_state: PathOrObject::Unspecified,
-            io_config: PathOrObject::Unspecified,
-            mgmt_listen_addr: None,
-            start_time: TimestampOrNow::Now,
+impl PocketScionRuntime {
+    /// Initialises and starts all runtime components, returning a running [PocketScionRuntime].
+    async fn start(
+        state: PocketScionState,
+        io_config: IoConfig,
+        mut join_set: JoinSet<Result<(), io::Error>>,
+    ) -> anyhow::Result<PocketScionRuntime> {
+        let cancel_token = CancellationToken::new();
+        let root_secret = state.root_secret();
+
+        Self::validate_state(&state)?;
+
+        Self::start_endhost_apis(&mut join_set, &state, &io_config).await?;
+
+        let snap_authz_map =
+            Self::start_snap_control_planes(&mut join_set, &state, &io_config).await?;
+        Self::start_snap_data_planes(
+            &mut join_set,
+            &cancel_token,
+            &state,
+            &io_config,
+            &root_secret,
+            snap_authz_map,
+        )
+        .await?;
+
+        Self::start_endhost_discovery_apis(&state, &io_config).await?;
+        Self::start_external_ases(&state, &io_config).await?;
+        Self::start_control_services(&mut join_set, &state);
+        Self::start_router_sockets(&mut join_set, &state, &io_config).await?;
+        Self::start_network_forwarders(&mut join_set, &state, &io_config).await?;
+        Self::start_auth_server(&mut join_set, &cancel_token, &state, &io_config).await?;
+
+        Ok(PocketScionRuntime {
+            join_set,
+            state,
+            io_config,
+            _cancel_token: cancel_token,
+        })
+    }
+
+    /// Stops all tasks and waits for them to finish.
+    ///
+    /// At the moment this does not do a graceful shutdown, but simply aborts all tasks.
+    /// In the future, a more graceful shutdown procedure may be implemented.
+    pub async fn stop_and_join(mut self) {
+        self.join_set.abort_all();
+        self.join_set.join_all().await;
+    }
+
+    /// Waits for all tasks to finish. This will run indefinitely until the runtime is dropped.
+    pub async fn join(mut self) {
+        while let Some(res) = self.join_set.join_next().await {
+            if let Err(e) = res {
+                tracing::error!("Task failed with error: {e}");
+            }
         }
     }
 
-    /// Expose PocketSCION's management API on `mgmt_listen_addr`.
-    pub fn with_mgmt_listen_addr(mut self, mgmt_listen_addr: SocketAddr) -> Self {
-        self.mgmt_listen_addr = Some(mgmt_listen_addr);
-        self
+    /// Validates that no ISD-AS has more than one SNAP, and no ISD-AS has both a router and a SNAP.
+    fn validate_state(pstate: &PocketScionState) -> anyhow::Result<()> {
+        let mut seen_ases = BTreeSet::new();
+        for (_, snap_state) in pstate.snaps() {
+            for isd_as in snap_state.isd_ases() {
+                if seen_ases.contains(&isd_as) {
+                    anyhow::bail!("Only one snap per ISD-AS is allowed");
+                }
+                seen_ases.insert(isd_as);
+            }
+        }
+        for (_, router) in pstate.routers() {
+            if seen_ases.contains(&router.isd_as) {
+                anyhow::bail!("Only one router per ISD-AS is allowed");
+            }
+        }
+        Ok(())
     }
 
-    /// Set PocketSCION's initial IO-configuration to `io_config`.
-    pub fn with_io_config(mut self, io_config: IoConfig) -> Self {
-        self.io_config = PathOrObject::Object(io_config);
-        self
+    /// Binds a UDP socket to `addr`, or to a random localhost port if `None`.
+    /// Writes the actual bound address back via `set_addr`.
+    async fn bind_udp_or_random(
+        addr: Option<SocketAddr>,
+        set_addr: impl FnOnce(SocketAddr),
+        context: impl std::fmt::Display,
+    ) -> anyhow::Result<tokio::net::UdpSocket> {
+        let bind_addr = addr.unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
+        let socket = tokio::net::UdpSocket::bind(bind_addr)
+            .await
+            .with_context(|| format!("Failed to bind UDP socket for {context}"))?;
+        set_addr(socket.local_addr()?);
+        Ok(socket)
     }
 
-    /// Load PocketSCION's initial IO-configuration from `path`.
-    pub fn with_io_config_path<P: AsRef<Path>>(mut self, path: P) -> Self {
-        self.io_config = PathOrObject::Path(path.as_ref().into());
-        self
+    /// Binds a TCP listener to `addr`, or to a random localhost port if `None`.
+    /// Writes the actual bound address back via `set_addr`.
+    async fn bind_tcp_or_random(
+        addr: Option<SocketAddr>,
+        set_addr: impl FnOnce(SocketAddr),
+        context: impl std::fmt::Display,
+    ) -> anyhow::Result<TcpListener> {
+        let bind_addr = addr.unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
+        let listener = TcpListener::bind(bind_addr)
+            .await
+            .with_context(|| format!("Failed to bind TCP listener for {context}"))?;
+        set_addr(listener.local_addr()?);
+        Ok(listener)
     }
 
-    /// Set PocketSCION's initial system state to `system_state`.
-    pub fn with_system_state(mut self, system_state: SystemState) -> Self {
-        self.system_state = PathOrObject::Object(system_state);
-        self
-    }
-
-    /// Load PocketSCION's initial system state from `path`.
-    pub fn with_system_state_path<P: AsRef<Path>>(mut self, path: P) -> Self {
-        self.system_state = PathOrObject::Path(path.as_ref().into());
-        self
-    }
-
-    /// Set the start time of PocketSCION to `time`. If `with_start_time` is _not_ called, the
-    /// current system time is used when [Self::start] is called.
-    pub fn with_start_time(mut self, time: SystemTime) -> Self {
-        self.start_time = TimestampOrNow::Timestamp(time);
-        self
-    }
-
-    /// Start the PocketSCION runtime.
-    pub async fn start(self) -> Result<PocketScionRuntime, PocketScionRuntimeError> {
-        self.start_with_task_set(CancelTaskSet::new()).await
-    }
-
-    /// Create an instance of a PocketSCION.
-    pub async fn start_with_task_set(
-        self,
-        mut task_set: CancelTaskSet,
-    ) -> Result<PocketScionRuntime, PocketScionRuntimeError> {
-        let ready_state = Arc::new(AtomicBool::new(false));
-        let start_time = match self.start_time {
-            TimestampOrNow::Now => SystemTime::now(),
-            TimestampOrNow::Timestamp(system_time) => system_time,
-        };
-        let system_state = self.system_state.load(start_time).await?;
-        let root_secret = system_state.root_secret();
-        let pstate = SharedPocketScionState::from_system_state(system_state);
-
-        let io_config = self.io_config.load().await?;
-        let io_config = SharedPocketScionIoConfig::from_state(io_config);
-
+    /// Starts the control plane API server for each configured SNAP.
+    /// Returns a map of SNAP ID to its identity registry, used later by the data plane.
+    async fn start_snap_control_planes(
+        join_set: &mut JoinSet<Result<(), io::Error>>,
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<BTreeMap<SnapId, Arc<IdentityRegistry>>> {
         let snap_token_decoding_key =
             DecodingKey::from_ed_pem(pem::encode(&pstate.snap_token_public_key()).as_bytes())
                 .unwrap();
@@ -158,56 +205,43 @@ impl PocketScionRuntimeBuilder {
 
         let mut snap_authz_map: BTreeMap<SnapId, Arc<IdentityRegistry>> = Default::default();
 
-        // Start Control plane API for each SNAP
         for (snap_id, snap_state) in pstate.snaps() {
-            let listener = match io_config.snap_control_addr(snap_id) {
-                Some(addr) => {
-                    TcpListener::bind(&addr).await.map_err(|e| {
-                        std::io::Error::new(
-                            e.kind(),
-                            format!("Failed to bind to SNAP CP addr {addr}: {e}"),
-                        )
-                    })?
-                }
-                None => {
-                    tracing::debug!(snap=%snap_id, "No control plane API port for SNAP specified");
-                    let listener =
-                        TcpListener::bind(&SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
-                    io_config.set_snap_control_addr(snap_id, listener.local_addr()?);
-                    listener
-                }
-            };
+            let local_ases = snap_state.isd_ases();
 
             let dp_discovery = pstate.snap_data_plane_discovery(snap_id, io_config.clone());
             let snap_resolver = pstate.snap_resolver(snap_id, io_config.clone());
             let identity_registry = Arc::new(IdentityRegistry::new());
-            let token_verifier = snap_token_verifier.clone();
-
-            let local_ases = snap_state.isd_ases();
-
             let segment_lister =
                 StateEndhostSegmentLister::new(pstate.clone(), local_ases.into_iter().collect());
+
+            let io_config = io_config.clone();
+            let listener = Self::bind_tcp_or_random(
+                io_config.snap_control_addr(snap_id),
+                |addr| {
+                    io_config.set_snap_control_addr(snap_id, addr);
+                },
+                format_args!("SNAP {snap_id} control plane"),
+            )
+            .await?;
 
             let snap_cp_api = match listener.local_addr() {
                 Ok(addr) => addr_to_http_url(addr),
                 Err(e) => {
-                    return Err(PocketScionRuntimeError::IoError(io::Error::other(format!(
-                        "Failed to get local address for SNAP control plane API: {e}"
-                    ))));
+                    bail!("Failed to get local address for SNAP control plane API: {e}");
                 }
             };
 
-            let router = snap_control::server::build_router(
+            let app = snap_control::server::build_router(
                 dp_discovery,
                 snap_cp_api,
                 segment_lister,
                 snap_resolver,
                 identity_registry.clone(),
-                token_verifier,
+                snap_token_verifier.clone(),
                 snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
             )?;
 
-            task_set.spawn_cancellable_task({
+            join_set.spawn({
                 let identity_registry = identity_registry.clone();
                 async move {
                     let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -220,12 +254,12 @@ impl PocketScionRuntimeBuilder {
                 }
             });
 
-            task_set.join_set.spawn(async move {
+            join_set.spawn(async move {
                 axum_server::from_tcp(listener.into_std().expect("no fail"))
                     .map_err(|e| {
                         io::Error::other(format!("failed to build server from TCP listener: {e}"))
                     })?
-                    .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+                    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
                     .await
                     .map_err(|e| {
                         io::Error::other(format!(
@@ -233,43 +267,22 @@ impl PocketScionRuntimeBuilder {
                         ))
                     })
             });
+
             snap_authz_map.insert(snap_id, identity_registry);
         }
 
-        for (id, _) in pstate.endhost_apis() {
-            let pstate = pstate.clone();
-            let io_config = io_config.clone();
-            task_set.join_set.spawn(async move {
-                PsEndhostApi::start(id, pstate, io_config)
-                    .await
-                    .map_err(|e| io::Error::other(format!("{e:?}")))
-            });
-        }
+        Ok(snap_authz_map)
+    }
 
-        // General setup
-
-        // Only one snap per ISD-AS is allowed.
-        let mut seen_ases = BTreeSet::new();
-        for (_, snap_state) in pstate.snaps() {
-            // Only allow one snap per ISD-AS.
-            for isd_as in snap_state.isd_ases() {
-                if seen_ases.contains(&isd_as) {
-                    return Err(PocketScionRuntimeError::StartupError(
-                        "Only one snap per ISD-AS is allowed".to_string(),
-                    ));
-                }
-                seen_ases.insert(isd_as);
-            }
-        }
-        // Do not allow any AS to have both routers and SNAPs configured.
-        for (_, router) in pstate.routers() {
-            if seen_ases.contains(&router.isd_as) {
-                return Err(PocketScionRuntimeError::StartupError(
-                    "Only one router per ISD-AS is allowed".to_string(),
-                ));
-            }
-        }
-
+    /// Starts the data plane tunnel gateway for each configured SNAP.
+    async fn start_snap_data_planes(
+        join_set: &mut JoinSet<Result<(), io::Error>>,
+        cancel_token: &CancellationToken,
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+        root_secret: &DhsdSecret,
+        mut snap_authz_map: BTreeMap<SnapId, Arc<IdentityRegistry>>,
+    ) -> anyhow::Result<()> {
         for (snap_id, snap) in pstate.snaps() {
             let metrics_registry = MetricsRegistry::new();
             let key = root_secret.derive_from_iter(vec![
@@ -278,39 +291,41 @@ impl PocketScionRuntimeBuilder {
             ]);
             let static_secret = StaticSecret::from(key.as_array());
 
-            let socket = match io_config.snap_data_plane_addr(snap_id) {
-                Some(addr) => tokio::net::UdpSocket::bind(addr).await?,
-                None => {
-                    tracing::debug!(%snap_id, "No listen address specified for SNAP dataplane");
-                    let udp_socket =
-                        tokio::net::UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-                            .await?;
-                    io_config.set_snap_data_plane_addr(snap_id, udp_socket.local_addr()?);
-                    udp_socket
-                }
-            };
+            let io_config = io_config.clone();
+            let socket = Self::bind_udp_or_random(
+                io_config.snap_data_plane_addr(snap_id),
+                |addr| {
+                    io_config.set_snap_data_plane_addr(snap_id, addr);
+                },
+                format_args!("SNAP {snap_id} data plane"),
+            )
+            .await?;
 
             let addr = socket.local_addr()?;
+            tracing::info!(%addr, %snap_id, "Starting snap dataplane");
 
             let tun_gw_metrics = TunnelGatewayDispatcherMetrics::new(&metrics_registry);
             let (tunnel_gw_dispatcher, tun_dispatcher_rx) =
                 TunnelGatewayDispatcher::new(tun_gw_metrics);
-
-            // XXX(scionstack-v2): If a SNAP is configured, then it is registered as wildcard
-            // sim_receiver and all traffic is forwarded to the SNAP.
             let tunnel_gw_dispatcher = Arc::new(tunnel_gw_dispatcher);
+
             for isd_as in snap.isd_ases() {
                 pstate
                     .add_wildcard_sim_receiver(isd_as, tunnel_gw_dispatcher.clone())
                     .expect("Failed to add wildcard receiver");
             }
+
             let authz = snap_authz_map
                 .remove(&snap_id)
                 .expect("no authz found for snap");
 
-            tracing::info!(%addr, %snap_id, "Starting snap dataplane");
+            // TODO: This hack needs to be removed when the CancelTaskSet is removed
+            let mut c_task_set = CancelTaskSet::new_from_parts(
+                std::mem::replace(join_set, JoinSet::new()),
+                cancel_token.clone(),
+            );
             start_tunnel_gateway(
-                &mut task_set,
+                &mut c_task_set,
                 socket,
                 authz,
                 Arc::new(NetSimDispatcher::new(pstate.clone())),
@@ -318,26 +333,86 @@ impl PocketScionRuntimeBuilder {
                 tun_dispatcher_rx,
                 static_secret,
             );
+            let (reclaimed, _) = c_task_set.into_parts();
+            *join_set = reclaimed;
         }
 
-        // Start Endhost Discovery APIs
+        Ok(())
+    }
+
+    /// Binds and spawns a task for each configured endhost API.
+    async fn start_endhost_apis(
+        join_set: &mut JoinSet<Result<(), io::Error>>,
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
+        for (id, _) in pstate.endhost_apis() {
+            let listener = Self::bind_tcp_or_random(
+                io_config.endhost_api_addr(id),
+                |addr| {
+                    io_config.set_endhost_api_addr(id, addr);
+                },
+                format_args!("endhost API {id}"),
+            )
+            .await?;
+
+            let pstate = pstate.clone();
+            let io_config = io_config.clone();
+            join_set.spawn(async move {
+                PsEndhostApi::serve(id, listener, pstate, io_config)
+                    .await
+                    .map_err(|e| io::Error::other(format!("{e:?}")))
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Starts the endhost API discovery service for each configured discovery API.
+    async fn start_endhost_discovery_apis(
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
         for (id, _) in pstate.endhost_api_discovery_apis() {
-            let pstate = pstate.clone();
-            let io_config = io_config.clone();
-            EndhostApiDiscoveryService::start(id, pstate, io_config)
+            let listener = Self::bind_tcp_or_random(
+                io_config.endhost_api_discovery_api_addr(id),
+                |addr| {
+                    io_config.set_endhost_api_discovery_api_addr(id, addr);
+                },
+                format_args!("endhost API discovery {id:?}"),
+            )
+            .await?;
+
+            EndhostApiDiscoveryService::start(id, listener, pstate.clone(), io_config.clone())
                 .await
                 .map_err(|e| io::Error::other(format!("{e:?}")))?;
         }
+        Ok(())
+    }
 
-        // Start External AS adapters
-        for (isd_as, _state) in pstate.external_ases() {
-            let pstate = pstate.clone();
-            let io_config = io_config.clone();
-            let ext_as = ExternalAsService::start(isd_as, pstate.clone(), io_config.clone())
+    /// Starts the external AS adapter for each configured external AS and registers it with the
+    /// simulation.
+    async fn start_external_ases(
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
+        for (isd_as, ext_state) in pstate.external_ases() {
+            let mut sockets = std::collections::HashMap::new();
+            for &iface_id in ext_state.interfaces.keys() {
+                let socket = Self::bind_udp_or_random(
+                    io_config.external_as_interface_addr(isd_as, iface_id),
+                    |addr| {
+                        io_config.set_external_as_interface_addr(isd_as, iface_id, addr);
+                    },
+                    format_args!("external AS {isd_as} interface {iface_id}"),
+                )
+                .await?;
+                sockets.insert(iface_id, socket);
+            }
+
+            let ext_as = ExternalAsService::start(isd_as, pstate.clone(), sockets)
                 .await
                 .map_err(|e| io::Error::other(format!("{e:?}")))?;
-
-            // Add the the handler to the simulation
             pstate
                 .register_external_as_handler(isd_as, ext_as)
                 .map_err(|e| {
@@ -346,39 +421,45 @@ impl PocketScionRuntimeBuilder {
                     ))
                 })?;
         }
+        Ok(())
+    }
 
-        // Control Services
+    /// Spawns a control service task for each configured ISD-AS.
+    fn start_control_services(
+        join_set: &mut JoinSet<Result<(), io::Error>>,
+        pstate: &PocketScionState,
+    ) {
         for (isd_as, _) in pstate.get_control_services() {
             let pstate = pstate.clone();
-            task_set.join_set.spawn(async move {
-                match ControlService::start(isd_as, pstate) {
-                    Ok(_) => {
-                        tracing::info!(isd_as = %isd_as, "Control Service started");
-                        Ok(())
-                    },
-                    Err(e) => {
-                        tracing::error!(isd_as = %isd_as, error = ?e, "Failed to start Control Service");
-                        Err(io::Error::other(format!("Failed to start Control Service for AS {isd_as}: {e:?}")))
-                    }
-                }
+            join_set.spawn(async move {
+                ControlService::start(isd_as, pstate).map_err(|e| {
+                    io::Error::other(format!(
+                        "Failed to start Control Service for AS {isd_as}: {e:?}"
+                    ))
+                })?;
+
+                Ok(())
             });
         }
+    }
 
-        // Start router sockets
+    /// Binds and starts a UDP router socket for each configured router, registering it as a
+    /// wildcard receiver.
+    async fn start_router_sockets(
+        join_set: &mut JoinSet<Result<(), io::Error>>,
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
         for sock_id in pstate.router_ids() {
-            let udp_socket = {
-                let bind_addr = match io_config.router_socket_addr(sock_id) {
-                    Some(addr) => addr,
-                    None => {
-                        let bind_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-                        io_config.set_router_socket_addr(sock_id, bind_addr);
-                        bind_addr
-                    }
-                };
-                let socket = tokio::net::UdpSocket::bind(bind_addr).await?;
-                io_config.set_router_socket_addr(sock_id, socket.local_addr()?);
-                socket
-            };
+            let io_config = io_config.clone();
+            let udp_socket = Self::bind_udp_or_random(
+                io_config.router_socket_addr(sock_id),
+                |addr| {
+                    io_config.set_router_socket_addr(sock_id, addr);
+                },
+                format_args!("router socket {sock_id}"),
+            )
+            .await?;
 
             let router_state = pstate
                 .router(sock_id)
@@ -398,21 +479,30 @@ impl PocketScionRuntimeBuilder {
                 .add_wildcard_sim_receiver(router_state.isd_as, Arc::new(router_socket.clone()))
                 .expect("Failed to add wildcard receiver");
 
-            task_set.spawn_cancellable_task(async move { router_socket.run().await });
+            join_set.spawn(async move { router_socket.run().await });
         }
+        Ok(())
+    }
 
-        // Start Network Forwarders
+    /// Binds and starts a network forwarder for each configured forwarder address.
+    async fn start_network_forwarders(
+        join_set: &mut JoinSet<Result<(), io::Error>>,
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
         for (sci_addr, forwarder_state) in pstate.network_forwarders() {
+            if sci_addr.local_address().unwrap() != forwarder_state.sim_addr {
+                return Err(io::Error::other(format!(
+                    "SCION address {sci_addr} does not match the simulation address \
+                     {sim_addr} configured for the forwarder",
+                    sim_addr = forwarder_state.sim_addr
+                ))
+                .into());
+            }
+
             let listen_addr = io_config
                 .network_forwarder_addr(sci_addr.isd_asn(), forwarder_state.sim_addr)
                 .unwrap_or_else(|| SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)));
-
-            if sci_addr.local_address().unwrap() != forwarder_state.sim_addr {
-                return Err(io::Error::other(format!(
-                    "SCION address {sci_addr} does not match the simulation address {sim_addr} configured for the forwarder",
-                    sim_addr = forwarder_state.sim_addr
-                )).into());
-            }
 
             let forwarder = NetworkForwarder::bind(
                 pstate.clone(),
@@ -429,376 +519,44 @@ impl PocketScionRuntimeBuilder {
                 ))
             })?;
 
-            // update the listen address in the io config in case it was not set
             io_config.set_network_forwarder_addr(
                 sci_addr.isd_asn(),
                 forwarder_state.sim_addr,
                 forwarder.listen_addr(),
             );
 
-            // Start the forwarder
-            task_set.spawn_cancellable_task(async move {
+            join_set.spawn(async move {
                 forwarder.run().await;
                 Ok(())
             });
         }
 
-        ready_state.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
 
-        // Only start the mgmt API when everything else is ready.
-        let mgmt_listen_addr = {
-            let ready_state_clone = ready_state.clone();
-            let token = task_set.cancellation_token();
-            let system_state = pstate.clone();
-            let io_config = io_config.clone();
-
-            let listener = tokio::net::TcpListener::bind(
-                self.mgmt_listen_addr
-                    .unwrap_or(SocketAddr::from((Ipv4Addr::LOCALHOST, DEFAULT_MGMT_PORT))),
+    /// Starts the authorization server if one is configured in the system state.
+    async fn start_auth_server(
+        join_set: &mut JoinSet<Result<(), io::Error>>,
+        cancel_token: &CancellationToken,
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
+        if pstate.has_auth_server() {
+            let listener = Self::bind_tcp_or_random(
+                io_config.auth_server_addr(),
+                |addr| {
+                    io_config.set_auth_server_addr(addr);
+                },
+                "auth server",
             )
             .await?;
-            let listen_address = listener.local_addr()?;
 
-            tracing::info!(addr=%listen_address, "Starting management API");
-
-            task_set.join_set.spawn(async move {
-                management_api::start(token, ready_state_clone, system_state, io_config, listener)
-                    .await
-            });
-            io::Result::Ok(listen_address)
-        }?;
-
-        if pstate.has_auth_server() {
             let auth_server = pstate.auth_server();
-
-            let io_config = io_config.clone();
-            let token = task_set.cancellation_token();
-            task_set.join_set.spawn(async move {
-                authorization_server::api::start(token, auth_server, io_config).await
+            let token = cancel_token.clone();
+            join_set.spawn(async move {
+                authorization_server::api::start(token, auth_server, listener).await
             });
         }
-        let client = admin::client::ApiClient::new(&addr_to_http_url(mgmt_listen_addr))
-            .expect("create client");
-
-        Ok(PocketScionRuntime {
-            handle: InProcess::new(task_set),
-            state: pstate,
-            io_config,
-            client,
-        })
+        Ok(())
     }
-}
-
-impl Default for PocketScionRuntimeBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// In-memory PocketSCION runtime.
-pub struct PocketScionRuntime {
-    handle: InProcess,
-    // TODO(ake): all api functions should be replaced with direct function calls and the client
-    // should be removed.
-    state: SharedPocketScionState,
-    io_config: SharedPocketScionIoConfig,
-    // Eventually, the in-memory representation should use direct function calls
-    // and not go through the http-interface.
-    client: admin::client::ApiClient,
-}
-
-impl PocketScionRuntime {
-    /// Returns the socket address of given endhost api, if it exists.
-    pub fn endhost_api_addr(&self, id: EndhostApiId) -> Option<SocketAddr> {
-        self.state
-            .endhost_api(id)
-            .and_then(|_| self.io_config.endhost_api_addr(id))
-    }
-
-    /// Returns the socket address of given endhost api discovery api, if it exists.
-    pub fn endhost_api_discovery_addr(&self, id: EndhostApiDiscoveryApiId) -> Option<SocketAddr> {
-        self.state
-            .endhost_api_discovery_api(id)
-            .and_then(|_| self.io_config.endhost_api_discovery_api_addr(id))
-    }
-
-    /// Returns the socket address of the interface with the given id of the external AS, if it
-    /// exists.
-    pub fn external_as_interface_addr(&self, ia: IsdAsn, interface_id: u16) -> Option<SocketAddr> {
-        self.state
-            .external_as(ia)
-            .and_then(|_| self.io_config.external_as_interface_addr(ia, interface_id))
-    }
-
-    /// Returns the socket address of the control plane API of the snap with the given id, if it
-    /// exists.
-    pub fn snap_control_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
-        self.state
-            .snap(snap_id)
-            .and_then(|_| self.io_config.snap_control_addr(snap_id))
-    }
-
-    /// Returns the socket address of the data plane API of the snap with the given id, if it
-    /// exists.
-    pub fn snap_data_plane_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
-        self.state
-            .snap(snap_id)
-            .and_then(|_| self.io_config.snap_data_plane_addr(snap_id))
-    }
-
-    /// Returns the socket address of the router with the given id, if it exists.
-    pub fn router_socket_addr(&self, router_id: RouterId) -> Option<SocketAddr> {
-        self.state
-            .router(router_id)
-            .and_then(|_| self.io_config.router_socket_addr(router_id))
-    }
-
-    /// Returns the listening socket address of the network forwarder registered at the given AS and
-    /// IP, if it exists.
-    pub fn network_forwarder_addr(&self, isd_asn: IsdAsn, ip: IpAddr) -> Option<SocketAddr> {
-        self.io_config.network_forwarder_addr(isd_asn, ip)
-    }
-
-    /// Returns a handle to the shared state of the PocketSCION runtime.
-    pub fn state(&self) -> SharedPocketScionState {
-        self.state.clone()
-    }
-
-    /// Returns valid Segments from `src` to `dst` as raw SCION packets, if they exist.
-    ///
-    /// ### Parameters
-    /// - `src`: Source ISD-AS for the path lookup.
-    /// - `dst`: Destination ISD-AS for the path lookup.
-    /// - `valid_after`: Returned paths are valid after this timestamp.
-    pub fn segments(
-        &self,
-        src: IsdAsn,
-        dst: IsdAsn,
-        valid_after: chrono::DateTime<chrono::Utc>,
-    ) -> anyhow::Result<SnapListPathSegments> {
-        let sguard = self.state.system_state();
-        let segments =
-            sguard
-                .segment_registry
-                .endhost_list_segments(src.into(), src.into(), dst.into())?;
-
-        segments.into_path_segments(&sguard.topology, valid_after, 0, 255)
-    }
-
-    /// Returns valid Paths from `src` to `dst` as raw SCION packets, if they exist.
-    ///
-    /// ### Parameters
-    /// - `src`: Source ISD-AS for the path lookup.
-    /// - `dst`: Destination ISD-AS for the path lookup.
-    /// - `valid_after`: Returned paths are valid after this timestamp.
-    pub fn paths(
-        &self,
-        src: IsdAsn,
-        dst: IsdAsn,
-        valid_after: chrono::DateTime<chrono::Utc>,
-    ) -> anyhow::Result<Vec<ScionPath<Bytes>>> {
-        let sguard = self.state.system_state();
-        let segments =
-            sguard
-                .segment_registry
-                .endhost_list_segments(src.into(), src.into(), dst.into())?;
-
-        let (core_segments, non_core_segments) = {
-            let sciparse_segments =
-                segments.into_path_segments(&sguard.topology, valid_after, 0, 255)?;
-
-            // TODO: once sciparse is the norm, this should be removed
-            (
-                sciparse_segments
-                    .core
-                    .into_iter()
-                    .map(|seg| seg.into())
-                    .collect(),
-                sciparse_segments
-                    .down
-                    .into_iter()
-                    .chain(sciparse_segments.up)
-                    .map(|seg| seg.into())
-                    .collect(),
-            )
-        };
-
-        Ok(combine(src, dst, core_segments, non_core_segments))
-    }
-}
-
-impl PocketScionRuntime {
-    /// Dispatches a packet through PocketScions Network simulation.
-    ///
-    /// ## Parameters
-    /// - `local_as`: The ISD-AS the packet starts processing
-    /// - `local_interface`: Interface where the packet starts processing. 0 means packet originated
-    ///   in the AS.
-    /// - `now`: The timestamp to dispatch the packet at.
-    /// - `packet`: The raw SCION packet to dispatch.
-    pub fn dispatch_packet(
-        &self,
-        local_as: IsdAsn,
-        local_interface: u16,
-        now: ScionNetworkTime,
-        packet: ScionPacketRaw,
-    ) {
-        self.state
-            .dispatch_to_network_sim(local_as, local_interface, now, packet);
-    }
-
-    /// Binds a socket to the given address and registers it as a simulation receiver for the given
-    /// AS.
-    ///
-    /// See [NetSimStack] for more details.
-    pub fn bind_sim_network_stack(
-        &self,
-        local_as: IsdAsn,
-        bind_addr: IpAddr,
-        queue_size: usize,
-    ) -> anyhow::Result<NetSimStack> {
-        NetSimStack::bind(self.state.clone(), local_as, bind_addr, queue_size)
-    }
-}
-
-const MAX_ATTEMPTS: i32 = 5;
-const ATTEMPT_WAIT: Duration = Duration::from_millis(200);
-
-/// PocketSCION runtime error.
-#[derive(Error, Debug)]
-pub enum PocketScionRuntimeError {
-    /// PocketSCION admin API client error.
-    #[error("client error: {0:?}")]
-    ClientError(#[from] admin::client::ClientError),
-    /// PocketSCION not ready.
-    #[error("pocket-scion not ready: {0}")]
-    PocketScionNotReady(String),
-    /// I/O error.
-    #[error("i/o error {0}")]
-    IoError(#[from] std::io::Error),
-    /// Startup error.
-    #[error("startup error: {0}")]
-    StartupError(String),
-}
-
-impl PocketScionRuntime {
-    /// Stop and join all the tasks. This is primarily intended to be used in tests.
-    pub async fn stop_and_join(&mut self) {
-        self.handle.task_set.cancellation_token().cancel();
-        self.join().await;
-    }
-
-    /// Join all tasks.
-    pub async fn join(&mut self) {
-        self.handle.task_set.join_all().await;
-    }
-
-    /// Wait until PocketSCION is ready.
-    pub async fn wait_for_ready(&self) -> Result<(), PocketScionRuntimeError> {
-        let mut err = PocketScionRuntimeError::PocketScionNotReady("Unknown state".to_string());
-        for _ in 1..=MAX_ATTEMPTS {
-            err = match self.client.get_status().await {
-                Ok(status) => {
-                    if status.state == admin::api::ReadyState::Ready {
-                        return Ok(());
-                    }
-                    PocketScionRuntimeError::PocketScionNotReady(format!("{status:?}"))
-                }
-                Err(e) => PocketScionRuntimeError::ClientError(e),
-            };
-
-            tracing::debug!("Waiting for Pocket SCION to be ready: {:?}", err);
-            sleep(ATTEMPT_WAIT).await;
-        }
-        Err(err)
-    }
-
-    /// Returns an API client connected to the management API of PocketSCION.
-    pub fn api_client(&self) -> admin::client::ApiClient {
-        self.client.clone()
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) enum PathOrObject<T> {
-    #[default]
-    Unspecified,
-    Path(PathBuf),
-    Object(T),
-}
-
-impl PathOrObject<SystemState> {
-    /// # Panics
-    ///
-    /// This method panics in case of i/o-errors. We deem this acceptable as it
-    /// is primarily used in testing.
-    #[allow(unused)]
-    pub(crate) async fn sync_to_file(self) -> anyhow::Result<Option<PathBuf>> {
-        let state = match self {
-            PathOrObject::Unspecified => return Ok(None),
-            PathOrObject::Path(path_buf) => return Ok(Some(path_buf)),
-            PathOrObject::Object(s) => s,
-        };
-        let path = get_tmp_path("system_state.json");
-        let dto: SystemStateDto = (&state).into();
-        write_file(path.clone(), &dto)
-            .await
-            .context("failed to write system state")?;
-
-        Ok(Some(path))
-    }
-
-    pub(crate) async fn load(self, start_time: SystemTime) -> Result<SystemState, std::io::Error> {
-        match self {
-            PathOrObject::Unspecified => Ok(SystemState::default_from_start_time(start_time)),
-            PathOrObject::Path(path_buf) => {
-                let dto: dto::SystemStateDto = read_file(path_buf).await?;
-                SystemState::try_from(dto).map_err(io::Error::other)
-            }
-            PathOrObject::Object(t) => Ok(t),
-        }
-    }
-}
-
-impl PathOrObject<IoConfig> {
-    /// # Panics
-    ///
-    /// This method panics in case of i/o-errors. We deem this acceptable as it
-    /// is primarily used in testing.
-    #[allow(unused)]
-    pub(crate) async fn sync_to_file(self) -> Option<PathBuf> {
-        let state = match self {
-            PathOrObject::Unspecified => return None,
-            PathOrObject::Path(path_buf) => return Some(path_buf),
-            PathOrObject::Object(s) => s,
-        };
-        let path = get_tmp_path("io_config.json");
-        let dto = crate::dto::IoConfigDto::from(&state);
-        write_file(path.clone(), &dto).await.expect("failed");
-        Some(path)
-    }
-
-    pub(crate) async fn load(self) -> Result<IoConfig, std::io::Error> {
-        match self {
-            PathOrObject::Unspecified => Ok(IoConfig::default()),
-            PathOrObject::Path(path_buf) => {
-                let dto: dto::IoConfigDto = read_file(path_buf).await?;
-                IoConfig::try_from(dto).map_err(io::Error::other)
-            }
-            PathOrObject::Object(t) => Ok(t),
-        }
-    }
-}
-
-impl PathOrObject<IoConfig> {
-    #[allow(unused)]
-    pub(crate) async fn write_to_temp_file(&self) -> PathBuf {
-        todo!()
-    }
-}
-
-#[derive(Debug, Clone)]
-enum TimestampOrNow {
-    Now,
-    Timestamp(SystemTime),
 }

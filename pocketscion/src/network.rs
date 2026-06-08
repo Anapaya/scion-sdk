@@ -11,7 +11,19 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Network Simulation
+
+//! Pocket SCION network simulation
+//!
+//! The network simulation is split in three parts:
+//!
+//! 1. `scion` contains the SCION network simulation, including the topology and the SCION routers.
+//! 2. `local` contains the local network simulation, which simulates Scion Routers and IP routing
+//!    within the ASes.
+//! 3. `simulator` which combines the SCION and local network simulations and provides an interface
+//!    to send packets through the simulated network.
+//!
+//! The network simulators are designed to be useable independently of the rest of PocketSCION.
+//! They do not depend directly on the PocketSCION state and its locking mechanism.
 
 pub mod local;
 pub mod scion;

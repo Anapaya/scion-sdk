@@ -13,7 +13,7 @@
 // limitations under the License.
 //! Integration tests for error SCION stack error handling.
 
-use pocketscion::topologies::{IA132, UnderlayType, minimal::two_path_topology};
+use pocketscion::util::topologies::{IA132, UnderlayType, minimal::two_path_topology};
 use scion_proto::address::{ScionAddrSvc, ServiceAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_stack::scionstack::{
@@ -60,7 +60,7 @@ async fn test_invalid_snap_token() {
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
     let result = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps_handle.endhost_api(IA132).unwrap())
         .with_auth_token("invalid token".to_string())
         .build()
         .await
@@ -85,7 +85,7 @@ async fn test_bind_service_address_fails_impl(underlay: UnderlayType) {
     let ps_handle = two_path_topology(underlay).await;
 
     let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps_handle.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await

@@ -14,8 +14,7 @@
 //! PocketSCION Endhost API.
 
 use std::{
-    collections::BTreeSet,
-    net::{Ipv4Addr, SocketAddr},
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 
@@ -33,9 +32,8 @@ use tokio::net::TcpListener;
 use utoipa::ToSchema;
 
 use crate::{
-    addr_to_http_url,
-    io_config::SharedPocketScionIoConfig,
-    state::{SharedPocketScionState, endhost_segment_lister::StateEndhostSegmentLister},
+    comp::endhost_segment_lister::StateEndhostSegmentLister, io_config::IoConfig,
+    state::PocketScionState, util::addr_to_http_url,
 };
 
 #[derive(
@@ -83,11 +81,20 @@ pub struct EndhostApiState {
 pub struct PsEndhostApi;
 
 impl PsEndhostApi {
-    /// Starts the Endhost API
-    pub async fn start(
+    /// Starts serving the Endhost API on the provided listener.
+    ///
+    /// ### Parameters
+    /// - `this_id`: ID of the Endhost API instance to serve. Must exist in the application state.
+    /// - `listener`: TCP listener to serve the API on. Must already be bound to the desired
+    ///   address.
+    /// - `ps_state`: The PocketSCION state, used to access the Endhost API state and other
+    ///   components.
+    /// - `ps_io`: The I/O configuration, used to discover addresses the Endhost API returns.
+    pub async fn serve(
         this_id: EndhostApiId,
-        ps_state: SharedPocketScionState,
-        ps_io: SharedPocketScionIoConfig,
+        listener: TcpListener,
+        ps_state: PocketScionState,
+        ps_io: IoConfig,
     ) -> anyhow::Result<()> {
         let state = ps_state
             .endhost_api(this_id)
@@ -96,7 +103,7 @@ impl PsEndhostApi {
         let underlay_discovery = PsEndhostApiUnderlayDiscovery {
             id: this_id,
             system_state: ps_state.clone(),
-            io_config: ps_io.clone(),
+            io_config: ps_io,
         };
 
         let segment_lister = StateEndhostSegmentLister::new(ps_state, state.local_ases.clone());
@@ -106,20 +113,9 @@ impl PsEndhostApi {
             Arc::new(segment_lister),
         );
 
-        // Setup Server
-        let listen_addr = ps_io
-            .endhost_api_addr(this_id)
-            .unwrap_or(SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 0));
-        let listener = TcpListener::bind(listen_addr)
-            .await
-            .context("error binding tcp listener")?;
-
         let local_addr = listener
             .local_addr()
             .context("error getting local address of listen socket")?;
-
-        // Update IoConfig
-        ps_io.set_endhost_api_addr(this_id, local_addr);
 
         // Start
         tracing::info!(%local_addr, local_ases = ?state.local_ases, "Starting endhost API");
@@ -135,9 +131,10 @@ impl PsEndhostApi {
 /// Underlay Discovery implementation for Endhost API
 struct PsEndhostApiUnderlayDiscovery {
     id: EndhostApiId,
-    system_state: SharedPocketScionState,
-    io_config: SharedPocketScionIoConfig,
+    system_state: PocketScionState,
+    io_config: IoConfig,
 }
+
 impl PsEndhostApiUnderlayDiscovery {
     // Extracts own state from pocket scion state
     fn own_state(&self) -> anyhow::Result<EndhostApiState> {
@@ -146,6 +143,7 @@ impl PsEndhostApiUnderlayDiscovery {
             .with_context(|| format!("missing state for endhost api with id {}", self.id))
     }
 }
+
 impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
     fn list_underlays(
         &self,
@@ -235,11 +233,42 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
     }
 }
 
+// Endhost API
+impl PocketScionState {
+    /// Adds a new endhost api to PocketSCION
+    pub fn add_endhost_api(
+        &mut self,
+        local_ases: impl IntoIterator<Item = IsdAsn>,
+    ) -> EndhostApiId {
+        let mut sstate = self.write();
+        let id = sstate.endhost_apis.len().into();
+
+        sstate.endhost_apis.insert(
+            id,
+            EndhostApiState {
+                local_ases: local_ases.into_iter().collect(),
+            },
+        );
+
+        id
+    }
+
+    /// Returns the cloned state of given endhost api
+    pub(crate) fn endhost_api(&self, id: EndhostApiId) -> Option<EndhostApiState> {
+        self.read().endhost_apis.get(&id).cloned()
+    }
+
+    pub(crate) fn endhost_apis(&self) -> BTreeMap<EndhostApiId, EndhostApiState> {
+        self.read().endhost_apis.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZero, str::FromStr, time::SystemTime};
+    use std::{collections::BTreeMap, net::SocketAddr, num::NonZero, str::FromStr};
 
     use anyhow::Ok;
+    use chrono::Utc;
 
     use super::*;
 
@@ -269,9 +298,9 @@ mod tests {
     /// - Two Routers with following ases:
     ///   1. (1-1)
     ///   2. (1-2)
-    fn setup() -> anyhow::Result<(SharedPocketScionState, SharedPocketScionIoConfig, TestSetup)> {
-        let mut state = SharedPocketScionState::new(SystemTime::now());
-        let io = SharedPocketScionIoConfig::new();
+    fn setup() -> anyhow::Result<(PocketScionState, IoConfig, TestSetup)> {
+        let mut state = PocketScionState::new(Utc::now());
+        let io = IoConfig::new();
 
         let ia1 = IsdAsn::from_str("1-1")?;
         let ia2 = IsdAsn::from_str("1-2")?;

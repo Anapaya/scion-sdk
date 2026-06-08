@@ -47,18 +47,18 @@ use url::Url;
 use utoipa::ToSchema;
 
 use crate::{
-    addr_to_http_url,
+    comp::{
+        control_service::beaconing::InterfaceBeaconState,
+        sim_network_stack::{NetSimPathProvider, NetSimStack},
+    },
     network::scion::{
         routing::ScionNetworkTime,
         segment::registry::SegmentRegistry,
         topology::{ScionGlobalInterfaceId, ScionTopology},
         trust_store::StoreCertificateDer,
     },
-    state::{
-        SharedPocketScionState,
-        control_service::beaconing::InterfaceBeaconState,
-        sim_network_stack::{NetSimPathProvider, NetSimStack},
-    },
+    state::PocketScionState,
+    util::addr_to_http_url,
 };
 
 pub mod beaconing;
@@ -68,7 +68,7 @@ pub struct ControlService {
     /// The ISD-AS of the Control Service
     isd_asn: IsdAsn,
     /// Shared state of the PocketSCION instance
-    app_state: SharedPocketScionState,
+    app_state: PocketScionState,
     /// Network Simulator Socket for communication with the network simulator
     net_stack: NetSimStack,
     /// Since the CRPC client requires certificates to be stored in files, we need to create temp
@@ -92,7 +92,7 @@ impl ControlService {
     /// 4. No Listener must be set up on `fd3a:9b6c:1f20:0002::/64` for the given ISD-AS
     pub fn start(
         isd_asn: IsdAsn,
-        app_state: SharedPocketScionState,
+        app_state: PocketScionState,
     ) -> anyhow::Result<Arc<ControlService>> {
         // Note: We are currently just hardcoding a address and port for the socket
         let ip = Ipv6Addr::from_str("fd3a:9b6c:1f20:0002::")
@@ -135,7 +135,7 @@ impl ControlService {
         loop {
             let action = {
                 let now = SystemTime::now();
-                let state_guard = self.app_state.system_state.read().unwrap();
+                let state_guard = self.app_state.read();
 
                 let segment_registry = &state_guard.segment_registry;
                 let topology = &state_guard.topology;
@@ -152,7 +152,7 @@ impl ControlService {
                     for (our_interface, beacon_reqs) in beacons {
                         let peer_as = self
                             .app_state
-                            .system_state()
+                            .read()
                             .topology
                             .scion_link(&our_interface.isd_as, our_interface.if_id)
                             .expect("Interface should exist in topology")
@@ -192,7 +192,7 @@ impl ControlService {
 
                         let crpc_client = {
                             let dst_cert_chain: Vec<StoreCertificateDer> = {
-                                let state_guard = self.app_state.system_state.read().unwrap();
+                                let state_guard = self.app_state.read();
                                 let Some(certs) =
                                     state_guard.topology.trust_store.ca_certs(&dst_as.isd())
                                 else {
@@ -322,7 +322,7 @@ impl ControlService {
             .context("Failed to bind UDP socket for service resolution")?;
 
         let (this_as, peer_as_if) = {
-            let state_guard = self.app_state.system_state.read().unwrap();
+            let state_guard = self.app_state.read();
             let topo = &state_guard.topology;
 
             let this_as = topo
@@ -480,7 +480,7 @@ impl CertificateTempDir {
 
 /// Serializable PocketScion State for the control service
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct ControlServiceState {
     beaconing_interfaces: HashMap<ScionGlobalInterfaceId, beaconing::InterfaceBeaconState>,
 }
@@ -601,7 +601,7 @@ pub enum ControlServiceAction {
     Wait(SystemTime),
 }
 
-impl SharedPocketScionState {
+impl PocketScionState {
     /// Adds a Control Service state for the given ISD-AS to the shared state, returning an error if
     /// a state for the ISD-AS already exists.
     pub fn add_control_service(
@@ -609,7 +609,7 @@ impl SharedPocketScionState {
         isd_asn: IsdAsn,
         state: ControlServiceState,
     ) -> anyhow::Result<()> {
-        let mut system_state = self.system_state.write().unwrap();
+        let mut system_state = self.write();
 
         if system_state.control_service_states.contains_key(&isd_asn) {
             bail!(
@@ -624,7 +624,7 @@ impl SharedPocketScionState {
 
     /// Gets the ISD-AS and Control Service state for all Control Services in the shared state.
     pub fn get_control_services(&self) -> Vec<(IsdAsn, ControlServiceState)> {
-        let state = self.system_state.read().unwrap();
+        let state = self.read();
         state
             .control_service_states
             .iter()
@@ -634,7 +634,7 @@ impl SharedPocketScionState {
 
     /// Gets the Control Service state for the given ISD-AS, if it exists.
     pub fn get_control_service_state(&self, isd_asn: IsdAsn) -> Option<ControlServiceState> {
-        let state = self.system_state.read().unwrap();
+        let state = self.read();
         state.control_service_states.get(&isd_asn).cloned()
     }
 
@@ -644,7 +644,7 @@ impl SharedPocketScionState {
     where
         F: FnOnce(&mut ControlServiceState) -> anyhow::Result<()>,
     {
-        let mut state = self.system_state.write().unwrap();
+        let mut state = self.write();
         let control_service_state = state
             .control_service_states
             .get_mut(&isd_asn)

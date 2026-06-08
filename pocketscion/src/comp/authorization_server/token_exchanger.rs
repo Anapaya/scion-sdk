@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    collections::HashMap,
-    str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+//! Token exchanger for the authorization server.
 
-use anyhow::Context;
+use std::{collections::HashMap, time::Duration};
+
+use chrono::Utc;
 use jsonwebtoken::{
     Algorithm, EncodingKey, Header, TokenData, dangerous::insecure_decode, encode,
     errors::Error as JwtError,
@@ -27,16 +25,14 @@ use pem::Pem;
 use serde::{Deserialize, Serialize};
 use snap_tokens::v0::{Pssid, SnapTokenClaims};
 use thiserror::Error;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::{
     api::{TokenRequest, TokenResponse},
     fake_idp::FakeIdp,
 };
-use crate::{
-    authorization_server::fake_idp::FAKE_IDP_ISSUER,
-    dto::{TokenExchangerConfigDto, TokenExchangerStateDto},
-};
+use crate::comp::authorization_server::fake_idp::FAKE_IDP_ISSUER;
 
 /// If the issued token is not an access token or usable as an access token,
 /// then the token_type value N_A is used to indicate that an OAuth 2.0
@@ -71,7 +67,7 @@ pub enum VerifyIdTokenError {
     JwtError(#[from] JwtError),
 }
 
-/// TokenExchange is the interface for the auhtorization server to exchange an
+/// TokenExchange is the interface for the authorization server to exchange an
 /// openID connect (OIDC) ID token for a SNAP token.
 pub trait TokenExchange: Send + Sync {
     /// exchanges an OIDC ID token for a SNAP token.
@@ -116,10 +112,11 @@ pub struct OpenIdToken {
     pub(crate) iat: i64,
 }
 
-/// Configuration for the [TokenExchangeImpl].
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TokenExchangeConfig {
+/// Configuration for the [PsTokenExchanger].
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct PsTokenExchangeConfig {
     /// The private key to sign the SNAP tokens (PEM encoded).
+    #[schema(value_type = String, example = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----")]
     private_key: Pem,
     /// The lifetime of the SNAP tokens.
     token_lifetime: Duration,
@@ -127,32 +124,8 @@ pub struct TokenExchangeConfig {
     fake_idp: FakeIdp,
 }
 
-impl From<&TokenExchangeConfig> for TokenExchangerConfigDto {
-    fn from(config: &TokenExchangeConfig) -> Self {
-        Self {
-            private_key: config.private_key.to_string(),
-            token_lifetime: config.token_lifetime,
-            fake_idp: (&config.fake_idp).into(),
-        }
-    }
-}
-
-impl TryFrom<TokenExchangerConfigDto> for TokenExchangeConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: TokenExchangerConfigDto) -> Result<Self, Self::Error> {
-        Ok(Self {
-            private_key: Pem::from_str(&value.private_key)
-                .context("invalid PEM format for session token issuer key")?,
-            token_lifetime: value.token_lifetime,
-            fake_idp: FakeIdp::try_from(value.fake_idp)
-                .context("invalid fake IDP configuration")?,
-        })
-    }
-}
-
-impl TokenExchangeConfig {
-    /// Creates a new [TokenExchangeConfig].
+impl PsTokenExchangeConfig {
+    /// Creates a new [PsTokenExchangeConfig].
     pub fn new(private_key: Pem, token_lifetime: Duration) -> Self {
         Self {
             private_key,
@@ -166,7 +139,7 @@ impl TokenExchangeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Ssid(pub String);
 
-/// [TokenExchangeImpl] is responsible for exchanging ID tokens for SNAP tokens.
+/// [PsTokenExchanger] is responsible for exchanging ID tokens for SNAP tokens.
 ///
 /// The SNAP token contains the pseudo SCION subsription ID (PSSID) such that
 /// the SNAP only knows the PSSID of the endhost. The authorization server needs
@@ -176,48 +149,16 @@ pub struct Ssid(pub String);
 /// The SNAP token JWTs are signed with the EdDSA algorithm with the configured
 /// private key. The corresponding public key is needed by the SNAPs to verify
 /// the SNAP tokens.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TokenExchangeImpl {
-    config: TokenExchangeConfig,
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq)]
+pub struct PsTokenExchanger {
+    config: PsTokenExchangeConfig,
+    #[schema(value_type = HashMap<String, String>, example = json!({"ssid1": "pssid1", "ssid2": "pssid2"}))]
     id_mapping: HashMap<Ssid, Pssid>,
 }
 
-impl From<&TokenExchangeImpl> for TokenExchangerStateDto {
-    fn from(value: &TokenExchangeImpl) -> Self {
-        Self {
-            config: (&value.config).into(),
-            id_mapping: value
-                .id_mapping
-                .iter()
-                .map(|(id, pssid)| (id.0.clone(), pssid.0.to_string()))
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<TokenExchangerStateDto> for TokenExchangeImpl {
-    type Error = anyhow::Error;
-
-    fn try_from(value: TokenExchangerStateDto) -> Result<Self, Self::Error> {
-        let config = TokenExchangeConfig::try_from(value.config)?;
-        let id_mapping = value
-            .id_mapping
-            .into_iter()
-            .map(|(id, uuid)| {
-                Ok((
-                    Ssid(id),
-                    Pssid(Uuid::from_str(&uuid).context("invalid UUID")?),
-                ))
-            })
-            .collect::<Result<_, Self::Error>>()?;
-
-        Ok(Self { config, id_mapping })
-    }
-}
-
-impl TokenExchangeImpl {
-    /// Creates a new [TokenExchangeImpl] with the given configuration.
-    pub fn new(config: TokenExchangeConfig) -> Self {
+impl PsTokenExchanger {
+    /// Creates a new [PsTokenExchanger] with the given configuration.
+    pub fn new(config: PsTokenExchangeConfig) -> Self {
         Self {
             config,
             id_mapping: HashMap::new(),
@@ -225,7 +166,7 @@ impl TokenExchangeImpl {
     }
 }
 
-impl TokenExchange for TokenExchangeImpl {
+impl TokenExchange for PsTokenExchanger {
     fn exchange(&mut self, req: TokenRequest) -> Result<TokenResponse, TokenExchangeError> {
         tracing::debug!(request=?req, "Received token exchange request");
 
@@ -274,10 +215,7 @@ impl TokenExchange for TokenExchangeImpl {
         // SNAP token claims
         let snap_token_claims = SnapTokenClaims {
             pssid: pssid.clone(),
-            exp: (SystemTime::now() + self.config.token_lifetime)
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            exp: (Utc::now() + self.config.token_lifetime).timestamp() as u64,
             jti: uuid::Uuid::new_v4().to_string(),
         };
 

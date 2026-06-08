@@ -15,7 +15,7 @@
 //! Integration tests with multiple clients in the same AS.
 
 use bytes::{Bytes, BytesMut};
-use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
+use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
 use scion_proto::address::SocketAddr;
 use scion_stack::scionstack::{ScionStackBuilder, UdpScionSocket};
 use snap_tokens::v0::{dummy_snap_token, seeded_dummy_snap_token};
@@ -32,7 +32,7 @@ async fn multi_client() {
     let ps_handle = minimal_topology(UnderlayType::Snap).await;
 
     // stack1
-    let ia132_eh_api = ps_handle.endhost_api(IA132).await.unwrap();
+    let ia132_eh_api = ps_handle.endhost_api(IA132).unwrap();
     let stack1 = ScionStackBuilder::new()
         .with_endhost_api(ia132_eh_api.clone())
         .with_auth_token(seeded_dummy_snap_token("client1".to_string()))
@@ -49,7 +49,7 @@ async fn multi_client() {
         .unwrap();
 
     // snap2
-    let ia212_eh_api = ps_handle.endhost_api(IA212).await.unwrap();
+    let ia212_eh_api = ps_handle.endhost_api(IA212).unwrap();
     let server_stack = ScionStackBuilder::new()
         .with_endhost_api(ia212_eh_api)
         .with_auth_token(dummy_snap_token())

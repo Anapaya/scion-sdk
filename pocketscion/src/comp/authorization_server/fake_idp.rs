@@ -15,20 +15,18 @@
 //! identity provider provides a public key and can issue access tokens. The
 //! access tokens are signed with an EdDSA key pair.
 
-use std::{
-    str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::Duration;
 
+use chrono::Utc;
 use ed25519_dalek::pkcs8::{EncodePrivateKey, EncodePublicKey};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation, decode};
 use pem::Pem;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::token_exchanger::{
     EDGE_APP_CLIENT_ID, IdentityProvider, OpenIdToken, VerifyIdTokenError,
 };
-use crate::dto::FakeIdpDto;
 
 pub(crate) const FAKE_IDP_ISSUER: &str = "fake_idp";
 
@@ -48,14 +46,9 @@ pub fn oidc_id_token(sub: String) -> String {
         iss: FAKE_IDP_ISSUER.to_string(),
         sub,
         aud: EDGE_APP_CLIENT_ID.to_string(),
-        exp: (SystemTime::now() + Duration::from_secs(3600))
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64,
-        iat: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64,
+        exp: (Utc::now() + chrono::Duration::from_std(Duration::from_secs(3600)).unwrap())
+            .timestamp(),
+        iat: Utc::now().timestamp(),
     };
     let idp_enc_key =
         EncodingKey::from_ed_pem(pem::encode(&idp_private_pem).as_bytes()).expect("no fail");
@@ -90,32 +83,10 @@ fn const_fake_idp_key_pair() -> (Pem, Pem) {
 }
 
 /// A fake identity provider for testing purposes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
 pub struct FakeIdp {
+    #[schema(value_type = String, example = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----")]
     public_key: Pem,
-}
-
-impl From<&FakeIdp> for FakeIdpDto {
-    fn from(fake_idp: &FakeIdp) -> Self {
-        Self {
-            public_key: fake_idp.public_key.to_string(),
-        }
-    }
-}
-
-impl TryFrom<FakeIdpDto> for FakeIdp {
-    type Error = std::io::Error;
-
-    fn try_from(value: FakeIdpDto) -> Result<Self, Self::Error> {
-        let public_key = Pem::from_str(&value.public_key).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Invalid PEM format for session token issuer key",
-            )
-        })?;
-
-        Ok(Self { public_key })
-    }
 }
 
 impl FakeIdp {

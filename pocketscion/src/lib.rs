@@ -11,31 +11,35 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! # The heart of PocketSCION.
 
-pub mod api;
-pub mod authorization_server;
-pub mod cli;
-pub mod dto;
-pub mod endhost_api;
+//! Pocket SCION is a SCION network simulator.
+//!
+//! To create a PocketSCION simulation, create a
+//! [PocketScionRuntimeBuilder](runtime::builder::PocketScionRuntimeBuilder) and configure the
+//! desired state.
+//!
+//! Pocketscion is split into:
+//! - [io_config::IoConfig]: Host specific Network Address configuration.
+//! - [state::PocketScionState]: The global state of the PocketSCION simulation
+//! - [comp]: The components that implement the logic of components of the simulation, e.g. APIs
+//! - [runtime::PocketScionRuntime]: The running PocketSCION simulation, which provides an API to
+//!   interact with the simulation.
+//! - [util]: Utility functions and types used across the PocketSCION codebase.
+//! - [network]: SCION network simulation code, including topology and path management.
+//!
+//! As a user you can use:
+//! - [io_config::IoConfig] to configure the network addresses are used by the simulation to
+//!   interact with your host.
+//! - [state::PocketScionState] to configure the simulation, e.g. add ASes, links, and components to
+//!   the simulation.
+//! - [runtime::PocketScionRuntime] to start the simulation and interact with it while it's running.
+//!
+//! Example usage can be found in the tests and in the [util::topologies] module, which contains
+//! example topologies that can be used in tests.
+
+pub mod comp;
 pub mod io_config;
-pub mod management_api;
 pub mod network;
 pub mod runtime;
 pub mod state;
-pub mod topologies;
-mod util;
-
-/// Transform a [`std::net::SocketAddr`] into a [`url::Url`].
-pub fn addr_to_http_url(addr: std::net::SocketAddr) -> url::Url {
-    match addr {
-        std::net::SocketAddr::V4(addr) => {
-            url::Url::parse(&format!("http://{addr}"))
-                .expect("It is safe to format a SocketAddr as a URL")
-        }
-        std::net::SocketAddr::V6(addr) => {
-            url::Url::parse(&format!("http://[{}]:{}", addr.ip(), addr.port()))
-                .expect("It is safe to format a SocketAddr as a URL")
-        }
-    }
-}
+pub mod util;

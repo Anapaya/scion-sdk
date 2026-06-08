@@ -35,8 +35,8 @@ use tracing::instrument;
 use utoipa::ToSchema;
 
 use crate::{
-    network::scion::routing::ScionNetworkTime,
-    state::{SharedPocketScionState, sim_network_stack::NetSimRawSocket},
+    comp::sim_network_stack::NetSimRawSocket, network::scion::routing::ScionNetworkTime,
+    state::PocketScionState,
 };
 
 /// Serializable state of a network forwarder stored in the system state. This is used to create a
@@ -96,7 +96,7 @@ impl NetworkForwarder {
     /// - `forward_addr`: The address to forward packets to and receive packets from on the real
     ///   network.
     pub async fn bind(
-        state: SharedPocketScionState,
+        state: PocketScionState,
         local_as: IsdAsn,
         sim_addr: IpAddr,
         queue_size: usize,
@@ -328,7 +328,7 @@ fn change_packet_addresses(
     }
 }
 
-impl SharedPocketScionState {
+impl PocketScionState {
     /// Adds a new network forwarder to the
     ///
     /// See [NetworkForwarder::bind] for more details on the parameters and behavior of the
@@ -340,7 +340,7 @@ impl SharedPocketScionState {
         queue_size: usize,
         forward_addr: std::net::SocketAddr,
     ) -> anyhow::Result<()> {
-        let mut guard = self.system_state.write().unwrap();
+        let mut guard = self.write();
         match guard
             .network_forwarders
             .entry(ScionAddr::new(local_as, sim_addr.into()))
@@ -367,9 +367,7 @@ impl SharedPocketScionState {
 
     /// Returns a list of all network forwarders in the system state, along with their state.
     pub fn network_forwarders(&self) -> Vec<(ScionAddr, NetworkForwarderState)> {
-        self.system_state
-            .read()
-            .unwrap()
+        self.read()
             .network_forwarders
             .iter()
             .map(|(addr, state)| (*addr, state.clone()))
@@ -379,9 +377,10 @@ impl SharedPocketScionState {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::IpAddr, time::SystemTime};
+    use std::net::IpAddr;
 
     use bytes::Bytes;
+    use chrono::Utc;
     use scion_proto::{
         address::{IsdAsn, ScionAddr, SocketAddr},
         packet::{ByEndpoint, ScionPacketRaw, ScionPacketUdp},
@@ -396,11 +395,11 @@ mod tests {
             routing::ScionNetworkTime,
             topology::{ScionAs, ScionTopology},
         },
-        state::SharedPocketScionState,
+        state::PocketScionState,
     };
 
-    fn setup_state(isd_as: IsdAsn) -> SharedPocketScionState {
-        let mut state = SharedPocketScionState::new(SystemTime::now());
+    fn setup_state(isd_as: IsdAsn) -> PocketScionState {
+        let mut state = PocketScionState::new(Utc::now());
         let mut topology = ScionTopology::new();
         topology
             .add_as(ScionAs::new_core(isd_as))

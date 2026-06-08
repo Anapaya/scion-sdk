@@ -18,7 +18,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     net::SocketAddr,
     str::FromStr,
-    sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use derive_more::Display;
@@ -34,17 +34,13 @@ use url::Url;
 use utoipa::ToSchema;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::{
-    dto::SnapStateDto,
-    io_config::SharedPocketScionIoConfig,
-    state::{SharedPocketScionState, SystemState},
-};
+use crate::{io_config::IoConfig, state::PocketScionState};
 
 /// The path prefix for deterministic derivation of the SNAP's static secret.
 pub const SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL: &str = "snaptun_server_private_key";
 
 /// Pocket SCION SNAP state.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SnapState {
     pub(crate) isd_as: IsdAsn,
 }
@@ -54,24 +50,6 @@ impl SnapState {
     pub(crate) fn isd_ases(&self) -> Vec<IsdAsn> {
         // might be extended in the future to support multiple ASes
         vec![self.isd_as]
-    }
-}
-
-impl From<SnapState> for SnapStateDto {
-    fn from(value: SnapState) -> Self {
-        Self {
-            isd_as: value.isd_as,
-        }
-    }
-}
-
-impl TryFrom<SnapStateDto> for SnapState {
-    type Error = anyhow::Error;
-
-    fn try_from(value: SnapStateDto) -> Result<Self, Self::Error> {
-        Ok(Self {
-            isd_as: value.isd_as,
-        })
     }
 }
 
@@ -101,10 +79,10 @@ impl Id for SnapId {
 }
 
 // Shared State Snap Functions
-impl SharedPocketScionState {
+impl PocketScionState {
     /// Adds a new SNAP to the system state and returns its id.
     pub fn add_snap(&mut self, isd_as: IsdAsn) -> anyhow::Result<SnapId> {
-        let mut system_state = self.system_state.write().unwrap();
+        let mut system_state = self.write();
 
         let snap_id = SnapId::from_usize(system_state.snaps.len());
 
@@ -122,80 +100,84 @@ impl SharedPocketScionState {
 
     /// Returns the state of the SNAP with the given id, if it exists.
     pub fn snap(&self, id: SnapId) -> Option<SnapState> {
-        self.system_state.read().unwrap().snaps.get(&id).cloned()
+        self.read().snaps.get(&id).cloned()
     }
 
     /// Returns a map of all Snaps
     pub fn snaps(&self) -> BTreeMap<SnapId, SnapState> {
-        let sstate = self.system_state.read().unwrap();
+        let sstate = self.read();
         sstate.snaps.clone()
     }
 
     /// Returns a vector of all existing SnapIds
     pub fn snaps_ids(&self) -> Vec<SnapId> {
-        let sstate = self.system_state.read().unwrap();
+        let sstate = self.read();
         sstate.snaps.keys().cloned().collect()
     }
 
     /// Set the public key used to verify SNAP tokens.
     pub fn set_snap_token_public_pem(&mut self, pem: Pem) {
-        let mut system_state = self.system_state.write().unwrap();
+        let mut system_state = self.write();
         system_state.snap_token_public_pem = pem;
     }
 
     /// Gets the public key used to verify SNAP tokens
     pub fn snap_token_public_key(&self) -> Pem {
-        let sstate = self.system_state.read().unwrap();
+        let sstate = self.read();
         sstate.snap_token_public_pem.clone()
     }
 
     /// Returns all local IsdAses of a snap
     pub fn snap_isd_ases(&self, id: SnapId) -> Option<Vec<IsdAsn>> {
-        self.system_state
-            .read()
-            .unwrap()
-            .snaps
-            .get(&id)
-            .map(|s| s.isd_ases())
+        self.read().snaps.get(&id).map(|s| s.isd_ases())
     }
 
     /// Get the [SnapDataPlaneDiscoveryHandle] of a specific snap
     pub(crate) fn snap_data_plane_discovery(
         &self,
         snap_id: SnapId,
-        io_config: SharedPocketScionIoConfig,
+        io_config: IoConfig,
     ) -> SnapDataPlaneDiscoveryHandle {
         SnapDataPlaneDiscoveryHandle {
             snap_id,
-            system_state: self.system_state.clone(),
+            system_state: self.clone(),
             io_config,
         }
     }
 
     /// Get the [SnapResolverHandle] of a specific snap
-    pub(crate) fn snap_resolver(
-        &self,
-        snap_id: SnapId,
-        io_config: SharedPocketScionIoConfig,
-    ) -> SnapResolverHandle {
+    pub(crate) fn snap_resolver(&self, snap_id: SnapId, io_config: IoConfig) -> SnapResolverHandle {
         SnapResolverHandle {
             snap_id,
-            system_state: self.system_state.clone(),
+            system_state: self.clone(),
             io_config,
         }
+    }
+}
+
+// SNAPtun Settings
+impl PocketScionState {
+    /// Returns the keepalive interval for the SNAPtun connection(s).
+    pub fn snaptun_keepalive_interval(&self) -> Duration {
+        self.read().snaptun_keepalive_interval
+    }
+    /// Sets the keepalive interval for the SNAPtun connection(s).
+    pub fn set_snaptun_keepalive_interval(&mut self, interval: Duration) {
+        let mut state = self.write();
+        state.snaptun_keepalive_interval = interval;
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct SnapDataPlaneDiscoveryHandle {
     snap_id: SnapId,
-    system_state: Arc<RwLock<SystemState>>,
-    io_config: SharedPocketScionIoConfig,
+    system_state: PocketScionState,
+    io_config: IoConfig,
 }
 
 impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
     fn list_snap_underlays(&self) -> Vec<SnapUnderlay> {
-        let sstate = self.system_state.read().unwrap();
+        let sstate = self.system_state.read();
         let snap = sstate.snaps.get(&self.snap_id).expect("SNAP not found");
 
         let isd_ases: Vec<sciparse::identifier::isd_asn::IsdAsn> =
@@ -215,8 +197,8 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
 pub(crate) struct SnapResolverHandle {
     snap_id: SnapId,
     #[allow(unused)]
-    system_state: Arc<RwLock<SystemState>>,
-    io_config: SharedPocketScionIoConfig,
+    system_state: PocketScionState,
+    io_config: IoConfig,
 }
 
 impl SnapDataPlaneResolver for SnapResolverHandle {
@@ -228,7 +210,7 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
         (http::StatusCode, anyhow::Error),
     > {
         let public_key = {
-            let root_secret = self.system_state.read().unwrap().root_secret();
+            let root_secret = self.system_state.root_secret();
             let key = root_secret.derive_from_iter(vec![
                 SNAPTUN_SERVER_PRIVATE_KEY_NODE_LABEL.into(),
                 self.snap_id.to_string().into(),

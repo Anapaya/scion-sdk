@@ -16,12 +16,14 @@
 use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 pub mod dto;
 
 /// SNAP control plane I/O configuration.
-#[derive(Debug, PartialEq, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct ControlPlaneIoConfig {
     /// The control plane API socket address.
+    #[schema(value_type = Option<String>, example = "127.0.0.1:8080")]
     pub api_addr: Option<SocketAddr>,
 }

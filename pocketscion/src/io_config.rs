@@ -11,389 +11,168 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 //! PocketSCION I/O configuration.
 
-use std::{
-    collections::BTreeMap,
-    net::{IpAddr, SocketAddr},
-    sync::{Arc, RwLock, RwLockReadGuard},
+use std::net::IpAddr;
+
+use scion_proto::address::IsdAsn;
+
+use crate::comp::{
+    endhost_api::EndhostApiId, endhost_api_discovery::EndhostApiDiscoveryApiId, router::RouterId,
+    snap::SnapId,
 };
 
-use anyhow::{Context, Ok};
-use scion_proto::address::{IsdAsn, ScionAddr};
-use serde::{Deserialize, Serialize};
-use snap_control::server::state::ControlPlaneIoConfig;
-use snap_dataplane::tunnel_gateway::state::TunnelGatewayIoConfig;
-
-use crate::{
-    authorization_server::api::IoAuthServerConfig,
-    dto::{IoConfigDto, IoSnapConfigDto},
-    endhost_api::EndhostApiId,
-    state::{RouterId, endhost_api_discovery::EndhostApiDiscoveryApiId, snap::SnapId},
-    util::{map_btree_fallible, map_btree_ref},
-};
-
-/// PocketSCION I/O configuration.
-#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct IoConfig {
-    /// The I/O state of the SNAPs.
-    snaps: BTreeMap<SnapId, SnapIoConfig>,
-    /// The I/O state of the authorization server.
-    auth_server: IoAuthServerConfig,
-    /// The I/O state of the SCION router sockets.
-    router_sockets: BTreeMap<RouterId, SocketAddr>,
-    /// Listen Socket for EndhostAPIs
-    endhost_apis: BTreeMap<EndhostApiId, SocketAddr>,
-    /// Listen Socket for Endhost Discovery APIs
-    endhost_api_discovery_apis: BTreeMap<EndhostApiDiscoveryApiId, SocketAddr>,
-    /// Listen Socket for External ASes, keyed by (ISD-AS, interface ID)
-    external_ases: BTreeMap<(IsdAsn, u16), SocketAddr>,
-    /// Listen Socket for Network Forwarders
-    network_forwarders: BTreeMap<ScionAddr, SocketAddr>,
-}
-
-impl AsRef<IoConfig> for RwLockReadGuard<'_, IoConfig> {
-    fn as_ref(&self) -> &IoConfig {
-        self
-    }
-}
-
-impl TryFrom<IoConfigDto> for IoConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: IoConfigDto) -> Result<Self, Self::Error> {
-        let snaps =
-            map_btree_fallible(value.snaps, |v| v.try_into()).context("invalid SNAP I/O config")?;
-
-        let router_sockets = map_btree_fallible(value.router_sockets, |v| v.parse())
-            .context("invalid router socket address")?;
-
-        let endhost_apis = map_btree_fallible(value.endhost_apis, |v| v.parse())
-            .context("invalid endhost API socket address")?;
-
-        let endhost_discovery_apis =
-            map_btree_fallible(value.endhost_discovery_apis, |v| v.parse())
-                .context("invalid endhost discovery API socket address")?;
-
-        let external_ases = map_btree_fallible(value.external_ases, |v| v.parse())
-            .context("invalid external AS API socket address")?;
-
-        let network_forwarders = map_btree_fallible(value.network_forwarders, |v| v.parse())
-            .context("invalid network forwarder socket address")?;
-
-        Ok(Self {
-            snaps,
-            router_sockets,
-            auth_server: value
-                .auth_server
-                .try_into()
-                .context("invalid auth server I/O config")?,
-            endhost_apis,
-            endhost_api_discovery_apis: endhost_discovery_apis,
-            external_ases,
-            network_forwarders,
-        })
-    }
-}
-
-impl From<&IoConfig> for IoConfigDto {
-    fn from(config: &IoConfig) -> Self {
-        Self {
-            auth_server: (&config.auth_server).into(),
-            snaps: map_btree_ref(&config.snaps, |v| v.into()),
-            router_sockets: map_btree_ref(&config.router_sockets, |v| v.to_string()),
-            endhost_apis: map_btree_ref(&config.endhost_apis, |v| v.to_string()),
-            endhost_discovery_apis: map_btree_ref(&config.endhost_api_discovery_apis, |v| {
-                v.to_string()
-            }),
-            external_ases: map_btree_ref(&config.external_ases, |v| v.to_string()),
-            network_forwarders: map_btree_ref(&config.network_forwarders, |v| v.to_string()),
-        }
-    }
-}
-
-/// Shared PocketSCION I/O configuration.
-#[derive(Clone, Default)]
-pub struct SharedPocketScionIoConfig {
-    state: Arc<RwLock<IoConfig>>,
-}
-
-impl SharedPocketScionIoConfig {
-    /// Creates a new, empty I/O configuration.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Creates a new I/O configuration from the given state.
-    pub fn from_state(state: IoConfig) -> Self {
-        Self {
-            state: Arc::new(RwLock::new(state)),
-        }
-    }
-
-    /// Creates a new I/O configuration from the given DTO.
-    pub fn from_dto(state: IoConfigDto) -> Result<Self, anyhow::Error> {
-        let state = IoConfig::try_from(state)?;
-
-        Ok(Self {
-            state: Arc::new(RwLock::new(state)),
-        })
-    }
-
-    /// Converts the I/O configuration to a DTO.
-    pub fn to_dto(&self) -> IoConfigDto {
-        self.get_state().as_ref().into()
-    }
-
-    /// Gets a read lock on the I/O configuration state.
-    pub fn get_state(&self) -> RwLockReadGuard<'_, IoConfig> {
-        self.state.read().unwrap()
-    }
-
-    /// Consumes the shared I/O configuration and returns the inner state.
-    pub fn into_state(self) -> IoConfig {
-        Arc::into_inner(self.state)
-            .expect("no fail")
-            .into_inner()
-            .expect("no fail")
-    }
-}
-
-impl SharedPocketScionIoConfig {
-    /// Set the address of given SNAP
+helper::io_config! {
+    /// I/O configuration for PocketSCION components.
     ///
-    /// # Panics
+    /// This struct contains the socket addresses for all components of PocketSCION.
+    /// These addresses map to real socket addresses on the host, and are used to configure the I/O of the components.
     ///
-    /// If address was already set
-    pub fn set_snap_control_addr(&self, snap_id: SnapId, control_plane_api_addr: SocketAddr) {
-        let mut sstate = self.state.write().unwrap();
-        assert!(!sstate.snaps.contains_key(&snap_id), "SNAP already exists");
-        sstate.snaps.insert(
-            snap_id,
-            SnapIoConfig {
-                control_plane: ControlPlaneIoConfig {
-                    api_addr: Some(control_plane_api_addr),
-                },
-                data_plane: Default::default(),
-            },
-        );
-    }
-
-    /// Sets the SNAP Data Plane address
-    ///
-    /// # Panics
-    ///
-    /// If address was already set
-    pub fn set_snap_data_plane_addr(&self, snap_id: SnapId, listen_addr: SocketAddr) {
-        let mut sstate = self.state.write().unwrap();
-        let snap_io_config = sstate.snaps.get_mut(&snap_id).expect("SNAP doesn't exist");
-
-        snap_io_config.data_plane = TunnelGatewayIoConfig::new(listen_addr);
-    }
-
-    /// List all available SNAPs with the control plane API address.
-    pub fn snaps(&self) -> Vec<(SnapId, Option<SocketAddr>)> {
-        let rstate = self.state.read().expect("no fail");
-        rstate
-            .snaps
-            .iter()
-            .map(|(snap_id, snap_state)| (*snap_id, snap_state.control_plane.api_addr))
-            .collect()
-    }
-
-    /// Get the control plane API address for a SNAP.
-    ///
-    /// Returns `None` if the SNAP doesn't exist or if the control plane API address
-    /// hasn't been set yet.
-    pub fn snap_control_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
-        let rstate = self.state.read().expect("no fail");
-        rstate
-            .snaps
-            .get(&snap_id)
-            .and_then(|snap| snap.control_plane.api_addr)
-    }
-
-    /// Get the listen address for a SNAP data plane.
-    ///
-    /// Returns `None` if the SNAP or the SNAP data plane doesn't exist, or if
-    /// the listen address hasn't been set yet.
-    pub fn snap_data_plane_addr(&self, snap_id: SnapId) -> Option<SocketAddr> {
-        let rstate = self.state.read().expect("no fail");
-        let snap = rstate.snaps.get(&snap_id)?;
-        snap.data_plane.listen_addr
-    }
-
-    /// Get the socket address of a given router socket.
-    pub fn router_socket_addr(&self, router_socket_id: RouterId) -> Option<SocketAddr> {
-        let rstate = self.state.read().expect("no fail");
-        rstate.router_sockets.get(&router_socket_id).copied()
-    }
-
-    /// Set the socket address of a given router socket.
-    pub fn set_router_socket_addr(&self, router_socket_id: RouterId, addr: SocketAddr) {
-        let mut sstate = self.state.write().unwrap();
-        sstate.router_sockets.insert(router_socket_id, addr);
-    }
-
-    /// Get the authorization server API address.
-    ///
-    /// Returns `None` if the address hasn't been set yet.
-    pub fn auth_server_addr(&self) -> Option<SocketAddr> {
-        let rstate = self.state.read().expect("no fail");
-        rstate.auth_server.addr
-    }
-
-    /// Add the authorization server API address.
-    pub fn set_auth_server_addr(&self, addr: SocketAddr) {
-        let mut sstate = self.state.write().unwrap();
-        sstate.auth_server.addr = Some(addr);
-    }
-
-    /// Gets the given endhost-api's socket address.
-    ///
-    /// Returns `None` if the address hasn't been set yet.
-    pub fn endhost_api_addr(&self, id: EndhostApiId) -> Option<SocketAddr> {
-        self.state.read().unwrap().endhost_apis.get(&id).cloned()
-    }
-
-    /// Sets the given endhost-api's socket address.
-    pub fn set_endhost_api_addr(&self, id: EndhostApiId, addr: SocketAddr) {
-        self.state.write().unwrap().endhost_apis.insert(id, addr);
-    }
-
-    /// Gets the given endhost API discovery API's socket address.
-    pub fn endhost_api_discovery_api_addr(
-        &self,
-        id: EndhostApiDiscoveryApiId,
-    ) -> Option<SocketAddr> {
-        self.state
-            .read()
-            .unwrap()
-            .endhost_api_discovery_apis
-            .get(&id)
-            .cloned()
-    }
-
-    /// Sets the given endhost API discovery API's socket address.
-    pub fn set_endhost_api_discovery_api_addr(
-        &self,
-        id: EndhostApiDiscoveryApiId,
-        addr: SocketAddr,
-    ) {
-        self.state
-            .write()
-            .unwrap()
-            .endhost_api_discovery_apis
-            .insert(id, addr);
-    }
-
-    /// Gets the socket address for an external AS interface, identified by the ISD-ASN and the
-    /// interface ID.
-    pub fn external_as_interface_addr(
-        &self,
-        isd_asn: IsdAsn,
-        interface_id: u16,
-    ) -> Option<SocketAddr> {
-        self.state
-            .read()
-            .unwrap()
-            .external_ases
-            .get(&(isd_asn, interface_id))
-            .cloned()
-    }
-
-    /// Sets the socket address for an external AS interface, identified by the ISD-ASN and the
-    /// interface ID.
-    pub fn set_external_as_interface_addr(
-        &self,
-        isd_asn: IsdAsn,
-        interface_id: u16,
-        addr: SocketAddr,
-    ) {
-        self.state
-            .write()
-            .unwrap()
-            .external_ases
-            .insert((isd_asn, interface_id), addr);
-    }
-
-    /// Gets the socket address for a network forwarder, identified by the SCION address.
-    pub fn network_forwarder_addr(&self, isd_asn: IsdAsn, ip_addr: IpAddr) -> Option<SocketAddr> {
-        self.state
-            .read()
-            .unwrap()
-            .network_forwarders
-            .get(&ScionAddr::new(isd_asn, ip_addr.into()))
-            .cloned()
-    }
-
-    /// Sets the socket address for a network forwarder
-    pub fn set_network_forwarder_addr(&self, isd_asn: IsdAsn, ip_addr: IpAddr, addr: SocketAddr) {
-        self.state
-            .write()
-            .unwrap()
-            .network_forwarders
-            .insert(ScionAddr::new(isd_asn, ip_addr.into()), addr);
-    }
+    /// If no specific address is configured for a component, it will bind to a random port to all interfaces.
+    struct IoConfig;
+    addr_map(router_socket: RouterId),
+    addr_map(endhost_api: EndhostApiId),
+    addr_map(endhost_api_discovery_api: EndhostApiDiscoveryApiId),
+    addr_map(snap_control: SnapId),
+    addr_map(snap_data_plane: SnapId),
+    addr_map_keyed(external_as_interface: (isd_asn: IsdAsn, interface_id: u16)),
+    addr_map_keyed(network_forwarder: (isd_asn: IsdAsn, ip_addr: IpAddr)),
+    addr_singleton(auth_server),
 }
 
-/// PocketSCION SNAP I/O configuration.
-#[derive(Debug, PartialEq, Clone, Default, Serialize, Deserialize)]
-pub struct SnapIoConfig {
-    /// The control plane I/O configuration.
-    pub control_plane: ControlPlaneIoConfig,
-    /// The data plane I/O configurations.
-    pub data_plane: TunnelGatewayIoConfig,
-}
+mod helper {
+    /// Macro to generate I/O configuration struct
+    ///
+    /// - addr_map: generates a BTreeMap<$Key, SocketAddr> field with the given name, and
+    ///   getter/setter methods to access it.
+    /// - addr_map_keyed: like addr_map but with named tuple components, flattened into the function
+    ///   signatures instead of a single tuple parameter.
+    /// - addr_singleton: generates an Option<SocketAddr> field with the given name, and
+    ///   getter/setter methods to access it.
+    /// - custom_map: generates a BTreeMap<$Key, $Val> field with the given name, without any
+    ///   getter/setter methods.
+    macro_rules! io_config {
+        (
+            $(#[$meta:meta])*
+            struct $StructName:ident;
+            $(addr_map($field:ident : $Key:ty),)*
+            $(addr_map_keyed($field4:ident : ($($kname:ident : $KTy:ty),+)),)*
+            $(addr_singleton($field2:ident),)*
+            $(custom_map($field3:ident : $Key3:ty => $Val:ty),)*
+        ) => {
+            paste::paste! {
+                // --- Inner data struct ---
+                #[derive(
+                    ::std::default::Default,
+                    ::std::fmt::Debug,
+                    ::std::cmp::PartialEq,
+                    ::std::clone::Clone,
+                    ::serde::Serialize,
+                    ::serde::Deserialize,
+                    ::utoipa::ToSchema,
+                )]
+                $(#[$meta])*
+                pub struct [<$StructName Inner>] {
+                    $(
+                        #[schema(value_type = ::std::collections::BTreeMap<String, String>)]
+                        $field: ::std::collections::BTreeMap<$Key, ::std::net::SocketAddr>,
+                    )*
+                    $(
+                        #[schema(value_type = ::std::collections::BTreeMap<String, String>)]
+                        $field4: ::std::collections::BTreeMap<($($KTy,)+), ::std::net::SocketAddr>,
+                    )*
+                    $(
+                        #[schema(value_type = String, nullable = true)]
+                        $field2: ::std::option::Option<::std::net::SocketAddr>,
+                    )*
+                    $(
+                        $field3: ::std::collections::BTreeMap<$Key3, $Val>,
+                    )*
+                }
 
-impl From<&SnapIoConfig> for IoSnapConfigDto {
-    fn from(value: &SnapIoConfig) -> Self {
-        IoSnapConfigDto {
-            control_plane: (&value.control_plane).into(),
-            data_plane: (&value.data_plane).into(),
-        }
+                // --- Shared wrapper ---
+                #[derive(::std::clone::Clone, ::std::default::Default)]
+                $(#[$meta])*
+                pub struct $StructName {
+                    inner: ::std::sync::Arc<::std::sync::RwLock<[<$StructName Inner>]>>,
+                }
+
+                impl ::std::fmt::Debug for $StructName {
+                    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                        self.inner.read().unwrap().fmt(f)
+                    }
+                }
+
+                impl $StructName {
+                    /// Creates a new, empty instance.
+                    pub fn new() -> Self {
+                        Self::default()
+                    }
+
+                    /// Creates a new instance from the given inner data.
+                    pub fn from_inner(inner: [<$StructName Inner>]) -> Self {
+                        Self {
+                            inner: ::std::sync::Arc::new(::std::sync::RwLock::new(inner)),
+                        }
+                    }
+
+                    /// Returns a clone of the inner data.
+                    pub fn to_inner(&self) -> [<$StructName Inner>] {
+                        self.inner.read().unwrap().clone()
+                    }
+
+                    /// Returns a read guard over the inner data.
+                    pub fn read(&self) -> ::std::sync::RwLockReadGuard<'_, [<$StructName Inner>]> {
+                        self.inner.read().unwrap()
+                    }
+
+                    /// Returns a write guard over the inner data.
+                    pub fn write(&self) -> ::std::sync::RwLockWriteGuard<'_, [<$StructName Inner>]> {
+                        self.inner.write().unwrap()
+                    }
+
+                    // addr_map methods
+                    $(
+                        /// Returns the socket address for the given ID, if it exists.
+                        pub fn [<$field:snake _addr>](&self, id: $Key) -> ::std::option::Option<::std::net::SocketAddr> {
+                            self.inner.read().unwrap().$field.get(&id).cloned()
+                        }
+
+                        /// Sets the socket address for the given ID, returning the previous value if any.
+                        pub fn [<set_ $field:snake _addr>](&self, id: $Key, addr: ::std::net::SocketAddr) -> ::std::option::Option<::std::net::SocketAddr> {
+                            self.inner.write().unwrap().$field.insert(id, addr)
+                        }
+                    )*
+
+                    // addr_map_keyed methods
+                    $(
+                        /// Returns the socket address for the given key components, if it exists.
+                        pub fn [<$field4:snake _addr>](&self, $($kname: $KTy,)+) -> ::std::option::Option<::std::net::SocketAddr> {
+                            self.inner.read().unwrap().$field4.get(&($($kname,)+)).cloned()
+                        }
+
+                        /// Sets the socket address for the given key components, returning the previous value if any.
+                        pub fn [<set_ $field4:snake _addr>](&self, $($kname: $KTy,)+ addr: ::std::net::SocketAddr) -> ::std::option::Option<::std::net::SocketAddr> {
+                            self.inner.write().unwrap().$field4.insert(($($kname,)+), addr)
+                        }
+                    )*
+
+                    // addr_singleton methods
+                    $(
+                        /// Returns the socket address if it exists.
+                        pub fn [<$field2:snake _addr>](&self) -> ::std::option::Option<::std::net::SocketAddr> {
+                            self.inner.read().unwrap().$field2
+                        }
+
+                        /// Sets the socket address, returning the previous value if any.
+                        pub fn [<set_ $field2:snake _addr>](&self, addr: ::std::net::SocketAddr) -> ::std::option::Option<::std::net::SocketAddr> {
+                            self.inner.write().unwrap().$field2.replace(addr)
+                        }
+                    )*
+                }
+            }
+        };
     }
-}
-
-impl TryFrom<IoSnapConfigDto> for SnapIoConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: IoSnapConfigDto) -> Result<Self, Self::Error> {
-        let data_plane = value
-            .data_plane
-            .try_into()
-            .with_context(|| "Invalid data plane config".to_string())?;
-
-        Ok(Self {
-            control_plane: value.control_plane.try_into()?,
-            data_plane,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::net::Ipv4Addr;
-
-    use snap_dataplane::state::Id;
-
-    use super::*;
-
-    #[test]
-    fn should_convert_to_dto_and_back_without_data_loss() {
-        let io_config = SharedPocketScionIoConfig::new();
-        let tunnel_addr = "127.0.0.1:9000".parse().unwrap();
-
-        let cp_api = std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, 9002));
-        let snap_id = SnapId::from_usize(1);
-
-        io_config.set_snap_control_addr(snap_id, cp_api);
-        io_config.set_snap_data_plane_addr(snap_id, tunnel_addr);
-        let before = io_config.state.read().unwrap().clone();
-
-        let dto_io_config = io_config.to_dto();
-        let after = IoConfig::try_from(dto_io_config).expect("failed to convert back");
-
-        assert_eq!(before, after);
-    }
+    pub(crate) use io_config;
 }

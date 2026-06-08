@@ -14,18 +14,21 @@
 
 //! PocketSCION example topologies for testing.
 
-use std::{collections::BTreeMap, num::NonZeroU16, time::SystemTime};
+use std::{collections::BTreeMap, num::NonZeroU16};
+
+use chrono::Utc;
 
 use crate::{
     network::scion::topology::{ScionAs, ScionLink, ScionLinkType, ScionTopology},
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
-    topologies::{IA132, IA212, IA222, PocketScionHandle, UnderlayType},
+    runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
+    util::topologies::{IA132, IA212, IA222, PsSetup, UnderlayType},
 };
 
-/// PocketSCION topology with two ASes and a single link between them.
-pub async fn minimal_topology(underlay: UnderlayType) -> PocketScionHandle {
-    let mut pstate = SharedPocketScionState::new(SystemTime::now());
+/// Sets up a minimal PocketSCION topology with two [IA132] and [IA212] ASes and a sing link between
+/// them. As well as either a SNAP or a UDP underlay, depending on the `underlay` parameter.
+pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
+    let mut pstate = PocketScionState::new(Utc::now());
 
     // Define the topology
     let mut topo = ScionTopology::new();
@@ -39,8 +42,10 @@ pub async fn minimal_topology(underlay: UnderlayType) -> PocketScionHandle {
     pstate.set_topology(topo);
 
     // Create Endhost API
-    let _eh132 = pstate.add_endhost_api(vec![IA132]);
-    let _eh212 = pstate.add_endhost_api(vec![IA212]);
+    let eh132 = pstate.add_endhost_api(vec![IA132]);
+    let eh212 = pstate.add_endhost_api(vec![IA212]);
+
+    let endhost_apis = BTreeMap::from([(IA132, eh132), (IA212, eh212)]);
 
     match underlay {
         // Add SNAPs
@@ -66,22 +71,27 @@ pub async fn minimal_topology(underlay: UnderlayType) -> PocketScionHandle {
     }
 
     let pocketscion = PocketScionRuntimeBuilder::new()
-        .with_system_state(pstate.into_state())
-        .with_mgmt_listen_addr("127.0.0.1:0".parse().unwrap())
+        .with_system_state(pstate)
         .start()
         .await
         .expect("Failed to start PocketSCION");
 
-    let api_client = pocketscion.api_client();
-
-    PocketScionHandle::new(pocketscion, api_client)
+    PsSetup {
+        runtime: pocketscion,
+        endhost_apis,
+    }
 }
 
-/// PocketSCION topology with three ASes and two paths from [IA132] to [IA212].
-pub async fn two_path_topology(underlay: UnderlayType) -> PocketScionHandle {
+/// Sets up a PocketSCION topology with three ASes, [IA132], [IA212] and [IA222].
+/// These ASes are connected in a triangle, with links between IA132-IA212, IA132-IA222 and
+/// IA212-IA222.
+///
+/// As well as either a SNAP or a UDP underlay, in both [IA132] and [IA212], depending on the
+/// `underlay` parameter.
+pub async fn two_path_topology(underlay: UnderlayType) -> PsSetup {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
 
-    let mut pstate = SharedPocketScionState::new(SystemTime::now());
+    let mut pstate = PocketScionState::new(Utc::now());
 
     // Define the topology
     let mut topo = ScionTopology::new();
@@ -101,8 +111,10 @@ pub async fn two_path_topology(underlay: UnderlayType) -> PocketScionHandle {
     pstate.set_topology(topo);
 
     // Create Endhost API
-    let _eh132 = pstate.add_endhost_api(vec![IA132]);
-    let _eh212 = pstate.add_endhost_api(vec![IA212]);
+    let eh132 = pstate.add_endhost_api(vec![IA132]);
+    let eh212 = pstate.add_endhost_api(vec![IA212]);
+
+    let endhost_apis = BTreeMap::from([(IA132, eh132), (IA212, eh212)]);
 
     match underlay {
         // Create two SNAPs with data planes
@@ -128,13 +140,13 @@ pub async fn two_path_topology(underlay: UnderlayType) -> PocketScionHandle {
     }
 
     let pocketscion = PocketScionRuntimeBuilder::new()
-        .with_system_state(pstate.into_state())
-        .with_mgmt_listen_addr("127.0.0.1:0".parse().unwrap())
+        .with_system_state(pstate)
         .start()
         .await
         .expect("Failed to start PocketSCION");
 
-    let api_client = pocketscion.api_client();
-
-    PocketScionHandle::new(pocketscion, api_client)
+    PsSetup {
+        runtime: pocketscion,
+        endhost_apis,
+    }
 }

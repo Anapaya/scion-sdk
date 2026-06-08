@@ -101,6 +101,31 @@ impl CancelTaskSet {
         }
     }
 
+    /// Creates a task set from the given parts. Without registering a signal handler.
+    pub fn new_from_parts(
+        join_set: JoinSet<Result<(), std::io::Error>>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        Self {
+            join_set,
+            cancellation_token,
+        }
+    }
+
+    /// Decomposes the task set into its parts.
+    ///
+    /// This will cause the task set to stop managing the tasks and cancellation token, and the
+    /// caller will be responsible for managing them.
+    pub fn into_parts(mut self) -> (JoinSet<Result<(), std::io::Error>>, CancellationToken) {
+        // TODO: this is a hack, only acceptable since CancelTaskSet will be removed soon.
+        let new_set = JoinSet::new();
+        let join_set = std::mem::replace(&mut self.join_set, new_set);
+        let new_token = CancellationToken::new();
+        let cancellation_token = std::mem::replace(&mut self.cancellation_token, new_token);
+
+        (join_set, cancellation_token)
+    }
+
     /// Returns a clone of the cancellation token.
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancellation_token.clone()

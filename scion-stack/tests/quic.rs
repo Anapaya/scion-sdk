@@ -21,7 +21,7 @@ use std::{
 
 use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use bytes::BytesMut;
-use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
+use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
 use rustls::ClientConfig;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
@@ -42,7 +42,7 @@ async fn quinn_echo() {
     let token_s = dummy_snap_token();
 
     // client stack
-    let ia132_eh_api = ps_handle.endhost_api(IA132).await.unwrap();
+    let ia132_eh_api = ps_handle.endhost_api(IA132).unwrap();
     let client_stack = ScionStackBuilder::new()
         .with_endhost_api(ia132_eh_api)
         .with_auth_token(token_c1)
@@ -51,7 +51,7 @@ async fn quinn_echo() {
         .unwrap();
 
     // server stack
-    let ia212_eh_api = ps_handle.endhost_api(IA212).await.unwrap();
+    let ia212_eh_api = ps_handle.endhost_api(IA212).unwrap();
     let server_stack = ScionStackBuilder::new()
         .with_endhost_api(ia212_eh_api)
         .with_auth_token(token_s)

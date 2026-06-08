@@ -14,18 +14,19 @@
 
 //! Integration test for the network forwarder using the PocketSCION runtime.
 
-use std::{net::IpAddr, time::SystemTime};
+use std::net::IpAddr;
 
 use anyhow::Context;
 use bytes::Bytes;
+use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
     network::scion::{
         routing::ScionNetworkTime,
         topology::{ScionAs, ScionTopology},
     },
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
+    runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
 };
 use scion_proto::{
     address::{IsdAsn, ScionAddr, SocketAddr},
@@ -46,7 +47,7 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
     let sim_forwarder_ip: IpAddr = "10.0.0.2".parse().unwrap();
     let queue_size = 8;
 
-    let mut state = SharedPocketScionState::new(SystemTime::now());
+    let mut state = PocketScionState::new(Utc::now());
     let mut topology = ScionTopology::new();
 
     topology.add_as(ScionAs::new_core(local_as))?;
@@ -65,7 +66,7 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
         .context("add network forwarder")?;
 
     let runtime = PocketScionRuntimeBuilder::new()
-        .with_system_state(state.into_state())
+        .with_system_state(state)
         .start()
         .await
         .context("error starting runtime")?;

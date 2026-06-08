@@ -12,34 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! External AS allows clients to discover Endhost APIs available to them
+//! Allows connecting a real external AS to the Pocket SCION simulation.
 
 use std::{
     collections::{BTreeMap, HashMap},
     io,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::SocketAddr,
     sync::Arc,
 };
 
 use anyhow::Context;
 use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
+use serde::{Deserialize, Serialize};
 use tokio::{
     net::UdpSocket,
     task::{self},
-    time,
 };
+use utoipa::ToSchema;
 
 use crate::{
-    io_config::SharedPocketScionIoConfig,
+    comp::external_as::conn::ExternalAsConnection,
     network::{
         local::external_as_handler::ExternalAsHandler,
         scion::{routing::ScionNetworkTime, topology::ScionGlobalInterfaceId},
     },
-    state::{SharedPocketScionState, external_as::conn::ExternalAsConnection},
+    state::PocketScionState,
 };
 
 mod conn;
-pub mod dto;
 
 /// Represents multiple connections to an External AS in Pocket SCION
 ///
@@ -56,7 +56,7 @@ pub struct ExternalAsService {
     /// Map of as interfaces which connect to the External AS, keyed by IsdAsn and interface ID
     as_interfaces: HashMap<IsdAsn, HashMap<u16, ExternalAsLink>>,
     #[expect(unused)]
-    app_state: SharedPocketScionState,
+    app_state: PocketScionState,
     #[expect(unused)]
     task_set: task::JoinSet<()>,
 }
@@ -70,15 +70,21 @@ impl ExternalAsService {
     /// 1. A Topology containing an AS with the given ISD-ASN must be present in the system state,
     ///    and that AS must be marked as external.
     /// 2. The External AS must be added to the system state using
-    ///    [SharedPocketScionState::add_external_as] with the same ISD-ASN.
-    /// 3. For each link defined in the topology, an interface with the corresponding interface ID
-    ///    must be present in the External AS state.
+    ///    [PocketScionState::add_external_as] with the same ISD-ASN. For each link defined in the
+    ///    topology, an interface with the corresponding interface ID must be present in the
+    ///    External AS state.
     /// 4. For each interface defined in the External AS state, a corresponding link with the same
     ///    interface ID must be present in the topology.
+    ///
+    /// ### Parameters
+    /// - `ext_isd_as`: ISD-ASN of the External AS to start the service for.
+    /// - `app_state`: The application state, used to access the topology and External AS state.
+    /// - `sockets`: A map of pre-bound UDP sockets keyed by interface ID, which will be used to
+    ///   send and receive packets to/from the External AS.
     pub async fn start(
         ext_isd_as: IsdAsn,
-        app_state: SharedPocketScionState,
-        io_config: SharedPocketScionIoConfig,
+        app_state: PocketScionState,
+        mut sockets: HashMap<u16, UdpSocket>,
     ) -> anyhow::Result<Arc<ExternalAsService>> {
         let as_state = app_state
             .external_as(ext_isd_as)
@@ -88,7 +94,7 @@ impl ExternalAsService {
         let mut link_map = HashMap::new();
         // Validate that the topology and External AS state are consistent with each other.
         let topo_as = {
-            let state_guard = app_state.system_state.read().unwrap();
+            let state_guard = app_state.read();
             let topo = &state_guard.topology;
 
             let topo_as = topo
@@ -141,53 +147,14 @@ impl ExternalAsService {
                 ))?;
 
                 let target_addr = iface_state.target_addr;
-                let listen_addr = match io_config
-                    .external_as_interface_addr(ext_isd_as, *ext_iface_id)
-                {
-                    Some(addr) => addr,
-                    None => {
-                        // If no address is configured, let the OS assign one and update the config
-                        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0)
-                    }
-                };
-
-                let socket = {
-                    const BACKOFF_DURATION_MS: u64 = 5000;
-                    const MAX_RETRIES: u32 = 100;
-
-                    let mut attempt = 0;
-                    let result = loop {
-                        let bind_error = match UdpSocket::bind(listen_addr).await {
-                            Ok(s) => break Ok(s),
-                            Err(e) => {
-                                tracing::debug!(
-                                    %listen_addr,
-                                    error = ?e,
-                                    "Failed to bind UDP socket for External AS API, retrying...",
-                                );
-                                e
-                            }
-                        };
-                        attempt += 1;
-                        if attempt >= MAX_RETRIES {
-                            break Err(bind_error);
-                        }
-                        time::sleep(time::Duration::from_millis(BACKOFF_DURATION_MS)).await;
-                    };
-                    result.with_context(|| {
-                        format!(
-                            "error binding udp listener for External AS API at address {} after {} attempts",
-                            listen_addr, MAX_RETRIES
-                        )
-                    })
-                }?;
-
-                // Update IoConfig with the actual address
-                io_config.set_external_as_interface_addr(
-                    ext_isd_as,
-                    *ext_iface_id,
-                    socket.local_addr()?,
-                );
+                let socket = sockets.remove(ext_iface_id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No pre-bound socket provided for interface {}#{}",
+                        ext_isd_as,
+                        ext_iface_id,
+                    )
+                })?;
+                let listen_addr = socket.local_addr()?;
 
                 // Create connection and spawn recv task
                 let iface = ExternalAsLink {
@@ -260,7 +227,7 @@ struct ExternalAsLink {
     /// The internal interface ID
     internal_if: ScionGlobalInterfaceId,
     conn: ExternalAsConnection,
-    state: SharedPocketScionState,
+    state: PocketScionState,
 }
 
 impl ExternalAsLink {
@@ -350,25 +317,26 @@ impl ExternalAsLink {
 }
 
 /// Serializable State for an External AS stored in PocketScionState
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct ExternalAsState {
-    interfaces: BTreeMap<u16, ExternalAsInterfaceState>,
+    pub(crate) interfaces: BTreeMap<u16, ExternalAsInterfaceState>,
 }
 
 /// Serializable State for an External AS interface stored in ExternalAsState
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 pub struct ExternalAsInterfaceState {
     /// ID of the interface described
     interface_id: u16,
     /// Address to where this interface connects, used for sending packets to the External AS and
     /// validating received packets
+    #[schema(value_type = String)]
     target_addr: SocketAddr,
 }
 
-impl SharedPocketScionState {
+impl PocketScionState {
     /// Adds a new External AS to the System state with the given IAs
     pub fn add_external_as(&mut self, isd_asn: IsdAsn) -> anyhow::Result<()> {
-        let mut sstate = self.system_state.write().unwrap();
+        let mut sstate = self.write();
         let is_external = sstate
             .topology
             .as_map
@@ -406,7 +374,7 @@ impl SharedPocketScionState {
         interface_id: u16,
         target_addr: SocketAddr,
     ) -> anyhow::Result<()> {
-        let mut sstate = self.system_state.write().unwrap();
+        let mut sstate = self.write();
         let ext_as = sstate
             .external_ases
             .get_mut(&isd_asn)
@@ -432,17 +400,12 @@ impl SharedPocketScionState {
 
     /// Returns a map of all External AS APIs in the system state.
     pub(crate) fn external_ases(&self) -> BTreeMap<IsdAsn, ExternalAsState> {
-        self.system_state.read().unwrap().external_ases.clone()
+        self.read().external_ases.clone()
     }
 
     /// Returns the state of the External AS API with the given id, if it exists.
     pub(crate) fn external_as(&self, id: IsdAsn) -> Option<ExternalAsState> {
-        self.system_state
-            .read()
-            .unwrap()
-            .external_ases
-            .get(&id)
-            .cloned()
+        self.read().external_ases.get(&id).cloned()
     }
 
     /// Registers a handler for the External AS with the given ISD-ASN, which will be used to send
@@ -454,7 +417,7 @@ impl SharedPocketScionState {
         isd_asn: IsdAsn,
         handler: Arc<dyn ExternalAsHandler>,
     ) -> anyhow::Result<()> {
-        let mut sstate = self.system_state.write().unwrap();
+        let mut sstate = self.write();
 
         if sstate.extern_as_handlers.contains_key(&isd_asn) {
             anyhow::bail!(

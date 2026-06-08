@@ -16,11 +16,13 @@
 use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Tunnel gateway I/O configuration.
-#[derive(Debug, PartialEq, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct TunnelGatewayIoConfig {
     /// Optional socket address to listen on for incoming SNAP tunnel connections.
+    #[schema(value_type = Option<String>, example = "127.0.0.1:8080")]
     pub listen_addr: Option<SocketAddr>,
 }
 

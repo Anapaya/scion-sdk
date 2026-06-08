@@ -20,8 +20,8 @@ use std::{
 
 use bytes::Bytes;
 use chrono::Utc;
-use pocketscion::topologies::{
-    IA132, IA212, PocketScionHandle, UnderlayType, minimal::two_path_topology,
+use pocketscion::util::topologies::{
+    IA132, IA212, PsSetup, UnderlayType, minimal::two_path_topology,
 };
 use scion_proto::{
     address::{IsdAsn, ScionAddr, SocketAddr},
@@ -112,16 +112,16 @@ async fn test_bind_two_endpoints_socket_already_in_use() {
     info!("Local address again: {:?}", first_endpoint.local_addr());
 }
 
-async fn test_bind_two_sockets_send_receive_impl(ps_handle: PocketScionHandle) {
+async fn test_bind_two_sockets_send_receive_impl(ps: PsSetup) {
     let sender_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build SCION stack");
 
     let receiver_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA212).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -166,9 +166,9 @@ async fn test_bind_two_sockets_send_receive_impl(ps_handle: PocketScionHandle) {
     );
 }
 
-async fn test_bind_with_specific_address_impl(ps_handle: PocketScionHandle) {
+async fn test_bind_with_specific_address_impl(ps: PsSetup) {
     let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -193,9 +193,9 @@ async fn test_bind_with_specific_address_impl(ps_handle: PocketScionHandle) {
     assert_eq!(socket.local_addr(), specific_addr);
 }
 
-async fn test_bind_port_already_in_use_impl(ps_handle: PocketScionHandle) {
+async fn test_bind_port_already_in_use_impl(ps: PsSetup) {
     let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -218,9 +218,9 @@ async fn test_bind_port_already_in_use_impl(ps_handle: PocketScionHandle) {
     drop(socket);
 }
 
-async fn test_quic_endpoint_creation_impl(ps_handle: PocketScionHandle) {
+async fn test_quic_endpoint_creation_impl(ps: PsSetup) {
     let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -235,16 +235,16 @@ async fn test_quic_endpoint_creation_impl(ps_handle: PocketScionHandle) {
 }
 
 /// Test that an SCMP socket receives SCMP messages.
-async fn test_scmp_with_port_is_received_scmp_impl(ps_handle: PocketScionHandle) {
+async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
     let sender_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build sender SCION stack");
 
     let receiver_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA212).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -323,16 +323,16 @@ async fn test_scmp_with_port_is_received_scmp_snap_impl() {
 }
 
 /// Test that a Raw socket receives SCMP messages.
-async fn test_scmp_with_port_is_received_raw_impl(ps_handle: PocketScionHandle) {
+async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
     let sender_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build sender SCION stack");
 
     let receiver_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA212).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -446,9 +446,9 @@ async fn send_raw_packet_directly(
 
 /// Test that a UDP socket ignores packets with unknown next_header (67).
 async fn test_udp_socket_ignores_unknown_next_header_impl() {
-    let ps_handle = two_path_topology(UnderlayType::Udp).await;
+    let ps = two_path_topology(UnderlayType::Udp).await;
     let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -484,9 +484,9 @@ async fn test_udp_socket_ignores_unknown_next_header_impl() {
 
 /// Test that an SCMP socket ignores packets with unknown next_header (67).
 async fn test_scmp_socket_ignores_unknown_next_header_impl() {
-    let ps_handle = two_path_topology(UnderlayType::Udp).await;
+    let ps = two_path_topology(UnderlayType::Udp).await;
     let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -518,9 +518,9 @@ async fn test_scmp_socket_ignores_unknown_next_header_impl() {
 
 /// Test that a RAW socket receives packets with unknown next_header (67).
 async fn test_raw_socket_receives_unknown_next_header_impl() {
-    let ps_handle = two_path_topology(UnderlayType::Udp).await;
+    let ps = two_path_topology(UnderlayType::Udp).await;
     let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -590,16 +590,16 @@ async fn test_raw_socket_receives_unknown_next_header() {
 /// 2. Packet with ISD-AS 0-0 (wildcard/unset) → dropped
 /// 3. Packet with wrong destination IP → dropped
 /// 4. Packet with wrong destination port → dropped
-async fn test_as_local_packets_impl(ps_handle: PocketScionHandle) {
+async fn test_as_local_packets_impl(ps: PsSetup) {
     let sender_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .expect("build sender SCION stack");
 
     let receiver_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await

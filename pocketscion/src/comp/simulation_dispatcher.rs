@@ -19,7 +19,7 @@ use snap_dataplane::dispatcher::Dispatcher;
 
 use crate::{
     network::{scion::routing::ScionNetworkTime, simulator::NetworkSimulator},
-    state::SharedPocketScionState,
+    state::PocketScionState,
 };
 
 /// Dispatches packets into the [NetworkSimulator]
@@ -27,11 +27,11 @@ use crate::{
 /// Bound to a specific AS
 pub(crate) struct AsNetSimDispatcher {
     local_as: IsdAsn,
-    app_state: SharedPocketScionState,
+    app_state: PocketScionState,
 }
 
 impl AsNetSimDispatcher {
-    pub(crate) fn new(local_as: IsdAsn, app_state: SharedPocketScionState) -> Self {
+    pub(crate) fn new(local_as: IsdAsn, app_state: PocketScionState) -> Self {
         Self {
             local_as,
             app_state,
@@ -59,11 +59,11 @@ impl Dispatcher for AsNetSimDispatcher {
 ///
 /// Uses the packet's source address to determine the AS
 pub(crate) struct NetSimDispatcher {
-    app_state: SharedPocketScionState,
+    app_state: PocketScionState,
 }
 
 impl NetSimDispatcher {
-    pub(crate) fn new(app_state: SharedPocketScionState) -> Self {
+    pub(crate) fn new(app_state: PocketScionState) -> Self {
         Self { app_state }
     }
 }
@@ -89,13 +89,7 @@ impl Dispatcher for NetSimDispatcher {
     }
 }
 
-impl SharedPocketScionState {
-    /// Sets whether to ignore MAC authentication during routing in the Network Simulator.
-    pub fn set_ignore_macs(&self, ignore: bool) {
-        let mut state_guard = self.system_state.write().unwrap();
-        state_guard.ignore_macs = ignore;
-    }
-
+impl PocketScionState {
     /// Dispatches a packet into the Network Simulator, using the given AS as the source.
     ///
     /// ## Parameters:
@@ -111,7 +105,7 @@ impl SharedPocketScionState {
         now: ScionNetworkTime,
         packet: ScionPacketRaw,
     ) {
-        let state_guard = self.system_state.read().unwrap();
+        let state_guard = self.read();
 
         NetworkSimulator::new(
             &state_guard.sim_receivers,
@@ -120,5 +114,11 @@ impl SharedPocketScionState {
             state_guard.ignore_macs,
         )
         .dispatch(local_as, local_interface, now, packet);
+    }
+
+    /// Sets whether to ignore MAC authentication during routing in the Network Simulator.
+    pub fn set_ignore_macs(&self, ignore: bool) {
+        let mut state_guard = self.write();
+        state_guard.ignore_macs = ignore;
     }
 }

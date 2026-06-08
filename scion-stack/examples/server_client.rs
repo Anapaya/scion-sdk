@@ -47,12 +47,14 @@ use std::{
 use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig, rustls::RootCertStore};
 use anyhow::Context;
 use bytes::Bytes;
+use chrono::Utc;
 use derive_more::Deref;
 use pocketscion::{
-    addr_to_http_url, io_config,
+    io_config::IoConfig,
     network::scion::topology::{ScionAs, ScionTopology},
-    runtime::{PocketScionRuntime, PocketScionRuntimeBuilder},
-    state::SharedPocketScionState,
+    runtime::{PocketScionRuntime, builder::PocketScionRuntimeBuilder},
+    state::PocketScionState,
+    util::addr_to_http_url,
 };
 use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
 use scion_stack::{
@@ -116,8 +118,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
         // Pocket SCIONs state is separated from IO Configuration to allow sharing the state
         // between multiple runtimes/machines/systems e.g. for testing purposes.
-        let mut system_state = SharedPocketScionState::new(SystemTime::now());
-        let io_config = io_config::SharedPocketScionIoConfig::new();
+        let mut system_state = PocketScionState::new(Utc::now());
+        let io_config = IoConfig::new();
 
         // Set the topology
         system_state.set_topology(cfg.pocket_scion.topology.clone());
@@ -135,9 +137,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
         // Finally we create the PocketScionRuntime
         let rt: PocketScionRuntime = PocketScionRuntimeBuilder::new()
-            .with_system_state(system_state.into_state())
-            .with_io_config(io_config.into_state())
-            .with_mgmt_listen_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 8082)))
+            .with_system_state(system_state)
+            .with_io_config(io_config)
             .start()
             .await
             .context("error starting Pocket SCION runtime")?;

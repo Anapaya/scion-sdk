@@ -18,7 +18,7 @@ use std::{sync::Arc, time::Duration};
 use anapaya_quinn::{EndpointConfig, crypto::rustls::QuicClientConfig};
 use anyhow::Context as _;
 use bytes::Bytes;
-use pocketscion::topologies::{IA132, IA212, UnderlayType, minimal::two_path_topology};
+use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::two_path_topology};
 use rustls::ClientConfig;
 use scion_stack::{quic::QuinnConn as _, scionstack::ScionStackBuilder};
 use snap_tokens::v0::dummy_snap_token;
@@ -35,14 +35,14 @@ async fn should_failover_on_link_error() {
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
     let sender_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps_handle.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
     let receiver_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
+        .with_endhost_api(ps_handle.endhost_api(IA212).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -126,9 +126,8 @@ async fn should_failover_on_link_error() {
 
     // Make direct link between ASes unavailable
     ps_handle
-        .api_client
+        .runtime
         .set_link_state(egress.isd_asn, egress.id, false)
-        .await
         .unwrap();
 
     // Notify sender task to start sending packets to trigger failover
@@ -232,21 +231,17 @@ async fn should_quic_failover_on_link_error() {
     let ps_handle = two_path_topology(UnderlayType::Snap).await;
 
     // Start with link b down to ensure the connection is established via a.
-    ps_handle
-        .api_client
-        .set_link_state(IA132, 2, false)
-        .await
-        .unwrap();
+    ps_handle.runtime.set_link_state(IA132, 2, false).unwrap();
 
     let sender_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).await.unwrap())
+        .with_endhost_api(ps_handle.endhost_api(IA132).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
         .unwrap();
 
     let receiver_stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA212).await.unwrap())
+        .with_endhost_api(ps_handle.endhost_api(IA212).unwrap())
         .with_auth_token(dummy_snap_token())
         .build()
         .await
@@ -314,16 +309,8 @@ async fn should_quic_failover_on_link_error() {
 
     // Now test failover: bring down the direct link a and bring up the indirect link b.
     // This forces the connection to use the indirect path via link b and c
-    ps_handle
-        .api_client
-        .set_link_state(IA132, 2, true)
-        .await
-        .unwrap();
-    ps_handle
-        .api_client
-        .set_link_state(IA132, 1, false)
-        .await
-        .unwrap();
+    ps_handle.runtime.set_link_state(IA132, 2, true).unwrap();
+    ps_handle.runtime.set_link_state(IA132, 1, false).unwrap();
 
     // Continue sending/receiving to verify communication still works after path change
     let test_data2 = Bytes::from("Hello after path change!");

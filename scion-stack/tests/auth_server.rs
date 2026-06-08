@@ -16,12 +16,12 @@
 //!
 //! Note: The auth server is deprecated.
 
-use std::time::SystemTime;
-
+use chrono::Utc;
 use pocketscion::{
-    authorization_server::{self, api::TokenRequest, fake_idp},
-    runtime::PocketScionRuntimeBuilder,
-    state::SharedPocketScionState,
+    comp::authorization_server::{self, api::TokenRequest, fake_idp},
+    runtime::builder::PocketScionRuntimeBuilder,
+    state::PocketScionState,
+    util::addr_to_http_url,
 };
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use scion_stack::scionstack::ScionStackBuilder;
@@ -35,33 +35,29 @@ async fn with_auth_server() {
 
     let (snap_token_private_pem, snap_token_public_pem) = insecure_const_ed25519_key_pair_pem();
 
-    let mut pstate = SharedPocketScionState::new(SystemTime::now());
+    let mut pstate = PocketScionState::new(Utc::now());
     pstate.set_snap_token_public_pem(snap_token_public_pem);
     pstate.set_auth_server(snap_token_private_pem);
 
     let isd_as = "1-ff00:0:110".parse().unwrap();
     let snap_id = pstate.add_snap(isd_as).unwrap();
+    let _eh_api_id = pstate.add_endhost_api(vec![isd_as]);
 
     let pocketscion = PocketScionRuntimeBuilder::new()
-        .with_system_state(pstate.into_state())
-        .with_mgmt_listen_addr("127.0.0.1:0".parse().expect("no fail"))
+        .with_system_state(pstate)
         .start()
         .await
         .expect("could not start runtime");
 
-    let mgmt_client = pocketscion.api_client();
-    let res = mgmt_client.get_snaps().await.expect("get snaps");
-    assert_eq!(res.snaps.len(), 1);
-
     // get the access token from the fake identity provider
     let access_token = fake_idp::oidc_id_token("fake user".to_string());
 
-    let auth_server = mgmt_client
-        .get_auth_server()
-        .await
-        .expect("get auth server");
+    let auth_server_addr = pocketscion
+        .io_config()
+        .auth_server_addr()
+        .expect("auth server should have an address");
 
-    let auth_server_api: Url = format!("http://{}/", auth_server.addr).parse().unwrap();
+    let auth_server_api: Url = addr_to_http_url(auth_server_addr);
     tracing::debug!("auth server api: {}", auth_server_api);
     let auth_client =
         authorization_server::client::ApiClient::new(&auth_server_api).expect("no fail");
@@ -71,14 +67,13 @@ async fn with_auth_server() {
         .await
         .expect("no fail");
 
-    let snap_cp_addr = res
-        .snaps
-        .get(&snap_id)
-        .expect("get snap")
-        .control_plane_api
-        .clone();
+    let snap_cp_addr = pocketscion
+        .snap_control_addr(snap_id)
+        .expect("snap should have a control address");
+    let snap_cp_url: Url = addr_to_http_url(snap_cp_addr);
+
     let _client_stack = ScionStackBuilder::new()
-        .with_endhost_api(snap_cp_addr)
+        .with_endhost_api(snap_cp_url)
         .with_auth_token(snap_token_resp.access_token)
         .build()
         .await
