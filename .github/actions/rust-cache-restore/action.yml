@@ -30,7 +30,7 @@ runs:
         path: |-
           ~/.rustup
           ~/.cargo
-          ${{ inputs.workspace }}/target/
+          ~/.cache/cargo
         restore-keys: |-
           ${{ runner.os }}-cargo-shear-1.3.2
           ${{ runner.os }}-cargo-shear-1.3.2-${{ hashFiles(format('{0}/rust-toolchain.toml', inputs.workspace)) }}

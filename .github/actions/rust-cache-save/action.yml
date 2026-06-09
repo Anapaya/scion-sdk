@@ -27,7 +27,7 @@ runs:
         path: |-
           ~/.rustup
           ~/.cargo
-          ${{ inputs.workspace }}/target/
+          ~/.cache/cargo
         cache-hit: ${{ inputs.cache-hit }}
     - name: Save cargo cache (Windows)
       if: runner.os == 'Windows' && github.event_name == 'push'
