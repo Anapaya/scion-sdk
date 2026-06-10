@@ -22,7 +22,7 @@ use std::{
 use snap_tokens::AnyClaims;
 use snap_tun::server::SnapTunAuthorization;
 
-use crate::crpc_api::api_service::model::SnapTunIdentityRegistry;
+use crate::api::crpc::model::SnapTunIdentityRegistry;
 
 type Identity = [u8; 32];
 static UNIT_SESSION_DATA: LazyLock<Arc<()>> = LazyLock::new(|| Arc::new(()));

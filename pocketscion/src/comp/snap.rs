@@ -26,7 +26,7 @@ use pem::Pem;
 use scion_proto::address::IsdAsn;
 use serde::{Deserialize, Serialize};
 use snap_control::{
-    crpc_api::api_service::model::{SnapDataPlane, SnapDataPlaneResolver},
+    api::crpc::model::{SnapDataPlane, SnapDataPlaneResolver},
     model::{SnapUnderlay, UdpUnderlay, UnderlayDiscovery},
 };
 use snap_dataplane::state::Id;
@@ -205,10 +205,8 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
     fn get_data_plane_address(
         &self,
         _endhost_ip: std::net::IpAddr,
-    ) -> Result<
-        snap_control::crpc_api::api_service::model::SnapDataPlane,
-        (http::StatusCode, anyhow::Error),
-    > {
+    ) -> Result<snap_control::api::crpc::model::SnapDataPlane, (http::StatusCode, anyhow::Error)>
+    {
         let public_key = {
             let root_secret = self.system_state.root_secret();
             let key = root_secret.derive_from_iter(vec![

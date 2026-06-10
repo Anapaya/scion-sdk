@@ -11,6 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Connect RPC API service.
+//! SNAP control plane API consisting of:
+//!
+//! - CRPC API: connect-RPC API for SNAP control plane interactions.
+//! - HTTP API: pathguard WAP API
 
-pub mod api_service;
+pub mod crpc;
+pub mod http;

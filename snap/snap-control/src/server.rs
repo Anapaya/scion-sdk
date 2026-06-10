@@ -28,9 +28,12 @@ use tower::{ServiceBuilder, timeout::TimeoutLayer};
 use url::Url;
 
 use crate::{
-    crpc_api::api_service::{
-        model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
-        nest_snap_control_api,
+    api::{
+        crpc::{
+            model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
+            nest_crpc_api,
+        },
+        http::{model::PgWapSessionManager, nest_http_api},
     },
     model::UnderlayDiscovery,
     server::{
@@ -58,6 +61,7 @@ pub fn build_router<UD, SL, SR, IR>(
     segment_lister: SL,
     snap_resolver: SR,
     identity_registry: Arc<IR>,
+    pg_wap_session_manager: Option<Arc<dyn PgWapSessionManager>>,
     token_verifier: SnapTokenVerifier,
     metrics: Metrics,
 ) -> std::io::Result<Router>
@@ -67,18 +71,33 @@ where
     SR: SnapDataPlaneResolver + 'static + Send + Sync,
     IR: SnapTunIdentityRegistry + 'static + Send + Sync,
 {
-    let router = nest_endhost_api(
-        Router::new(),
+    // Create a sub-router for authenticated endpoints
+    let mut auth_router = Router::new();
+    auth_router = nest_endhost_api(
+        auth_router,
         Arc::new(UnderlayDiscoveryAdapter::new(
             Arc::new(underlay_discovery),
             snap_cp_api,
         )),
         Arc::new(segment_lister),
     );
+    auth_router = nest_crpc_api(auth_router, Arc::new(snap_resolver), identity_registry);
+    auth_router =
+        auth_router.layer(ServiceBuilder::new().layer(AuthMiddlewareLayer::new(token_verifier)));
 
-    let router = nest_snap_control_api(router, Arc::new(snap_resolver), identity_registry);
+    // Main unauthorized router.
+    let mut router = Router::new();
+    // XXX(bunert): For now the pathguard WAP HTTP API is unauthenticated. This will change in the
+    // future.
+    if let Some(pg_wap_session_manager) = pg_wap_session_manager {
+        router = nest_http_api(router, pg_wap_session_manager);
+    }
 
-    let router = router.layer(
+    // Merge the authenticated router into the main router
+    router = router.merge(auth_router);
+
+    // Apply common middlewares to ALL routes (error handling, tracing, timeout, metrics)
+    router = router.layer(
         ServiceBuilder::new()
             .layer(HandleErrorLayer::new(|err: BoxError| {
                 async move {
@@ -91,10 +110,8 @@ where
             }))
             .layer(info_trace_layer())
             .layer(TimeoutLayer::new(CONTROL_PLANE_API_TIMEOUT))
-            .layer(PrometheusMiddlewareLayer::new(metrics))
-            .layer(AuthMiddlewareLayer::new(token_verifier)),
+            .layer(PrometheusMiddlewareLayer::new(metrics)),
     );
-
     Ok(router)
 }
 

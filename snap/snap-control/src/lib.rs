@@ -13,9 +13,10 @@
 // limitations under the License.
 //! SNAP control plane library.
 
+pub mod api;
 pub mod client;
-pub mod crpc_api;
 pub mod model;
+pub mod pg_wap;
 pub mod protobuf;
 pub mod server;
 

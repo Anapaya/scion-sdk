@@ -24,7 +24,7 @@ use std::{
 use axum::body::Body;
 use http::{Request, Response};
 use thiserror::Error;
-use tower::{BoxError, Layer, Service};
+use tower::{Layer, Service};
 
 use crate::server::token_verifier::SnapTokenVerifier;
 
@@ -64,15 +64,14 @@ impl<S> AuthMiddleware<S> {
 impl<S> Service<Request<Body>> for AuthMiddleware<S>
 where
     S: Service<Request<Body>, Response = Response<Body>> + Send + Clone + 'static,
-    S::Error: Into<BoxError>,
     S::Future: Send + 'static,
 {
     type Response = Response<Body>;
-    type Error = BoxError;
+    type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Into::into)
+        self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, mut request: Request<Body>) -> Self::Future {
@@ -90,7 +89,7 @@ where
             match verifier.verify(&token).await {
                 Ok(token_claims) => {
                     request.extensions_mut().insert(token_claims);
-                    inner.call(request).await.map_err(Into::into)
+                    inner.call(request).await
                 }
                 Err(err) => {
                     tracing::debug!(%err, "Invalid Token");

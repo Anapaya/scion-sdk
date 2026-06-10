@@ -237,6 +237,7 @@ impl PocketScionRuntime {
                 segment_lister,
                 snap_resolver,
                 identity_registry.clone(),
+                None,
                 snap_token_verifier.clone(),
                 snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
             )?;

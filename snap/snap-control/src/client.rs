@@ -23,7 +23,7 @@ use url::Url;
 use x25519_dalek::PublicKey;
 
 use crate::{
-    crpc_api::api_service::{GET_SNAP_DATA_PLANE_ADDRESS, REGISTER_SNAPTUN_IDENTITY, SERVICE_PATH},
+    api::crpc::{GET_SNAP_DATA_PLANE_ADDRESS, REGISTER_SNAPTUN_IDENTITY, SERVICE_PATH},
     protobuf::anapaya::snap::v1::api_service as proto,
 };
 

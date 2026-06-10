@@ -31,7 +31,7 @@ use snap_tokens::AnyClaims;
 use x25519_dalek::PublicKey;
 
 use crate::{
-    crpc_api::api_service::model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
+    api::crpc::model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
     protobuf::anapaya::snap::v1::api_service::{
         GetSnapDataPlaneRequest, GetSnapDataPlaneResponse, RegisterSnapTunIdentityRequest,
         RegisterSnapTunIdentityResponse,
@@ -115,10 +115,7 @@ pub(crate) mod convert {
     use url::Url;
     use x25519_dalek::PublicKey;
 
-    use crate::{
-        crpc_api::api_service::model::SnapDataPlane,
-        protobuf::anapaya::snap::v1::api_service as rpc,
-    };
+    use crate::{api::crpc::model::SnapDataPlane, protobuf::anapaya::snap::v1::api_service as rpc};
 
     /// This error is returned when converting a GetSnapDataPlaneResponse to a SnapDataPlane.
     #[derive(thiserror::Error, Debug)]
@@ -175,7 +172,7 @@ pub(crate) const GET_SNAP_DATA_PLANE_ADDRESS: &str = "/GetSnapDataPlaneAddress";
 pub(crate) const REGISTER_SNAPTUN_IDENTITY: &str = "/RegisterSnapTunIdentity";
 
 /// Nests the SNAP control API routes into the provided `base_router`.
-pub fn nest_snap_control_api(
+pub fn nest_crpc_api(
     router: axum::Router,
     snap_resolver: Arc<dyn SnapDataPlaneResolver>,
     identity_registrar: Arc<dyn SnapTunIdentityRegistry>,
