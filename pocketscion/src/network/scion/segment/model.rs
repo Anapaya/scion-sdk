@@ -222,6 +222,27 @@ impl LinkSegment {
     }
 }
 
+/// The type of a segments
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SegmentType {
+    /// Up segment
+    Up,
+    /// Core segment
+    Core,
+    /// Down segment
+    Down,
+}
+impl SegmentType {
+    /// Converts to the protobuf representation of SegmentType.
+    pub fn to_rpc(&self) -> scion_protobuf::control_plane::v1::SegmentType {
+        match self {
+            SegmentType::Core => scion_protobuf::control_plane::v1::SegmentType::Core,
+            SegmentType::Up => scion_protobuf::control_plane::v1::SegmentType::Up,
+            SegmentType::Down => scion_protobuf::control_plane::v1::SegmentType::Down,
+        }
+    }
+}
+
 /// Single hop in a [LinkSegment]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hop {

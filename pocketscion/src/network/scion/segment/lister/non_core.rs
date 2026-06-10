@@ -17,8 +17,10 @@ use anyhow::{Context, bail};
 use sciparse::identifier::isd_asn::IsdAsn;
 
 use crate::network::scion::segment::{
-    lister::model::{QueryTarget, Scope},
-    model::LinkSegment,
+    lister::{
+        model::{QueryTarget, Scope},
+        types::ListSegmentsOutput,
+    },
     registry::SegmentRegistry,
 };
 
@@ -27,12 +29,12 @@ impl SegmentRegistry {
     /// Forwarding Lists segments between src_as and dst_as at a Non-Core AS
     ///
     /// `local` is the as Handling the request
-    pub fn non_core_list_segments(
-        &self,
+    pub fn non_core_list_segments<'a>(
+        &'a self,
         local: IsdAsn,
         src_as: IsdAsn,
         dst_as: IsdAsn,
-    ) -> anyhow::Result<Vec<&LinkSegment>> {
+    ) -> anyhow::Result<ListSegmentsOutput<'a>> {
         let core_store = self.core_segments();
 
         let src_is_core = core_store.is_known_as(src_as.into());
@@ -51,7 +53,7 @@ impl SegmentRegistry {
             "Forwarding list segments"
         );
 
-        let res: Result<Vec<&LinkSegment>, anyhow::Error> = match query {
+        let res: Result<ListSegmentsOutput, anyhow::Error> = match query {
             Query::Core(Scope::One(src), dst) => forward_request(self, src, src, dst.ias()),
             Query::Core(Scope::Wildcard(isd), dst) => {
                 let isd_cores = core_store
@@ -59,7 +61,7 @@ impl SegmentRegistry {
                     .filter(|&ias| ias.isd() == isd.into())
                     .copied();
 
-                let mut res = Vec::new();
+                let mut res = ListSegmentsOutput::empty();
                 for core in isd_cores {
                     res.extend(forward_request(self, core.into(), core.into(), dst.ias())?);
                 }
@@ -74,7 +76,7 @@ impl SegmentRegistry {
                     .filter(|&ias| ias.isd() == src.into())
                     .copied();
 
-                let mut res = Vec::new();
+                let mut res = ListSegmentsOutput::empty();
                 for core in isd_cores {
                     res.extend(forward_request(self, core.into(), core.into(), dst)?);
                 }
@@ -83,16 +85,16 @@ impl SegmentRegistry {
             }
 
             // Up queries are just Down queries with us as the destination
-            Query::Up(Scope::One(dst)) => forward_request(self, dst, dst, local),
+            Query::Up(Scope::One(dst)) => Ok(forward_request(self, dst, dst, local)?.inverted()),
             Query::Up(Scope::Wildcard(isd)) => {
                 let isd_core_ases = core_store
                     .iter_known_ases()
                     .filter(|&ias| ias.isd() == isd.into())
                     .copied();
 
-                let mut res = Vec::new();
+                let mut res = ListSegmentsOutput::empty();
                 for core in isd_core_ases {
-                    res.extend(forward_request(self, core.into(), core.into(), local)?);
+                    res.extend(forward_request(self, core.into(), core.into(), local)?.inverted());
                 }
 
                 Ok(res)
@@ -105,25 +107,24 @@ impl SegmentRegistry {
             ?local,
             ?src_as,
             ?dst_as,
-            segment_count = res.len(),
+            res = %res,
             "Resolved segments"
         );
+
         #[cfg(debug_assertions)]
         {
-            for segment in &res {
-                tracing::trace!(%segment, "Segment details");
-            }
+            tracing::debug!("Segment details: \n {}", res.pretty_format());
         }
 
         return Ok(res);
 
         /// Simulates a core lookup
-        fn forward_request(
-            this: &SegmentRegistry,
+        fn forward_request<'a>(
+            this: &'a SegmentRegistry,
             recipient: IsdAsn,
             src: IsdAsn,
             dst: IsdAsn,
-        ) -> anyhow::Result<Vec<&LinkSegment>> {
+        ) -> anyhow::Result<ListSegmentsOutput<'a>> {
             this.core_list_segments(recipient, src, dst)
                 .with_context(|| {
                     format!(

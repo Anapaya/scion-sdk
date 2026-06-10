@@ -31,7 +31,7 @@ use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use crate::{
     comp::{
         authorization_server::AuthServerState,
-        control_service::ControlServiceState,
+        control_service::{ControlServiceState, segment_lookup::SegmentListingCache},
         endhost_api::{EndhostApiId, EndhostApiState},
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryState},
         external_as::ExternalAsState,
@@ -106,6 +106,8 @@ pub struct PocketScionStateInner {
     pub control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
     /// The network forwarders in the system.
     pub network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
+    /// Optional global cache for segment listing results, used by the SegmentLookupService.
+    pub segment_listing_cache: Option<SegmentListingCache>,
 }
 
 impl PocketScionStateInner {
@@ -131,6 +133,7 @@ impl PocketScionStateInner {
             network_forwarders: Default::default(),
             control_service_states: Default::default(),
             ignore_macs: false,
+            segment_listing_cache: None,
         }
     }
 

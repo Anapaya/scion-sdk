@@ -17,22 +17,272 @@
 use std::{
     collections::{HashSet, VecDeque},
     hash::{DefaultHasher, Hash, Hasher},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use scion_proto::address::IsdAsn;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use scion_proto::address::{IsdAsn, ServiceAddr};
+use scion_protobuf::control_plane::v1::BeaconRequest;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 use utoipa::ToSchema;
 
-use crate::network::scion::{
-    segment::{
-        model::LinkSegment,
-        registry::{LinkSegmentStore, SegmentRegistry},
+use crate::{
+    comp::control_service::{ControlService, ControlServiceState, crpc::ControlServiceCrpcClient},
+    network::scion::{
+        segment::{
+            model::LinkSegment,
+            registry::{LinkSegmentStore, SegmentRegistry},
+        },
+        topology::{DirectedScionLink, ScionGlobalInterfaceId, ScionLinkType, ScionTopology},
+        trust_store::StoreCertificateDer,
     },
-    topology::{ScionGlobalInterfaceId, ScionLinkType, ScionTopology},
 };
+
+/// Component of the Control Service, responsible for scheduling and sending beacons to external
+/// ASes
+///
+/// State is consolidated in Control Service
+pub struct BeaconingService {
+    control_service: Arc<ControlService>,
+}
+impl BeaconingService {
+    /// Creates a new BeaconingService
+    pub fn new(control_service: Arc<ControlService>) -> Self {
+        Self { control_service }
+    }
+
+    /// Ticks the beaconing state for all interfaces
+    ///
+    /// Beacon state is part of the Control Service state
+    fn tick_beaconing_state(
+        state: &mut ControlServiceState,
+        now: SystemTime,
+        segment_registry: &SegmentRegistry,
+        topology: &ScionTopology,
+    ) -> anyhow::Result<BeaconServiceAction> {
+        let mut beacons_to_send = Vec::new();
+        let mut shortest_wait = SystemTime::now() + Duration::from_secs(24 * 3600); // Default to waiting for 24 hours if no interfaces are configured
+
+        for (interface, beacon_state) in &mut state.beaconing_interfaces {
+            match beacon_state.tick(now, segment_registry, topology)? {
+                InterfaceBeaconAction::SendBeacons(beacons) => {
+                    beacons_to_send.push((*interface, beacons));
+                }
+                InterfaceBeaconAction::Wait(next_time) => {
+                    if next_time < shortest_wait {
+                        shortest_wait = shortest_wait.min(next_time);
+                    }
+                }
+            }
+        }
+
+        if !beacons_to_send.is_empty() {
+            return Ok(BeaconServiceAction::SendBeacons {
+                beacons: beacons_to_send,
+            });
+        };
+
+        Ok(BeaconServiceAction::Wait(shortest_wait))
+    }
+
+    /// Starts the beaconing loop, which continuously checks the beaconing state for each interface
+    /// and sends beacons when necessary.
+    #[instrument(name = "cs_beaconing", skip(self), fields(isd_asn))]
+    pub async fn start_beaconing(self: Arc<Self>) {
+        loop {
+            let cs = &self.control_service;
+
+            let action = {
+                let now = SystemTime::now();
+                let state_guard = cs.app_state.read();
+
+                let segment_registry = &state_guard.segment_registry;
+                let topology = &state_guard.topology;
+                let mut state = cs
+                    .app_state
+                    .get_control_service_state(cs.isd_asn)
+                    .expect("Control Service state must exist for own ISD-AS");
+
+                Self::tick_beaconing_state(&mut state, now, segment_registry, topology)
+                    .expect("ticking beaconing state should not fail")
+            };
+
+            match action {
+                BeaconServiceAction::SendBeacons { beacons } => {
+                    for (our_interface, beacon_reqs) in beacons {
+                        let peer_as = cs
+                            .app_state
+                            .read()
+                            .topology
+                            .scion_link(&our_interface.isd_as, our_interface.if_id)
+                            .expect("Interface should exist in topology")
+                            .get_directed_from(&our_interface.isd_as)
+                            .expect("Interface should have a direction from its AS in topology")
+                            .to;
+
+                        let (dst_as, svc_addr, path) = match cs
+                            .resolve_svc_addr(our_interface, ServiceAddr::CONTROL)
+                            .await
+                        {
+                            Ok(res) => res,
+                            Err(e) => {
+                                tracing::warn!(
+                                    interface = %our_interface,
+                                    peer_as = %peer_as,
+                                    error = ?e,
+                                    "Failed to resolve control service address for peer AS, skipping sending beacons on this interface",
+                                );
+
+                                cs.app_state
+                                    .get_control_service_state(cs.isd_asn)
+                                    .expect("Control Service state must exist for own ISD-AS")
+                                    .mark_send_result(&our_interface, false, SystemTime::now());
+
+                                continue;
+                            }
+                        };
+
+                        let mut all_successes = true;
+                        let num_beacons = beacon_reqs.len();
+                        tracing::debug!(
+                            interface = %our_interface,
+                            num_beacons,
+                            "Sending beacons on interface",
+                        );
+
+                        let crpc_client = {
+                            let dst_cert_chain: Vec<StoreCertificateDer> = {
+                                let state_guard = cs.app_state.read();
+                                let Some(certs) =
+                                    state_guard.topology.trust_store.ca_certs(&dst_as.isd())
+                                else {
+                                    tracing::warn!(
+                                        interface = %our_interface,
+                                        peer_as = %dst_as,
+                                        "No certificate chain found for peer AS in trust store, skipping sending beacons on this interface",
+                                    );
+
+                                    cs.app_state
+                                        .get_control_service_state(cs.isd_asn)
+                                        .expect("Control Service state must exist for own ISD-AS")
+                                        .mark_send_result(&our_interface, false, SystemTime::now());
+
+                                    continue;
+                                };
+
+                                certs
+                                    .values()
+                                    .flat_map(|ca| {
+                                        vec![ca.root.cert.clone(), ca.intermediary.cert.clone()]
+                                    })
+                                    .collect()
+                            };
+
+                            match ControlServiceCrpcClient::connect(
+                                Duration::from_secs(10),
+                                &cs.net_stack,
+                                dst_as,
+                                svc_addr,
+                                path,
+                                &dst_cert_chain,
+                                &cs.certificate_temp_dir,
+                            )
+                            .await
+                            {
+                                Ok(client) => client,
+                                Err(e) => {
+                                    tracing::warn!(
+                                        interface = %our_interface,
+                                        peer_as = %dst_as,
+                                        error = ?e,
+                                        "Failed to create CRPC client for control service in peer AS, skipping sending beacons on this interface",
+                                    );
+
+                                    cs.app_state
+                                        .get_control_service_state(cs.isd_asn)
+                                        .expect("Control Service state must exist for own ISD-AS")
+                                        .mark_send_result(&our_interface, false, SystemTime::now());
+
+                                    continue;
+                                }
+                            }
+                        };
+
+                        for beacon_req in beacon_reqs {
+                            match crpc_client
+                                .beacon_request(Duration::from_secs(5), &beacon_req)
+                                .await
+                            {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    tracing::warn!(
+                                        interface = %our_interface,
+                                        error = ?e,
+                                        "Failed to send beacon on interface",
+                                    );
+
+                                    all_successes = false;
+                                }
+                            }
+                        }
+
+                        tracing::info!(
+                            interface = %our_interface,
+                            peer_as = %dst_as,
+                            num_beacons,
+                            all_succeeded = all_successes,
+                            "Finished sending beacons on interface",
+                        );
+
+                        // Mark the result of sending beacons for this interface in the Control
+                        // Service state
+                        cs.app_state
+                            .mutate_control_service_state(cs.isd_asn, |state| {
+                                state.mark_send_result(
+                                    &our_interface,
+                                    all_successes,
+                                    SystemTime::now(),
+                                );
+                                Ok(())
+                            })
+                            .expect(
+                                "Failed to update Control Service state with beacon send result",
+                            );
+                    }
+                }
+                BeaconServiceAction::Wait(next_time) => {
+                    let duration = next_time
+                        .duration_since(SystemTime::now())
+                        .unwrap_or_else(|_| Duration::from_secs(0));
+                    tracing::debug!(
+                        wait_duration = ?duration,
+                        "No beacons to send, waiting until next scheduled send time",
+                    );
+
+                    tokio::time::sleep(duration).await;
+                }
+            }
+        }
+    }
+}
+
+/// Action to be taken by the beaconing service after ticking the beaconing state for all
+/// interfaces.
+pub enum BeaconServiceAction {
+    /// Send the given beacons to the External AS, and mark the given interfaces as having sent
+    /// beacons successfully or unsuccessfully based on whether sending was successful or not.
+    SendBeacons {
+        /// Interface and corresponding beacon requests for which to send beacons through the
+        /// network simulator to
+        beacons: Vec<(ScionGlobalInterfaceId, Vec<BeaconRequest>)>,
+    },
+    /// Wait until the given time and tick again to check if beacons should be sent
+    Wait(SystemTime),
+}
 
 /// The beaconing state for a specific interface
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -189,6 +439,8 @@ impl BeaconGen {
         timestamp: DateTime<Utc>,
         hop_expiry_units: u8,
     ) -> anyhow::Result<Vec<scion_protobuf::control_plane::v1::BeaconRequest>> {
+        const MIN_CHUNK_PER_THREAD: usize = 10;
+
         let egress_link = topology
             .scion_link(&egress_if.isd_as, egress_if.if_id)
             .context("Given interface does not exist in topology")?
@@ -200,14 +452,15 @@ impl BeaconGen {
         let empty_segment_store = LinkSegmentStore::new(Default::default(), Default::default());
         let our_as = egress_if.isd_as;
 
-        let forward_segments: Vec<_> = match is_core {
+        let beacons = match is_core {
             true => {
                 // All segments which end at our AS and starts from an originating AS would be
                 // forwarded
-                segments
+                let iter = segments
                     .core_segments()
                     .segments_by_end_as(our_as)
-                    .iter()
+                    .par_iter()
+                    .with_min_len(MIN_CHUNK_PER_THREAD)
                     .filter(|seg| {
                         originator_ases.is_none_or(|oas| oas.contains(&seg.bucket.start_as))
                     })
@@ -216,9 +469,9 @@ impl BeaconGen {
                             .core_segments()
                             .segment(seg)
                             .expect("segment index and segment registry must be consistent")
-                    })
-                    .cloned()
-                    .collect()
+                    });
+
+                generate_beacons(iter, egress_link, topology, timestamp, hop_expiry_units)?
             }
             false => {
                 // Select all interfaces where we would receive beacons from parent ASes, as
@@ -249,9 +502,10 @@ impl BeaconGen {
                     .isd_segments(&our_as.isd())
                     .unwrap_or(&empty_segment_store);
 
-                isd_segment_store
+                let iter = isd_segment_store
                     .segments_by_end_as(our_as)
-                    .iter()
+                    .par_iter()
+                    .with_min_len(MIN_CHUNK_PER_THREAD)
                     .filter(|seg| {
                         originator_ases.is_none_or(|oas| oas.contains(&seg.bucket.start_as))
                     })
@@ -267,33 +521,11 @@ impl BeaconGen {
                             .last()
                             .map(|link| our_relevant_interfaces.contains(&link.to))
                             .unwrap_or(false)
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>()
+                    });
+
+                generate_beacons(iter, egress_link, topology, timestamp, hop_expiry_units)?
             }
         };
-
-        let mut beacons = Vec::new();
-
-        // Collect all path segments for each beacon source AS which need to be sent to the
-        // External AS, and create requests for them
-        for mut segment in forward_segments {
-            // we need to add a hop going to the external AS
-            segment.links.push_back(egress_link.clone());
-
-            let mut hasher = DefaultHasher::new();
-            timestamp.hash(&mut hasher);
-            let segment_id = hasher.finish() as u16;
-            let path_segment = segment
-                .to_path_segment(topology, timestamp, segment_id, hop_expiry_units, true)
-                .context("Failed to convert segment to path segment for beacon generation")?;
-
-            let beacon_req = scion_protobuf::control_plane::v1::BeaconRequest {
-                segment: Some(path_segment.into()),
-            };
-
-            beacons.push(beacon_req);
-        }
 
         tracing::debug!(
             num_beacons = beacons.len(),
@@ -301,7 +533,43 @@ impl BeaconGen {
             "Generated forwarding beacons for AS",
         );
 
-        Ok(beacons)
+        return Ok(beacons);
+
+        fn generate_beacons<'data, IterType>(
+            segment_iter: IterType,
+            egress_link: DirectedScionLink,
+            topology: &ScionTopology,
+            timestamp: DateTime<Utc>,
+            hop_expiry_units: u8,
+        ) -> anyhow::Result<Vec<scion_protobuf::control_plane::v1::BeaconRequest>>
+        where
+            IterType: ParallelIterator<Item = &'data LinkSegment>,
+        {
+            segment_iter
+                .map(|segment: &LinkSegment| {
+                    let mut cloned_segment = segment.clone();
+
+                    // we need to add a hop going to the external AS
+                    cloned_segment.links.push_back(egress_link.clone());
+
+                    let mut hasher = DefaultHasher::new();
+                    timestamp.hash(&mut hasher);
+                    let segment_id = hasher.finish() as u16;
+                    let path_segment = cloned_segment
+                        .to_path_segment(topology, timestamp, segment_id, hop_expiry_units, true)
+                        .context("Failed to convert segment to path segment for beacon generation");
+
+                    match path_segment {
+                        Ok(path_segment) => {
+                            Ok(scion_protobuf::control_plane::v1::BeaconRequest {
+                                segment: Some(path_segment.into()),
+                            })
+                        }
+                        Err(e) => Err(e.context("Failed to generate beacon for segment")),
+                    }
+                })
+                .collect()
+        }
     }
 
     /// Generates a beacon which the given Core AS would originate to its neighbors, based on

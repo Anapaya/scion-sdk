@@ -14,15 +14,10 @@
 //! Listing segments at a SNAP
 
 use anyhow::bail;
-use chrono::{DateTime, Utc};
-use sciparse::segment::{
-    SignedPathSegment,
-    list_segment_plan::{CoreHint, Dst, ListSegmentPlan, Src},
-};
+use sciparse::segment::list_segment_plan::{CoreHint, Dst, ListSegmentPlan, Src};
 
-use crate::network::scion::{
-    segment::{model::LinkSegment, registry::SegmentRegistry},
-    topology::ScionTopology,
+use crate::network::scion::segment::{
+    lister::types::ListSegmentsOutput, registry::SegmentRegistry,
 };
 
 impl SegmentRegistry {
@@ -34,7 +29,7 @@ impl SegmentRegistry {
         local: sciparse::identifier::isd_asn::IsdAsn,
         src_as: sciparse::identifier::isd_asn::IsdAsn,
         dst_as: sciparse::identifier::isd_asn::IsdAsn,
-    ) -> anyhow::Result<SnapListSegmentsOutput<'_>> {
+    ) -> anyhow::Result<ListSegmentsOutput<'_>> {
         let src = Src::new(src_as, self.core_segments().is_known_as(src_as.into()))?;
         let dst = Dst::new(dst_as, self.core_segments().is_known_as(dst_as.into()));
 
@@ -65,150 +60,34 @@ impl SegmentRegistry {
             "listing segments"
         );
 
-        let mut res = SnapListSegmentsOutput::empty();
+        let mut res = ListSegmentsOutput::empty();
 
         if let Some((src, dst)) = req.up {
-            res.up = self.non_core_list_segments(local, src, dst)?;
+            res.extend(self.non_core_list_segments(local, src, dst)?);
         }
 
         if let Some((src, dst)) = req.core {
-            res.core = self.non_core_list_segments(local, src, dst)?;
+            res.extend(self.non_core_list_segments(local, src, dst)?);
         }
 
         if let Some((src, dst)) = req.down {
-            res.down = self.non_core_list_segments(local, src, dst)?;
+            res.extend(self.non_core_list_segments(local, src, dst)?);
         }
 
         tracing::debug!(
             ?local,
             ?src_as,
             ?dst_as,
-            segments = %res,
+            res = %res,
             "fetched segments"
         );
 
         #[cfg(debug_assertions)]
         {
-            for segment in &res.core {
-                tracing::trace!(%segment, segment_type = "Core", "Segment details");
-            }
-            for segment in &res.up {
-                tracing::trace!(%segment, segment_type = "Up", "Segment details");
-            }
-            for segment in &res.down {
-                tracing::trace!(%segment, segment_type = "Down", "Segment details");
-            }
+            tracing::trace!("Segment details:\n {}", res.pretty_format());
         }
 
         Ok(res)
-    }
-}
-
-/// Generic Output of Snap List Segments
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SnapListSegmentsOutput<'store> {
-    pub(crate) up: Vec<&'store LinkSegment>,
-    pub(crate) core: Vec<&'store LinkSegment>,
-    pub(crate) down: Vec<&'store LinkSegment>,
-}
-
-impl std::fmt::Display for SnapListSegmentsOutput<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ResolvedSegments (up: {}, core: {}, down: {})",
-            self.up.len(),
-            self.core.len(),
-            self.down.len()
-        )
-    }
-}
-
-impl SnapListSegmentsOutput<'_> {
-    /// Creates an empty list of segments.
-    pub fn empty() -> Self {
-        SnapListSegmentsOutput {
-            up: vec![],
-            core: vec![],
-            down: vec![],
-        }
-    }
-
-    /// Iterator over all link segments.
-    pub fn iter_all(&self) -> impl Iterator<Item = &LinkSegment> {
-        self.up
-            .iter()
-            .chain(self.core.iter())
-            .chain(self.down.iter())
-            .copied()
-    }
-
-    /// Converts the SCION topology into path segments.
-    pub fn into_path_segments(
-        self,
-        topo: &ScionTopology,
-        timestamp: DateTime<Utc>,
-        segment_id: u16,
-        hop_entry_expiry: u8,
-    ) -> anyhow::Result<SnapListPathSegments> {
-        let up = self
-            .up
-            .into_iter()
-            .map(|segment| {
-                segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry, false)
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        let core = self
-            .core
-            .into_iter()
-            .map(|segment| {
-                segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry, false)
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        let down = self
-            .down
-            .into_iter()
-            .map(|segment| {
-                segment.to_path_segment(topo, timestamp, segment_id, hop_entry_expiry, false)
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        Ok(SnapListPathSegments {
-            expire_after: timestamp + chrono::Duration::seconds(hop_entry_expiry as i64),
-            up,
-            core,
-            down,
-        })
-    }
-}
-
-/// Realised path Segments
-pub struct SnapListPathSegments {
-    #[allow(unused)]
-    pub(crate) expire_after: DateTime<Utc>,
-    pub(crate) up: Vec<SignedPathSegment>,
-    pub(crate) core: Vec<SignedPathSegment>,
-    pub(crate) down: Vec<SignedPathSegment>,
-}
-impl SnapListPathSegments {
-    /// Iterator over all path segments.
-    pub fn iter_all(&self) -> impl Iterator<Item = &SignedPathSegment> {
-        self.up
-            .iter()
-            .chain(self.core.iter())
-            .chain(self.down.iter())
-    }
-
-    /// Iterator over all core segments.
-    pub fn iter_cores(&self) -> impl Iterator<Item = &SignedPathSegment> {
-        self.core.iter()
-    }
-
-    /// Iterator over all non-core segments.
-    pub fn iter_non_cores(&self) -> impl Iterator<Item = &SignedPathSegment> {
-        self.up.iter().chain(self.down.iter())
     }
 }
 
@@ -417,7 +296,7 @@ mod test {
             Self { src, dst }
         }
 
-        fn print_test_statement(&self, segments: &SnapListSegmentsOutput) {
+        fn print_test_statement(&self, segments: &ListSegmentsOutput) {
             let up = segments
                 .up
                 .iter()
@@ -478,7 +357,7 @@ mod test {
         down: Vec<&'static str>,
     }
     impl ExpectedSegments {
-        fn check(&self, segments: &SnapListSegmentsOutput) -> anyhow::Result<()> {
+        fn check(&self, segments: &ListSegmentsOutput) -> anyhow::Result<()> {
             let up = self
                 .up
                 .iter()
@@ -499,7 +378,11 @@ mod test {
 
             for segment in &segments.up {
                 if !up.contains(segment) {
-                    bail!("Segment not found in expected up segments: {}", segment);
+                    println!("Expected up segments:");
+                    for s in &up {
+                        println!(" - {:?}", s);
+                    }
+                    bail!("Segment not found in expected core segments: {:?}", segment);
                 }
             }
 
@@ -513,7 +396,11 @@ mod test {
 
             for segment in &segments.core {
                 if !core.contains(segment) {
-                    bail!("Segment not found in expected core segments: {}", segment);
+                    println!("Expected core segments:");
+                    for s in &core {
+                        println!(" - {:?}", s);
+                    }
+                    bail!("Segment not found in expected core segments: {:?}", segment);
                 }
             }
 
@@ -527,7 +414,11 @@ mod test {
 
             for segment in &segments.down {
                 if !down.contains(segment) {
-                    bail!("Segment not found in expected down segments: {}", segment);
+                    println!("Expected down segments:");
+                    for s in &down {
+                        println!(" - {:?}", s);
+                    }
+                    bail!("Segment not found in expected down segments: {:?}", segment);
                 }
             }
 

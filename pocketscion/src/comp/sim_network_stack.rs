@@ -416,6 +416,14 @@ impl NetSimRawSocket {
 ///
 /// get_path will be called for every packet sent through the Network Simulator Socket.
 pub trait NetSimPathProvider: Send + Sync + 'static {
+    /// Informs the path provider that a path from src AS to dst AS has been observed, with the
+    /// given path.
+    ///
+    /// This function internally will reverse the given path if required.
+    ///
+    /// This can be used to populate the path provider with paths learned from incoming packets.
+    fn inform_path(&self, _src_as: IsdAsn, _dst_as: IsdAsn, _path: &DataPlanePath) {}
+
     /// Returns a path from the given source AS to the given destination AS, if one exists.
     fn get_path(&self, src_as: IsdAsn, dst_as: IsdAsn) -> Option<DataPlanePath>;
 }
@@ -467,13 +475,35 @@ impl<P: NetSimPathProvider> PathAwareNetSimUdpSocket<P> {
     /// Attempts to receive a packet from the socket's receive queue, returning an error if no
     /// packet is available or if the socket has been disconnected.
     pub fn try_recv(&mut self) -> io::Result<ScionPacketUdp> {
-        self.socket.try_recv()
+        let pkt = self.socket.try_recv()?;
+        // Inform the path provider of the path from the source AS to the local AS based on
+        // the received packet.
+        if let (Some(src_addr), Some(dst_addr)) = (pkt.source(), pkt.destination()) {
+            self.path_provider.inform_path(
+                src_addr.isd_asn(),
+                dst_addr.isd_asn(),
+                &pkt.headers.path,
+            );
+        }
+
+        Ok(pkt)
     }
 
     /// Asynchronously receives a packet from the socket's receive queue, returning an error if the
     /// socket has been disconnected.
     pub async fn recv(&self) -> io::Result<ScionPacketUdp> {
-        self.socket.recv().await
+        let pkt = self.socket.recv().await?;
+        // Inform the path provider of the path from the source AS to the local AS based on
+        // the received packet.
+        if let (Some(src_addr), Some(dst_addr)) = (pkt.source(), pkt.destination()) {
+            self.path_provider.inform_path(
+                src_addr.isd_asn(),
+                dst_addr.isd_asn(),
+                &pkt.headers.path,
+            );
+        }
+
+        Ok(pkt)
     }
 }
 

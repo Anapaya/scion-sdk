@@ -548,6 +548,12 @@ impl StoreKeyDer {
             .map_err(|e| anyhow::anyhow!("error converting key from bytes: {}", e))?;
         Ok(StoreKeyDer(key_der.clone_key()))
     }
+
+    /// Converts the StoreKeyDer to PEM format
+    pub fn to_pem(&self) -> String {
+        let pem = Pem::new("PRIVATE KEY", self.0.secret_der());
+        pem::encode(&pem)
+    }
 }
 impl Clone for StoreKeyDer {
     fn clone(&self) -> Self {

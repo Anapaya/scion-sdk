@@ -184,8 +184,7 @@ impl ConnectionManager {
         // Parse QUIC header
         let hdr = squiche::Header::from_slice(pkt, squiche::MAX_CONN_ID_LEN)
             .map_err(PacketProcessError::InvalidHeader)?;
-
-        tracing::trace!(?hdr.scid, ?hdr.dcid, ?from, "Received QUIC packet");
+        tracing::trace!(?hdr.dcid, ?from, "Received QUIC packet");
 
         let (remote_addr, local_addr) =
             match (from.socket_addr(), self.socket.local_addr().socket_addr()) {

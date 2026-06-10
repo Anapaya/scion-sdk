@@ -13,6 +13,7 @@ categories = ["network-programming"]
 [dependencies]
 # Local Dependencies
 dhsd = { workspace = true }
+scion-sdk-axum-connect-rpc = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-scion-connect-rpc = { workspace = true }
 scion-sdk-quic-scion = { workspace = true }
@@ -51,6 +52,7 @@ p256 = { workspace = true }
 paste = { workspace = true }
 pem = { workspace = true, features = ["serde"] }
 prost = { workspace = true }
+rayon = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser", "pem"] }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 rustls = { workspace = true }

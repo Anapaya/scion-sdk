@@ -116,7 +116,7 @@ quinn-udp = "0.5.14"
 # follow the instructions in the documentation.
 anapaya-quinn = { version = "0.11.9-ana.0" }
 rand = "0.10"
-# rand_core = "0.9"
+rayon = "1.12"
 chacha20 = { version = "0.10" }
 rand_xorshift = "0.5"
 rcgen = "0.14"

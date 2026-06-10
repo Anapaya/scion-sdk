@@ -50,7 +50,7 @@ use x25519_dalek::StaticSecret;
 use crate::{
     comp::{
         authorization_server,
-        control_service::ControlService,
+        control_service::{ControlService, segment_lookup::SegmentListingCache},
         endhost_api::PsEndhostApi,
         endhost_api_discovery::EndhostApiDiscoveryService,
         endhost_segment_lister::StateEndhostSegmentLister,
@@ -204,6 +204,18 @@ impl PocketScionRuntime {
             snap_control::server::SnapTokenVerifier::new(snap_token_decoding_key);
 
         let mut snap_authz_map: BTreeMap<SnapId, Arc<IdentityRegistry>> = Default::default();
+
+        {
+            if pstate.read().segment_listing_cache.is_some() {
+                tracing::info!("Starting segment listing cache cleanup loop");
+                let state = pstate.clone();
+                join_set.spawn(async move {
+                    SegmentListingCache::cleanup_loop(state, Duration::from_secs(60)).await;
+                    tracing::info!("Segment listing cache cleanup loop exited");
+                    Ok(())
+                });
+            }
+        }
 
         for (snap_id, snap_state) in pstate.snaps() {
             let local_ases = snap_state.isd_ases();

@@ -29,7 +29,7 @@ use crate::{
         router::RouterId, sim_network_stack::NetSimStack, snap::SnapId,
     },
     io_config::IoConfig,
-    network::scion::{routing::ScionNetworkTime, segment::lister::endhost::SnapListPathSegments},
+    network::scion::{routing::ScionNetworkTime, segment::lister::types::ListPathSegments},
     runtime::PocketScionRuntime,
     state::PocketScionStateInner,
 };
@@ -71,7 +71,7 @@ impl PocketScionRuntime {
         src: IsdAsn,
         dst: IsdAsn,
         valid_after: chrono::DateTime<chrono::Utc>,
-    ) -> anyhow::Result<SnapListPathSegments> {
+    ) -> anyhow::Result<ListPathSegments> {
         let sguard = self.state.read();
         let segments =
             sguard

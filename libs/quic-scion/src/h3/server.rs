@@ -276,7 +276,17 @@ impl H3ServerConnection {
 
                     match more_frames {
                         true => {
-                            self.partial_requests.insert(stream_id, req);
+                            match self.partial_requests.entry(stream_id) {
+                                std::collections::hash_map::Entry::Vacant(entry) => {
+                                    entry.insert(req);
+                                }
+                                std::collections::hash_map::Entry::Occupied(_) => {
+                                    tracing::warn!(
+                                        ?stream_id,
+                                        "Received headers for stream with existing partial request, ignoring new headers"
+                                    );
+                                }
+                            }
                             continue;
                         }
                         false => {
