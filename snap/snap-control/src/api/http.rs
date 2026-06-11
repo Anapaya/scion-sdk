@@ -69,12 +69,7 @@ pub fn nest_http_api(
 
     doc.merge(api_spec);
 
-    let doc = Arc::new(doc);
-    router.merge(api_router).route(
-        "/.well-known/openapi.json",
-        get(move || {
-            let doc = doc.clone();
-            async move { Json(doc) }
-        }),
-    )
+    router
+        .merge(api_router)
+        .route("/.well-known/openapi.json", get(|| async { Json(doc) }))
 }
