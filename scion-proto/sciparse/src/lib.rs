@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SciParse: Zero-Copy SCION Packets
+//! # SciParse: Zero-Copy SCION Packets
 //!
 //! This library provides functionality to parse and construct SCION packets.
 //!
@@ -25,7 +25,15 @@
 //!
 //! SciParse exposes both view-based and model-based representations of SCION packets.
 //!
+//! ## Overview
+//!
+//! * [SCION Packet Types](proto::packet) - SCION packet parsing and construction
+//! * [SCION Path Types](proto::dataplane_path) - SCION path parsing and construction
+//! * [SCION Header Types](proto::header) - SCION header parsing and construction
+//!
 //! ## Views
+//!
+//! Detailed docs: [view](core::view)
 //!
 //! Views are zero-copy projections over byte buffers.
 //!
@@ -35,12 +43,67 @@
 //! Views do not support modification of dynamically sized fields
 //! (e.g., addresses, path segments).
 //!
+//! Most relevant structs include:
+//!
+//! * [ScionRawPacketView](proto::packet::view::ScionRawPacketView)
+//! * [ScionUdpPacketView](proto::packet::view::ScionUdpPacketView)
+//! * [ScionHeaderView](proto::header::view::ScionHeaderView)
+//! * [ScionDpPathView](proto::dataplane_path::view::ScionDpPathView)
+//! * [StandardPathView](proto::dataplane_path::standard::view::StandardPathView)
+//! * [OneHopPathView](proto::dataplane_path::onehop::view::OneHopPathView)
+//!
+//!
+//! Most views can be parsed from byte buffers using the [View](crate::core::view::View) trait,
+//! which performs the necessary validation to ensure that the view is safe to use.
+//!
+//! ```no_run
+//! # use sciparse::packet::view::ScionRawPacketView;
+//! # use sciparse::core::view::View;
+//! let buf: Vec<u8> = vec![/* ... */]; // Buffer containing a SCION packet
+//! let packet_view = ScionRawPacketView::from_slice(&buf[..]).expect("Failed to parse SCION packet");
+//!
+//! println!("Parsed view: {:?}", packet_view);
+//! ```
+//!
+//! The View trait also supplies functions for mutable slices, and boxed buffers, as well as unsafe
+//! functions for unchecked parsing when the caller can guarantee the validity of the buffer.
+//!
+//! There are some exceptions where views require information found in other parts of the packet,
+//! which can not implement the View trait directly.
+//!
 //! ## Models
 //!
 //! Models represent SCION packets as structured Rust types.
 //!
 //! They are intended for constructing new packets or performing complex
 //! modifications that are impractical or unsafe using views alone.
+//!
+//! Most relevant structs include:
+//! * [ScionRawPacket](proto::packet::model::ScionRawPacket)
+//! * [ScionUdpPacket](proto::packet::model::ScionUdpPacket)
+//! * [ScionHeader](proto::header::model::ScionPacketHeader)
+//! * [DpPath](proto::dataplane_path::model::DpPath)
+//! * [StandardPath](proto::dataplane_path::standard::model::StandardPath)
+//! * [OneHopPath](proto::dataplane_path::onehop::model::OneHopPath)
+//!
+//! Models allow creating new packets from scratch.
+//!
+//! Most models can also be created from views or from byte buffers directly, which load the
+//! relevant fields of a SCION packet into Rust types.
+//!
+//! ```no_run
+//! # use sciparse::packet::model::ScionRawPacket;
+//! let buf: Vec<u8> = vec![/* ... */]; // Buffer containing a SCION packet
+//! let model = ScionRawPacket::from_slice(&buf[..]).expect("Failed to parse SCION packet");
+//!
+//! println!("Parsed model: {:?}", model);
+//! ```
+//!
+//!
+//! ## Control Plane Primitives
+//!
+//! In addition to dataplane packet parsing and construction, SciParse also provides primitives for
+//! working with SCION control plane messages, such as path segments and beacons.
 
 /// Core traits and utilities for working with bit-level data
 pub mod core;

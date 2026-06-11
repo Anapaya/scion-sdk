@@ -14,6 +14,10 @@
 
 //! SCION dataplane path parsing and interpretation.
 //!
+//! Currently SciParse supports:
+//! * [Standard SCION paths](crate::proto::dataplane_path::standard)
+//! * [One-hop paths](crate::proto::dataplane_path::onehop)
+//!
 //! SCION dataplane paths specify the path that a packet should take through the network. They can
 //! be of different types, such as standard SCION paths or one-hop paths between neighboring border
 //! routers.

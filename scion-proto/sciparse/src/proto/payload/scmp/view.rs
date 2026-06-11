@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Debug;
+
 use crate::{
     core::{
         macros::impl_from_ref,
@@ -45,6 +47,14 @@ use crate::{
 /// message.
 #[repr(transparent)]
 pub struct ScmpPayloadView([u8]);
+impl Debug for ScmpPayloadView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpPayloadView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .finish()
+    }
+}
 gen_view_impl!(ScmpPayloadView, ScmpMessageLayout);
 impl_from_ref!(
     ScmpDestinationUnreachableMessageView,

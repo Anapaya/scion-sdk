@@ -467,7 +467,32 @@ impl StandardPathView {
 
         expiry_time
     }
+
+    /// Calculates the segment of the given hop field index in the path.
+    ///
+    /// Returns (segment_idx, is_at_segment_end) if the hop field index is valid, or None if the hop
+    /// field index is out of bounds.
+    pub fn calculate_segment_index(&self, hop_idx: usize) -> Option<(usize, bool)> {
+        let segment_lengths = [self.seg0_len(), self.seg1_len(), self.seg2_len()];
+        let mut seg_len_agg = 0;
+
+        for (seg_idx, seg_len) in segment_lengths.into_iter().enumerate() {
+            seg_len_agg += seg_len as usize;
+
+            if hop_idx + 1 == seg_len_agg {
+                // We are at the end of a segment
+                return Some((seg_idx, true));
+            } else if hop_idx + 1 < seg_len_agg {
+                // We are in the middle of a segment
+                return Some((seg_idx, false));
+            }
+        }
+
+        // hop_idx is out of bounds
+        None
+    }
 }
+
 impl Debug for StandardPathView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hop_fields = self.hop_fields();

@@ -58,6 +58,7 @@ fn generate_packet_bytes() -> Vec<Bytes> {
                 unsupported: 0,
                 standard_params: ArbitraryPathContext {
                     hops_per_segment: 1..=MAX_HOPS_PER_SEGMENT,
+                    ..Default::default()
                 },
                 one_hop_params: Default::default(),
             },

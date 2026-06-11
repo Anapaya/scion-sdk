@@ -13,7 +13,6 @@
 // limitations under the License.
 
 //! SCION standard path models
-
 use tinyvec::{ArrayVec, TinyVec};
 
 use crate::{
@@ -506,23 +505,104 @@ impl WireEncode for HopField {
 /// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
 pub mod ptest {
+    use std::{fmt::Debug, sync::Arc};
+
     use ::proptest::prelude::*;
 
     use super::*;
+    use crate::dataplane_path::standard::mac::algo::mac_beta_step;
 
+    /// Trait for generating forwarding keys for hop fields when generating arbitrary paths with
+    /// valid MACs.
+    pub trait ArbitraryForwardingKeyGenerator {
+        /// Generates a forwarding key for the given hop field.
+        ///
+        /// ### Parameters
+        /// * `field` is the hop field for which the forwarding key is being generated.
+        /// * `segment_index` is the index of the segment that the hop field belongs to.
+        /// * `segment_hop_index` is the index of the hop field within its segment.
+        /// * `segment_change` indicates whether this hop field is the first or last hop field in
+        ///   its segment
+        fn generate(
+            &self,
+            field: &HopField,
+            segment_index: usize,
+            segment_hop_index: usize,
+            segment_change: bool,
+        ) -> ForwardingKey;
+    }
     /// Configuration for generating arbitrary [`StandardPath`] values.
-    #[derive(Debug, Clone)]
+    #[derive(Clone)]
     pub struct ArbitraryPathContext {
-        /// Range of hop fields per segment. Defaults to `1..=63` (the protocol maximum).
+        /// Range of hop fields per segment. Defaults to `2..=63` (the protocol maximum).
         pub hops_per_segment: std::ops::RangeInclusive<usize>,
+        /// Range of segments per path. Defaults to `1..=3` (the protocol maximum).
+        pub segments: std::ops::RangeInclusive<usize>,
+        /// Key generator for hop fields used in MAC calculation. If `None`, generated paths will
+        /// not have valid MACs. Defaults to `None`.
+        pub forwarding_key_generator: Option<Arc<dyn ArbitraryForwardingKeyGenerator>>,
     }
 
     impl Default for ArbitraryPathContext {
         fn default() -> Self {
             Self {
-                hops_per_segment: 1..=63,
+                hops_per_segment: 2..=63,
+                segments: 1..=3,
+                forwarding_key_generator: None,
             }
         }
+    }
+    impl Debug for ArbitraryPathContext {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("ArbitraryPathContext")
+                .field("hops_per_segment", &self.hops_per_segment)
+                .field(
+                    "forwarding_key_generator",
+                    &self.forwarding_key_generator.as_ref().map(|_| "Generator"),
+                )
+                .finish()
+        }
+    }
+
+    /// Generates a `Vec<usize>` of `n` hop counts, each in `min..=max_each`,
+    /// with a total sum that does not exceed `total_cap`.
+    fn gen_hop_counts(
+        segment_count: usize,
+        min: usize,
+        max_each: usize,
+        total_cap: usize,
+    ) -> BoxedStrategy<Vec<usize>> {
+        prop::collection::vec(min..=max_each, segment_count)
+            .prop_map(move |mut counts| {
+                let sum: usize = counts.iter().sum();
+                if sum > total_cap {
+                    // Each count is at least `min`. The room above that minimum is
+                    // what we can trim. Scale everyone's room above `min` down
+                    // proportionally so the total fits within `total_cap`.
+                    let max_total: usize = counts.iter().map(|count| count - min).sum();
+                    let min_total = total_cap.saturating_sub(segment_count * min);
+                    if segment_count * min > total_cap {
+                        // Impossible constraints: set all counts to min
+                        counts.iter_mut().for_each(|c| *c = min);
+                    } else {
+                        let mut remaining_cap_room = min_total;
+                        let mut remaining_total_room = max_total;
+                        for c in &mut counts {
+                            let room = *c - min;
+                            let share = if remaining_total_room > 0 {
+                                room * remaining_cap_room / remaining_total_room
+                            } else {
+                                0
+                            };
+                            *c = min + share;
+                            remaining_cap_room = remaining_cap_room.saturating_sub(share);
+                            remaining_total_room = remaining_total_room.saturating_sub(room);
+                        }
+                    }
+                }
+                counts
+            })
+            .boxed()
     }
 
     impl Arbitrary for StandardPath {
@@ -530,36 +610,55 @@ pub mod ptest {
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(ctx: Self::Parameters) -> Self::Strategy {
-            (
-                any::<u8>(),
-                prop::collection::vec(Segment::arbitrary_with(ctx), 1..=3),
-            )
-                .prop_map(|(curr_hop, segments): (u8, Vec<Segment>)| {
-                    // A full path can only address up to 63 hops due to the 6-bit limit of the
-                    // curr_hop_field.
-                    let max_total_hops = StdPathMetaLayout::MAX_TOTAL_HOPS;
+            // A full path can only address up to 63 hops due to the 6-bit limit of the
+            // curr_hop_field.
+            let max_total_hops = StdPathMetaLayout::MAX_TOTAL_HOPS;
+            let hops_per_segment = ctx.hops_per_segment.clone();
+            let fkg = ctx.forwarding_key_generator.clone();
 
-                    // ensure the total number of hops does not exceed the maximum allowed for the
-                    // number of segments
+            // choose number of segments, then for each segment generate an exact hop
+            // count drawn sequentially from the remaining budget.
+            (ctx.segments)
+                .prop_flat_map(move |num_segments| {
+                    let fkg = fkg.clone();
+                    let min = *hops_per_segment.start();
+                    let max_each = *hops_per_segment.end();
+
+                    gen_hop_counts(num_segments, min, max_each, max_total_hops).prop_flat_map(
+                        move |hop_counts| {
+                            let fkg = fkg.clone();
+
+                            // Build one segment strategy per index with its exact hop count,
+                            // then fold them into a single strategy producing a Vec<Segment>
+                            // to ensure each segment gets its designated hop count.
+                            let init: BoxedStrategy<Vec<Segment>> = Just(Vec::new()).boxed();
+                            hop_counts.iter().enumerate().fold(
+                                init,
+                                move |acc, (seg_idx, &count)| {
+                                    let seg_strat =
+                                        Segment::arbitrary_with(ArbitrarySegmentContext {
+                                            hop_count: count..=count,
+                                            segment_index: seg_idx,
+                                            forwarding_key_generator: fkg.clone(),
+                                        });
+                                    (acc, seg_strat)
+                                        .prop_map(|(mut v, s)| {
+                                            v.push(s);
+                                            v
+                                        })
+                                        .boxed()
+                                },
+                            )
+                        },
+                    )
+                })
+                // now that the exact hop counts are known, generate curr_hop in range.
+                .prop_flat_map(|segments| {
                     let total_hops: usize = segments.iter().map(|s| s.hop_fields.len()).sum();
-                    let mut segments = segments;
-                    if total_hops > max_total_hops {
-                        let n = segments.len();
-                        let base = max_total_hops / n;
-                        let extra = max_total_hops % n;
-                        for (i, seg) in segments.iter_mut().enumerate() {
-                            let limit = base + if i < extra { 1 } else { 0 };
-                            seg.hop_fields.truncate(limit.max(1));
-                        }
-                    }
-
-                    // current_hop must be in range of total hops
-                    let total_hops: usize = segments.iter().map(|s| s.hop_fields.len()).sum();
-                    let curr_hop = match total_hops {
-                        0 => 0,
-                        _ => curr_hop % (total_hops as u8),
-                    };
-
+                    let curr_hop_range = 0u8..total_hops as u8;
+                    (Just(segments), curr_hop_range)
+                })
+                .prop_map(|(mut segments, curr_hop)| {
                     // current_info_field is defined by which segment the current_hop_field is in
                     let mut hop_count = 0;
                     let mut curr_info = 0;
@@ -571,29 +670,137 @@ pub mod ptest {
                         }
                     }
 
-                    let segments = segments.into_iter().collect();
+                    // Advance each segment's seg_id to reflect the hops already traversed before
+                    // the current hop field position.
+                    let mut advanced_hops = 0;
+                    'outer: for segment in segments.iter_mut() {
+                        let is_cons_dir =
+                            segment.info_field.flags.contains(InfoFieldFlags::CONS_DIR);
+
+                        // We either need to skip the first or the last hop field depending on the
+                        // direction
+                        let hop_iter: Box<dyn Iterator<Item = &HopField>> = match is_cons_dir {
+                            true => {
+                                Box::new(
+                                    segment
+                                        .hop_fields
+                                        .iter()
+                                        .take(segment.hop_fields.len().saturating_sub(1)),
+                                )
+                            }
+                            false => Box::new(segment.hop_fields.iter().skip(1)),
+                        };
+
+                        for hop in hop_iter {
+                            if advanced_hops >= curr_hop as usize {
+                                break 'outer;
+                            }
+
+                            segment.info_field.segment_id =
+                                mac_beta_step(segment.info_field.segment_id, hop.mac.0);
+
+                            advanced_hops += 1;
+                        }
+
+                        // Account for the skipped hop field
+                        advanced_hops += 1;
+                    }
 
                     StandardPath {
                         current_info_field: curr_info,
                         current_hop_field: curr_hop,
-                        segments,
+                        segments: segments.into_iter().collect(),
                     }
                 })
                 .boxed()
         }
     }
 
+    /// Configuration for generating arbitrary [`Segment`] values.
+    pub struct ArbitrarySegmentContext {
+        /// Range of hop fields in the segment. Defaults to `2..=62`
+        pub hop_count: std::ops::RangeInclusive<usize>,
+        /// The index of the segment being generated, starting from 0. This is passed to the
+        /// forwarding key generator.
+        pub segment_index: usize,
+        /// A forwarding key generator which will be used to generate keys for hop fields used in
+        /// the MAC calculation.
+        pub forwarding_key_generator: Option<Arc<dyn ArbitraryForwardingKeyGenerator>>,
+    }
+    impl Default for ArbitrarySegmentContext {
+        fn default() -> Self {
+            Self {
+                hop_count: 2..=62,
+                segment_index: 0,
+                forwarding_key_generator: None,
+            }
+        }
+    }
+
     impl Arbitrary for Segment {
-        type Parameters = ArbitraryPathContext;
+        type Parameters = ArbitrarySegmentContext;
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(ctx: Self::Parameters) -> Self::Strategy {
-            let range = ctx.hops_per_segment.clone();
+            let range = ctx.hop_count.clone();
             (
                 any::<InfoField>(),
                 prop::collection::vec(any::<HopField>(), range),
             )
-                .prop_map(|(info_field, hop_fields)| {
+                .prop_map(move |(mut info_field, mut hop_fields)| {
+                    let total_count = hop_fields.len();
+                    let const_dir = info_field.flags.contains(InfoFieldFlags::CONS_DIR);
+
+                    // set first and last hop's cons_ingress/cons_egress to 0 to reflect segment
+                    // boundaries
+                    if let Some(first) = hop_fields.first_mut() {
+                        match const_dir {
+                            true => first.cons_ingress = 0,
+                            false => first.cons_egress = 0,
+                        }
+                    }
+                    if let Some(last) = hop_fields.last_mut() {
+                        match const_dir {
+                            true => last.cons_egress = 0,
+                            false => last.cons_ingress = 0,
+                        }
+                    }
+
+                    if let Some(key_gen) = ctx.forwarding_key_generator.as_ref() {
+                        let mut beta = info_field.segment_id;
+                        let mut prev_beta = beta;
+
+                        // Normalize the direction of iteration based on CONS_DIR to simplify the
+                        // logic of MAC calculation.
+                        let hopiter: Box<dyn Iterator<Item = &mut HopField>> = match const_dir {
+                            true => Box::new(hop_fields.iter_mut()),
+                            false => Box::new(hop_fields.iter_mut().rev()),
+                        };
+
+                        for (hop_idx, hop_field) in hopiter.enumerate() {
+                            let segment_change = hop_idx == 0 || hop_idx == total_count - 1;
+                            let forwarding_key = key_gen.generate(
+                                hop_field,
+                                ctx.segment_index,
+                                hop_idx,
+                                segment_change,
+                            );
+
+                            hop_field.mac = hop_field.calculate_mac(
+                                beta,
+                                info_field.timestamp,
+                                &forwarding_key,
+                            );
+                            prev_beta = beta;
+                            beta = mac_beta_step(beta, hop_field.mac.0);
+                        }
+
+                        // If not in construction dir, our previous_beta is the final segment id
+                        if !const_dir {
+                            info_field.segment_id = prev_beta;
+                        }
+                    }
+
                     Segment {
                         info_field,
                         hop_fields: TinyVec::Heap(hop_fields),
@@ -620,16 +827,31 @@ pub mod ptest {
         }
     }
 
+    /// Configuration for generating arbitrary [`HopField`] values.
+    #[derive(Clone, Default)]
+    pub struct ArbitraryHopFieldContext {
+        /// If true, the `cons_ingress` and `cons_egress` fields may be zero, indicating start or
+        /// end of segment. If false, they will be in the range `1..=u16::MAX`, indicating valid
+        /// interfaces.
+        pub allow_zero_interfaces: bool,
+    }
+
     impl Arbitrary for HopField {
-        type Parameters = ();
+        type Parameters = ArbitraryHopFieldContext;
         type Strategy = BoxedStrategy<Self>;
 
-        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
+            let interface_range = if params.allow_zero_interfaces {
+                0..=u16::MAX
+            } else {
+                1..=u16::MAX
+            };
+
             (
                 any::<HopFieldFlags>(),
                 any::<u8>(),
-                any::<u16>(),
-                any::<u16>(),
+                interface_range.clone(),
+                interface_range,
                 any::<[u8; 6]>(),
             )
                 .prop_map(

@@ -14,7 +14,7 @@
 
 //! Zero-copy UDP datagram view.
 
-use std::{cmp::min, mem::transmute};
+use std::{cmp::min, fmt::Debug, mem::transmute};
 
 use crate::{
     core::{
@@ -31,7 +31,6 @@ use crate::{
 /// The view is valid if the buffer can hold at least the 8 byte UDP header.
 #[repr(transparent)]
 pub struct UdpDatagramView([u8]);
-
 impl View for UdpDatagramView {
     #[inline]
     fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
@@ -90,7 +89,17 @@ impl View for UdpDatagramView {
         &self.0
     }
 }
-
+impl Debug for UdpDatagramView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UdpDatagramView")
+            .field("src_port", &self.src_port())
+            .field("dst_port", &self.dst_port())
+            .field("length", &self.length())
+            .field("checksum", &self.checksum())
+            .field("payload_len", &self.payload().len())
+            .finish()
+    }
+}
 impl UdpDatagramView {
     gen_field_read!(src_port, UdpDatagramLayout::SRC_PORT_RNG, u16);
     gen_field_read!(dst_port, UdpDatagramLayout::DST_PORT_RNG, u16);

@@ -16,7 +16,7 @@
 //!
 //! See [`View`](crate::core::view) for more information about views in general.
 
-use std::mem::transmute;
+use std::{fmt::Debug, mem::transmute};
 
 use super::classify::{ClassifiedPacketView, ClassifyError};
 use crate::{
@@ -121,6 +121,14 @@ impl View for ScionRawPacketView {
     #[inline]
     fn as_bytes(&self) -> &[u8] {
         &self.1
+    }
+}
+impl Debug for ScionRawPacketView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScionRawPacketView")
+            .field("header", &self.header())
+            .field("payload_len", &self.payload().len())
+            .finish()
     }
 }
 impl ScionRawPacketView {
@@ -268,6 +276,14 @@ impl View for ScionUdpPacketView {
         &self.1
     }
 }
+impl Debug for ScionUdpPacketView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScionUdpPacketView")
+            .field("header", &self.header())
+            .field("datagram", &self.udp())
+            .finish()
+    }
+}
 impl ScionUdpPacketView {
     /// Converts a raw SCION packet into a UDP packet view. This only checks that the payload is
     /// large enough for a UDP header but does not check the packets NextHeader field.
@@ -408,6 +424,14 @@ impl View for ScionScmpPacketView {
     #[inline]
     fn as_bytes(&self) -> &[u8] {
         &self.1
+    }
+}
+impl Debug for ScionScmpPacketView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScionScmpPacketView")
+            .field("header", &self.header())
+            .field("message", &self.scmp())
+            .finish()
     }
 }
 impl<'a> ScionScmpPacketView {
