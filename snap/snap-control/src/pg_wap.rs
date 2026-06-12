@@ -16,7 +16,7 @@
 use std::net::IpAddr;
 
 use crate::{
-    api::http::model::{IpAuthInfo, PgWapSessionManager},
+    api::http::model::{PgWapSessionManager, Session},
     pg_wap::{
         auth::{AuthInfo, AuthService},
         session_manager::WapSessionManager,
@@ -32,6 +32,7 @@ pub mod tcp_session;
 pub struct ControlService {
     auth_service: AuthService,
     session_manager: WapSessionManager,
+    data_plane_port: u16,
     encoded_local_ip: String,
 }
 
@@ -41,6 +42,7 @@ impl ControlService {
         session_manager: WapSessionManager,
         auth_duration: std::time::Duration,
         local_ip: IpAddr,
+        data_plane_port: u16,
     ) -> Self {
         let auth_service = AuthService::new(auth_duration);
 
@@ -48,6 +50,7 @@ impl ControlService {
             session_manager,
             auth_service,
             encoded_local_ip: Self::encode_ap_id(local_ip),
+            data_plane_port,
         }
     }
 
@@ -79,14 +82,15 @@ impl ControlService {
 }
 
 impl PgWapSessionManager for ControlService {
-    fn new_session(&self, client_ip: IpAddr) -> Result<IpAuthInfo, anyhow::Error> {
+    fn new_session(&self, client_ip: IpAddr) -> Result<Session, anyhow::Error> {
         let auth_info = self.auth_service.authenticate(client_ip);
         let ap_id = self.ap_id();
         self.grant_ip_access(auth_info.clone());
 
-        Ok(IpAuthInfo {
+        Ok(Session {
             ip: auth_info.ip,
             ap_id: ap_id.to_string(),
+            data_plane_port: self.data_plane_port,
             valid_until: auth_info.valid_until,
         })
     }

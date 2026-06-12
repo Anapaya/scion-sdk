@@ -37,11 +37,13 @@ pub mod model {
 
     /// Information about an authenticated IP address.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub struct IpAuthInfo {
+    pub struct Session {
         /// The authenticated IP address.
         pub ip: IpAddr,
         /// The AP ID to use for sessions authenticated with this IP address.
         pub ap_id: String,
+        /// The port to use for data plane sessions.
+        pub data_plane_port: u16,
         /// The time until which the authentication is valid. After this time, the client needs to
         /// reauthenticate.
         pub valid_until: chrono::DateTime<chrono::Utc>,
@@ -52,7 +54,7 @@ pub mod model {
     /// Pathguard WAP session manager.
     pub trait PgWapSessionManager: Send + Sync {
         /// Create a new session for the given client IP address.
-        fn new_session(&self, client_ip: IpAddr) -> Result<IpAuthInfo, anyhow::Error>;
+        fn new_session(&self, client_ip: IpAddr) -> Result<Session, anyhow::Error>;
     }
 }
 

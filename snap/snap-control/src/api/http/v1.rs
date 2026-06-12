@@ -48,6 +48,7 @@ mod pg_wap {
         #[schema(value_type = String, example = "1.2.3.4")]
         client_ip: IpAddr,
         ap_id: String,
+        data_plane_port: u16,
         until: DateTime<chrono::Utc>,
     }
 
@@ -61,7 +62,7 @@ mod pg_wap {
     /// terminated.
     #[utoipa::path(
         post,
-        path = "/session", // Appended to the root: /pg-wap/api/v1/session
+        path = "/sessions", // Appended to the root: /pg-wap/api/v1/sessions
         responses(
             (status = 200, description = "HTTP request processed successfully", body = SessionResponse),
             (status = 400, description = "Invalid HTTP request"),
@@ -75,11 +76,12 @@ mod pg_wap {
         ip: ConnectInfo<SocketAddr>,
     ) -> Result<Json<SessionResponse>, axum::http::StatusCode> {
         match pg_wap_session_manager.new_session(ip.ip()) {
-            Ok(auth_info) => {
+            Ok(session) => {
                 Ok(Json(SessionResponse {
-                    client_ip: ip.ip(),
-                    ap_id: auth_info.ap_id.to_string(),
-                    until: auth_info.valid_until,
+                    client_ip: session.ip,
+                    ap_id: session.ap_id.to_string(),
+                    data_plane_port: session.data_plane_port,
+                    until: session.valid_until,
                 }))
             }
             Err(err) => {
