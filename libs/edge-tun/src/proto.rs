@@ -12,22 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Build script to compile the protobuf definitions for the ng API.
+//! Protobuf definitions for the edge-tun control plane API.
 
-use std::io::Result;
-
-fn main() -> Result<()> {
-    let out_dir = "src/ng/control/protobuf/generated";
-    let proto_files = ["./protobuf/anapaya.edgetun.v1.proto"];
-    let proto_include_paths = ["./protobuf"];
-
-    let mut config = prost_build::Config::new();
-    config
-        .protoc_arg("--experimental_allow_proto3_optional")
-        .out_dir(out_dir)
-        .include_file("mod.rs")
-        .compile_protos(&proto_files, &proto_include_paths)
-        .expect("failed to compile proto files");
-
-    Ok(())
+/// Anapaya
+pub mod anapaya {
+    /// Edge-tun
+    pub mod edgetun {
+        /// Version 1 of the edge-tun API.
+        pub mod v1 {
+            include!("proto/anapaya.edgetun.v1.rs");
+        }
+    }
 }

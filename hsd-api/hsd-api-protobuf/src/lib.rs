@@ -19,13 +19,13 @@
 pub mod hsd {
     //! Types and services for the HSD API.
 
-    pub mod api_service {
+    pub mod segments {
         //! HSD API service.
 
         pub mod v1 {
             //! Version 1 of the HSD API service.
 
-            include!("proto/hsd.api_service.v1.rs");
+            include!("proto/anapaya.scion.hsd.segments.v1.rs");
         }
     }
 }

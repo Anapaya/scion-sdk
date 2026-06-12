@@ -32,41 +32,58 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing;
 
-use crate::ng::control::{
-    EdgeTunControlPlane,
-    protobuf::anapaya::edgetun::v1::{
+use crate::{
+    ng::control::EdgeTunControlPlane,
+    proto::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
-        GetDataPlaneConfigurationResponse, IpAddressRange, RegisterEdgeTunIdentityRequest,
-        RegisterEdgeTunIdentityResponse, RouteAdvertisementRequest, RouteAdvertisementResponse,
+        GetDataPlaneConfigurationResponse, GetRouteAdvertisementRequest,
+        GetRouteAdvertisementResponse, IpAddressRange, RegisterEdgeTunIdentityRequest,
+        RegisterEdgeTunIdentityResponse,
     },
 };
-
 /// Connect-RPC path for the edge-tun control plane service.
-pub(crate) const SERVICE_PATH: &str = "anapaya.edgetun.v1";
+pub(crate) const SERVICE_PATH: &str = "anapaya.edgetun.v1.EdgeTunControlService";
 
 /// Connect-RPC method path for data plane configuration.
-pub(crate) const DATA_PLANE_CONFIGURATION: &str = "data_plane_configuration";
+pub(crate) const DATA_PLANE_CONFIGURATION: &str = "GetDataPlaneConfiguration";
 
 /// Connect-RPC method path for identity registration.
-pub(crate) const REGISTER_IDENTITY: &str = "register_identity";
+pub(crate) const REGISTER_IDENTITY: &str = "RegisterEdgeTunIdentity";
 
 /// Connect-RPC method path for address assignment.
-pub(crate) const ASSIGN_ADDRESSES: &str = "assign_addresses";
+pub(crate) const ASSIGN_ADDRESSES: &str = "AddressAssign";
 
 /// Connect-RPC method path for route advertisement.
-pub(crate) const REQUEST_ROUTES: &str = "request_routes";
+pub(crate) const REQUEST_ROUTES: &str = "GetRouteAdvertisement";
 
 /// Full Connect-RPC path for data plane configuration.
-const PATH_DATA_PLANE_CONFIGURATION: &str = "/anapaya.edgetun.v1/data_plane_configuration";
+const PATH_DATA_PLANE_CONFIGURATION: &str =
+    "/anapaya.edgetun.v1.EdgeTunControlService/GetDataPlaneConfiguration";
 
 /// Full Connect-RPC path for identity registration.
-const PATH_REGISTER_IDENTITY: &str = "/anapaya.edgetun.v1/register_identity";
+const PATH_REGISTER_IDENTITY: &str =
+    "/anapaya.edgetun.v1.EdgeTunControlService/RegisterEdgeTunIdentity";
 
 /// Full Connect-RPC path for address assignment.
-const PATH_ASSIGN_ADDRESSES: &str = "/anapaya.edgetun.v1/assign_addresses";
+const PATH_ASSIGN_ADDRESSES: &str = "/anapaya.edgetun.v1.EdgeTunControlService/AddressAssign";
 
 /// Full Connect-RPC path for route advertisement.
-const PATH_REQUEST_ROUTES: &str = "/anapaya.edgetun.v1/request_routes";
+const PATH_REQUEST_ROUTES: &str = "/anapaya.edgetun.v1.EdgeTunControlService/GetRouteAdvertisement";
+
+/// Deprecated full Connect-RPC paths without the service prefix, still accepted by the server for
+/// backward compatibility.
+pub(crate) mod deprecated_paths {
+    /// Deprecated full Connect-RPC path for data plane configuration (without service prefix).
+    pub const DEPR_DATA_PLANE_CONFIGURATION: &str = "/anapaya.edgetun.v1/data_plane_configuration";
+
+    /// Deprecated full Connect-RPC path for identity registration (without service prefix).
+    pub const DEPR_REGISTER_IDENTITY: &str = "/anapaya.edgetun.v1/register_identity";
+    /// Deprecated full Connect-RPC path for address assignment (without service prefix).
+    pub const DEPR_ASSIGN_ADDRESSES: &str = "/anapaya.edgetun.v1/assign_addresses";
+
+    /// Deprecated full Connect-RPC path for route advertisement (without service prefix).
+    pub const DEPR_REQUEST_ROUTES: &str = "/anapaya.edgetun.v1/request_routes";
+}
 
 /// The edge-tun control plane Connect-RPC API server.
 ///
@@ -160,10 +177,18 @@ async fn handle_request<C: EdgeTunControlPlane>(
     let path = req.headers.path.as_str();
 
     let result = match path {
-        PATH_DATA_PLANE_CONFIGURATION => handle_data_plane_configuration(&req, control_plane),
-        PATH_REGISTER_IDENTITY => handle_register_identity(&req, control_plane),
-        PATH_ASSIGN_ADDRESSES => handle_assign_addresses(&req, control_plane),
-        PATH_REQUEST_ROUTES => handle_request_routes(&req, control_plane),
+        deprecated_paths::DEPR_DATA_PLANE_CONFIGURATION | PATH_DATA_PLANE_CONFIGURATION => {
+            handle_get_data_plane_configuration(&req, control_plane)
+        }
+        deprecated_paths::DEPR_REGISTER_IDENTITY | PATH_REGISTER_IDENTITY => {
+            handle_register_edge_tun_identity(&req, control_plane)
+        }
+        deprecated_paths::DEPR_ASSIGN_ADDRESSES | PATH_ASSIGN_ADDRESSES => {
+            handle_address_assign(&req, control_plane)
+        }
+        deprecated_paths::DEPR_REQUEST_ROUTES | PATH_REQUEST_ROUTES => {
+            handle_get_route_advertisement(&req, control_plane)
+        }
         _ => {
             tracing::warn!(path, "EdgeTunControlPlaneCrpcApi: unknown path");
             Err(CrpcError::new(
@@ -190,8 +215,7 @@ async fn handle_request<C: EdgeTunControlPlane>(
     }
 }
 
-/// Handles a `/anapaya.edgetun.v1/data_plane_configuration` request.
-fn handle_data_plane_configuration<C: EdgeTunControlPlane>(
+fn handle_get_data_plane_configuration<C: EdgeTunControlPlane>(
     req: &scion_sdk_quic_scion::h3::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
@@ -213,8 +237,7 @@ fn handle_data_plane_configuration<C: EdgeTunControlPlane>(
     Ok(response.encode_to_vec())
 }
 
-/// Handles a `/anapaya.edgetun.v1/register_identity` request.
-fn handle_register_identity<C: EdgeTunControlPlane>(
+fn handle_register_edge_tun_identity<C: EdgeTunControlPlane>(
     req: &scion_sdk_quic_scion::h3::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
@@ -251,8 +274,7 @@ fn extract_x25519_public_key(bytes: &[u8]) -> Result<x25519::PublicKey, CrpcErro
     Ok(x25519::PublicKey::from(key_bytes))
 }
 
-/// Handles a `/anapaya.edgetun.v1/assign_addresses` request.
-fn handle_assign_addresses<C: EdgeTunControlPlane>(
+fn handle_address_assign<C: EdgeTunControlPlane>(
     req: &scion_sdk_quic_scion::h3::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
@@ -290,13 +312,12 @@ fn handle_assign_addresses<C: EdgeTunControlPlane>(
     Ok(response.encode_to_vec())
 }
 
-/// Handles a `/anapaya.edgetun.v1/request_routes` request.
-fn handle_request_routes<C: EdgeTunControlPlane>(
+fn handle_get_route_advertisement<C: EdgeTunControlPlane>(
     req: &scion_sdk_quic_scion::h3::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
     let body = req.body.as_deref().unwrap_or_default();
-    let request = RouteAdvertisementRequest::decode(body).map_err(|e| {
+    let request = GetRouteAdvertisementRequest::decode(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
             format!("failed to decode request: {e}"),
@@ -313,7 +334,7 @@ fn handle_request_routes<C: EdgeTunControlPlane>(
 
     let routes = control_plane.get_route_advertisement(identity);
 
-    let response = RouteAdvertisementResponse {
+    let response = GetRouteAdvertisementResponse {
         route: routes.into_iter().map(ipnet_to_ip_address_range).collect(),
     };
 

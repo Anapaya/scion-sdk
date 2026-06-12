@@ -1,12 +1,20 @@
 syntax = "proto3";
 
-package anapaya.snap.v1.api_service;
+package anapaya.snap.v1;
+
+service SnapControl {
+  // Returns the SNAP data plane details for the client to connect to.
+  rpc GetSnapDataPlaneAddress(GetSnapDataPlaneAddressRequest) returns (GetSnapDataPlaneAddressResponse) {}
+
+  // Registers a static identity for a snaptun connection.
+  rpc RegisterSnapTunIdentity(RegisterSnapTunIdentityRequest) returns (RegisterSnapTunIdentityResponse) {}
+}
 
 // Request to get the SNAP data plane details for the client to connect to.
-message GetSnapDataPlaneRequest {}
+message GetSnapDataPlaneAddressRequest {}
 
 // SNAP data plane response message.
-message GetSnapDataPlaneResponse {
+message GetSnapDataPlaneAddressResponse {
   // The UDP endpoint (host:port) of the SNAP data plane.
   // The host can either be an IP address or a hostname.
   string address = 1;

@@ -1,8 +1,13 @@
 syntax = "proto3";
 
-package hsd.api_service.v1;
+package anapaya.scion.hsd.segments.v1;
 
 import "proto/control_plane/v1/seg.proto";
+
+service SegmentLookupService {
+  // ListSegments looks up hidden segments between the source and destination ISD-AS.
+  rpc ListSegments(ListSegmentsRequest) returns (ListSegmentsResponse) {}
+}
 
 // ListSegmentsRequest looks up hidden segments.
 message ListSegmentsRequest {

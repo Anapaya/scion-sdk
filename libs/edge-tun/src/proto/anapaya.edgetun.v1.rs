@@ -54,14 +54,15 @@ pub struct AddressAssignResponse {
 }
 /// Request advertised routes from the edge-tun server.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RouteAdvertisementRequest {
+pub struct GetRouteAdvertisementRequest {
     /// Client's static identity.
     #[prost(bytes = "vec", tag = "1")]
     pub client_identity: ::prost::alloc::vec::Vec<u8>,
 }
 /// Response containing advertised routes.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RouteAdvertisementResponse {
+pub struct GetRouteAdvertisementResponse {
+    /// The list of advertised routes.
     #[prost(message, repeated, tag = "1")]
     pub route: ::prost::alloc::vec::Vec<IpAddressRange>,
 }

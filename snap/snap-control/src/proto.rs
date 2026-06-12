@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Protobuf bindings for the edge-tun ng control plane API.
+//! Protobuf definitions for the SNAP control plane API.
 
-#[allow(missing_docs)]
-mod generated;
-
-pub use generated::*;
+/// Anapaya
+pub mod anapaya {
+    /// Snap
+    pub mod snap {
+        /// Version 1 of the Snap API.
+        pub mod v1 {
+            include!("proto/anapaya.snap.v1.rs");
+        }
+    }
+}

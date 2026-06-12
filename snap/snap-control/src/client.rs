@@ -24,7 +24,7 @@ use x25519_dalek::PublicKey;
 
 use crate::{
     api::crpc::{GET_SNAP_DATA_PLANE_ADDRESS, REGISTER_SNAPTUN_IDENTITY, SERVICE_PATH},
-    protobuf::anapaya::snap::v1::api_service as proto,
+    proto::anapaya::snap::v1 as proto,
 };
 
 /// Re-export the endhost API client and the reqwest connect RPC cllient.
@@ -97,11 +97,11 @@ impl CrpcSnapControlClient {
 #[async_trait]
 impl ControlPlaneApi for CrpcSnapControlClient {
     async fn get_data_plane_address(&self) -> Result<GetDataPlaneAddressResponse, CrpcClientError> {
-        let res: proto::GetSnapDataPlaneResponse = self
+        let res: proto::GetSnapDataPlaneAddressResponse = self
             .client
-            .unary_request::<proto::GetSnapDataPlaneRequest, proto::GetSnapDataPlaneResponse>(
+            .unary_request::<proto::GetSnapDataPlaneAddressRequest, proto::GetSnapDataPlaneAddressResponse>(
                 &format!("{SERVICE_PATH}{GET_SNAP_DATA_PLANE_ADDRESS}"),
-                &proto::GetSnapDataPlaneRequest::default(),
+                &proto::GetSnapDataPlaneAddressRequest::default(),
             )
             .await?;
         let address = res.address.parse().map_err(|e: std::net::AddrParseError| {

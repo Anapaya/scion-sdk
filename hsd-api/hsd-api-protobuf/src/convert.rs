@@ -15,7 +15,7 @@
 
 use scion_proto::path::convert::segment::InvalidSegmentError;
 
-use crate::hsd::api_service::v1::ListSegmentsResponse;
+use crate::hsd::segments::v1::ListSegmentsResponse;
 
 impl From<scion_proto::path::segment::Segments> for ListSegmentsResponse {
     fn from(segments: scion_proto::path::segment::Segments) -> Self {

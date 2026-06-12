@@ -32,9 +32,9 @@ use x25519_dalek::PublicKey;
 
 use crate::{
     api::crpc::model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
-    protobuf::anapaya::snap::v1::api_service::{
-        GetSnapDataPlaneRequest, GetSnapDataPlaneResponse, RegisterSnapTunIdentityRequest,
-        RegisterSnapTunIdentityResponse,
+    proto::anapaya::snap::v1::{
+        GetSnapDataPlaneAddressRequest, GetSnapDataPlaneAddressResponse,
+        RegisterSnapTunIdentityRequest, RegisterSnapTunIdentityResponse,
     },
 };
 
@@ -115,9 +115,9 @@ pub(crate) mod convert {
     use url::Url;
     use x25519_dalek::PublicKey;
 
-    use crate::{api::crpc::model::SnapDataPlane, protobuf::anapaya::snap::v1::api_service as rpc};
+    use crate::{api::crpc::model::SnapDataPlane, proto::anapaya::snap::v1 as rpc};
 
-    /// This error is returned when converting a GetSnapDataPlaneResponse to a SnapDataPlane.
+    /// This error is returned when converting a GetSnapDataPlaneAddressResponse to a SnapDataPlane.
     #[derive(thiserror::Error, Debug)]
     pub enum ConvertError {
         #[error("failed to parse data plane address: {0}")]
@@ -129,9 +129,9 @@ pub(crate) mod convert {
     }
 
     // Protobuf to Model
-    impl TryFrom<rpc::GetSnapDataPlaneResponse> for SnapDataPlane {
+    impl TryFrom<rpc::GetSnapDataPlaneAddressResponse> for SnapDataPlane {
         type Error = ConvertError;
-        fn try_from(value: rpc::GetSnapDataPlaneResponse) -> Result<Self, Self::Error> {
+        fn try_from(value: rpc::GetSnapDataPlaneAddressResponse) -> Result<Self, Self::Error> {
             let snap_tun_control_address = value
                 .snap_tun_control_address
                 .map(|address| {
@@ -197,10 +197,10 @@ async fn get_snap_data_plane_address_handler(
     State(rendezvous_hasher): State<Arc<dyn SnapDataPlaneResolver>>,
     _snap_token: Extension<AnyClaims>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
-    ConnectRpc(_request): ConnectRpc<GetSnapDataPlaneRequest>,
-) -> Result<ConnectRpc<GetSnapDataPlaneResponse>, CrpcError> {
+    ConnectRpc(_request): ConnectRpc<GetSnapDataPlaneAddressRequest>,
+) -> Result<ConnectRpc<GetSnapDataPlaneAddressResponse>, CrpcError> {
     let addr = rendezvous_hasher.get_data_plane_address(addr.ip())?;
-    Ok(ConnectRpc(GetSnapDataPlaneResponse {
+    Ok(ConnectRpc(GetSnapDataPlaneAddressResponse {
         address: addr.address.to_string(),
         snap_tun_control_address: addr
             .snap_tun_control_address

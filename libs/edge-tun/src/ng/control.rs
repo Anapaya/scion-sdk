@@ -25,7 +25,6 @@ use ipnet::IpNet;
 use sciparse::address::socket_addr::ScionSocketAddr;
 
 pub mod api;
-pub mod protobuf;
 
 /// Configuration for the edge-tun data plane.
 pub struct EdgeTunDataPlaneConfig {

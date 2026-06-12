@@ -90,6 +90,22 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec![],
             use_tonic: false,
         },
+        CompileConfig {
+            name: "snap-control",
+            out_dir: "snap/snap-control/src/proto",
+            proto_dirs: vec!["snap/snap-control/protobuf"],
+            extern_includes: vec![],
+            protoc_args: vec![],
+            use_tonic: false,
+        },
+        CompileConfig {
+            name: "edge-tun",
+            out_dir: "libs/edge-tun/src/proto",
+            proto_dirs: vec!["libs/edge-tun/protobuf"],
+            extern_includes: vec![],
+            protoc_args: vec![],
+            use_tonic: false,
+        },
     ];
 
     match cli.command {

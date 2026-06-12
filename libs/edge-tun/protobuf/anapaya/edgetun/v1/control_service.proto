@@ -16,6 +16,28 @@ syntax = "proto3";
 
 package anapaya.edgetun.v1;
 
+service EdgeTunControlService {
+  // Returns the data plane configuration for the client.
+  //
+  // The client should use the returned control plane socket address for all further control plane requests.
+  rpc GetDataPlaneConfiguration(GetDataPlaneConfigurationRequest) returns (GetDataPlaneConfigurationResponse) {}
+
+  // Returns the advertised routes to the client.
+  //
+  // The client should use the returned routes to configure the data plane.
+  rpc GetRouteAdvertisement(GetRouteAdvertisementRequest) returns (GetRouteAdvertisementResponse) {}
+
+  // Registers a client's static identity with the server.
+  //
+  // The client should use the returned addresses to configure the data plane connection.
+  rpc RegisterEdgeTunIdentity(RegisterEdgeTunIdentityRequest) returns (RegisterEdgeTunIdentityResponse) {}
+
+  // AddressAssign assigns IP addresses to the client.
+  //
+  // The client should use the returned addresses to configure the data plane.
+  rpc AddressAssign(AddressAssignRequest) returns (AddressAssignResponse) {}
+}
+
 // Request data plane configuration from the edge-tun server.
 message GetDataPlaneConfigurationRequest {}
 
@@ -62,13 +84,14 @@ message AddressAssignResponse {
 }
 
 // Request advertised routes from the edge-tun server.
-message RouteAdvertisementRequest {
+message GetRouteAdvertisementRequest {
   // Client's static identity.
   bytes client_identity = 1;
 }
 
 // Response containing advertised routes.
-message RouteAdvertisementResponse {
+message GetRouteAdvertisementResponse {
+  // The list of advertised routes.
   repeated IpAddressRange route = 1;
 }
 

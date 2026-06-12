@@ -17,7 +17,7 @@ pub mod api;
 pub mod client;
 pub mod model;
 pub mod pg_wap;
-pub mod protobuf;
+pub mod proto;
 pub mod server;
 
 /// Re-exported dependencies.

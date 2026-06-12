@@ -29,15 +29,19 @@ use sciparse::address::socket_addr::ScionSocketAddr;
 use thiserror::Error;
 use url::Url;
 
-use crate::ng::control::{
-    EdgeTunDataPlaneConfig,
-    api::server::{
-        ASSIGN_ADDRESSES, DATA_PLANE_CONFIGURATION, REGISTER_IDENTITY, REQUEST_ROUTES, SERVICE_PATH,
+use crate::{
+    ng::control::{
+        EdgeTunDataPlaneConfig,
+        api::server::{
+            ASSIGN_ADDRESSES, DATA_PLANE_CONFIGURATION, REGISTER_IDENTITY, REQUEST_ROUTES,
+            SERVICE_PATH,
+        },
     },
-    protobuf::anapaya::edgetun::v1::{
+    proto::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
-        GetDataPlaneConfigurationResponse, IpAddressRange, RegisterEdgeTunIdentityRequest,
-        RegisterEdgeTunIdentityResponse, RouteAdvertisementRequest, RouteAdvertisementResponse,
+        GetDataPlaneConfigurationResponse, GetRouteAdvertisementRequest,
+        GetRouteAdvertisementResponse, IpAddressRange, RegisterEdgeTunIdentityRequest,
+        RegisterEdgeTunIdentityResponse,
     },
 };
 
@@ -90,9 +94,7 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
     }
 
     /// Fetches the data plane configuration from the server.
-    ///
-    /// Calls `/anapaya.edgetun.v1/data_plane_configuration`.
-    pub async fn get_data_plane_config(
+    pub async fn get_data_plane_configuration(
         &self,
     ) -> Result<EdgeTunDataPlaneConfig, EdgeTunClientError> {
         let url = self.make_url(DATA_PLANE_CONFIGURATION);
@@ -130,8 +132,6 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
     }
 
     /// Registers a WireGuard static identity with the edge-tun server.
-    ///
-    /// Calls `/anapaya.edgetun.v1/register_identity`.
     ///
     /// Returns the server's responder static public key and an optional PSK share.
     pub async fn register_edge_tun_identity(
@@ -171,8 +171,6 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
 
     /// Requests an IP address assignment from the edge-tun server.
     ///
-    /// Calls `/anapaya.edgetun.v1/assign_addresses`.
-    ///
     /// Returns `None` if the server could not assign an address, or `Some(addr)` if successful.
     pub async fn assign_address(
         &self,
@@ -208,8 +206,6 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
     }
 
     /// Fetches advertised routes for the given client identity.
-    ///
-    /// Calls `/anapaya.edgetun.v1/request_routes`.
     pub async fn get_route_advertisement(
         &self,
         client_identity: x25519::PublicKey,
@@ -217,10 +213,10 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
         let url = self.make_url(REQUEST_ROUTES);
         let resp = self
             .client
-            .unary_request::<RouteAdvertisementRequest, RouteAdvertisementResponse>(
+            .unary_request::<GetRouteAdvertisementRequest, GetRouteAdvertisementResponse>(
                 Method::POST,
                 url,
-                &RouteAdvertisementRequest {
+                &GetRouteAdvertisementRequest {
                     client_identity: client_identity.as_bytes().to_vec(),
                 },
             )

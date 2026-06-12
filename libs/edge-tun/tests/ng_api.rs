@@ -25,10 +25,12 @@ use std::{
 
 use ana_gotatun::x25519;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
-use scion_sdk_edge_tun::ng::control::{
-    EdgeTunControlPlane, EdgeTunDataPlaneConfig,
-    api::{client::EdgeTunControlPlaneClient, server::EdgeTunControlPlaneCrpcApi},
-    protobuf::anapaya::edgetun::v1::{
+use scion_sdk_edge_tun::{
+    ng::control::{
+        EdgeTunControlPlane, EdgeTunDataPlaneConfig,
+        api::{client::EdgeTunControlPlaneClient, server::EdgeTunControlPlaneCrpcApi},
+    },
+    proto::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
         IpAddressRange,
     },
@@ -304,9 +306,9 @@ async fn test_get_data_plane_config() {
 
     let client = make_client(client_socket, server_addr).await;
     let config = client
-        .get_data_plane_config()
+        .get_data_plane_configuration()
         .await
-        .expect("get_data_plane_config");
+        .expect("get_data_plane_configuration");
 
     assert_eq!(config.control_plane_scion_sockaddr, control_plane_addr);
     assert_eq!(config.data_plane_scion_sockaddr, data_plane_addr);

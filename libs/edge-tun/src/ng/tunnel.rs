@@ -296,7 +296,7 @@ impl EdgeTunnel {
         let EdgeTunDataPlaneConfig {
             data_plane_scion_sockaddr,
             ..
-        } = control_client.get_data_plane_config().await?;
+        } = control_client.get_data_plane_configuration().await?;
 
         // Drop the control client (and its underlying CrpcClient connection).
         drop(control_client);

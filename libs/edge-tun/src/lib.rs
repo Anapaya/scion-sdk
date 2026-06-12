@@ -31,6 +31,8 @@ pub mod ip;
 pub mod metrics;
 /// Next-generation edge-tun control plane API.
 pub mod ng;
+/// Protobuf definitions
+pub mod proto;
 /// Wire-format request and response types for the edge-tun control protocol.
 pub mod requests;
 /// QUIC-based edge-tun server implementation.

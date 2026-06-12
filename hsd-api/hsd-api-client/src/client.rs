@@ -30,7 +30,7 @@
 //!     .await;
 //! ```
 
-use hsd_api_protobuf::hsd::api_service::v1::{ListSegmentsRequest, ListSegmentsResponse};
+use hsd_api_protobuf::hsd::segments::v1::{ListSegmentsRequest, ListSegmentsResponse};
 use scion_proto::{address::IsdAsn, path::convert::segment::InvalidSegmentError};
 use scion_sdk_scion_connect_rpc::{
     Method,
