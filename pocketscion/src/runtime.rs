@@ -250,6 +250,7 @@ impl PocketScionRuntime {
                 snap_resolver,
                 identity_registry.clone(),
                 None,
+                None,
                 snap_token_verifier.clone(),
                 snap_control::server::metrics::Metrics::new(&MetricsRegistry::new()),
             )?;

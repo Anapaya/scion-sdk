@@ -28,6 +28,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tower = { workspace = true, features = ["limit", "buffer"] }
+tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 url = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time", "axum_extras"] }

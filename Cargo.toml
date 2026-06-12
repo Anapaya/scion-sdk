@@ -154,7 +154,7 @@ tonic = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = { version = "0.5", features = ["limit", "load-shed", "timeout"] }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-bunyan-formatter = "0.3"

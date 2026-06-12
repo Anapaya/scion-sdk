@@ -21,10 +21,11 @@ use endhost_api_models::{
     SegmentsDiscovery,
     underlays::{ScionRouter, Underlays},
 };
-use http::StatusCode;
+use http::{HeaderValue, StatusCode};
 use scion_sdk_observability::info_trace_layer;
 use sciparse::identifier::isd_asn::IsdAsn;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};
+use tower_http::cors::CorsLayer;
 use url::Url;
 
 use crate::{
@@ -62,6 +63,7 @@ pub fn build_router<UD, SL, SR, IR>(
     snap_resolver: SR,
     identity_registry: Arc<IR>,
     pg_wap_session_manager: Option<Arc<dyn PgWapSessionManager>>,
+    pg_wap_cors_origins: Option<Vec<HeaderValue>>,
     token_verifier: SnapTokenVerifier,
     metrics: Metrics,
 ) -> std::io::Result<Router>
@@ -90,7 +92,16 @@ where
     // XXX(bunert): For now the pathguard WAP HTTP API is unauthenticated. This will change in the
     // future.
     if let Some(pg_wap_session_manager) = pg_wap_session_manager {
-        router = nest_http_api(router, pg_wap_session_manager);
+        let mut http_api_router = nest_http_api(Router::new(), pg_wap_session_manager);
+        if let Some(origins) = pg_wap_cors_origins {
+            http_api_router = http_api_router.layer(
+                CorsLayer::new()
+                    .allow_methods(tower_http::cors::Any)
+                    .allow_headers(tower_http::cors::Any)
+                    .allow_origin(origins),
+            );
+        }
+        router = router.merge(http_api_router);
     }
 
     // Merge the authenticated router into the main router
