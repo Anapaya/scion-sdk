@@ -83,7 +83,9 @@ impl ControlService {
 
 impl PgWapSessionManager for ControlService {
     fn new_session(&self, client_ip: IpAddr) -> Result<Session, anyhow::Error> {
-        let auth_info = self.auth_service.authenticate(client_ip);
+        let auth_info = self
+            .auth_service
+            .authenticate(chrono::Utc::now(), client_ip);
         let ap_id = self.ap_id();
         self.grant_ip_access(auth_info.clone());
 

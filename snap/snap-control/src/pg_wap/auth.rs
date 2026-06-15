@@ -37,8 +37,8 @@ impl AuthService {
         Self { auth_duration }
     }
 
-    pub fn authenticate(&self, ip: IpAddr) -> AuthInfo {
-        let valid_until = chrono::Utc::now() + self.auth_duration;
+    pub fn authenticate(&self, now: chrono::DateTime<chrono::Utc>, ip: IpAddr) -> AuthInfo {
+        let valid_until = now + self.auth_duration;
         AuthInfo { ip, valid_until }
     }
 }

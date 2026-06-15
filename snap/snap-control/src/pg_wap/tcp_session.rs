@@ -22,6 +22,11 @@ pub enum TcpSessionCommand {
         /// Reason for the termination, used for logging and debugging purposes.
         reason: Cow<'static, str>,
     },
+    /// Extend the lifetime of the TCP session.
+    ExtendLifetime {
+        /// The new valid until timestamp.
+        new_valid_until: chrono::DateTime<chrono::Utc>,
+    },
 }
 
 /// Handle to a TCP session, allowing to send commands to the session and observe its shared state.
