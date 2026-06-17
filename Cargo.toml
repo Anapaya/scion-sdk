@@ -149,6 +149,9 @@ test-log = { version = "0.2", features = ["trace"] }
 thiserror = "2.0"
 tinyvec = { version = "1.10", features = ["alloc"]}
 tokio = { version = "1.45", features = ["full"] }
+# Stock (BoringSSL/quiche-based) async QUIC implementation, used in tests to
+# exercise the squiche-based server endpoint against an established peer.
+tokio-quiche = { version = "0.19", default-features = false }
 tokio-util = "0.7"
 tonic = "0.14"
 tonic-prost = "0.14"

@@ -9,23 +9,28 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["HTTP3", "QUIC", "SCION"]
 
 [dependencies]
+# global dependencies
 async-trait = { workspace = true }
 buffer-pool = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+prometheus = { workspace = true }
 ring = { workspace = true }
 squiche = { workspace = true }
 sciparse = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+chacha20 = { workspace = true, features = ["rng"] }
 ntest = { workspace = true }
 rcgen = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
+tokio-quiche = { workspace = true }
 
 [lints]
 workspace = true

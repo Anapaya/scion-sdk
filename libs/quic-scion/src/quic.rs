@@ -17,4 +17,6 @@
 mod addr_validation_token;
 pub mod client;
 pub mod config;
+pub mod connection;
 pub mod server;
+pub mod server_endpoint;
