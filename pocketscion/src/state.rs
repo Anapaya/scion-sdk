@@ -32,6 +32,7 @@ use crate::{
     comp::{
         authorization_server::AuthServerState,
         control_service::{ControlServiceState, segment_lookup::SegmentListingCache},
+        daemon::DaemonServiceState,
         endhost_api::{EndhostApiId, EndhostApiState},
         endhost_api_discovery::{EndhostApiDiscoveryApiId, EndhostApiDiscoveryState},
         external_as::ExternalAsState,
@@ -48,6 +49,7 @@ use crate::{
             topology::{FastTopologyLookup, ScionAs, ScionLink, ScionTopology},
         },
     },
+    util::cert_tmp_dir::CertificateTempDir,
 };
 
 /// The default keepalive interval for the SNAPtun connection(s).
@@ -58,7 +60,7 @@ pub const DEFAULT_POCKET_SCION_ROOT_SECRET: [u8; 32] = [67u8; 32];
 /// Inner state of PocketSCION, containing all runtime state (as far as possible) of the system.
 ///
 /// See [PocketScionState] for usage.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PocketScionStateInner {
     // Configuration
     // -------------------------------------------------
@@ -96,6 +98,8 @@ pub struct PocketScionStateInner {
     pub snaps: BTreeMap<SnapId, SnapState>,
     /// The state of the routers in the system.
     pub routers: BTreeMap<RouterId, RouterState>,
+    /// The state of the daemon services in the system.
+    pub daemon_services: BTreeMap<IsdAsn, DaemonServiceState>,
     /// The state of the endhost APIs in the system.
     pub endhost_apis: BTreeMap<EndhostApiId, EndhostApiState>,
     /// The state of the endhost API discovery APIs in the system.
@@ -108,6 +112,8 @@ pub struct PocketScionStateInner {
     pub network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
     /// Optional global cache for segment listing results, used by the SegmentLookupService.
     pub segment_listing_cache: Option<SegmentListingCache>,
+    /// Temporary directory for certificate files,
+    pub cert_dir: CertificateTempDir,
 }
 
 impl PocketScionStateInner {
@@ -120,6 +126,7 @@ impl PocketScionStateInner {
             snaps: Default::default(),
             snaptun_keepalive_interval: DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL,
             routers: Default::default(),
+            daemon_services: Default::default(),
             auth_server: Default::default(),
             topology: Self::default_topology(),
             segment_registry: SegmentRegistry::new(&FastTopologyLookup::new(
@@ -134,6 +141,7 @@ impl PocketScionStateInner {
             control_service_states: Default::default(),
             ignore_macs: false,
             segment_listing_cache: None,
+            cert_dir: CertificateTempDir::new().expect("Failed to create temporary directory"),
         }
     }
 

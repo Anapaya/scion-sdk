@@ -384,7 +384,10 @@ fn create_udp_reply(
         .source()
         .context("UDP packet has no source socket address")?;
     let endhosts = ByEndpoint::<SocketAddr> {
-        source: SocketAddr::new(ScionAddr::new(local_as, router.ip.into()), 0),
+        source: SocketAddr::new(
+            ScionAddr::new(local_as, router.address.ip().into()),
+            router.address.port(),
+        ),
         destination: packet_src,
     };
 
@@ -453,7 +456,7 @@ fn maybe_create_scmp_reply(
     // Note: if src address is a multicast address, this should not generate a response.
 
     let endhosts = ByEndpoint::<ScionAddr> {
-        source: ScionAddr::new(local_as, router.ip.into()),
+        source: ScionAddr::new(local_as, router.address.ip().into()),
         destination: packet_src,
     };
 

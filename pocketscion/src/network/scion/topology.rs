@@ -17,7 +17,7 @@ use std::{
     collections::{BTreeMap, HashMap, btree_map::Entry},
     fmt::{Display, Formatter},
     hash::Hash,
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     str::FromStr,
 };
 
@@ -315,7 +315,7 @@ impl ScionTopology {
     pub fn get_router(&self, isd_as: &IsdAsn, ingress_interface: u16) -> &ScionRouter {
         static FALLBACK_ROUTER: ScionRouter = ScionRouter {
             interfaces: ScionRouterInterface::Fallback,
-            ip: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            address: SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0),
         };
 
         let mut fallback = &FALLBACK_ROUTER;
@@ -873,15 +873,15 @@ pub struct ScionRouter {
     pub interfaces: ScionRouterInterface,
     /// The IP address of the router.
 
-    #[schema(value_type = String, example = "192.168.1.1")]
-    pub ip: IpAddr,
+    #[schema(value_type = String, example = "192.168.1.1:8080")]
+    pub address: SocketAddr,
 }
 impl ScionRouter {
     /// Creates a new SCION router with the given interface IDs and IP address.
-    pub fn new(interfaces: Vec<u16>, ip: IpAddr) -> Self {
+    pub fn new(interfaces: Vec<u16>, address: SocketAddr) -> Self {
         Self {
             interfaces: ScionRouterInterface::Ids(interfaces),
-            ip,
+            address,
         }
     }
 
@@ -889,10 +889,10 @@ impl ScionRouter {
     ///
     /// This router can be used as a default router for an AS, which is used if no other router is
     /// explicitly associated with the ingress interface.
-    pub fn new_fallback(ip: IpAddr) -> Self {
+    pub fn new_fallback(address: SocketAddr) -> Self {
         Self {
             interfaces: ScionRouterInterface::Fallback,
-            ip,
+            address,
         }
     }
 }

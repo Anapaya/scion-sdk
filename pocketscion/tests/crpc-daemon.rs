@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Simple test verifying that the Control Service's CRPC endpoint can be reached and returns
-//! expected results.
+//! Simple test verifying that the Daemon Service's CRPC endpoint can be reached.
 
 use std::{str::FromStr, sync::Arc};
 
@@ -23,21 +22,24 @@ use http::Method;
 use ntest::timeout;
 use pocketscion::{
     self,
-    comp::control_service::ControlServiceState,
+    comp::daemon::{
+        DaemonServiceState,
+        model::{PATH_AS, SERVICE_PREFIX},
+    },
     network::scion::topology::{ScionAs, ScionTopology},
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
     util::{addr_to_http_url, path_providers::ManualPathProvider},
 };
 use scion_proto::{address::IsdAsn, path::DataPlanePath};
-use scion_protobuf::control_plane::v1::{SegmentsRequest, SegmentsResponse};
+use scion_protobuf::daemon::v1::{AsRequest, AsResponse};
 use scion_sdk_quic_scion::quic::config::QuicConfig;
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
 use sciparse::address::socket_addr::ScionSocketAddr;
 
 #[test_log::test(tokio::test)]
 #[timeout(10_000)]
-async fn control_service_crpc_lookup() -> anyhow::Result<()> {
+async fn daemon_crpc_lookup() -> anyhow::Result<()> {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
     let mut state = PocketScionState::new(Utc::now());
 
@@ -52,14 +54,15 @@ async fn control_service_crpc_lookup() -> anyhow::Result<()> {
 
     state.set_topology(topo);
 
-    // Add control service for 1-2
+    // Add daemon service for 1-2
 
-    let cs_addr = "1.2.3.4:12345".parse()?;
+    let ds_addr = "1.2.3.4:12345".parse()?;
 
-    let mut cs = ControlServiceState::new();
-    cs.set_virtual_addr(cs_addr);
-    state.add_control_service(ia2, cs)?;
+    let mut ds = DaemonServiceState::new();
+    ds.set_virtual_addr(ds_addr);
+    state.add_daemon_service(ia2, ds)?;
 
+    tracing::info!("Starting runtime");
     // Start PocketScion
     let ps_rt = PocketScionRuntimeBuilder::new()
         .with_system_state(state)
@@ -86,7 +89,7 @@ async fn control_service_crpc_lookup() -> anyhow::Result<()> {
     ns_socket.path_provider.set_path(DataPlanePath::EmptyPath);
 
     let client = CrpcClient::with_quic_config(
-        ScionSocketAddr::new(ia2.into(), cs_addr.ip().into(), cs_addr.port()),
+        ScionSocketAddr::new(ia2.into(), ds_addr.ip().into(), ds_addr.port()),
         Arc::new(ns_socket),
         None,
         None,
@@ -94,31 +97,26 @@ async fn control_service_crpc_lookup() -> anyhow::Result<()> {
     )
     .await?;
 
-    tracing::info!("CRPC client connected to Control Service");
-    let mut url = addr_to_http_url(cs_addr);
+    tracing::info!("CRPC client connected");
+    let mut url = addr_to_http_url(ds_addr);
 
-    const SERVICE_PATH: &str = "/proto.control_plane.v1.SegmentLookupService";
-    const ENDPOINT_PATH: &str = "/Segments";
-    url.set_path(&format!("{}{}", SERVICE_PATH, ENDPOINT_PATH));
+    url.set_path(&format!("{}{}", SERVICE_PREFIX, PATH_AS));
 
-    let rsp: SegmentsResponse = client
-        .unary_request(
-            Method::POST,
-            url.clone(),
-            &SegmentsRequest {
-                src_isd_as: ia2.0,
-                dst_isd_as: ia1.0,
-            },
-        )
+    let rsp: AsResponse = client
+        .unary_request(Method::POST, url.clone(), &AsRequest { isd_as: ia2.into() })
         .await?;
 
+    tracing::info!("CRPC request successful: {:?}", rsp);
+
     assert_eq!(
-        rsp.segments
-            .get(&scion_protobuf::control_plane::v1::SegmentType::Core.into())
-            .unwrap()
-            .segments
-            .len(),
-        1
+        rsp.isd_as,
+        ia2.to_u64(),
+        "CRPC response ISD-AS does not match expected value"
     );
+    assert!(
+        rsp.core,
+        "CRPC response core status does not match expected value"
+    );
+
     Ok(())
 }

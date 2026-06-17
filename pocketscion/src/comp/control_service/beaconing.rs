@@ -96,15 +96,18 @@ impl BeaconingService {
         loop {
             let cs = &self.control_service;
 
+            let cert_tmp_dir;
+
             let action = {
                 let now = SystemTime::now();
                 let state_guard = cs.app_state.read();
+                cert_tmp_dir = state_guard.cert_dir.clone();
 
                 let segment_registry = &state_guard.segment_registry;
                 let topology = &state_guard.topology;
                 let mut state = cs
                     .app_state
-                    .get_control_service_state(cs.isd_asn)
+                    .control_service_state(cs.isd_asn)
                     .expect("Control Service state must exist for own ISD-AS");
 
                 Self::tick_beaconing_state(&mut state, now, segment_registry, topology)
@@ -138,7 +141,7 @@ impl BeaconingService {
                                 );
 
                                 cs.app_state
-                                    .get_control_service_state(cs.isd_asn)
+                                    .control_service_state(cs.isd_asn)
                                     .expect("Control Service state must exist for own ISD-AS")
                                     .mark_send_result(&our_interface, false, SystemTime::now());
 
@@ -167,7 +170,7 @@ impl BeaconingService {
                                     );
 
                                     cs.app_state
-                                        .get_control_service_state(cs.isd_asn)
+                                        .control_service_state(cs.isd_asn)
                                         .expect("Control Service state must exist for own ISD-AS")
                                         .mark_send_result(&our_interface, false, SystemTime::now());
 
@@ -189,7 +192,7 @@ impl BeaconingService {
                                 svc_addr,
                                 path,
                                 &dst_cert_chain,
-                                &cs.certificate_temp_dir,
+                                &cert_tmp_dir,
                             )
                             .await
                             {
@@ -203,7 +206,7 @@ impl BeaconingService {
                                     );
 
                                     cs.app_state
-                                        .get_control_service_state(cs.isd_asn)
+                                        .control_service_state(cs.isd_asn)
                                         .expect("Control Service state must exist for own ISD-AS")
                                         .mark_send_result(&our_interface, false, SystemTime::now());
 

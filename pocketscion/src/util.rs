@@ -14,6 +14,9 @@
 
 //! Shared utility functions
 
+pub(crate) mod cert_tmp_dir;
+pub mod crpc;
+pub mod path_providers;
 pub mod serde_ext;
 pub mod topologies;
 

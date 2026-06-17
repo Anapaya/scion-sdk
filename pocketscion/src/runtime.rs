@@ -51,6 +51,7 @@ use crate::{
     comp::{
         authorization_server,
         control_service::{ControlService, segment_lookup::SegmentListingCache},
+        daemon::PsDaemonService,
         endhost_api::PsEndhostApi,
         endhost_api_discovery::EndhostApiDiscoveryService,
         endhost_segment_lister::StateEndhostSegmentLister,
@@ -110,7 +111,8 @@ impl PocketScionRuntime {
 
         Self::start_endhost_discovery_apis(&state, &io_config).await?;
         Self::start_external_ases(&state, &io_config).await?;
-        Self::start_control_services(&mut join_set, &state);
+        Self::start_control_services(&state)?;
+        Self::start_daemon_services(&state)?;
         Self::start_router_sockets(&mut join_set, &state, &io_config).await?;
         Self::start_network_forwarders(&mut join_set, &state, &io_config).await?;
         Self::start_auth_server(&mut join_set, &cancel_token, &state, &io_config).await?;
@@ -427,6 +429,7 @@ impl PocketScionRuntime {
             let ext_as = ExternalAsService::start(isd_as, pstate.clone(), sockets)
                 .await
                 .map_err(|e| io::Error::other(format!("{e:?}")))?;
+
             pstate
                 .register_external_as_handler(isd_as, ext_as)
                 .map_err(|e| {
@@ -439,22 +442,25 @@ impl PocketScionRuntime {
     }
 
     /// Spawns a control service task for each configured ISD-AS.
-    fn start_control_services(
-        join_set: &mut JoinSet<Result<(), io::Error>>,
-        pstate: &PocketScionState,
-    ) {
-        for (isd_as, _) in pstate.get_control_services() {
+    fn start_control_services(pstate: &PocketScionState) -> anyhow::Result<()> {
+        for (isd_as, _) in pstate.control_services() {
             let pstate = pstate.clone();
-            join_set.spawn(async move {
-                ControlService::start(isd_as, pstate).map_err(|e| {
-                    io::Error::other(format!(
-                        "Failed to start Control Service for AS {isd_as}: {e:?}"
-                    ))
-                })?;
-
-                Ok(())
-            });
+            ControlService::start(isd_as, pstate)
+                .with_context(|| format!("Failed to start Control Service for ISD-AS {isd_as}"))?;
         }
+
+        Ok(())
+    }
+
+    /// Spawns a daemon service task for each configured ISD-AS.
+    fn start_daemon_services(pstate: &PocketScionState) -> anyhow::Result<()> {
+        for (isd_as, _) in pstate.daemon_services() {
+            let pstate = pstate.clone();
+            PsDaemonService::start(isd_as, pstate)
+                .with_context(|| format!("Failed to start Daemon Service for ISD-AS {isd_as}"))?;
+        }
+
+        Ok(())
     }
 
     /// Binds and starts a UDP router socket for each configured router, registering it as a

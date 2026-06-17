@@ -16,10 +16,8 @@
 
 use std::{
     collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    path::PathBuf,
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -39,26 +37,21 @@ use utoipa::ToSchema;
 
 use crate::{
     comp::{
-        control_service::{
-            beaconing::{BeaconingService, InterfaceBeaconState},
-            crpc::{AxumH3Server, MirroringPathProvider},
-        },
+        control_service::beaconing::{BeaconingService, InterfaceBeaconState},
         sim_network_stack::NetSimStack,
     },
-    network::scion::{
-        routing::ScionNetworkTime,
-        topology::ScionGlobalInterfaceId,
-        trust_store::{StoreCertificateDer, StoreKeyDer},
-    },
+    network::scion::{routing::ScionNetworkTime, topology::ScionGlobalInterfaceId},
     state::PocketScionState,
+    util::{
+        cert_tmp_dir::CertificateTempDir, crpc::server::AxumH3Server,
+        path_providers::MirroringPathProvider,
+    },
 };
 
 mod crpc;
 
 pub mod beaconing;
 pub mod segment_lookup;
-
-pub use crpc::ManualPathProvider;
 
 /// Control Service Runtime
 pub struct ControlService {
@@ -68,9 +61,6 @@ pub struct ControlService {
     app_state: PocketScionState,
     /// Network Simulator Socket for communication with the network simulator
     net_stack: NetSimStack,
-    /// Since the CRPC client requires certificates to be stored in files, we need to create temp
-    /// files for all certs used
-    certificate_temp_dir: CertificateTempDir,
 }
 
 impl ControlService {
@@ -91,9 +81,26 @@ impl ControlService {
         isd_asn: IsdAsn,
         app_state: PocketScionState,
     ) -> anyhow::Result<Arc<ControlService>> {
-        let self_state = app_state
-            .get_control_service_state(isd_asn)
-            .context("Control Service state for ISD-AS must be set in shared state before starting Control Service")?;
+        let self_state;
+        let cert_tmp_dir;
+        let key_pair;
+
+        {
+            let guard = app_state.read();
+            cert_tmp_dir = guard.cert_dir.clone();
+            self_state = guard
+                .control_service_states
+                .get(&isd_asn)
+                .context("Control Service state for ISD-AS must be set in shared state before starting Control Service")?
+                .clone();
+            key_pair = guard
+                .topology
+                .trust_store
+                .as_key_pair(&isd_asn)
+                .context("Failed to get key pair for Control Service from topology trust store")?
+                .clone()
+        }
+
         let addr = self_state.virtual_addr();
 
         let stack = NetSimStack::bind(app_state.clone(), isd_asn, addr.ip(), 100)?;
@@ -103,14 +110,10 @@ impl ControlService {
             .add_svc_mapping(isd_asn, ServiceAddr::CONTROL, "QUIC".to_string(), addr)
             .context("Failed to add Control Service address mapping to shared state")?;
 
-        let cert_temp_dir =
-            CertificateTempDir::new().context("Failed to create certificate temp directory")?;
-
         let svc = Arc::new(ControlService {
             isd_asn,
-            app_state,
+            app_state: app_state.clone(),
             net_stack: stack.clone(),
-            certificate_temp_dir: cert_temp_dir.clone(),
         });
 
         let app = axum::Router::new();
@@ -127,19 +130,10 @@ impl ControlService {
             .bind_udp(addr.port())?
             .into_path_aware(MirroringPathProvider::default());
 
-        let key_pair = {
-            let read = svc.app_state.read();
-            read.topology
-                .trust_store
-                .as_key_pair(&isd_asn)
-                .context("Failed to get key pair for Control Service from topology trust store")?
-                .clone()
-        };
-
-        let server_key = cert_temp_dir
+        let server_key = cert_tmp_dir
             .get_or_create_key_file(&key_pair.key)
             .context("Failed to get or create key file for Control Service")?;
-        let server_cert = cert_temp_dir
+        let server_cert = cert_tmp_dir
             .get_or_create_cert_file(&[key_pair.cert])
             .context("Failed to get or create cert file for Control Service")?;
 
@@ -152,14 +146,13 @@ impl ControlService {
         quiche_conf.load_cert_chain_from_pem_file(server_cert.to_str().unwrap())?;
         quiche_conf.load_priv_key_from_pem_file(server_key.to_str().unwrap())?;
 
-        let server = AxumH3Server::serve(Arc::new(sock), app, quiche_conf);
-        task::spawn(server);
-
-        tracing::info!(
-            %isd_asn,
-            %addr,
-            "Control Service started",
-        );
+        task::spawn(async move {
+            tracing::info!(%isd_asn, %addr, "Control service listening");
+            match AxumH3Server::serve(Arc::new(sock), app, quiche_conf).await {
+                Ok(_) => tracing::info!("Control service stopped gracefully"),
+                Err(e) => tracing::error!("Control service stopped with error: {:?}", e),
+            }
+        });
 
         Ok(svc)
     }
@@ -292,72 +285,6 @@ impl ControlService {
     }
 }
 
-#[derive(Debug, Clone)]
-struct CertificateTempDir {
-    existing: Arc<Mutex<HashMap<u64, PathBuf>>>,
-    temp_dir: Arc<tempfile::TempDir>,
-}
-impl CertificateTempDir {
-    fn new() -> anyhow::Result<Self> {
-        Ok(Self {
-            existing: Arc::new(Mutex::new(HashMap::new())),
-            temp_dir: Arc::new(
-                tempfile::tempdir()
-                    .context("Failed to create temporary directory for certificates")?,
-            ),
-        })
-    }
-
-    // Creates or gets a temporary file for the given certificate chain, returning the path to the
-    // file. The file is created in a temporary directory that is deleted when the
-    // CertificateTempDir is dropped. If a file for the given certificate chain already exists, the
-    // existing path is returned.
-    pub fn get_or_create_cert_file(
-        &self,
-        cert_chain: &[StoreCertificateDer],
-    ) -> anyhow::Result<PathBuf> {
-        let mut hasher = DefaultHasher::new();
-        cert_chain.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        let mut existing_guard = self.existing.lock().unwrap();
-        if let Some(path) = existing_guard.get(&hash) {
-            Ok(path.clone())
-        } else {
-            let path = self.temp_dir.path().join(format!("chain-{}.crt", hash));
-
-            let cert_chain = cert_chain
-                .iter()
-                .map(|cert| cert.to_pem())
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            std::fs::write(&path, cert_chain)?;
-            existing_guard.insert(hash, path.clone());
-
-            Ok(path)
-        }
-    }
-
-    pub fn get_or_create_key_file(&self, key: &StoreKeyDer) -> anyhow::Result<PathBuf> {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        let mut existing_guard = self.existing.lock().unwrap();
-        if let Some(path) = existing_guard.get(&hash) {
-            Ok(path.clone())
-        } else {
-            let path = self.temp_dir.path().join(format!("key-{}.key", hash));
-
-            std::fs::write(&path, key.to_pem())?;
-            existing_guard.insert(hash, path.clone());
-
-            Ok(path)
-        }
-    }
-}
-
 // -----------------------------------------
 // PocketSCION State Management
 
@@ -457,7 +384,7 @@ impl PocketScionState {
     }
 
     /// Gets the ISD-AS and Control Service state for all Control Services in the shared state.
-    pub fn get_control_services(&self) -> Vec<(IsdAsn, ControlServiceState)> {
+    pub fn control_services(&self) -> Vec<(IsdAsn, ControlServiceState)> {
         let state = self.read();
         state
             .control_service_states
@@ -467,7 +394,7 @@ impl PocketScionState {
     }
 
     /// Gets the Control Service state for the given ISD-AS, if it exists.
-    pub fn get_control_service_state(&self, isd_asn: IsdAsn) -> Option<ControlServiceState> {
+    pub fn control_service_state(&self, isd_asn: IsdAsn) -> Option<ControlServiceState> {
         let state = self.read();
         state.control_service_states.get(&isd_asn).cloned()
     }

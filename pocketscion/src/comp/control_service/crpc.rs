@@ -15,33 +15,18 @@
 //! CRPC Client for the Control Service to send requests to the control service in the External
 //! AS through the network simulator
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
-};
+use std::time::Duration;
 
 use anyhow::{Context, bail};
-use bytes::Bytes;
 use scion_proto::{address::IsdAsn, path::DataPlanePath};
 use scion_protobuf::control_plane::v1::{BeaconRequest, BeaconResponse};
-use scion_sdk_quic_scion::{
-    h3::server::{H3Server, H3ServerConnection},
-    quic::{config::QuicConfig, server::QuicServer},
-    reexport::squiche::{self, h3::NameValue},
-    socket::GenericScionUdpSocket,
-};
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
-use sciparse::address::socket_addr::ScionSocketAddr;
 use url::Url;
 
 use crate::{
-    comp::{
-        control_service::CertificateTempDir,
-        sim_network_stack::{NetSimPathProvider, NetSimStack},
-    },
+    comp::{control_service::CertificateTempDir, sim_network_stack::NetSimStack},
     network::scion::trust_store::StoreCertificateDer,
-    util::addr_to_http_url,
+    util::{addr_to_http_url, crpc::client::PsCrpcClient, path_providers::ManualPathProvider},
 };
 
 /// Control Service CRPC client that can be used to send requests to the control service in the
@@ -65,49 +50,24 @@ impl ControlServiceCrpcClient {
             .get_or_create_cert_file(cert_chain)
             .context("Failed to get certificate path for destination ISD-AS")?;
 
-        let quic_config = QuicConfig {
-            // Peer validation is disabled in general
-            verify_peer: false,
-            ca_certs_directory: Some(
-                cert_temp_dir
-                    .temp_dir
-                    .path()
-                    .to_str()
-                    .context("Failed to convert certificate temp directory path to string")?
-                    .to_owned(),
-            ),
-            ..Default::default()
-        };
+        let path_provider = ManualPathProvider::default();
+        path_provider.set_path(path);
 
-        let socket = network_stack
-            .bind_udp(0)
-            .context("Failed to bind UDP socket for CRPC client")?
-            .into_path_aware(ManualPathProvider::default());
-
-        // Set the path to be used in the packet
-        socket.path_provider.set_path(path);
-
-        let socket = Arc::new(socket);
-
-        let client_fut = CrpcClient::with_quic_config(
-            ScionSocketAddr::new(dst_ia.into(), dst_addr.ip().into(), dst_addr.port()),
-            socket,
-            None, // XXX: Peer validation is disabled
-            None,
-            quic_config,
-        );
-
-        let client = match tokio::time::timeout(timeout, client_fut).await {
-            Ok(Ok(client)) => client,
-            Ok(Err(e)) => bail!("Failed to create CRPC client: {e}"),
-            Err(_) => bail!("Timed out while creating CRPC client"),
-        };
-
-        let url = addr_to_http_url(dst_addr);
+        let client = PsCrpcClient::connect(
+            timeout,
+            network_stack,
+            dst_ia,
+            dst_addr,
+            path_provider,
+            cert_chain,
+            cert_temp_dir,
+        )
+        .await
+        .context("Failed to create CRPC client")?;
 
         Ok(Self {
             client,
-            base_url: url,
+            base_url: addr_to_http_url(dst_addr),
         })
     }
 
@@ -133,174 +93,5 @@ impl ControlServiceCrpcClient {
             Ok(Err(e)) => bail!("Failed to send beacon request through CRPC client: {e}"),
             Err(_) => bail!("Timed out while sending beacon request through CRPC client"),
         }
-    }
-}
-
-/// A simple implementation of a path provider for the network simulator that allows manually
-/// setting the path to be returned.
-#[derive(Debug, Default)]
-pub struct ManualPathProvider {
-    /// The path to be returned by this path provider. Wrapped in a Mutex to allow mutation.
-    pub path: Mutex<Option<DataPlanePath>>,
-}
-
-impl ManualPathProvider {
-    /// Sets the path to be returned by this path provider.
-    pub fn set_path(&self, path: DataPlanePath) {
-        self.path.lock().unwrap().replace(path);
-    }
-}
-
-impl NetSimPathProvider for ManualPathProvider {
-    fn get_path(
-        &self,
-        _src_as: IsdAsn,
-        _dst_as: IsdAsn,
-    ) -> Option<scion_proto::path::DataPlanePath> {
-        self.path.lock().unwrap().clone()
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct MirroringPathProvider {
-    /// Maps (src AS, dst AS) to the path to be used for packets from src AS to dst AS
-    pub paths: Mutex<HashMap<(IsdAsn, IsdAsn), DataPlanePath>>,
-}
-
-impl MirroringPathProvider {
-    /// Sets the path to be returned for packets from src AS to dst AS.
-    ///
-    /// This path may be overridden when the path provider is informed of a path from src AS to dst
-    /// AS through `inform_path`.
-    #[allow(dead_code)]
-    pub fn set_path(&self, src_as: IsdAsn, dst_as: IsdAsn, path: DataPlanePath) {
-        self.paths.lock().unwrap().insert((src_as, dst_as), path);
-    }
-}
-
-impl NetSimPathProvider for MirroringPathProvider {
-    fn inform_path(&self, src_as: IsdAsn, dst_as: IsdAsn, path: &DataPlanePath) {
-        let mut reversed_path = path.clone();
-        let Ok(_) = reversed_path.reverse() else {
-            tracing::debug!(src_as = %src_as, dst_as = %dst_as, "Failed to reverse path, not setting path for MirroringPathProvider");
-            return;
-        };
-        self.paths
-            .lock()
-            .unwrap()
-            .insert((dst_as, src_as), reversed_path.clone());
-    }
-
-    fn get_path(&self, src_as: IsdAsn, dst_as: IsdAsn) -> Option<DataPlanePath> {
-        self.paths.lock().unwrap().get(&(src_as, dst_as)).cloned()
-    }
-}
-
-/// Axum-based HTTP/3 server using a GenericScionUdpSocket
-pub struct AxumH3Server;
-
-impl AxumH3Server {
-    /// Serves the given Axum app over HTTP/3 using the provided socket. This function will run
-    /// until the server is stopped (e.g., by dropping the socket or shutting down the runtime
-    pub async fn serve(
-        sock: Arc<dyn GenericScionUdpSocket>,
-        app: axum::Router,
-        quic_config: squiche::Config,
-    ) -> anyhow::Result<()> {
-        let quic_server = QuicServer::new(sock, quic_config)?;
-
-        let mut h3_server = H3Server::new(quic_server);
-
-        while let Some(conn) = h3_server.accept().await {
-            tracing::debug!("Accepted new H3 connection");
-            // Dispatch a task to handle the connection
-            let app_clone = app.clone();
-            tokio::spawn(async move {
-                match Self::handle_client_connection(conn, app_clone).await {
-                    Ok(_) => tracing::debug!("Client connection closed gracefully"),
-                    Err(e) => tracing::error!(?e, "Client connection closed with error"),
-                }
-            });
-        }
-
-        tracing::info!("Stopping CRPC server");
-
-        Ok(())
-    }
-
-    /// Handles a single client connection, processing incoming requests and sending responses using
-    /// the provided Axum app. This function will run until the connection is closed.
-    async fn handle_client_connection(
-        mut conn: H3ServerConnection,
-        app: axum::Router,
-    ) -> anyhow::Result<()> {
-        while let Some((req, responder)) = conn.handle_request().await {
-            let id = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)?
-                .as_millis();
-            tracing::debug!(?req, id, "CRPC server received request");
-            // Handle Requests concurrently
-            tokio::spawn({
-                let app = app.clone();
-                async move {
-                    match Self::handle_request(app, req, responder, id).await {
-                        Ok(_) => {}
-                        Err(e) => tracing::error!(?e, id, "Error handling request"),
-                    }
-                }
-            });
-        }
-
-        Ok(())
-    }
-
-    async fn handle_request(
-        app: axum::Router,
-        req: scion_sdk_quic_scion::h3::request::H3Request,
-        mut responder: scion_sdk_quic_scion::h3::server::H3ResponseSender,
-        id: u128,
-    ) -> Result<(), anyhow::Error> {
-        tracing::debug!(id, "CRPC server handling request");
-        let mut axum_request_builder = http::request::Builder::new()
-            .method(req.headers.method)
-            .uri(format!(
-                "{}://{}{}",
-                req.headers.scheme, req.headers.authority, req.headers.path
-            ));
-
-        for header in req.headers.headers.iter() {
-            axum_request_builder = axum_request_builder.header(header.name(), header.value());
-        }
-
-        let body = match req.body {
-            Some(body) => axum::body::Body::from(Bytes::from_owner(body)),
-            None => axum::body::Body::empty(),
-        };
-
-        let axum_request = axum_request_builder
-            .body(body)
-            .context("Failed to build HTTP request from H3 request")?;
-        let res = tower::ServiceExt::oneshot(app, axum_request).await?;
-
-        tracing::debug!(status = res.status().as_u16(), req_at = ?id, "CRPC server generated response");
-
-        let (parts, body) = res.into_parts();
-        let body_stream = std::pin::pin!(body.into_data_stream());
-
-        tracing::debug!(
-            status = parts.status.as_u16(),
-            id,
-            "CRPC server sending response"
-        );
-
-        match responder
-            .send_streaming_response(parts.status, &parts.headers, body_stream)
-            .await
-        {
-            Ok(_) => {}
-            Err(e) => tracing::error!(?e, "Failed to send response to client"),
-        }
-
-        Ok(())
     }
 }

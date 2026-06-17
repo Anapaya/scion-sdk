@@ -17,4 +17,5 @@ pub mod core;
 pub mod endhost;
 pub mod model;
 pub mod non_core;
+pub mod paths;
 pub mod types;

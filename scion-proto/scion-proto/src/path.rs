@@ -39,6 +39,7 @@ use std::{net::SocketAddr, ops::Deref};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use scion_protobuf::daemon::v1 as daemon_grpc;
+use sciparse::reexport::prost_types;
 use tracing::warn;
 
 use crate::{address::IsdAsn, packet::ByEndpoint, wire_encoding::WireDecode};
@@ -394,6 +395,139 @@ impl Path<Bytes> {
             isd_asn,
             metadata,
         })
+    }
+
+    /// Converts this `Path` into the GRPC representation.
+    pub fn into_grpc(self) -> daemon_grpc::Path {
+        let data_plane_path = match self.data_plane_path {
+            DataPlanePath::EmptyPath => vec![],
+            DataPlanePath::Standard(path) => path.raw().to_vec(),
+            DataPlanePath::Unsupported { .. } => {
+                warn!("Encoding unsupported path type as empty path");
+                vec![]
+            }
+        };
+
+        let (
+            interfaces,
+            mtu,
+            expiration,
+            latency,
+            bandwidth,
+            geo,
+            link_type,
+            internal_hops,
+            notes,
+            epic_auths,
+        ) = match self.metadata {
+            None => Default::default(),
+            Some(metadata) => {
+                let interfaces = metadata
+                    .interfaces
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|i| {
+                        daemon_grpc::PathInterface {
+                            isd_as: i.isd_asn.into(),
+                            id: i.id.into(),
+                        }
+                    })
+                    .collect();
+
+                let mtu = metadata.mtu.into();
+
+                let expiration = Some(prost_types::Timestamp {
+                    seconds: metadata.expiration.timestamp(),
+                    nanos: metadata.expiration.timestamp_subsec_nanos() as i32,
+                });
+
+                let latency = metadata
+                    .latency
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|d| {
+                        let d = d.unwrap_or_default();
+                        prost_types::Duration {
+                            seconds: d.num_seconds(),
+                            nanos: (d.num_nanoseconds().unwrap_or(0) % 1_000_000_000) as i32,
+                        }
+                    })
+                    .collect();
+
+                let bandwidth = metadata
+                    .bandwidth_kbps
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|b| b.map(|v| v.get()).unwrap_or(0))
+                    .collect();
+
+                let geo = metadata
+                    .geo
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|g| {
+                        let g = g.unwrap_or_default();
+                        daemon_grpc::GeoCoordinates {
+                            latitude: g.lat,
+                            longitude: g.long,
+                            address: g.address,
+                        }
+                    })
+                    .collect();
+
+                let link_type = metadata
+                    .link_type
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|lt| lt as i32)
+                    .collect();
+
+                let internal_hops = metadata.internal_hops.unwrap_or_default();
+
+                let notes = metadata.notes.unwrap_or_default();
+
+                let epic_auths = metadata.epic_auths.map(|ea| {
+                    daemon_grpc::EpicAuths {
+                        auth_phvf: ea.phvf.to_vec(),
+                        auth_lhvf: ea.lhvf.to_vec(),
+                    }
+                });
+
+                (
+                    interfaces,
+                    mtu,
+                    expiration,
+                    latency,
+                    bandwidth,
+                    geo,
+                    link_type,
+                    internal_hops,
+                    notes,
+                    epic_auths,
+                )
+            }
+        };
+
+        daemon_grpc::Path {
+            raw: data_plane_path,
+            interface: self.underlay_next_hop.map(|addr| {
+                daemon_grpc::Interface {
+                    address: Some(daemon_grpc::Underlay {
+                        address: addr.to_string(),
+                    }),
+                }
+            }),
+            interfaces,
+            mtu,
+            expiration,
+            latency,
+            bandwidth,
+            geo,
+            link_type,
+            internal_hops,
+            notes,
+            epic_auths,
+        }
     }
 
     /// Creates a new Path using the given path's bytes as backing storage
