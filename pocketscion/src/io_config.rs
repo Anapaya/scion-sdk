@@ -36,6 +36,7 @@ helper::io_config! {
     addr_map(endhost_api_discovery_api: EndhostApiDiscoveryApiId),
     addr_map(snap_control: SnapId),
     addr_map(snap_data_plane: SnapId),
+    addr_map(daemon_service: IsdAsn),
     addr_map_keyed(external_as_interface: (isd_asn: IsdAsn, interface_id: u16)),
     addr_map_keyed(network_forwarder: (isd_asn: IsdAsn, ip_addr: IpAddr)),
     addr_singleton(auth_server),

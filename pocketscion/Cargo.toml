@@ -63,6 +63,7 @@ serde_json = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tonic = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -80,6 +81,7 @@ x509-cert = { workspace = true }
 endhost-api-client = { workspace = true }
 ntest = { workspace = true }
 snap-tokens = { workspace = true }
+tonic = { workspace = true }
 
 [lints]
 workspace = true

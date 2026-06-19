@@ -554,6 +554,11 @@ impl StoreKeyDer {
         let pem = Pem::new("PRIVATE KEY", self.0.secret_der());
         pem::encode(&pem)
     }
+
+    /// Converts the StoreKeyDer to a vector of bytes
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.0.secret_der().to_vec()
+    }
 }
 impl Clone for StoreKeyDer {
     fn clone(&self) -> Self {

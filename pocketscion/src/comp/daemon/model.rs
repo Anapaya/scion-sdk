@@ -21,21 +21,21 @@ use scion_sdk_axum_connect_rpc::error::CrpcError;
 pub const SERVICE_PREFIX: &str = "proto.daemon.v1.DaemonService";
 
 /// Endpoint Path
-pub const PATH_PATHS: &str = "/PocketScionStatePaths";
+pub const PATH_PATHS: &str = "/Paths";
 /// Endpoint Path
-pub const PATH_AS: &str = "/PocketScionStateAS";
+pub const PATH_AS: &str = "/AS";
 /// Endpoint Path
-pub const PATH_INTERFACES: &str = "/PocketScionStateInterfaces";
+pub const PATH_INTERFACES: &str = "/Interfaces";
 /// Endpoint Path
-pub const PATH_SERVICES: &str = "/PocketScionStateServices";
+pub const PATH_SERVICES: &str = "/Services";
 /// Endpoint Path
-pub const PATH_NOTIFY_INTERFACE_DOWN: &str = "/PocketScionStateNotifyInterfaceDown";
+pub const PATH_NOTIFY_INTERFACE_DOWN: &str = "/NotifyInterfaceDown";
 /// Endpoint Path
-pub const PATH_DR_KEY_AS_HOST: &str = "/PocketScionStateDRKeyASHost";
+pub const PATH_DR_KEY_AS_HOST: &str = "/DRKeyASHost";
 /// Endpoint Path
-pub const PATH_DR_KEY_HOST_AS: &str = "/PocketScionStateDRKeyHostAS";
+pub const PATH_DR_KEY_HOST_AS: &str = "/DRKeyHostAS";
 /// Endpoint Path
-pub const PATH_DR_KEY_HOST_HOST: &str = "/PocketScionStateDRKeyHostHost";
+pub const PATH_DR_KEY_HOST_HOST: &str = "/DRKeyHostHost";
 
 /// Trait for the SCION Daemon service.
 #[async_trait::async_trait]

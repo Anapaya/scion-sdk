@@ -33,3 +33,17 @@ pub fn addr_to_http_url(addr: std::net::SocketAddr) -> url::Url {
         }
     }
 }
+
+/// Transform a [`std::net::SocketAddr`] into a [`url::Url`].
+pub fn addr_to_https_url(addr: std::net::SocketAddr) -> url::Url {
+    match addr {
+        std::net::SocketAddr::V4(addr) => {
+            url::Url::parse(&format!("https://{addr}"))
+                .expect("It is safe to format a SocketAddr as a URL")
+        }
+        std::net::SocketAddr::V6(addr) => {
+            url::Url::parse(&format!("https://[{}]:{}", addr.ip(), addr.port()))
+                .expect("It is safe to format a SocketAddr as a URL")
+        }
+    }
+}

@@ -17,20 +17,22 @@
 pub mod api;
 pub mod model;
 
-use std::{collections::BTreeMap, net::SocketAddr, str::FromStr, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, bail};
-use scion_proto::address::{IsdAsn, ServiceAddr};
-use scion_protobuf::daemon::v1::{self as proto, AsRequest};
+use scion_proto::address::IsdAsn;
+use scion_protobuf::daemon::v1::{
+    self as proto, AsRequest, daemon_service_server::DaemonServiceServer,
+};
 use scion_sdk_axum_connect_rpc::error::CrpcError;
-use scion_sdk_quic_scion::quic::config::QuicConfig;
 use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
+use tonic::service::Routes;
 use utoipa::ToSchema;
 
 use crate::{
-    comp::{daemon::model::DaemonService, sim_network_stack::NetSimStack},
+    comp::daemon::{api::grpc::DaemonGrpcApi, model::DaemonService},
     state::PocketScionState,
-    util::{crpc::server::AxumH3Server, path_providers::MirroringPathProvider},
 };
 
 /// SCION Daemon service implementation through PocketScion
@@ -43,76 +45,46 @@ pub struct PsDaemonService {
 
 impl PsDaemonService {
     /// Creates a new PsDaemonService with the given local ISD-AS and shared state.
-    pub fn start(
+    pub async fn start(
         isd_asn: scion_proto::address::IsdAsn,
         state: PocketScionState,
+        socket: TcpListener,
     ) -> anyhow::Result<Arc<PsDaemonService>> {
-        let self_state;
-        let cert_tmp_dir;
-        let key_pair;
         {
             let guard = state.read();
 
-            cert_tmp_dir = guard.cert_dir.clone();
-
-            self_state = guard
+            guard
                 .daemon_services
                 .get(&isd_asn)
-                .with_context(|| format!("No DaemonServiceState found for local IA {}", isd_asn))?
-                .clone();
-
-            key_pair = guard
-                .topology
-                .trust_store
-                .as_key_pair(&isd_asn)
-                .with_context(|| {
-                    format!(
-                        "Failed to get key pair for ISD-AS {} from topology trust store",
-                        isd_asn
-                    )
-                })?
-                .clone();
+                .with_context(|| format!("No DaemonServiceState found for local IA {}", isd_asn))?;
         }
-
-        let addr = self_state.virtual_addr();
-
-        state
-            .add_svc_mapping(isd_asn, ServiceAddr::DAEMON, "QUIC".to_string(), addr)
-            .context("Failed to add service mapping for Daemon Service")?;
 
         let svc = Arc::new(PsDaemonService {
             local_ia: isd_asn,
             state: state.clone(),
         });
 
-        let app = axum::Router::new();
-        let app = api::nest_api(app, svc.clone());
+        let grpc_api = DaemonGrpcApi::new(svc.clone());
+
+        let grpc_router = Routes::new(DaemonServiceServer::new(grpc_api)).into_axum_router();
+        let app = axum::Router::new().merge(grpc_router);
 
         // Start the server
-        let stack = NetSimStack::bind(state.clone(), isd_asn, addr.ip(), 100)?;
-        let sock = stack
-            .bind_udp(addr.port())?
-            .into_path_aware(MirroringPathProvider::default());
 
-        let server_key = cert_tmp_dir
-            .get_or_create_key_file(&key_pair.key)
-            .context("Failed to get or create key file")?;
-        let server_cert = cert_tmp_dir
-            .get_or_create_cert_file(&[key_pair.cert])
-            .context("Failed to get or create cert file")?;
+        let addr = socket
+            .local_addr()
+            .context("Failed to get local address of TCP listener")?;
+        let listener = socket
+            .into_std()
+            .context("Failed to convert TCP listener to std")?;
 
-        let conf = QuicConfig {
-            verify_peer: false,
-            ..Default::default()
-        };
-
-        let mut quiche_conf = conf.to_quiche_config()?;
-        quiche_conf.load_cert_chain_from_pem_file(server_cert.to_str().unwrap())?;
-        quiche_conf.load_priv_key_from_pem_file(server_key.to_str().unwrap())?;
+        // SCION Daemon uses plaintext HTTP/2
+        let server =
+            axum_server::from_tcp(listener).context("Failed to create server from TCP listener")?;
 
         tokio::task::spawn(async move {
             tracing::info!(%isd_asn, %addr, "Daemon service listening");
-            match AxumH3Server::serve(Arc::new(sock), app, quiche_conf).await {
+            match server.serve(app.into_make_service()).await {
                 Ok(_) => tracing::info!("Daemon service stopped gracefully"),
                 Err(e) => tracing::error!("Daemon service stopped with error: {:?}", e),
             }
@@ -270,35 +242,18 @@ impl DaemonService for PsDaemonService {
 
 /// State of the SCION Daemon service, stored in the shared PocketScion state.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
-pub struct DaemonServiceState {
-    /// The virtual address of the SCION Daemon service in the AS
-    #[schema(value_type = String, example = "[fd3a:9b6c:1f20:0003::]:4000")]
-    virtual_address: SocketAddr,
-}
+pub struct DaemonServiceState;
 
 impl Default for DaemonServiceState {
     fn default() -> Self {
-        Self {
-            virtual_address: std::net::SocketAddr::from_str("[fd3a:9b6c:1f20:0003::]:4000")
-                .expect("Failed to parse hardcoded Daemon IP address"),
-        }
+        Self
     }
 }
 
 impl DaemonServiceState {
     /// Creates a new DaemonServiceState with default values.
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the virtual address of the SCION Daemon service.
-    pub fn set_virtual_addr(&mut self, virtual_address: SocketAddr) {
-        self.virtual_address = virtual_address;
-    }
-
-    /// Returns the virtual address of the SCION Daemon service.
-    pub fn virtual_addr(&self) -> SocketAddr {
-        self.virtual_address
+        Self
     }
 }
 

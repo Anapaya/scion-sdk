@@ -112,7 +112,7 @@ impl PocketScionRuntime {
         Self::start_endhost_discovery_apis(&state, &io_config).await?;
         Self::start_external_ases(&state, &io_config).await?;
         Self::start_control_services(&state)?;
-        Self::start_daemon_services(&state)?;
+        Self::start_daemon_services(&state, &io_config).await?;
         Self::start_router_sockets(&mut join_set, &state, &io_config).await?;
         Self::start_network_forwarders(&mut join_set, &state, &io_config).await?;
         Self::start_auth_server(&mut join_set, &cancel_token, &state, &io_config).await?;
@@ -453,10 +453,23 @@ impl PocketScionRuntime {
     }
 
     /// Spawns a daemon service task for each configured ISD-AS.
-    fn start_daemon_services(pstate: &PocketScionState) -> anyhow::Result<()> {
+    async fn start_daemon_services(
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
         for (isd_as, _) in pstate.daemon_services() {
+            let tcp_listener = Self::bind_tcp_or_random(
+                io_config.daemon_service_addr(isd_as),
+                |addr| {
+                    io_config.set_daemon_service_addr(isd_as, addr);
+                },
+                format_args!("daemon service {isd_as}"),
+            )
+            .await?;
+
             let pstate = pstate.clone();
-            PsDaemonService::start(isd_as, pstate)
+            PsDaemonService::start(isd_as, pstate, tcp_listener)
+                .await
                 .with_context(|| format!("Failed to start Daemon Service for ISD-AS {isd_as}"))?;
         }
 

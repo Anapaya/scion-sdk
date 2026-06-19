@@ -154,7 +154,7 @@ tokio = { version = "1.45", features = ["full"] }
 # exercise the squiche-based server endpoint against an established peer.
 tokio-quiche = { version = "0.19", default-features = false }
 tokio-util = "0.7"
-tonic = "0.14"
+tonic = { version = "0.14", features = ["router"] }
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = { version = "0.5", features = ["limit", "load-shed", "timeout"] }
