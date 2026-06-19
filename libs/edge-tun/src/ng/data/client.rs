@@ -18,7 +18,7 @@
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ana_gotatun::{
@@ -36,6 +36,80 @@ use super::{
     common::EdgePacketBufPool,
 };
 use crate::fragmenting::metrics::{DefragmentMetrics, FragmentMetrics};
+
+// Minimum interval between logging underlay send I/O errors.
+//
+// Mirrors quinn's `IO_ERROR_LOG_INTERVAL`: when the underlay is failing, every
+// outgoing packet produces the same error, so we rate-limit the log to avoid
+// flooding it with one line per dropped packet.
+const SEND_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+// A [`GenericScionUdpSocket`] wrapper that suppresses underlay send I/O
+// errors.
+//
+// Following quinn's approach (see quinn-udp's `log_sendmsg_error`), a failed
+// `send_to` is treated as a lost datagram rather than a fatal error.
+//
+// Errors are logged at most once per [`SEND_ERROR_LOG_INTERVAL`].
+struct SendErrorTolerantSocket {
+    inner: Arc<dyn GenericScionUdpSocket>,
+    /// When the last send error was logged, or `None` if none has been logged
+    /// yet. Used to throttle logging to [`SEND_ERROR_LOG_INTERVAL`].
+    last_logged_error: Mutex<Option<Instant>>,
+}
+
+impl SendErrorTolerantSocket {
+    fn new(inner: Arc<dyn GenericScionUdpSocket>) -> Self {
+        Self {
+            inner,
+            last_logged_error: Mutex::new(None),
+        }
+    }
+
+    /// Logs `err` at most once per [`SEND_ERROR_LOG_INTERVAL`].
+    fn log_send_error_throttled(&self, err: &BoxedSocketError, destination: ScionSocketAddr) {
+        let now = Instant::now();
+        let mut last = self.last_logged_error.lock().expect("lock poisoned");
+        let should_log =
+            last.is_none_or(|t| now.saturating_duration_since(t) > SEND_ERROR_LOG_INTERVAL);
+        if should_log {
+            *last = Some(now);
+            tracing::warn!(
+                error = ?err,
+                ?destination,
+                "underlay send error; dropping packet (logged at most once per {}s)",
+                SEND_ERROR_LOG_INTERVAL.as_secs(),
+            );
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl GenericScionUdpSocket for SendErrorTolerantSocket {
+    async fn send_to(
+        &self,
+        payload: &[u8],
+        destination: ScionSocketAddr,
+    ) -> Result<(), BoxedSocketError> {
+        if let Err(e) = self.inner.send_to(payload, destination).await {
+            self.log_send_error_throttled(&e, destination);
+        }
+        // Always report success: a failed send is a dropped datagram, not a fatal
+        // error. Reconnect, if needed, is driven by the WireGuard connection timer.
+        Ok(())
+    }
+
+    async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
+        self.inner.recv_from(buf).await
+    }
+
+    fn local_addr(&self) -> ScionSocketAddr {
+        self.inner.local_addr()
+    }
+}
 
 /// Error when driving the edge-tun WireGuard client.
 #[derive(Debug, thiserror::Error)]
@@ -238,6 +312,10 @@ impl EdgeTunClient {
             fragmenter_metrics,
             defragmenter_metrics,
         )));
+        // Wrap the underlay socket to log but not forward send errors. Send IO
+        // errors on UDP sockets are transient. E.g. on Windows an interface
+        // flapping results in an error AddrNotAvailable.
+        let socket: Arc<dyn GenericScionUdpSocket> = Arc::new(SendErrorTolerantSocket::new(socket));
         let (packet_sender, packet_receiver) = async_channel::bounded(receive_queue_capacity);
         let driver = ClientDriver::new(
             state.clone(),
