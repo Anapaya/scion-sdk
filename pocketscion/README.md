@@ -6,5 +6,3 @@ full-fledged SCION network.
 
 PocketSCION supports both the UDP and SNAP underlays, allowing you to test your applications in a
 variety of network scenarios.
-
-You can find examples on how to use PocketSCION for local testing in the examples directory.
