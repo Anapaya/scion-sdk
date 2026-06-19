@@ -12,8 +12,10 @@ keywords = ["HTTP3", "QUIC", "SCION"]
 # global dependencies
 async-trait = { workspace = true }
 buffer-pool = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+http-body = { workspace = true }
 prometheus = { workspace = true }
 ring = { workspace = true }
 squiche = { workspace = true }

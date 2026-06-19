@@ -224,8 +224,19 @@ async fn wait_until_client_closed(mut client: TestClient) {
 ///
 /// All remaining connections are unrestricted and are closed by the client.
 #[test_log::test(tokio::test)]
-#[ntest::timeout(10_000)]
+#[ntest::timeout(30_000)]
 async fn client_closes_connections_with_partial_handshakes() {
+    // This test depends on real-time idle-timeout cleanup of the half-open and
+    // isolated connections, so it needs more headroom than the connect-only
+    // tests; match the budget the other multi-connection tests here use (30s).
+    //
+    // Use a small, dedicated connection count rather than the shared
+    // `NUM_CONNECTIONS` (32): the partial-handshake behavior only needs the 3
+    // restricted connections plus a few unrestricted ones, and fewer concurrent
+    // handshakes mean far less contention and UDP-buffer loss on the single
+    // shared server socket under load.
+    const NUM_CONNECTIONS: usize = 8;
+
     // Short idle timeout so the half-open (2nd) and isolated-but-established
     // (3rd) connections time out quickly.
     let idle_timeout = Duration::from_secs(2);

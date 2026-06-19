@@ -4816,9 +4816,11 @@ version = "0.5.2"
 dependencies = [
  "async-trait",
  "buffer-pool",
+ "bytes",
  "chacha20 0.10.0",
  "futures",
  "http",
+ "http-body",
  "ntest",
  "prometheus",
  "rcgen",

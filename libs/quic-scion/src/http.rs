@@ -12,9 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! HTTP/3 over SCION transport.
+//! Trait for HTTP services.
 
-pub mod client;
-pub mod request;
-pub mod server;
-pub mod service;
+use http::{Request, Response};
+use http_body::Body as HttpBody;
+
+/// Trait for HTTP services.
+pub trait HttpService {
+    /// The request body type.
+    type Body: HttpBody;
+    /// The response body type.
+    type ResponseBody: HttpBody;
+
+    /// Calls the HTTP service with the given request and returns a future that
+    /// resolves to a response.
+    fn call(
+        &self,
+        req: Request<Self::Body>,
+    ) -> impl std::future::Future<Output = Response<Self::ResponseBody>> + Send;
+}

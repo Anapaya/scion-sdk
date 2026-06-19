@@ -39,6 +39,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    app::{NoApp, QuicScionApplication},
     quic::connection::{
         ConnectionHandle, IsdAsnPair, QuicScionConn, QuicScionConnDriver, ScionSendInfo,
     },
@@ -306,6 +307,7 @@ impl<T> QuicScionServerEndpoint<T> {
                     to: self.local_addr.isd_asn(),
                 },
                 inner: conn,
+                app: NoApp,
             }),
         );
         self.metrics
@@ -394,11 +396,15 @@ impl<T> QuicScionServerEndpoint<T> {
 /// * ... dispatching incoming packets to the endpoint state machine.
 /// * ... launching connection drivers for established connections.
 /// * ... (de)registering connections with the endpoint.
-pub struct QuicScionEndpointDriver<F> {
+pub struct QuicScionEndpointDriver<F, A = NoApp>
+where
+    A: QuicScionApplication,
+{
     established_conn: F,
+    config: A::Config,
     socket: Arc<dyn GenericScionUdpSocket>,
     local_addr: SocketAddr,
-    quic_scion_endpoint: QuicScionServerEndpoint<ConnectionHandle>,
+    quic_scion_endpoint: QuicScionServerEndpoint<ConnectionHandle<A>>,
     send_buf: Box<[u8; DEFAULT_SEND_BUF_SIZE]>,
     recv_buf: Box<[u8; DEFAULT_RECV_BUF_SIZE]>,
     spawned_connections: FuturesUnordered<JoinWithId<Result<(), BoxedSocketError>>>,
@@ -407,11 +413,19 @@ pub struct QuicScionEndpointDriver<F> {
 const DEFAULT_SEND_BUF_SIZE: usize = 65535;
 const DEFAULT_RECV_BUF_SIZE: usize = 65535;
 
-impl<F> QuicScionEndpointDriver<F>
+impl<F, A> QuicScionEndpointDriver<F, A>
 where
-    F: Fn(ConnectionHandle) + Send + Sync,
+    A: QuicScionApplication + 'static,
+    A::Config: Default,
+    F: Fn(ConnectionHandle<A>) + Send + Sync,
 {
-    /// Creates a new [`QuicScionEndpointDriver`].
+    /// Creates a new [`QuicScionEndpointDriver`] using a default application
+    /// configuration.
+    ///
+    /// The application protocol `A` run by each connection is determined by the
+    /// handle type accepted by `established_conn` (and stored by
+    /// `quic_scion_endpoint`); it defaults to [`NoApp`] for plain QUIC. Use
+    /// [`Self::with_config`] to provide a non-default configuration.
     ///
     /// ## Parameters
     ///
@@ -423,9 +437,45 @@ where
     ///
     /// This panics if the local address is not an IPv4 or IPv6 address.
     pub fn new(
-        quic_scion_endpoint: QuicScionServerEndpoint<ConnectionHandle>,
+        quic_scion_endpoint: QuicScionServerEndpoint<ConnectionHandle<A>>,
         scion_udp_socket: Arc<dyn GenericScionUdpSocket>,
         established_conn: F,
+    ) -> Self {
+        Self::with_config(
+            quic_scion_endpoint,
+            scion_udp_socket,
+            established_conn,
+            A::Config::default(),
+        )
+    }
+}
+
+impl<F, A> QuicScionEndpointDriver<F, A>
+where
+    A: QuicScionApplication + 'static,
+    F: Fn(ConnectionHandle<A>) + Send + Sync,
+{
+    /// Creates a new [`QuicScionEndpointDriver`].
+    ///
+    /// Each connection's application instance is constructed via
+    /// [`QuicScionApplication::on_established`], passing `config` by reference,
+    /// once the connection is established.
+    ///
+    /// ## Parameters
+    ///
+    /// * `quic_scion_endpoint` the endpoint state machine to drive.
+    /// * `scion_udp_socket` the socket used to send and receive packets.
+    /// * `established_conn` is invoked once for every newly established connection.
+    /// * `config` is the shared application configuration.
+    ///
+    /// ## Panics
+    ///
+    /// This panics if the local address is not an IPv4 or IPv6 address.
+    pub fn with_config(
+        quic_scion_endpoint: QuicScionServerEndpoint<ConnectionHandle<A>>,
+        scion_udp_socket: Arc<dyn GenericScionUdpSocket>,
+        established_conn: F,
+        config: A::Config,
     ) -> Self {
         let Some(local_addr) = scion_udp_socket.local_addr().socket_addr() else {
             panic!("local address is not an IPv4 or IPv6 address");
@@ -434,6 +484,7 @@ where
         Self {
             quic_scion_endpoint,
             established_conn,
+            config,
             socket: scion_udp_socket,
             local_addr,
             send_buf: Box::new([0u8; DEFAULT_SEND_BUF_SIZE]),
@@ -543,7 +594,21 @@ where
             }
             Ok(RecvOutcome::EstablishedConn(c)) => {
                 let conn_id = c.inner.source_id().into_owned();
-                let conn_handle = ConnectionHandle::new(Notify::new(), *c);
+                // The endpoint establishes connections without an application
+                // layer; construct the application now that the connection is
+                // established and attach it.
+                let QuicScionConn {
+                    asn_pair,
+                    mut inner,
+                    ..
+                } = *c;
+                let app = A::on_established(&mut inner, &self.config);
+                let conn = QuicScionConn {
+                    asn_pair,
+                    inner,
+                    app,
+                };
+                let conn_handle = ConnectionHandle::new(Notify::new(), conn);
                 let jh = tokio::spawn({
                     let driver = QuicScionConnDriver::new(conn_handle.clone(), self.socket.clone());
                     async move { driver.run().await }

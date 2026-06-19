@@ -331,6 +331,97 @@ impl TrafficGate for IncomingPerPeerLimitGate {
     }
 }
 
+/// A [`TrafficGate`] that rate-limits *incoming* packets per peer, where each
+/// peer declares its own budget in-band.
+///
+/// The first incoming packet from a previously unseen peer is interpreted as a
+/// *config packet*: its payload is a big-endian [`u64`] budget (see
+/// [`encode_packet_budget`]). The config packet itself is always dropped (never
+/// forwarded to the server). The budget *counts that config packet*, so:
+///
+/// * `budget == 0` — the peer is unrestricted; every later packet passes.
+/// * `budget == 1` — no further packet passes after the config packet.
+/// * `budget == n` (`n >= 1`) — the next `n - 1` packets pass, the rest are dropped.
+///
+/// Because the budget travels in-band rather than being assigned by observation
+/// order, connections no longer need to be driven sequentially: they can run
+/// concurrently and still be reasoned about by their declared budget. This is
+/// the concurrent counterpart to [`IncomingPerPeerLimitGate`].
+pub struct ConfiguredPerPeerLimitGate {
+    /// Per-peer remaining budget, established from the peer's config packet.
+    state: StdMutex<HashMap<SocketAddr, PeerPacketBudget>>,
+}
+
+/// The remaining incoming-packet budget for a single peer.
+enum PeerPacketBudget {
+    /// At most this many further (post-config) packets may pass.
+    Limited(usize),
+    /// Every further packet passes.
+    Unlimited,
+}
+
+impl ConfiguredPerPeerLimitGate {
+    /// Creates a new gate. Peers are unknown until they send their config
+    /// packet.
+    pub fn new() -> Self {
+        Self {
+            state: StdMutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Default for ConfiguredPerPeerLimitGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Encodes a packet budget into the config-packet payload consumed by
+/// [`ConfiguredPerPeerLimitGate`].
+pub fn encode_packet_budget(budget: u64) -> [u8; 8] {
+    budget.to_be_bytes()
+}
+
+impl TrafficGate for ConfiguredPerPeerLimitGate {
+    fn manipulate(&self, dir: Direction, peer: ScionSocketAddr, packet: &mut [u8]) -> usize {
+        if dir == Direction::Outgoing {
+            return 1;
+        }
+
+        let Some(key) = peer.socket_addr() else {
+            // Can't identify the peer; let the packet through.
+            return 1;
+        };
+
+        let mut state = self.state.lock().unwrap();
+        match state.get_mut(&key) {
+            None => {
+                // First packet from this peer: its config packet. Parse the
+                // declared budget, record the remaining post-config budget, and
+                // drop the config packet itself.
+                let budget = packet
+                    .get(..8)
+                    .map(|bytes| u64::from_be_bytes(bytes.try_into().unwrap()))
+                    .unwrap_or(0);
+                let remaining = if budget == 0 {
+                    PeerPacketBudget::Unlimited
+                } else {
+                    // The config packet counts towards the budget.
+                    PeerPacketBudget::Limited((budget - 1) as usize)
+                };
+                state.insert(key, remaining);
+                0
+            }
+            Some(PeerPacketBudget::Unlimited) => 1,
+            Some(PeerPacketBudget::Limited(0)) => 0,
+            Some(PeerPacketBudget::Limited(remaining)) => {
+                *remaining -= 1;
+                1
+            }
+        }
+    }
+}
+
 /// A [`GenericScionUdpSocket`] backed by a real tokio [`UdpSocket`].
 ///
 /// It is used to test a standard (non-SCION) QUIC implementation, such as
@@ -632,6 +723,37 @@ pub async fn connect_test_client_with_config(
 
     // The server endpoint negotiates HTTP/3 (ALPN `h3`), so drive the client
     // with the ready-made H3 application.
+    let (h3_driver, controller) = ClientH3Driver::new(Http3Settings::default());
+    let conn = connect_with_config(socket, Some("localhost"), &params, h3_driver).await?;
+
+    Ok(TestClient { conn, controller })
+}
+
+/// Like [`connect_test_client_with_config`], but first sends a raw "config"
+/// datagram declaring this connection's incoming-packet `budget` before the
+/// QUIC handshake begins.
+///
+/// The config packet is sent from the same socket (hence the same source
+/// address) that subsequently carries the QUIC traffic, so a
+/// [`ConfiguredPerPeerLimitGate`] on the server can associate the budget with
+/// this peer. The send is awaited before the handshake starts, and UDP
+/// preserves per-flow ordering on localhost, so the gate observes the config
+/// packet first. See [`ConfiguredPerPeerLimitGate`] for the budget semantics
+/// (the config packet counts towards the budget).
+pub async fn connect_test_client_with_budget(
+    server_addr: SocketAddr,
+    config: &QuicConfig,
+    budget: u64,
+) -> QuicResult<TestClient> {
+    let udp = UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+    udp.connect(server_addr).await?;
+
+    // Declare the budget before any QUIC packet leaves this socket.
+    udp.send(&encode_packet_budget(budget)).await?;
+
+    let socket = Socket::try_from(udp)?;
+
+    let params = ConnectionParams::new_client(quic_settings_from(config), None, Hooks::default());
     let (h3_driver, controller) = ClientH3Driver::new(Http3Settings::default());
     let conn = connect_with_config(socket, Some("localhost"), &params, h3_driver).await?;
 

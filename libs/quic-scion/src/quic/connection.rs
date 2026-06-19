@@ -16,7 +16,7 @@
 
 use std::{
     pin::Pin,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, Weak},
     time::Instant,
 };
 
@@ -24,7 +24,10 @@ use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAs
 use squiche::{Connection, SendInfo};
 use tokio::sync::Notify;
 
-use crate::socket::{BoxedSocketError, GenericScionUdpSocket};
+use crate::{
+    app::{NoApp, QuicScionApplication, Wakeups},
+    socket::{BoxedSocketError, GenericScionUdpSocket},
+};
 
 /// A driver for a single established SCION QUIC connection.
 ///
@@ -38,19 +41,19 @@ use crate::socket::{BoxedSocketError, GenericScionUdpSocket};
 /// packets are fed into the connection by other tasks (which then call
 /// [`ConnectionHandle::notify`]), while the driver flushes outbound packets and
 /// drives the connection's timers until it is closed.
-pub struct QuicScionConnDriver {
-    conn_handle: ConnectionHandle,
+pub struct QuicScionConnDriver<A = NoApp> {
+    conn_handle: ConnectionHandle<A>,
     socket: Arc<dyn GenericScionUdpSocket>,
 }
 
-impl QuicScionConnDriver {
+impl<A: QuicScionApplication> QuicScionConnDriver<A> {
     /// Create a new connection driver.
     ///
     /// ## Parameters
     ///
     /// * `conn_handle` handle to the connection to drive.
     /// * `socket` is used to dispatch outgoing packets.
-    pub fn new(conn_handle: ConnectionHandle, socket: Arc<dyn GenericScionUdpSocket>) -> Self {
+    pub fn new(conn_handle: ConnectionHandle<A>, socket: Arc<dyn GenericScionUdpSocket>) -> Self {
         Self {
             conn_handle,
             socket,
@@ -85,13 +88,22 @@ impl QuicScionConnDriver {
         tokio::pin!(timeout);
         let mut timeout_fired = false;
         let mut timeout_inst: Option<Instant> = None;
-        Self::set_timeout(
-            &mut timeout_inst,
-            &mut timeout,
-            self.conn_handle.lock().inner.timeout_instant(),
-        );
+        {
+            // Hand the application a (weak) handle to its own connection so it
+            // can build bodies / spawn tasks that access the connection, then
+            // arm the initial timeout.
+            let handle = self.conn_handle.clone();
+            let mut conn = handle.lock();
+            conn.app.bind(&handle);
+            Self::set_timeout(
+                &mut timeout_inst,
+                &mut timeout,
+                conn.inner.timeout_instant(),
+            );
+        }
         /* END bookkeeping */
 
+        let mut wakeups = Wakeups::default();
         while !closed {
             // We assume that .send_to is cancel-safe.
             let send = async {
@@ -123,9 +135,16 @@ impl QuicScionConnDriver {
                     conn.inner.on_timeout();
                     timeout_fired = false;
                 }
+                // Step the application state machine in lockstep with the
+                // connection: after timeouts are processed, before packets are
+                // flushed.
+                conn.update_app(&mut wakeups);
                 if transmit_size == 0 {
                     // We only break the loop if the transmit buffer is empty.
                     closed = conn.inner.is_closed();
+                    if closed {
+                        conn.on_closed(&mut wakeups);
+                    }
                     match conn.send(send_buf.as_mut()) {
                         // Pacing is currently ignored.
                         Ok((n, s)) => {
@@ -145,6 +164,9 @@ impl QuicScionConnDriver {
                 );
                 /* END critical section */
             }
+            // Fire consumer wakeups after the connection lock is dropped so the
+            // woken tasks don't immediately bounce off the mutex.
+            wakeups.fire();
         }
         Ok(())
     }
@@ -170,15 +192,25 @@ impl QuicScionConnDriver {
 /// endpoint that routes inbound packets to it, and any readers/writers. All
 /// access to the connection state goes through [`Self::lock`]; state changes
 /// are announced to the driver via [`Self::notify`].
-#[derive(Clone)]
-pub struct ConnectionHandle {
-    conn: Arc<Mutex<QuicScionConn>>,
+pub struct ConnectionHandle<A = NoApp> {
+    conn: Arc<Mutex<QuicScionConn<A>>>,
     notify: Arc<Notify>,
 }
 
-impl ConnectionHandle {
+// Manual `Clone` impl: cloning a handle only clones the shared `Arc`s, so it
+// must not require `A: Clone` (which `#[derive(Clone)]` would impose).
+impl<A> Clone for ConnectionHandle<A> {
+    fn clone(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+            notify: self.notify.clone(),
+        }
+    }
+}
+
+impl<A> ConnectionHandle<A> {
     /// Creates a new handle owning `conn`, using `notify` to signal its driver.
-    pub fn new(notify: Notify, conn: QuicScionConn) -> Self {
+    pub fn new(notify: Notify, conn: QuicScionConn<A>) -> Self {
         Self {
             conn: Arc::new(Mutex::new(conn)),
             notify: Arc::new(notify),
@@ -189,8 +221,21 @@ impl ConnectionHandle {
     /// [`QuicScionConn`] state.
     ///
     /// Panics if the underlying mutex was poisoned.
-    pub fn lock(&self) -> MutexGuard<'_, QuicScionConn> {
+    pub fn lock(&self) -> MutexGuard<'_, QuicScionConn<A>> {
         self.conn.lock().unwrap()
+    }
+
+    /// Like [`Self::lock`], but recovers the guard if the mutex was poisoned by
+    /// a panic elsewhere instead of panicking.
+    ///
+    /// Intended for best-effort cleanup paths that run from a `Drop` guard,
+    /// where panicking again (e.g. on a poisoned lock) would abort the process
+    /// during unwinding. The recovered state may be inconsistent, so this must
+    /// only be used for teardown, never for normal operation.
+    pub fn lock_recovering(&self) -> MutexGuard<'_, QuicScionConn<A>> {
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Wakes the connection's driver so it can make progress (for example, to
@@ -204,23 +249,79 @@ impl ConnectionHandle {
     pub fn notified(&self) -> tokio::sync::futures::Notified<'_> {
         self.notify.notified()
     }
+
+    /// Returns a weak handle that does not keep the connection alive.
+    ///
+    /// Application state machines use this to reference their own connection
+    /// (for example, from spawned tasks or response bodies) without forming an
+    /// `Arc` cycle through the connection's stored application state.
+    pub fn downgrade(&self) -> WeakConnectionHandle<A> {
+        WeakConnectionHandle {
+            conn: Arc::downgrade(&self.conn),
+            notify: self.notify.clone(),
+        }
+    }
+}
+
+/// A weak counterpart to [`ConnectionHandle`].
+///
+/// Holds a weak reference to the connection, so it does not keep it alive.
+/// [`Self::upgrade`] returns a live [`ConnectionHandle`] while the connection
+/// still exists.
+pub struct WeakConnectionHandle<A = NoApp> {
+    conn: Weak<Mutex<QuicScionConn<A>>>,
+    notify: Arc<Notify>,
+}
+
+impl<A> Clone for WeakConnectionHandle<A> {
+    fn clone(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+            notify: self.notify.clone(),
+        }
+    }
+}
+
+impl<A> WeakConnectionHandle<A> {
+    /// Upgrades to a strong [`ConnectionHandle`], or returns `None` if the
+    /// connection has already been dropped.
+    pub fn upgrade(&self) -> Option<ConnectionHandle<A>> {
+        Some(ConnectionHandle {
+            conn: self.conn.upgrade()?,
+            notify: self.notify.clone(),
+        })
+    }
 }
 
 /// The state of a SCION QUIC connection.
-pub struct QuicScionConn {
+pub struct QuicScionConn<A = NoApp> {
     /// Source/Dest ISD-ASN pair.
     pub asn_pair: IsdAsnPair,
     /// QUIC Connection.
     pub inner: Connection,
+    /// Application protocol driven in lockstep with the connection.
+    pub app: A,
 }
 
-impl QuicScionConn {
+impl<A> QuicScionConn<A> {
     /// Writes the next queued outgoing packet into `send_buf`, returning its
     /// length and the SCION send information for it.
     pub fn send(&mut self, send_buf: &mut [u8]) -> squiche::Result<(usize, ScionSendInfo)> {
         self.inner
             .send(send_buf)
             .map(|(n, s)| (n, ScionSendInfo::from_squiche(s, self.asn_pair.clone())))
+    }
+}
+
+impl<A: QuicScionApplication> QuicScionConn<A> {
+    /// Steps the application state machine, collecting consumer wakeups.
+    fn update_app(&mut self, wakeups: &mut Wakeups) {
+        self.app.update(&mut self.inner, wakeups);
+    }
+
+    /// Signals the application that the connection has been closed.
+    fn on_closed(&mut self, wakeups: &mut Wakeups) {
+        self.app.on_closed(wakeups);
     }
 }
 
