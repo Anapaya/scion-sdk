@@ -19,7 +19,7 @@ use std::{collections::BTreeMap, num::NonZeroU16};
 use chrono::Utc;
 
 use crate::{
-    network::scion::topology::{ScionAs, ScionLink, ScionLinkType, ScionTopology},
+    network::scion::topology::{ScionAs, ScionLink, ScionLinkType, ScionTopologyBuilder},
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
     util::topologies::{IA132, IA212, IA222, PsSetup, UnderlayType},
@@ -31,7 +31,7 @@ pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
     let mut pstate = PocketScionState::new(Utc::now());
 
     // Define the topology
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
     topo.add_as(ScionAs::new_core(IA212))
         .unwrap()
         .add_as(ScionAs::new_core(IA132))
@@ -39,7 +39,7 @@ pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
         .add_link(ScionLink::new(IA132, 1, ScionLinkType::Core, IA212, 3).unwrap())
         .unwrap();
 
-    pstate.set_topology(topo);
+    pstate.set_topology(topo.build().unwrap());
 
     // Create Endhost API
     let eh132 = pstate.add_endhost_api(vec![IA132]);
@@ -94,7 +94,7 @@ pub async fn two_path_topology(underlay: UnderlayType) -> PsSetup {
     let mut pstate = PocketScionState::new(Utc::now());
 
     // Define the topology
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
     topo.add_as(ScionAs::new_core(IA212))
         .unwrap()
         .add_as(ScionAs::new_core(IA132))
@@ -108,7 +108,7 @@ pub async fn two_path_topology(underlay: UnderlayType) -> PsSetup {
         .add_link(ScionLink::new(IA212, 4, ScionLinkType::Core, IA222, 2).unwrap())
         .unwrap();
 
-    pstate.set_topology(topo);
+    pstate.set_topology(topo.build().unwrap());
 
     // Create Endhost API
     let eh132 = pstate.add_endhost_api(vec![IA132]);

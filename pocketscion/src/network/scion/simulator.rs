@@ -348,14 +348,13 @@ mod tests {
     };
 
     use super::*;
-    use crate::network::scion::topology::ScionAs;
+    use crate::network::scion::topology::{ScionAs, ScionTopologyBuilder};
 
     #[test_log::test]
     fn should_successfully_route_on_existing_path() {
-        let mut topology = ScionTopology::new(); // Assume this creates a valid topology
+        let mut topo = ScionTopologyBuilder::new(); // Assume this creates a valid topology
 
-        topology
-            .add_as(ScionAs::new("1-1".parse().unwrap()))
+        topo.add_as(ScionAs::new("1-1".parse().unwrap()))
             .unwrap()
             .add_as(ScionAs::new("1-2".parse().unwrap()))
             .unwrap()
@@ -364,13 +363,14 @@ mod tests {
             .add_as(ScionAs::new("1-4".parse().unwrap()))
             .unwrap();
 
-        topology
-            .add_link("1-1#1 up_to 1-2#2".parse().unwrap())
+        topo.add_link("1-1#1 up_to 1-2#2".parse().unwrap())
             .unwrap()
             .add_link("1-2#3 up_to 1-3#4".parse().unwrap())
             .unwrap()
             .add_link("1-3#5 up_to 1-4#6".parse().unwrap())
             .unwrap();
+
+        let topology = topo.build().unwrap();
 
         let src_addr = ScionAddr::V4(ScionAddrV4::new(
             "1-1".parse().unwrap(),
@@ -415,7 +415,7 @@ mod tests {
     fn should_fail_to_route_if_path_is_broken() {
         // Note - kind of a mixed test as the mock impl needs to report that the path is broken,
         // otherwise the Network Sim would just throw an anyhow error
-        let mut topology = ScionTopology::new();
+        let mut topology = ScionTopologyBuilder::new();
 
         let failing_as = "1-2".parse().unwrap();
 
@@ -436,6 +436,8 @@ mod tests {
             // .unwrap()
             .add_link("1-3#5 up_to 1-4#6".parse().unwrap())
             .unwrap();
+
+        let topology = topology.build().unwrap();
 
         let src_addr = ScionAddr::V4(ScionAddrV4::new(
             "1-1".parse().unwrap(),
@@ -478,7 +480,7 @@ mod tests {
 
     #[test_log::test]
     fn should_iterate_as_expected() {
-        let mut topology = ScionTopology::new(); // Assume this creates a valid topology
+        let mut topology = ScionTopologyBuilder::new(); // Assume this creates a valid topology
 
         let as1 = ScionAs::new("1-1".parse().unwrap());
         let as2 = ScionAs::new("1-2".parse().unwrap());
@@ -502,6 +504,8 @@ mod tests {
             .unwrap()
             .add_link("1-3#5 up_to 1-4#6".parse().unwrap())
             .unwrap();
+
+        let topology = topology.build().unwrap();
 
         let src_addr = ScionAddr::V4(ScionAddrV4::new(as1.isd_as(), Ipv4Addr::new(1, 1, 1, 1)));
         let dst_addr = ScionAddr::V4(ScionAddrV4::new(as4.isd_as(), Ipv4Addr::new(2, 2, 2, 2)));

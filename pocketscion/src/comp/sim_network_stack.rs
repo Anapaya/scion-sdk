@@ -600,18 +600,18 @@ mod tests {
     use crate::{
         network::scion::{
             routing::ScionNetworkTime,
-            topology::{ScionAs, ScionTopology},
+            topology::{ScionAs, ScionTopologyBuilder},
         },
         state::PocketScionState,
     };
 
     fn setup_state(isd_as: IsdAsn) -> PocketScionState {
         let mut state = PocketScionState::new(Utc::now());
-        let mut topology = ScionTopology::new();
+        let mut topology = ScionTopologyBuilder::new();
         topology
             .add_as(ScionAs::new_core(isd_as))
             .expect("failed to add AS");
-        state.set_topology(topology);
+        state.set_topology(topology.build().expect("failed to build topology"));
         state
     }
 

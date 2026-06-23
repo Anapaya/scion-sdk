@@ -25,7 +25,7 @@ use utoipa::{
 };
 
 use crate::network::scion::{
-    topology::{ScionAs, ScionLink, ScionRouter, ScionTopology},
+    topology::{ScionAs, ScionLink, ScionRouter, ScionTopology, ScionTopologyBuilder},
     trust_store::TrustStore,
 };
 
@@ -42,7 +42,7 @@ impl TryFrom<ScionTopologyDto> for ScionTopology {
     type Error = anyhow::Error;
 
     fn try_from(value: ScionTopologyDto) -> Result<Self, Self::Error> {
-        let mut topo = ScionTopology::default();
+        let mut topo = ScionTopologyBuilder::new();
 
         for as_info in value.as_list {
             // Register the AS
@@ -57,9 +57,6 @@ impl TryFrom<ScionTopologyDto> for ScionTopology {
                 .context("error adding link to topology")?;
         }
 
-        topo.set_trust_store(value.trust_store)
-            .context("Topology trust store misconfigured")?;
-
         for (isd_as, routers) in value.routers {
             for router in routers {
                 topo.add_router(isd_as, router)
@@ -67,7 +64,10 @@ impl TryFrom<ScionTopologyDto> for ScionTopology {
             }
         }
 
-        Ok(topo)
+        // The serialized trust store is the complete, materialized trust store, so it is installed
+        // as-is rather than regenerated from the topology.
+        topo.build_with_trust_store(value.trust_store)
+            .context("Topology trust store misconfigured")
     }
 }
 
@@ -211,7 +211,7 @@ mod test {
 
     #[test]
     fn should_convert_to_from_domain_losslessly() {
-        let mut topo = ScionTopology::default();
+        let mut topo = ScionTopologyBuilder::new();
 
         let isd_asn1 = IsdAsn::from_str("1-ff00:0:110").unwrap();
         // Add an AS
@@ -233,6 +233,8 @@ mod test {
         // Add a link
         let link = ScionLink::from_str("1-ff00:0:110#1 core 1-ff00:0:111#1").unwrap();
         topo.add_link(link).expect("adding link to topology");
+
+        let topo = topo.build().expect("building topology");
 
         // Convert to state and back
         let state: ScionTopologyDto = topo.clone().into();

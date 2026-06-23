@@ -111,7 +111,7 @@ impl PocketScionRuntime {
 
         Self::start_endhost_discovery_apis(&state, &io_config).await?;
         Self::start_external_ases(&state, &io_config).await?;
-        Self::start_control_services(&state)?;
+        Self::start_control_services(&state, &io_config).await?;
         Self::start_daemon_services(&state, &io_config).await?;
         Self::start_router_sockets(&mut join_set, &state, &io_config).await?;
         Self::start_network_forwarders(&mut join_set, &state, &io_config).await?;
@@ -442,10 +442,29 @@ impl PocketScionRuntime {
     }
 
     /// Spawns a control service task for each configured ISD-AS.
-    fn start_control_services(pstate: &PocketScionState) -> anyhow::Result<()> {
-        for (isd_as, _) in pstate.control_services() {
+    async fn start_control_services(
+        pstate: &PocketScionState,
+        io_config: &IoConfig,
+    ) -> anyhow::Result<()> {
+        for (isd_as, cs_state) in pstate.control_services() {
+            let host_socket_listener = match cs_state.host_socket_enabled() {
+                true => {
+                    let io_config = io_config.clone();
+                    let listener = Self::bind_tcp_or_random(
+                        io_config.control_service_addr(isd_as),
+                        |addr| {
+                            io_config.set_control_service_addr(isd_as, addr);
+                        },
+                        format!("control service gRPC for ISD-AS {isd_as}"),
+                    )
+                    .await?;
+                    Some(listener)
+                }
+                false => None,
+            };
+
             let pstate = pstate.clone();
-            ControlService::start(isd_as, pstate)
+            ControlService::start(isd_as, pstate, host_socket_listener)
                 .with_context(|| format!("Failed to start Control Service for ISD-AS {isd_as}"))?;
         }
 

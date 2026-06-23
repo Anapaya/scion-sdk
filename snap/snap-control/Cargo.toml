@@ -26,7 +26,6 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-tonic = { workspace = true }
 tower = { workspace = true, features = ["limit", "buffer"] }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }

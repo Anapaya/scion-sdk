@@ -23,7 +23,7 @@ use ntest::timeout;
 use pocketscion::{
     network::scion::{
         routing::ScionNetworkTime,
-        topology::{ScionAs, ScionTopology},
+        topology::{ScionAs, ScionTopologyBuilder},
     },
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
@@ -48,10 +48,10 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
     let queue_size = 8;
 
     let mut state = PocketScionState::new(Utc::now());
-    let mut topology = ScionTopology::new();
+    let mut topology = ScionTopologyBuilder::new();
 
     topology.add_as(ScionAs::new_core(local_as))?;
-    state.set_topology(topology);
+    state.set_topology(topology.build()?);
 
     let external_socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
         .await

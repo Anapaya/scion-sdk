@@ -20,7 +20,7 @@ use anyhow::{Context, Ok};
 use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
-    network::scion::topology::{ScionAs, ScionTopology},
+    network::scion::topology::{ScionAs, ScionTopologyBuilder},
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
 };
@@ -42,7 +42,7 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     //
     // Setup minimal topology
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
     topo.add_as(ScionAs::new_core("1-1".parse()?))?
         .add_as(ScionAs::new_core("1-2".parse()?))?
         .add_as(ScionAs::new("1-3".parse()?))?
@@ -56,7 +56,7 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
         .add_link("2-1#2 down_to 2-2#1".parse()?)?
         .add_link("2-2#2 down_to 2-3#1".parse()?)?;
 
-    state.set_topology(topo);
+    state.set_topology(topo.build()?);
 
     //
     // Setup snaps

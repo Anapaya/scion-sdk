@@ -46,7 +46,9 @@ use crate::{
         },
         scion::{
             segment::registry::SegmentRegistry,
-            topology::{FastTopologyLookup, ScionAs, ScionLink, ScionTopology},
+            topology::{
+                FastTopologyLookup, ScionAs, ScionLink, ScionTopology, ScionTopologyBuilder,
+            },
         },
     },
     util::cert_tmp_dir::CertificateTempDir,
@@ -147,7 +149,7 @@ impl PocketScionStateInner {
 
     /// Returns a default topology
     fn default_topology() -> ScionTopology {
-        let mut topo = ScionTopology::new();
+        let mut topo = ScionTopologyBuilder::new();
         topo.add_as(ScionAs::new_core("1-ff00:0:132".parse().unwrap()))
             .unwrap()
             .add_as(ScionAs::new_core("2-ff00:0:212".parse().unwrap()))
@@ -164,7 +166,7 @@ impl PocketScionStateInner {
             )
             .unwrap();
 
-        topo
+        topo.build().expect("building default topology")
     }
 }
 

@@ -20,7 +20,9 @@ use axum::{Router, extract::State, routing::post};
 use chrono::Utc;
 use scion_proto::{address::IsdAsn, path::EXP_TIME_UNIT};
 use scion_protobuf::control_plane::v1::{
-    SegmentsRequest, SegmentsResponse, segments_response::Segments,
+    SegmentsRequest, SegmentsResponse,
+    segment_lookup_service_server::{SegmentLookupService, SegmentLookupServiceServer},
+    segments_response::Segments,
 };
 use scion_sdk_axum_connect_rpc::{
     error::{CrpcError, CrpcErrorCode},
@@ -40,6 +42,36 @@ pub fn nest_api(router: Router, service: PsSegmentLookupService) -> Router {
             .route("/Segments", post(lookup_segments))
             .with_state(service),
     )
+}
+
+/// Builds a tonic gRPC server for the segment lookup service.
+pub fn grpc_server(
+    service: PsSegmentLookupService,
+) -> SegmentLookupServiceServer<PsSegmentLookupGrpcService> {
+    SegmentLookupServiceServer::new(PsSegmentLookupGrpcService { inner: service })
+}
+
+/// Tonic gRPC adapter delegating to [PsSegmentLookupService].
+#[derive(Clone)]
+pub struct PsSegmentLookupGrpcService {
+    inner: PsSegmentLookupService,
+}
+
+#[tonic::async_trait]
+impl SegmentLookupService for PsSegmentLookupGrpcService {
+    async fn segments(
+        &self,
+        request: tonic::Request<SegmentsRequest>,
+    ) -> Result<tonic::Response<SegmentsResponse>, tonic::Status> {
+        let res = self
+            .inner
+            .lookup_segments(request.into_inner())
+            .await
+            .inspect_err(|e| tracing::error!("Error looking up segments: {:?}", e))
+            .map_err(|e| tonic::Status::internal(format!("Failed to lookup segments: {:?}", e)))?;
+
+        Ok(tonic::Response::new(res))
+    }
 }
 
 /// Handler for the ListSegments endpoint of the SegmentLookupService.

@@ -21,7 +21,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
-    network::scion::topology::{ScionAs, ScionTopology},
+    network::scion::topology::{ScionAs, ScionTopologyBuilder},
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
     util::addr_to_http_url,
@@ -46,12 +46,12 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
 
     //
     // Setup minimal topology
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
     topo.add_as(ScionAs::new_core(server_ia))?
         .add_as(ScionAs::new_core("1-2".parse()?))?
         .add_link("1-1#1 core 1-2#1".parse()?)?;
 
-    state.set_topology(topo);
+    state.set_topology(topo.build()?);
 
     //
     // Setup snap

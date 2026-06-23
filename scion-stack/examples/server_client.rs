@@ -51,7 +51,7 @@ use chrono::Utc;
 use derive_more::Deref;
 use pocketscion::{
     io_config::IoConfig,
-    network::scion::topology::{ScionAs, ScionTopology},
+    network::scion::topology::{ScionAs, ScionTopology, ScionTopologyBuilder},
     runtime::{PocketScionRuntime, builder::PocketScionRuntimeBuilder},
     state::PocketScionState,
     util::addr_to_http_url,
@@ -563,7 +563,7 @@ fn micros_to_string(micros: u64) -> String {
 
 /// Defines a Network Topology to be simulated through Pocket SCION.
 pub fn example_topology() -> anyhow::Result<ScionTopology> {
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
 
     topo.add_as(ScionAs::new_core("1-1".parse()?))?
         .add_as(ScionAs::new("1-2".parse()?))?
@@ -601,7 +601,7 @@ pub fn example_topology() -> anyhow::Result<ScionTopology> {
         .add_link("2-2#4 down_to 2-3#5".parse()?)?
         .add_link("2-3#6 down_to 2-4#7".parse()?)?;
 
-    Ok(topo)
+    topo.build()
 }
 
 /// Configuration

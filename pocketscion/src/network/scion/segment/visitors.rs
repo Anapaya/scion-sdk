@@ -279,11 +279,11 @@ mod tests {
     /// runs the core segment collector with 10 threads.
     #[test_log::test]
     fn single_and_multi_thread_should_have_same_results() {
-        use crate::network::scion::topology::ScionTopology;
+        use crate::network::scion::topology::ScionTopologyBuilder;
 
         const NUM_CORE_ASES: u16 = 6;
         // Build topology: N core ASes, all connected to each other.
-        let mut topo = ScionTopology::new();
+        let mut topo = ScionTopologyBuilder::new();
         for i in 1..=NUM_CORE_ASES {
             topo.add_as(ScionAs::new_core(format!("1-{i}").parse().unwrap()))
                 .unwrap();
@@ -299,6 +299,7 @@ mod tests {
             }
         }
 
+        let topo = topo.build().unwrap();
         let lookup = FastTopologyLookup::new(&topo);
 
         let start = std::time::Instant::now();

@@ -307,7 +307,7 @@ mod test {
         };
 
         use super::*;
-        use crate::network::scion::topology::ScionAs;
+        use crate::network::scion::topology::{ScionAs, ScionTopologyBuilder};
 
         #[test_log::test]
         fn should_resolve_svc_address() {
@@ -316,7 +316,7 @@ mod test {
             let src_ip_net: IpNet = "10.0.0.1/32".parse().unwrap();
             let svc_addr: SocketAddr = "10.1.2.3:54321".parse().unwrap();
 
-            let mut topology = ScionTopology::new();
+            let mut topology = ScionTopologyBuilder::new();
             topology
                 .add_as(ScionAs::new_core(src_ia).with_forwarding_key([0; 16])) // Src AS
                 .unwrap()
@@ -324,6 +324,7 @@ mod test {
                 .unwrap()
                 .add_link("1-1#1 core 1-99#1".parse().unwrap())
                 .unwrap();
+            let topology = topology.build().expect("building topology");
 
             let src_receiver = Arc::new(MockReceiver::default());
             let mut network_receivers = NetworkReceiverRegistry::new();

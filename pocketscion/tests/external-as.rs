@@ -30,7 +30,7 @@ use pocketscion::{
         local::receivers::Receiver,
         scion::{
             routing::ScionNetworkTime,
-            topology::{ScionAs, ScionTopology},
+            topology::{ScionAs, ScionTopologyBuilder},
         },
     },
     runtime::builder::PocketScionRuntimeBuilder,
@@ -60,7 +60,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
 
     let network_time = ScionNetworkTime::now();
     // Setup minimal topology
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
     topo.add_as(ScionAs::new_core("1-1".parse()?).with_forwarding_key(ia1_key))?
         .add_as(ScionAs::new_external_core("1-2".parse()?))?
         .add_link("1-1#1 core 1-2#2".parse()?)?;
@@ -77,7 +77,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
         .build(network_time.inner())
         .path();
 
-    state.set_topology(topo);
+    state.set_topology(topo.build()?);
 
     // Setup external AS
     state.add_external_as(ia2)?;

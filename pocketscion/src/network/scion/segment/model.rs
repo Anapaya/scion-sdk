@@ -476,7 +476,10 @@ mod tests {
         use std::str::FromStr;
 
         use super::*;
-        use crate::network::scion::{topology::ScionAs, util::test_helper::parse_segment};
+        use crate::network::scion::{
+            topology::{ScionAs, ScionTopologyBuilder},
+            util::test_helper::parse_segment,
+        };
 
         struct TestTopo {
             topo: ScionTopology,
@@ -493,7 +496,7 @@ mod tests {
             let as3 = IsdAsn::from_str("1-3").unwrap();
             let as_2_peer = IsdAsn::from_str("2-2").unwrap();
 
-            let mut topo = ScionTopology::default();
+            let mut topo = ScionTopologyBuilder::new();
             topo.add_as(ScionAs::new_core(as1.into()).with_forwarding_key([1; 16]))
                 .unwrap()
                 .add_as(ScionAs::new_core(as2.into()).with_forwarding_key([2; 16]))
@@ -509,6 +512,8 @@ mod tests {
                 .unwrap()
                 .add_link("1-2#10 peer 2-2#11".parse().unwrap())
                 .unwrap();
+
+            let topo = topo.build().unwrap();
 
             TestTopo {
                 topo,

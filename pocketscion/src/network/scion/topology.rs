@@ -14,7 +14,7 @@
 //! Representation of a SCION Topology
 
 use std::{
-    collections::{BTreeMap, HashMap, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashMap, btree_map::Entry},
     fmt::{Display, Formatter},
     hash::Hash,
     net::{IpAddr, SocketAddr},
@@ -32,6 +32,10 @@ pub mod dto;
 pub mod visitor;
 
 /// General representation of a SCION Topology.
+///
+/// A topology is constructed via [`ScionTopologyBuilder`]. Once built, its structure is immutable;
+/// only per-link state (such as whether a link is up) can still be changed through the accessor
+/// methods.
 #[derive(Eq, PartialEq, Debug, Clone, Default)]
 pub struct ScionTopology {
     pub(crate) trust_store: TrustStore,
@@ -40,57 +44,55 @@ pub struct ScionTopology {
     pub(crate) router_map: BTreeMap<IsdAsn, Vec<ScionRouter>>,
 }
 
+/// Builder for a [`ScionTopology`].
+///
+/// Collects ASes, links and routers, validating the topology rules as elements are added. The
+/// final [`ScionTopology`] is produced by either:
+/// - [`ScionTopologyBuilder::build`], which derives the trust store (TRCs and certificates) from
+///   the topology's core ASes, or
+/// - [`ScionTopologyBuilder::build_with_trust_store`], which uses an externally created trust
+///   store.
+#[derive(Eq, PartialEq, Debug, Clone, Default)]
+pub struct ScionTopologyBuilder {
+    pub(crate) as_map: BTreeMap<IsdAsn, ScionAs>,
+    pub(crate) link_map: BTreeMap<ScionLinkId, ScionLink>,
+    pub(crate) router_map: BTreeMap<IsdAsn, Vec<ScionRouter>>,
+}
+
 impl ScionTopology {
-    /// Creates a new, empty SCION topology.
-    pub fn new() -> Self {
-        Self {
-            trust_store: TrustStore::new(),
-            as_map: Default::default(),
-            link_map: Default::default(),
-            router_map: Default::default(),
-        }
+    /// Writes all TRCs from the trust store to a new temporary directory.
+    ///
+    /// Returns the temporary directory, which deletes its contents when dropped. The directory can
+    /// be passed to a SNAP `trc_path` configuration so the SNAP can resolve the topology's core
+    /// ASes.
+    pub fn write_trcs_to_temp_dir(&self) -> anyhow::Result<tempfile::TempDir> {
+        let dir = tempfile::tempdir().context("creating temporary directory for TRCs")?;
+        self.trust_store.write_trcs(dir.path())?;
+        Ok(dir)
     }
 
-    /// Sets the trust store to use for this topology.
+    /// Writes all TRCs from the trust store to the given directory.
     ///
-    /// The trust store must contain certificates for all ASes in the topology, or this will return
-    /// an error.
-    ///
-    /// If setting the trust store before adding ASes, the trust store will be used to issue
-    /// certificates for ASes as they are added.
-    pub fn set_trust_store(&mut self, trust_store: TrustStore) -> anyhow::Result<&mut Self> {
-        // Apply certificates from trust store to ASes in the topology, if they exist. If an AS does
-        // not have a certificate in the trust store, this will fail
-        for sas in self.as_map.values_mut() {
-            let sas @ ScionAs::Simulated { .. } = sas else {
-                continue;
-            };
+    /// The directory must already exist. The written files can be passed to a SNAP `trc_path`
+    /// configuration so the SNAP can resolve the topology's core ASes. In contrast to
+    /// [`Self::write_trcs_to_temp_dir`], the caller is responsible for the directory's lifetime.
+    pub fn write_trcs(&self, dir: &std::path::Path) -> anyhow::Result<Vec<std::path::PathBuf>> {
+        self.trust_store.write_trcs(dir)
+    }
+}
 
-            // Check that AS identity exists
-            trust_store.as_key_pair(&sas.isd_as()).with_context(|| {
-                format!(
-                    "AS '{}' does not have a certificate in the trust store",
-                    sas.isd_as()
-                )
-            })?;
-        }
-
-        self.trust_store = trust_store;
-
-        Ok(self)
+impl ScionTopologyBuilder {
+    /// Creates a new, empty topology builder.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Add a new AS to the topology.
     ///
-    /// If a Trust Store is set, this will issue a certificate for the AS and add it to the trust
-    /// store, or use the existing certificate if it already exists in the trust store.
-    ///
     /// Validates that the AS does not already exist.
     pub fn add_as(&mut self, scion_as: ScionAs) -> anyhow::Result<&mut Self> {
-        // Ensure AS has identity in the trust store
-        let _identity = self.trust_store.get_or_issue_as_key_pair(scion_as.isd_as());
-
-        match self.as_map.entry(scion_as.isd_as()) {
+        let isd_as = scion_as.isd_as();
+        match self.as_map.entry(isd_as) {
             Entry::Occupied(occupied_entry) => {
                 bail!("AS '{}' already exists", occupied_entry.key())
             }
@@ -98,6 +100,14 @@ impl ScionTopology {
         };
 
         Ok(self)
+    }
+
+    /// Returns the ScionLink for the given AS and interface ID. If none exists, returns None.
+    fn scion_link(&self, isd_as: &IsdAsn, interface_id: u16) -> Option<&ScionLink> {
+        self.link_map.values().find(|link| {
+            link.id.lower.if_id == interface_id && link.id.lower.isd_as == *isd_as
+                || link.id.higher.if_id == interface_id && link.id.higher.isd_as == *isd_as
+        })
     }
 
     /// Add a new link to the topology.
@@ -271,6 +281,66 @@ impl ScionTopology {
         routers.push(router);
 
         Ok(self)
+    }
+
+    /// Builds the topology, deriving the trust store from the topology's ASes.
+    ///
+    /// A fresh trust store is generated: a certificate is issued for every AS and a minimal,
+    /// unsigned TRC is generated for each ISD from that ISD's core ASes.
+    pub fn build(self) -> anyhow::Result<ScionTopology> {
+        let mut trust_store = TrustStore::new();
+
+        // Ensure every AS has an identity in the trust store.
+        for isd_as in self.as_map.keys() {
+            let _identity = trust_store.get_or_issue_as_key_pair(*isd_as);
+        }
+
+        // Generate a TRC per ISD reflecting that ISD's core ASes.
+        let isds: BTreeSet<Isd> = self.as_map.keys().map(|isd_as| isd_as.isd()).collect();
+        for isd in isds {
+            let core_ases: Vec<IsdAsn> = self
+                .as_map
+                .values()
+                .filter(|sas| sas.isd_as().isd() == isd && sas.is_core())
+                .map(|sas| sas.isd_as())
+                .collect();
+            trust_store.set_isd_trc(isd, &core_ases)?;
+        }
+
+        Ok(self.into_topology(trust_store))
+    }
+
+    /// Builds the topology using an externally created trust store.
+    ///
+    /// The trust store must contain a certificate for every simulated AS in the topology, otherwise
+    /// an error is returned. The trust store is installed as-is; no TRCs or certificates are
+    /// (re)generated.
+    pub fn build_with_trust_store(self, trust_store: TrustStore) -> anyhow::Result<ScionTopology> {
+        // Check that every simulated AS has an identity in the trust store.
+        for sas in self.as_map.values() {
+            let ScionAs::Simulated { .. } = sas else {
+                continue;
+            };
+
+            trust_store.as_key_pair(&sas.isd_as()).with_context(|| {
+                format!(
+                    "AS '{}' does not have a certificate in the trust store",
+                    sas.isd_as()
+                )
+            })?;
+        }
+
+        Ok(self.into_topology(trust_store))
+    }
+
+    /// Assembles the final [`ScionTopology`] from this builder and the given trust store.
+    fn into_topology(self, trust_store: TrustStore) -> ScionTopology {
+        ScionTopology {
+            trust_store,
+            as_map: self.as_map,
+            link_map: self.link_map,
+            router_map: self.router_map,
+        }
     }
 }
 // Accessor functions

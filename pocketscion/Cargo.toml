@@ -36,10 +36,10 @@ endhost-api-discovery-api = { workspace = true }
 endhost-api-discovery-models = { workspace = true }
 
 # General Dependencies
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 axum-server = { workspace = true }
-anyhow = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -48,6 +48,7 @@ ecdsa = { workspace = true }
 ed25519-dalek = { workspace = true }
 http = { workspace = true }
 ipnet = { workspace = true, features = ["serde"] }
+jsonwebtoken = { workspace = true }
 p256 = { workspace = true }
 paste = { workspace = true }
 pem = { workspace = true, features = ["serde"] }
@@ -56,23 +57,23 @@ rayon = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser", "pem"] }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 rustls = { workspace = true }
-jsonwebtoken = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_with = { workspace = true, features = ["base64"] }
 serde_json = { workspace = true }
-test-log = { workspace = true, features = ["trace"] }
+serde_with = { workspace = true, features = ["base64"] }
 tempfile = { workspace = true }
+test-log = { workspace = true, features = ["trace"] }
 thiserror = { workspace = true }
-tonic = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }
+tonic = { workspace = true }
 tower = { workspace = true, features = ["limit", "buffer"] }
 tracing = { workspace = true }
 url = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
 utoipa-axum = { workspace = true }
 utoipa-redoc = { workspace = true, features = ["axum"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 x25519-dalek = { workspace = true }
 x509-cert = { workspace = true }
 

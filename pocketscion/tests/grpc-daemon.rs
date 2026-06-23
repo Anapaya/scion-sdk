@@ -26,7 +26,7 @@ use pocketscion::{
         DaemonServiceState,
         model::{PATH_AS, SERVICE_PREFIX},
     },
-    network::scion::topology::{ScionAs, ScionTopology},
+    network::scion::topology::{ScionAs, ScionTopologyBuilder},
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
     util::addr_to_http_url,
@@ -44,12 +44,12 @@ async fn daemon_grpc_request() -> anyhow::Result<()> {
     let ia2 = IsdAsn::from_str("1-2")?;
 
     // Setup minimal topology
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
     topo.add_as(ScionAs::new_core(ia1))?
         .add_as(ScionAs::new_core(ia2))?
         .add_link("1-1#1 core 1-2#2".parse()?)?;
 
-    state.set_topology(topo);
+    state.set_topology(topo.build()?);
 
     // Add daemon service for 1-2
 

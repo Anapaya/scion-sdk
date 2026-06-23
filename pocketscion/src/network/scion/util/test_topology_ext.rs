@@ -21,7 +21,7 @@ use scion_proto::{
 
 use crate::network::scion::{
     routing::AsRoutingLinkType,
-    topology::{ScionAs, ScionLink, ScionLinkType, ScionTopology},
+    topology::{ScionAs, ScionLink, ScionLinkType, ScionTopology, ScionTopologyBuilder},
 };
 
 /// Extension trait for building a ScionTopology from a TestPathContext
@@ -38,7 +38,7 @@ pub trait TestPathContextTopologyExt {
 
 impl TestPathContextTopologyExt for TestPathContext {
     fn build_topology(&self) -> ScionTopology {
-        let mut topology = ScionTopology::new();
+        let mut topology = ScionTopologyBuilder::new();
 
         let src_as = self.src_address.isd_asn();
         let dst_as = self.dst_address.isd_asn();
@@ -68,7 +68,7 @@ impl TestPathContextTopologyExt for TestPathContext {
                 .add_link(ScionLink::new(src_as, 1, ScionLinkType::Core, other_as, 1).unwrap())
                 .unwrap();
 
-            return topology;
+            return topology.build().expect("building topology");
         };
 
         for (seg_idx, segment) in self.test_segments.iter().enumerate() {
@@ -204,7 +204,7 @@ impl TestPathContextTopologyExt for TestPathContext {
             topology.add_link(dst_link).expect("Failed to add link");
         }
 
-        topology
+        topology.build().expect("building topology")
     }
 }
 

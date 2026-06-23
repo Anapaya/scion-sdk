@@ -80,6 +80,7 @@ impl ControlService {
     pub fn start(
         isd_asn: IsdAsn,
         app_state: PocketScionState,
+        host_socket_listener: Option<tokio::net::TcpListener>,
     ) -> anyhow::Result<Arc<ControlService>> {
         let self_state;
         let cert_tmp_dir;
@@ -103,27 +104,30 @@ impl ControlService {
 
         let addr = self_state.virtual_addr();
 
-        let stack = NetSimStack::bind(app_state.clone(), isd_asn, addr.ip(), 100)?;
+        // Segment lookups are answered from the shared state's topology-derived segment registry,
+        // so they do not require a simulated network stack.
+        let segment_lookup_svc =
+            segment_lookup::PsSegmentLookupService::new(isd_asn, app_state.clone());
 
         // Add CS svc address mapping
         app_state
             .add_svc_mapping(isd_asn, ServiceAddr::CONTROL, "QUIC".to_string(), addr)
             .context("Failed to add Control Service address mapping to shared state")?;
 
+        // Full simulated control service: bind a network stack and serve the SCION-native
+        // control service endpoint (QUIC/CRPC) plus beaconing.
+        let stack = NetSimStack::bind(app_state.clone(), isd_asn, addr.ip(), 100)?;
         let svc = Arc::new(ControlService {
             isd_asn,
             app_state: app_state.clone(),
             net_stack: stack.clone(),
         });
 
-        let app = axum::Router::new();
-
+        let router = axum::Router::new();
         let beaconing_svc = Arc::new(BeaconingService::new(svc.clone()));
         task::spawn(beaconing_svc.start_beaconing());
 
-        let segment_lookup_svc =
-            segment_lookup::PsSegmentLookupService::new(isd_asn, svc.app_state.clone());
-        let app = segment_lookup::nest_api(app, segment_lookup_svc);
+        let app = segment_lookup::nest_api(router, segment_lookup_svc.clone());
 
         // Start the server
         let sock = stack
@@ -153,6 +157,26 @@ impl ControlService {
                 Err(e) => tracing::error!("Control service stopped with error: {:?}", e),
             }
         });
+
+        if let Some(listener) = host_socket_listener {
+            // Serve the segment lookup gRPC control service on a real host socket.
+            let host_addr = listener.local_addr().ok();
+            let grpc_service = segment_lookup::grpc_server(segment_lookup_svc);
+            task::spawn(async move {
+                tracing::info!(%isd_asn, ?host_addr, "Control service gRPC listening on host");
+                let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+                match tonic::transport::Server::builder()
+                    .add_service(grpc_service)
+                    .serve_with_incoming(incoming)
+                    .await
+                {
+                    Ok(_) => tracing::info!("Control service gRPC server stopped gracefully"),
+                    Err(e) => {
+                        tracing::error!("Control service gRPC server stopped with error: {:?}", e)
+                    }
+                }
+            });
+        }
 
         Ok(svc)
     }
@@ -296,6 +320,10 @@ pub struct ControlServiceState {
     // The virtual IP address that the control service listens on for incoming requests.
     #[schema(value_type = String, example = "[fd3a:9b6c:1f20:0002::]:3000")]
     virtual_socket_addr: std::net::SocketAddr,
+    // Whether to expose the SCION control service outside of the simulated network, on a real host
+    // socket.
+    #[serde(default)]
+    host_socket: bool,
 }
 impl Default for ControlServiceState {
     fn default() -> Self {
@@ -303,6 +331,7 @@ impl Default for ControlServiceState {
             beaconing_interfaces: HashMap::new(),
             virtual_socket_addr: std::net::SocketAddr::from_str("[fd3a:9b6c:1f20:0002::]:3000")
                 .expect("Failed to parse hardcoded Control Service IP address"),
+            host_socket: false,
         }
     }
 }
@@ -321,6 +350,18 @@ impl ControlServiceState {
     /// Gets the virtual socket address that the control service listens on for incoming requests.
     pub fn virtual_addr(&self) -> std::net::SocketAddr {
         self.virtual_socket_addr
+    }
+
+    /// Returns whether the segment lookup service should additionally be exposed over gRPC on a
+    /// real host socket.
+    pub fn host_socket_enabled(&self) -> bool {
+        self.host_socket
+    }
+
+    /// Sets whether the segment lookup service should be exposed on a real host socket.
+    pub fn with_host_socket(mut self) -> Self {
+        self.host_socket = true;
+        self
     }
 
     /// Adds an interface to the control service state for beaconing, with the given initial

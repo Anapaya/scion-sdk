@@ -1,20 +1,25 @@
 // Copyright 2026 Anapaya Systems
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+// in compliance with the License. You may obtain a copy of the License at
 //
 //   http://www.apache.org/licenses/LICENSE-2.0
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Unless required by applicable law or agreed to in writing, software distributed under the License
+// is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+// or implied. See the License for the specific language governing permissions and limitations under
+// the License.
 
 //! SCION Trust Store
 
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, ops::Deref, path::Path};
+use std::{
+    collections::BTreeMap,
+    fmt::Debug,
+    hash::Hash,
+    ops::Deref,
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime},
+};
 
 use anyhow::{Context, bail};
 use base64::{Engine, prelude::BASE64_STANDARD};
@@ -27,7 +32,7 @@ use pem::Pem;
 use rcgen::Issuer;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use scion_proto::address::{Isd, IsdAsn};
-use scion_sdk_trc::trc::{ParseTrcError, Trc};
+use scion_sdk_trc::trc::{ParseTrcError, Trc, TrcId};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use utoipa::{PartialSchema, ToSchema};
@@ -37,9 +42,10 @@ use crate::network::scion::trust_store::dir_parser::trust_store_from_directory;
 mod dir_parser;
 pub mod issuing;
 
+const TRC_VALIDITY: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 10); // 10 years
+
 /// Pocket SCION trust store
 // XXX(ake): The Trust store should be merged with the topology at some point
-// Currently this is only seperate as we can't generate TRCs
 #[derive(Debug, Default, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
 pub struct TrustStore {
     /// The ISD trust stores, keyed by ISD
@@ -83,32 +89,76 @@ impl TrustStore {
         }
     }
 
-    /// Since we can't create TRCs, this function adds a mock TRC for the given ISD for testing.
-    pub(crate) fn add_mock_isd_trust_store(
-        &mut self,
-        isd: Isd,
-    ) -> anyhow::Result<&mut IsdTrustStore> {
-        const MOCK_TRC: &str = include_str!("./trust_store/mock_trc.pem");
-
-        let trc = StoreTrc {
-            trc: Trc::parse_from_pem(MOCK_TRC.as_bytes()).expect("should succeed on static data"),
-            raw: MOCK_TRC.as_bytes().to_vec(),
+    /// Generates a minimal, unsigned TRC for the given ISD with the given core ASes.
+    ///
+    /// The generated TRC only carries the information required by a consumer to determine the core
+    /// ASes of the ISD (the TRC ID and the list of core ASes). It is not signed and does not
+    /// contain any certificates, so it must only be used in contexts where signature verification
+    /// is not performed.
+    fn generate_trc(isd: Isd, core_ases: &[IsdAsn]) -> anyhow::Result<StoreTrc> {
+        let id = TrcId {
+            isd: isd.into(),
+            base: 1,
+            serial: 1,
         };
+        let sci_core_ases: Vec<sciparse::identifier::isd_asn::IsdAsn> =
+            core_ases.iter().map(|ia| (*ia).into()).collect();
+
+        let now = SystemTime::now();
+        let trc = Trc::new_unsigned(
+            id,
+            &sci_core_ases,
+            now,
+            now + TRC_VALIDITY,
+            &format!("pocketscion generated TRC for ISD {isd}"),
+        )
+        .context("failed to generate unsigned TRC")?;
+
+        let raw = trc
+            .to_pem()
+            .context("failed to encode generated TRC as PEM")?
+            .into_bytes();
+
+        Ok(StoreTrc { trc, raw })
+    }
+
+    /// Creates or replaces the TRC for the given ISD with a minimal, unsigned TRC built from the
+    /// given core ASes.
+    ///
+    /// Existing CA and AS certificates for the ISD are preserved.
+    pub fn set_isd_trc(&mut self, isd: Isd, core_ases: &[IsdAsn]) -> anyhow::Result<()> {
+        let trc = Self::generate_trc(isd, core_ases)?;
 
         match self.isds.entry(isd) {
-            std::collections::btree_map::Entry::Occupied(_) => {
-                anyhow::bail!("ISD {} already exists in trust store", isd)
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().trc = trc;
             }
             std::collections::btree_map::Entry::Vacant(entry) => {
-                let trust_store = IsdTrustStore {
+                entry.insert(IsdTrustStore {
                     isd,
                     trc,
                     ca_certs: Default::default(),
                     as_certs: Default::default(),
-                };
-                Ok(entry.insert(trust_store))
+                });
             }
         }
+
+        Ok(())
+    }
+
+    /// Writes all TRCs in the trust store to the given directory as `ISD<n>.trc` PEM files.
+    ///
+    /// Returns the paths of the written files. The directory must already exist.
+    pub fn write_trcs(&self, dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+        let mut paths = Vec::with_capacity(self.isds.len());
+        for (isd, store) in &self.isds {
+            let path = dir.join(format!("ISD{}.trc", isd.to_u16()));
+            std::fs::write(&path, &store.trc.raw).with_context(|| {
+                format!("failed to write TRC for ISD {isd} to {}", path.display())
+            })?;
+            paths.push(path);
+        }
+        Ok(paths)
     }
 
     /// Adds an AS key pair for the given ISD-AS to the trust store.
@@ -168,10 +218,12 @@ impl TrustStore {
             .and_then(|certs| certs.get(isd_asn))
     }
 
-    fn ensure_or_mock_trc(&mut self, isd: Isd) {
+    fn ensure_isd_trust_store(&mut self, isd: Isd) {
         if self.trc(&isd).is_none() {
-            self.add_mock_isd_trust_store(isd)
-                .expect("no isd exists, so this should succeed");
+            // The core ASes are filled in by the topology once they are known; here we only need an
+            // ISD trust store to exist so that CA certificates can be issued.
+            self.set_isd_trc(isd, &[])
+                .expect("generating an unsigned TRC should succeed");
         }
     }
 
@@ -245,7 +297,7 @@ impl TrustStore {
             },
         };
 
-        self.ensure_or_mock_trc(isd_asn.isd());
+        self.ensure_isd_trust_store(isd_asn.isd());
         self.add_ca_root(isd_asn.isd(), ca)
             .expect("CA should not already exist, so this should succeed");
 
@@ -371,8 +423,8 @@ pub struct IsdCa {
     /// The intermediary identity for this CA
     pub intermediary: CertifiedKeyPair,
 }
-/// Struct containing a certificate and private key for an AS, used for both AS certificates and
-/// CA certificates
+/// Struct containing a certificate and private key for an AS, used for both AS certificates and CA
+/// certificates
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Hash, PartialEq, Eq)]
 pub struct CertifiedKeyPair {
     /// Private Key

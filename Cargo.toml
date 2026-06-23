@@ -153,6 +153,7 @@ tokio = { version = "1.45", features = ["full"] }
 # Stock (BoringSSL/quiche-based) async QUIC implementation, used in tests to
 # exercise the squiche-based server endpoint against an established peer.
 tokio-quiche = { version = "0.19", default-features = false }
+tokio-stream = { version = "0.1", features = ["net"] }
 tokio-util = "0.7"
 tonic = { version = "0.14", features = ["router"] }
 tonic-prost = "0.14"

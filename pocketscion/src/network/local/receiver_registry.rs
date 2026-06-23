@@ -34,8 +34,9 @@ use crate::network::local::receivers::Receiver;
 pub struct NetworkReceiverRegistry {
     /// The receivers available to the network simulation.
     ///
-    /// Receivers are stored in a BTreeMap keyed by ISD-AS. Each ISD-AS can have either a wildcard
-    /// receiver, or multiple receivers for specific IP ranges, but not both.
+    /// Receivers are stored in a BTreeMap keyed by ISD-AS. Each ISD-AS can have an optional
+    /// wildcard receiver and any number of receivers bound to specific IP ranges. Address-specific
+    /// receivers take precedence over the wildcard receiver.
     receivers: BTreeMap<IsdAsn, LocalNetworkReceivers>,
     /// SVC Address mappings available in the network simulation.
     /// Mapping of ISD-AS -> SVC -> Protocol Name -> SocketAddr
@@ -43,18 +44,10 @@ pub struct NetworkReceiverRegistry {
 }
 impl PartialEq for LocalNetworkReceivers {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                LocalNetworkReceivers::ByAddressRanges { receivers: r1 },
-                LocalNetworkReceivers::ByAddressRanges { receivers: r2 },
-            ) => r1.len() == r2.len(), /* We only compare the number of receivers, not the actual */
-            // receivers
-            (
-                LocalNetworkReceivers::WildcardReceiver { .. },
-                LocalNetworkReceivers::WildcardReceiver { .. },
-            ) => true, // We consider all wildcard receivers as equal
-            _ => false,
-        }
+        // We only compare the presence of a wildcard receiver and the number of address-range
+        // receivers, not the actual receivers.
+        self.wildcard.is_some() == other.wildcard.is_some()
+            && self.ranged_receivers.len() == other.ranged_receivers.len()
     }
 }
 
@@ -66,52 +59,45 @@ impl NetworkReceiverRegistry {
 
     /// Binds a network receiver to an entire ISD-AS.
     ///
-    /// Fails if a receiver for the ISD-AS already exists.
+    /// Fails if a wildcard receiver for the ISD-AS already exists. Address-range receivers may
+    /// coexist with the wildcard receiver.
     pub fn add_wildcard_receiver(
         &mut self,
         ias: IsdAsn,
         receiver: Arc<dyn Receiver>,
     ) -> anyhow::Result<()> {
-        if self.receivers.contains_key(&ias) {
-            bail!("A Receiver for ISD-AS {} already exists", ias);
+        let entry = self.receivers.entry(ias).or_default();
+        if entry.wildcard.is_some() {
+            bail!("A wildcard receiver for ISD-AS {} already exists", ias);
         }
 
-        self.receivers.insert(
-            ias,
-            LocalNetworkReceivers::WildcardReceiver {
-                receivers: receiver,
-            },
-        );
+        entry.wildcard = Some(receiver);
 
         Ok(())
     }
 
     /// Binds a receiver to a specific IP range within an ISD-AS.
     ///
-    /// Fails if an overlapping Receiver already exists.
+    /// Fails if an overlapping Receiver already exists. May coexist with a wildcard receiver.
     pub fn add_receiver(
         &mut self,
         ias: IsdAsn,
         ipnet: IpNet,
         receiver: Arc<dyn Receiver>,
     ) -> anyhow::Result<()> {
-        let recvs = self.receivers.entry(ias).or_insert_with(|| {
-            LocalNetworkReceivers::ByAddressRanges {
-                receivers: Vec::new(),
-            }
-        });
+        let entry = self.receivers.entry(ias).or_default();
 
-        let LocalNetworkReceivers::ByAddressRanges { receivers } = recvs else {
-            bail!("Receiver for ISD-AS {} is already a wildcard receiver", ias);
-        };
-
-        if let Some((overlap_net, _)) = receivers.iter().find(|(net, _)| net.contains(&ipnet)) {
+        if let Some((overlap_net, _)) = entry
+            .ranged_receivers
+            .iter()
+            .find(|(net, _)| net.contains(&ipnet))
+        {
             bail!(
                 "ISD-AS {ias} has a receiver with overlapping IP range. existing: {overlap_net} overlaps with {ipnet}",
             );
         };
 
-        receivers.push((ipnet, receiver));
+        entry.ranged_receivers.push((ipnet, receiver));
 
         Ok(())
     }
@@ -120,22 +106,22 @@ impl NetworkReceiverRegistry {
     ///
     /// Otherwise, returns an error.
     pub fn remove_receiver(&mut self, ias: IsdAsn, ipnet: IpNet) -> anyhow::Result<()> {
-        let recvs = self.receivers.get_mut(&ias).ok_or_else(|| {
+        let entry = self.receivers.get_mut(&ias).ok_or_else(|| {
             anyhow::anyhow!(
                 "No receivers found for ISD-AS {}, cannot remove receiver",
                 ias
             )
         })?;
 
-        let LocalNetworkReceivers::ByAddressRanges { receivers } = recvs else {
-            bail!(
-                "Receiver for ISD-AS {} is a wildcard receiver, cannot remove specific IP range",
-                ias
-            );
-        };
-
-        if let Some(pos) = receivers.iter().position(|(net, _)| *net == ipnet) {
-            receivers.remove(pos);
+        if let Some(pos) = entry
+            .ranged_receivers
+            .iter()
+            .position(|(net, _)| *net == ipnet)
+        {
+            entry.ranged_receivers.remove(pos);
+            if entry.is_empty() {
+                self.receivers.remove(&ias);
+            }
             Ok(())
         } else {
             bail!(
@@ -150,45 +136,38 @@ impl NetworkReceiverRegistry {
     ///
     /// Otherwise, returns an error.
     pub fn remove_wildcard_receiver(&mut self, ias: IsdAsn) -> anyhow::Result<()> {
-        // check if wildcard receiver exists for the given ISD-AS
-        match self.receivers.get(&ias) {
-            Some(LocalNetworkReceivers::WildcardReceiver { .. }) => {
-                self.receivers.remove(&ias);
-                Ok(())
-            }
-            Some(LocalNetworkReceivers::ByAddressRanges { .. }) => {
-                bail!(
-                    "Receiver for ISD-AS {} is not a wildcard receiver, cannot remove",
-                    ias
-                );
-            }
-            None => {
-                bail!(
-                    "No receivers found for ISD-AS {}, cannot remove wildcard receiver",
-                    ias
-                );
-            }
+        let entry = self.receivers.get_mut(&ias).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No receivers found for ISD-AS {}, cannot remove wildcard receiver",
+                ias
+            )
+        })?;
+
+        if entry.wildcard.take().is_none() {
+            bail!(
+                "Receiver for ISD-AS {} is not a wildcard receiver, cannot remove",
+                ias
+            );
         }
+
+        if entry.is_empty() {
+            self.receivers.remove(&ias);
+        }
+
+        Ok(())
     }
 
     /// Returns the receiver for the given address, if one exists.
+    ///
+    /// Address-specific receivers take precedence; if none matches, the wildcard receiver (if any)
+    /// is returned.
     pub fn by_addr(&self, ia: IsdAsn, dst_ip: IpAddr) -> Option<&Arc<dyn Receiver>> {
-        self.receivers.get(&ia).and_then(|registration| {
-            match registration {
-                LocalNetworkReceivers::WildcardReceiver {
-                    receivers: receiver,
-                } => Some(receiver),
-                LocalNetworkReceivers::ByAddressRanges { receivers } => {
-                    receivers.iter().find_map(|(ipnet, receiver)| {
-                        if ipnet.contains(&dst_ip) {
-                            Some(receiver)
-                        } else {
-                            None
-                        }
-                    })
-                }
-            }
-        })
+        let entry = self.receivers.get(&ia)?;
+        entry
+            .ranged_receivers
+            .iter()
+            .find_map(|(ipnet, receiver)| ipnet.contains(&dst_ip).then_some(receiver))
+            .or(entry.wildcard.as_ref())
     }
 
     /// Adds an Service Address mapping for the given ISD-AS, SVC and protocol.
@@ -242,27 +221,32 @@ impl NetworkReceiverRegistry {
     }
 }
 
-/// Receivers registered for a specific ISD-AS
-#[derive(Clone)]
-enum LocalNetworkReceivers {
-    /// Multiple Receivers registered for specific address ranges
-    ByAddressRanges {
-        receivers: Vec<(IpNet, Arc<dyn Receiver>)>,
-    },
-    /// A Single Receiver registered for the entire ISD-AS
-    WildcardReceiver { receivers: Arc<dyn Receiver> },
+/// Receivers registered for a specific ISD-AS.
+///
+/// An ISD-AS may have an optional wildcard receiver and any number of receivers bound to specific
+/// IP ranges. Address-specific receivers take precedence over the wildcard receiver.
+#[derive(Clone, Default)]
+struct LocalNetworkReceivers {
+    /// A single receiver registered for the entire ISD-AS, used as a fallback when no
+    /// address-range receiver matches.
+    wildcard: Option<Arc<dyn Receiver>>,
+    /// Receivers registered for specific address ranges.
+    ranged_receivers: Vec<(IpNet, Arc<dyn Receiver>)>,
+}
+
+impl LocalNetworkReceivers {
+    /// Returns true if neither a wildcard receiver nor any address-range receivers are registered.
+    fn is_empty(&self) -> bool {
+        self.wildcard.is_none() && self.ranged_receivers.is_empty()
+    }
 }
 
 impl std::fmt::Debug for LocalNetworkReceivers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ByAddressRanges { receivers } => {
-                f.debug_struct("ByAddressRanges")
-                    .field("receivers", &receivers.len())
-                    .finish()
-            }
-            Self::WildcardReceiver { .. } => f.debug_struct("Wildcard").finish(),
-        }
+        f.debug_struct("LocalNetworkReceivers")
+            .field("wildcard", &self.wildcard.is_some())
+            .field("ranges", &self.ranged_receivers.len())
+            .finish()
     }
 }
 
@@ -354,18 +338,52 @@ mod tests {
     }
 
     #[test]
-    fn should_fail_to_add_receiver_if_wildcard_receiver_exists() {
+    fn should_fail_to_add_second_wildcard_receiver() {
         let mut receivers = NetworkReceiverRegistry::new();
         let ias = IsdAsn::from_str("1-2").unwrap();
         let receiver1: Arc<dyn Receiver> = Arc::new(MockReceiver);
         let receiver2: Arc<dyn Receiver> = Arc::new(MockReceiver);
         receivers.add_wildcard_receiver(ias, receiver1).unwrap();
-        let result = receivers.add_wildcard_receiver(ias, receiver2.clone());
+        let result = receivers.add_wildcard_receiver(ias, receiver2);
         assert!(result.is_err());
+    }
 
-        let ipnet1: IpNet = "10.0.0.0/24".parse().unwrap();
-        let result = receivers.add_receiver(ias, ipnet1, receiver2);
-        assert!(result.is_err());
+    #[test]
+    fn should_allow_wildcard_and_range_receivers_to_coexist() {
+        let mut receivers = NetworkReceiverRegistry::new();
+        let ias = IsdAsn::from_str("1-2").unwrap();
+        let ipnet: IpNet = "10.0.0.0/24".parse().unwrap();
+        let wildcard: Arc<dyn Receiver> = Arc::new(MockReceiver);
+        let range: Arc<dyn Receiver> = Arc::new(MockReceiver);
+
+        receivers
+            .add_wildcard_receiver(ias, wildcard.clone())
+            .unwrap();
+        receivers.add_receiver(ias, ipnet, range.clone()).unwrap();
+    }
+
+    #[test]
+    fn should_prefer_range_receiver_over_wildcard() {
+        let mut receivers = NetworkReceiverRegistry::new();
+        let ias = IsdAsn::from_str("1-2").unwrap();
+        let ipnet: IpNet = "10.0.0.0/24".parse().unwrap();
+        let wildcard: Arc<dyn Receiver> = Arc::new(MockReceiver);
+        let range: Arc<dyn Receiver> = Arc::new(MockReceiver);
+
+        receivers
+            .add_wildcard_receiver(ias, wildcard.clone())
+            .unwrap();
+        receivers.add_receiver(ias, ipnet, range.clone()).unwrap();
+
+        // Address inside the range resolves to the range receiver.
+        let in_range = Ipv4Addr::from_str("10.0.0.42").unwrap().into();
+        let found = receivers.by_addr(ias, in_range).unwrap();
+        assert!(Arc::ptr_eq(found, &range));
+
+        // Address outside the range falls back to the wildcard receiver.
+        let out_of_range = Ipv4Addr::from_str("10.0.1.42").unwrap().into();
+        let found = receivers.by_addr(ias, out_of_range).unwrap();
+        assert!(Arc::ptr_eq(found, &wildcard));
     }
 
     #[derive(Default)]

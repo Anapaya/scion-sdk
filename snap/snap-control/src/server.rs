@@ -47,7 +47,6 @@ pub mod auth;
 pub mod identity_registry;
 pub mod jwks_key_store;
 pub mod metrics;
-pub mod mock_segment_lister;
 pub mod state;
 pub mod token_verifier;
 

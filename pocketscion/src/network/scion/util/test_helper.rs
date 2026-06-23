@@ -17,7 +17,10 @@ use std::collections::VecDeque;
 
 use crate::network::scion::{
     segment::model::LinkSegment,
-    topology::{DirectedScionLink, ScionAs, ScionGlobalInterfaceId, ScionLinkType, ScionTopology},
+    topology::{
+        DirectedScionLink, ScionAs, ScionGlobalInterfaceId, ScionLinkType, ScionTopology,
+        ScionTopologyBuilder,
+    },
 };
 
 /// Parses a LinkSegment from a string representation.
@@ -101,7 +104,7 @@ pub fn test_topology() -> anyhow::Result<ScionTopology> {
     // 2-21 -->|2 Up 52| 2-2
     // 2-3 -->|6 Up 7| 2-21
 
-    let mut topo = ScionTopology::new();
+    let mut topo = ScionTopologyBuilder::new();
 
     topo.add_as(ScionAs::new_core("1-1".parse()?))?
         .add_as(ScionAs::new("1-2".parse()?))?
@@ -143,5 +146,5 @@ pub fn test_topology() -> anyhow::Result<ScionTopology> {
     // Peer links
     topo.add_link("1-3#53 peer 2-2#22".parse()?)?;
 
-    Ok(topo)
+    topo.build()
 }
