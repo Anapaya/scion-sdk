@@ -34,7 +34,7 @@
 //! - [`StandardPath`] is a structure representation of a SCION path that can be used to create or
 //!   modify SCION paths.
 
-use std::{net::SocketAddr, ops::Deref};
+use std::{collections::HashMap, net::SocketAddr, ops::Deref};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -527,6 +527,7 @@ impl Path<Bytes> {
             internal_hops,
             notes,
             epic_auths,
+            discovery_information: HashMap::new(),
         }
     }
 

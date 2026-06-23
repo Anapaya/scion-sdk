@@ -246,6 +246,8 @@ impl TryFrom<daemon_grpc::Path> for Metadata {
 
 #[cfg(test)]
 pub mod test_utils {
+    use std::collections::HashMap;
+
     use super::*;
 
     pub const MINIMAL_RAW_PATH: [u8; 24] = [
@@ -270,6 +272,7 @@ pub mod test_utils {
             internal_hops: vec![],
             notes: vec![],
             epic_auths: None,
+            discovery_information: HashMap::new(),
         }
     }
 }

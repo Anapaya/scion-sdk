@@ -64,6 +64,9 @@ pub trait DaemonService: Send + Sync + 'static {
         request: proto::NotifyInterfaceDownRequest,
     ) -> Result<proto::NotifyInterfaceDownResponse, CrpcError>;
 
+    /// Returns the endhost port range defined in the local AS.
+    async fn port_range(&self) -> Result<proto::PortRangeResponse, CrpcError>;
+
     /// DRKeyASHost returns a key that matches the request.
     async fn dr_key_as_host(
         &self,

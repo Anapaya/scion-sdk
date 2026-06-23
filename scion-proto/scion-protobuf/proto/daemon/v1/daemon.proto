@@ -17,6 +17,7 @@ syntax = "proto3";
 package proto.daemon.v1;
 
 import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "proto/drkey/v1/drkey.proto";
 
@@ -35,6 +36,8 @@ service DaemonService {
   rpc Services(ServicesRequest) returns (ServicesResponse) {}
   // Inform the SCION Daemon of a revocation.
   rpc NotifyInterfaceDown(NotifyInterfaceDownRequest) returns (NotifyInterfaceDownResponse) {}
+  // Returns the endhost port range defined in the local AS.
+  rpc PortRange(google.protobuf.Empty) returns (PortRangeResponse) {}
   // DRKeyASHost returns a key that matches the request.
   rpc DRKeyASHost(DRKeyASHostRequest) returns (DRKeyASHostResponse) {}
   // DRKeyHostAS returns a key that matches the request.
@@ -104,6 +107,19 @@ message Path {
   repeated string notes = 11;
   // EpicAuths contains the EPIC authenticators used to calculate the PHVF and LHVF.
   EpicAuths epic_auths = 12;
+  // DiscoveryInformation contains the discovery information of each ISD-AS on
+  // the path. Note that depending on the path, the information for a given
+  // ISD-AS might be differnt.
+  map<uint64, DiscoveryInformation> discovery_information = 13;
+}
+
+message DiscoveryInformation {
+  // The control service addresses of an AS. Note that this might not be a
+  // complete view of all control services in the AS.
+  repeated string control_service_addresses = 1;
+  // The discovery sevice addresses of an AS. Note that this might not be a
+  // complete view of all discovery services in the AS.
+  repeated string discovery_service_addresses = 2;
 }
 
 message EpicAuths {
@@ -136,7 +152,7 @@ enum LinkType {
   LINK_TYPE_DIRECT = 1;
   // Connection with local routing/switching.
   LINK_TYPE_MULTI_HOP = 2;
-  // Connection overlaid over publicly routed Internet.
+  // Connection overlayed over publicly routed Internet.
   LINK_TYPE_OPEN_NET = 3;
 }
 
@@ -199,6 +215,13 @@ message NotifyInterfaceDownRequest {
 }
 
 message NotifyInterfaceDownResponse {}
+
+message PortRangeResponse {
+  // The lowest port in the SCION/UDP dispatched port range.
+  uint32 dispatched_port_start = 1;
+  // The highest port in the SCION/UDP dispatched port range.
+  uint32 dispatched_port_end = 2;
+}
 
 message DRKeyHostASRequest {
   // Point in time where requested key is valid.

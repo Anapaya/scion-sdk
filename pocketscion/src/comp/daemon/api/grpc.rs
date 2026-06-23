@@ -96,6 +96,18 @@ impl GrpcDaemonService for DaemonGrpcApi {
             .map_err(to_tonic_status)
     }
 
+    /// Returns the endhost port range defined in the local AS.
+    async fn port_range(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> std::result::Result<tonic::Response<grpc::PortRangeResponse>, tonic::Status> {
+        self.daemon_service
+            .port_range()
+            .await
+            .map(tonic::Response::new)
+            .map_err(to_tonic_status)
+    }
+
     /// DRKeyASHost returns a key that matches the request.
     async fn dr_key_as_host(
         &self,

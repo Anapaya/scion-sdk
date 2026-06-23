@@ -78,6 +78,26 @@ pub struct Path {
     /// EpicAuths contains the EPIC authenticators used to calculate the PHVF and LHVF.
     #[prost(message, optional, tag = "12")]
     pub epic_auths: ::core::option::Option<EpicAuths>,
+    /// DiscoveryInformation contains the discovery information of each ISD-AS on
+    /// the path. Note that depending on the path, the information for a given
+    /// ISD-AS might be differnt.
+    #[prost(map = "uint64, message", tag = "13")]
+    pub discovery_information: ::std::collections::HashMap<u64, DiscoveryInformation>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DiscoveryInformation {
+    /// The control service addresses of an AS. Note that this might not be a
+    /// complete view of all control services in the AS.
+    #[prost(string, repeated, tag = "1")]
+    pub control_service_addresses: ::prost::alloc::vec::Vec<
+        ::prost::alloc::string::String,
+    >,
+    /// The discovery sevice addresses of an AS. Note that this might not be a
+    /// complete view of all discovery services in the AS.
+    #[prost(string, repeated, tag = "2")]
+    pub discovery_service_addresses: ::prost::alloc::vec::Vec<
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EpicAuths {
@@ -184,6 +204,15 @@ pub struct NotifyInterfaceDownRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NotifyInterfaceDownResponse {}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PortRangeResponse {
+    /// The lowest port in the SCION/UDP dispatched port range.
+    #[prost(uint32, tag = "1")]
+    pub dispatched_port_start: u32,
+    /// The highest port in the SCION/UDP dispatched port range.
+    #[prost(uint32, tag = "2")]
+    pub dispatched_port_end: u32,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DrKeyHostAsRequest {
     /// Point in time where requested key is valid.
@@ -286,7 +315,7 @@ pub enum LinkType {
     Direct = 1,
     /// Connection with local routing/switching.
     MultiHop = 2,
-    /// Connection overlaid over publicly routed Internet.
+    /// Connection overlayed over publicly routed Internet.
     OpenNet = 3,
 }
 impl LinkType {
@@ -530,6 +559,31 @@ pub mod daemon_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Returns the endhost port range defined in the local AS.
+        pub async fn port_range(
+            &mut self,
+            request: impl tonic::IntoRequest<()>,
+        ) -> std::result::Result<
+            tonic::Response<super::PortRangeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/proto.daemon.v1.DaemonService/PortRange",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("proto.daemon.v1.DaemonService", "PortRange"));
+            self.inner.unary(req, path, codec).await
+        }
         /// DRKeyASHost returns a key that matches the request.
         pub async fn dr_key_as_host(
             &mut self,
@@ -656,6 +710,14 @@ pub mod daemon_service_server {
             request: tonic::Request<super::NotifyInterfaceDownRequest>,
         ) -> std::result::Result<
             tonic::Response<super::NotifyInterfaceDownResponse>,
+            tonic::Status,
+        >;
+        /// Returns the endhost port range defined in the local AS.
+        async fn port_range(
+            &self,
+            request: tonic::Request<()>,
+        ) -> std::result::Result<
+            tonic::Response<super::PortRangeResponse>,
             tonic::Status,
         >;
         /// DRKeyASHost returns a key that matches the request.
@@ -967,6 +1029,46 @@ pub mod daemon_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = NotifyInterfaceDownSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/proto.daemon.v1.DaemonService/PortRange" => {
+                    #[allow(non_camel_case_types)]
+                    struct PortRangeSvc<T: DaemonService>(pub Arc<T>);
+                    impl<T: DaemonService> tonic::server::UnaryService<()>
+                    for PortRangeSvc<T> {
+                        type Response = super::PortRangeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(&mut self, request: tonic::Request<()>) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DaemonService>::port_range(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = PortRangeSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

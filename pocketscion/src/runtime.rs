@@ -487,7 +487,7 @@ impl PocketScionRuntime {
             .await?;
 
             let pstate = pstate.clone();
-            PsDaemonService::start(isd_as, pstate, tcp_listener)
+            PsDaemonService::start(isd_as, pstate, io_config.clone(), tcp_listener)
                 .await
                 .with_context(|| format!("Failed to start Daemon Service for ISD-AS {isd_as}"))?;
         }
