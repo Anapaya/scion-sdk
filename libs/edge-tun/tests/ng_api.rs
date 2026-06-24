@@ -36,7 +36,7 @@ use scion_sdk_edge_tun::{
     },
 };
 use scion_sdk_quic_scion::{
-    quic::{config::QuicConfig, server::QuicServer},
+    quic::{config::QuicConfig, deprecated::server::QuicServer},
     socket::{BoxedSocketError, GenericScionUdpSocket},
 };
 use scion_sdk_scion_connect_rpc::{

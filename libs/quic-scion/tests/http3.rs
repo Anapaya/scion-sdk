@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use scion_sdk_quic_scion::{
     h3::deprecated::{client::H3Client, request::H3Request, server::H3Server},
-    quic::{config::QuicConfig, server::QuicServer},
+    quic::{config::QuicConfig, deprecated::server::QuicServer},
     socket::GenericScionUdpSocket,
 };
 use test_log::test;

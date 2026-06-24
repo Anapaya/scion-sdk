@@ -98,7 +98,7 @@ pub mod server {
     use bytes::Bytes;
     use scion_sdk_quic_scion::{
         h3::deprecated::server::{H3Server, H3ServerConnection},
-        quic::server::QuicServer,
+        quic::deprecated::server::QuicServer,
         reexport::squiche::{self, h3::NameValue},
         socket::GenericScionUdpSocket,
     };

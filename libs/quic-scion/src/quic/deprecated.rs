@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! QUIC over SCION transport.
+//! The legacy QUIC stack.
 //!
-//! [`server_endpoint`]/[`connection`] are the modern sans-I/O QUIC server stack.
-//! The legacy channel/driver-based server and client live under [`deprecated`] and
-//! are retained only until their remaining call sites migrate.
+//! This is the original channel/driver-based QUIC server ([`server::QuicServer`])
+//! and client ([`client::QuicConnection`] + `QuicConnectionDriver`). It predates the
+//! sans-I/O [`super::server_endpoint`]/[`super::connection`] stack and is retained
+//! only for call sites that have not yet migrated.
 
-pub mod config;
-pub mod connection;
-pub mod deprecated;
-pub mod server_endpoint;
+mod addr_validation_token;
+pub mod client;
+pub mod server;

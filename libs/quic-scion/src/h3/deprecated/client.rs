@@ -28,8 +28,8 @@ use crate::{
         request::{H3Request, H3Response},
     },
     quic::{
-        client::{QuicConnection, QuicConnectionError},
         config::QuicConfig,
+        deprecated::client::{QuicConnection, QuicConnectionError},
     },
     socket::GenericScionUdpSocket,
 };

@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, oneshot};
 use crate::{
     UDP_PACKET_BUFFER_SIZE,
     h3::deprecated::request::{H3Request, H3Response},
-    quic::client::QuicConnection,
+    quic::deprecated::client::QuicConnection,
 };
 
 /// Maximum body buffer size.

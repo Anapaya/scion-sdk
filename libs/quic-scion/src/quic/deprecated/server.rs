@@ -28,7 +28,7 @@ use tokio::{
 use crate::{
     DEFAULT_MAX_UDP_PAYLOAD_SIZE, UDP_PACKET_BUFFER_SIZE,
     buf_factory::{BufFactory, PooledBuf},
-    quic::addr_validation_token::{AddrValidationTokenManager, TokenError},
+    quic::deprecated::addr_validation_token::{AddrValidationTokenManager, TokenError},
     socket::{BoxedSocketError, GenericScionUdpSocket},
 };
 

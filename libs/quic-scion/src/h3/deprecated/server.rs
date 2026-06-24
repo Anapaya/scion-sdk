@@ -27,7 +27,7 @@ use tokio::{
 use crate::{
     UDP_PACKET_BUFFER_SIZE,
     h3::deprecated::request::{H3Headers, H3Request},
-    quic::server::{QuicServer, QuicServerConnection},
+    quic::deprecated::server::{QuicServer, QuicServerConnection},
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -25,7 +25,7 @@ use ipnet::IpNet;
 use prost::Message;
 use scion_sdk_quic_scion::{
     h3::deprecated::server::{H3ResponseSender, H3Server, H3ServerConnection},
-    quic::server::QuicServer,
+    quic::deprecated::server::QuicServer,
 };
 use scion_sdk_scion_connect_rpc::error::{CrpcError, CrpcErrorCode};
 use tokio::sync::Mutex;
@@ -98,7 +98,7 @@ pub(crate) mod deprecated_paths {
 /// use scion_sdk_edge_tun::ng::control::{api::server::EdgeTunControlPlaneCrpcApi, EdgeTunControlPlane};
 /// use tokio_util::sync::CancellationToken;
 ///
-/// # async fn example<C: EdgeTunControlPlane + 'static>(quic_server: scion_sdk_quic_scion::quic::server::QuicServer, control_plane: Arc<C>) {
+/// # async fn example<C: EdgeTunControlPlane + 'static>(quic_server: scion_sdk_quic_scion::quic::deprecated::server::QuicServer, control_plane: Arc<C>) {
 /// let api = Arc::new(EdgeTunControlPlaneCrpcApi::new(quic_server, control_plane));
 /// let token = CancellationToken::new();
 /// api.start_listening(token).await;

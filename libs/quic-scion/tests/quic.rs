@@ -19,7 +19,10 @@ mod common;
 use std::sync::Arc;
 
 use scion_sdk_quic_scion::{
-    quic::{client::QuicConnection, config::QuicConfig, server::QuicServer},
+    quic::{
+        config::QuicConfig,
+        deprecated::{client::QuicConnection, server::QuicServer},
+    },
     socket::GenericScionUdpSocket,
 };
 use test_log::test;
