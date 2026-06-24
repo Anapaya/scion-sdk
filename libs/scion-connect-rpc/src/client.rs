@@ -19,7 +19,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use scion_sdk_quic_scion::{
-    h3::{
+    h3::deprecated::{
         client::{H3Client, H3ConnectionError},
         request::H3Request,
     },

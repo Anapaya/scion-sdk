@@ -23,7 +23,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::{
-    h3::{
+    h3::deprecated::{
         client::driver::{H3Connection, H3Driver, H3Reply},
         request::{H3Request, H3Response},
     },

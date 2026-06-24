@@ -12,11 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! HTTP/3 over SCION transport.
+//! The legacy HTTP/3 stack.
 //!
-//! [`service`] is the modern sans-I/O HTTP/3 server. The legacy stack (its
-//! client and server) lives under [`deprecated`] and is retained only until its
-//! remaining call sites migrate.
+//! This is the original HTTP/3 client and server: a self-contained
+//! `QuicConnection` + `QuicConnectionDriver` plus a separate `H3Driver` event
+//! loop, with [`request::H3Request`]/[`request::H3Response`] types and
+//! bodies that are fully buffered in memory.
+//!
+//! It is retained here only for call sites that have not yet migrated to the
+//! rewritten stack.
 
-pub mod deprecated;
-pub mod service;
+pub mod client;
+pub mod request;
+pub mod server;

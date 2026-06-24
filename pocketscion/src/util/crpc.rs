@@ -97,7 +97,7 @@ pub mod server {
     use anyhow::Context;
     use bytes::Bytes;
     use scion_sdk_quic_scion::{
-        h3::server::{H3Server, H3ServerConnection},
+        h3::deprecated::server::{H3Server, H3ServerConnection},
         quic::server::QuicServer,
         reexport::squiche::{self, h3::NameValue},
         socket::GenericScionUdpSocket,
@@ -164,8 +164,8 @@ pub mod server {
 
         async fn handle_request(
             app: axum::Router,
-            req: scion_sdk_quic_scion::h3::request::H3Request,
-            mut responder: scion_sdk_quic_scion::h3::server::H3ResponseSender,
+            req: scion_sdk_quic_scion::h3::deprecated::request::H3Request,
+            mut responder: scion_sdk_quic_scion::h3::deprecated::server::H3ResponseSender,
             id: u128,
         ) -> Result<(), anyhow::Error> {
             tracing::debug!(id, "H3 server handling request");

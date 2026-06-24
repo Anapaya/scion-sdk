@@ -19,7 +19,9 @@ use bytes::Bytes;
 use ipnet::IpNet;
 use rand::TryRng;
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
-use scion_sdk_quic_scion::{h3::client::H3ConnectionError, socket::GenericScionUdpSocket};
+use scion_sdk_quic_scion::{
+    h3::deprecated::client::H3ConnectionError, socket::GenericScionUdpSocket,
+};
 use scion_sdk_scion_connect_rpc::client::CrpcClient;
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use sciparse::address::socket_addr::ScionSocketAddr;

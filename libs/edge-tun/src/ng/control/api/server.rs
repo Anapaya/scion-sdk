@@ -24,7 +24,7 @@ use ana_gotatun::x25519;
 use ipnet::IpNet;
 use prost::Message;
 use scion_sdk_quic_scion::{
-    h3::server::{H3ResponseSender, H3Server, H3ServerConnection},
+    h3::deprecated::server::{H3ResponseSender, H3Server, H3ServerConnection},
     quic::server::QuicServer,
 };
 use scion_sdk_scion_connect_rpc::error::{CrpcError, CrpcErrorCode};
@@ -170,7 +170,7 @@ async fn handle_connection<C: EdgeTunControlPlane + 'static>(
 
 /// Handles a single Connect-RPC request by routing it to the appropriate handler.
 async fn handle_request<C: EdgeTunControlPlane>(
-    req: scion_sdk_quic_scion::h3::request::H3Request,
+    req: scion_sdk_quic_scion::h3::deprecated::request::H3Request,
     mut responder: H3ResponseSender,
     control_plane: &C,
 ) {
@@ -216,7 +216,7 @@ async fn handle_request<C: EdgeTunControlPlane>(
 }
 
 fn handle_get_data_plane_configuration<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::request::H3Request,
+    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
     let body = req.body.as_deref().unwrap_or_default();
@@ -238,7 +238,7 @@ fn handle_get_data_plane_configuration<C: EdgeTunControlPlane>(
 }
 
 fn handle_register_edge_tun_identity<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::request::H3Request,
+    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
     let body = req.body.as_deref().unwrap_or_default();
@@ -275,7 +275,7 @@ fn extract_x25519_public_key(bytes: &[u8]) -> Result<x25519::PublicKey, CrpcErro
 }
 
 fn handle_address_assign<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::request::H3Request,
+    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
     let body = req.body.as_deref().unwrap_or_default();
@@ -313,7 +313,7 @@ fn handle_address_assign<C: EdgeTunControlPlane>(
 }
 
 fn handle_get_route_advertisement<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::request::H3Request,
+    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
     let body = req.body.as_deref().unwrap_or_default();
