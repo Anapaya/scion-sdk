@@ -14,8 +14,6 @@
 
 //! Valid packets roundtrip through encode → view → reconstruct without data loss or panics.
 
-mod helpers;
-
 use std::panic::catch_unwind;
 
 use proptest::{prelude::ProptestConfig, prop_assert, prop_assert_eq, proptest};
@@ -27,8 +25,6 @@ use sciparse::{
         view::ScionRawPacketView,
     },
 };
-
-use crate::helpers::view_function_checks;
 
 /// Creates valid headers with various options and ensures they roundtrip through encoding and
 /// decoding Validates all functions in the ScionHeaderView do not panic
@@ -62,7 +58,7 @@ fn valid_packets_should_roundtrip_correctly() {
 
             // Exercise every getter/setter on the view hierarchy to validate
             // that no access causes UB on validly-constructed packets.
-            view_function_checks::packet::exec_every_view_function(view);
+            sciparse::util::fuzz::view_function_checks::packet::exec_every_view_function(view);
 
             // Packets should still match after exercising the views
             assert_packet_eq(&packet, view)?;

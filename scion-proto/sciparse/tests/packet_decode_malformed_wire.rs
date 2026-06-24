@@ -17,8 +17,6 @@
 //! Wire-level strategic breaking of encoded packets must not panic during parsing or view
 //! manipulation.
 
-mod helpers;
-
 use std::panic::catch_unwind;
 
 use proptest::{
@@ -34,8 +32,6 @@ use sciparse::{
     header::view::ScionHeaderView,
     packet::{classify::ClassifiedPacket, view::ScionRawPacketView},
 };
-
-use crate::helpers::view_function_checks;
 
 /// Strategically breaks important packet fields on the wire and ensures no panics occur during
 /// parsing or view manipulation
@@ -56,7 +52,9 @@ fn broken_wire_packets_must_not_panic() {
 
             match ScionRawPacketView::from_mut_slice(&mut broken_buf) {
                 Ok((view, _rest)) => {
-                    view_function_checks::packet::exec_every_view_function(view);
+                    sciparse::util::fuzz::view_function_checks::packet::exec_every_view_function(
+                        view,
+                    );
                 }
                 Err(ViewConversionError::BufferTooSmall { .. })
                 | Err(ViewConversionError::Other(_)) => {

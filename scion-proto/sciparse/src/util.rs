@@ -19,6 +19,9 @@ use proptest::{
     strategy::ValueTree,
 };
 
+#[cfg(feature = "fuzz")]
+pub mod fuzz;
+
 /// A helper trait to generate arbitrary values of a type that implements `Arbitrary` using a seed.
 pub trait ToValue {
     /// The parameters for generating arbitrary values of type `T`.

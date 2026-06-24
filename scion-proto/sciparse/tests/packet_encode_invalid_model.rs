@@ -14,8 +14,6 @@
 
 //! Invalid Model-level packet must not panic during encoding.
 
-mod helpers;
-
 use std::panic::catch_unwind;
 
 use proptest::{
@@ -33,8 +31,6 @@ use sciparse::{
         view::ScionRawPacketView,
     },
 };
-
-use crate::helpers::view_function_checks::packet::exec_every_view_function;
 
 /// Breaks packets at the model level and ensures no panics occur during encoding
 #[test]
@@ -59,7 +55,9 @@ fn encoding_invalid_packets_must_not_panic() {
                 Ok(_) => {
                     let (view, _rest) = ScionRawPacketView::from_mut_slice(&mut buf)
                         .expect("Anything that encodes must be decodable");
-                    exec_every_view_function(view);
+                    sciparse::util::fuzz::view_function_checks::packet::exec_every_view_function(
+                        view,
+                    );
                 }
                 Err(EncodeError::InvalidStructure(_)) => {
                     return Ok(());
