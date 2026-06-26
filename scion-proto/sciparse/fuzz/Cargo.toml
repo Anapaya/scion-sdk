@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 
 [dependencies.sciparse]
 path = ".."
+features = ["fuzz"]
 
 # Use independent workspace for fuzzers
 [workspace]

@@ -32,12 +32,13 @@ proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 
 [features]
-default = ["proptest", "fuzz"]
+default = ["proptest"]
 proptest = ["dep:proptest", "dep:proptest-derive"]
 fuzz = []
 
 [dev-dependencies]
 base64 = { workspace = true }
+sciparse = { path = ".", features = ["fuzz"] }
 
 [lints]
 workspace = true

@@ -4979,6 +4979,7 @@ dependencies = [
  "prost",
  "prost-types",
  "scion-protobuf",
+ "sciparse",
  "serde",
  "serde_with",
  "sha2",
