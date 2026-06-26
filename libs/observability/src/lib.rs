@@ -31,8 +31,15 @@ use tower_http::{
 use tracing::Span;
 use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
-use tracing_subscriber::{EnvFilter, Layer, Registry, fmt::time::UtcTime, prelude::*};
+use tracing_subscriber::{
+    EnvFilter, Layer, Registry,
+    fmt::{format::Format, time::UtcTime},
+    prelude::*,
+};
 
+use crate::dedup::DeduplicatingFormatter;
+
+pub mod dedup;
 pub mod metrics;
 pub mod prometheus_json;
 
@@ -120,6 +127,8 @@ pub struct TracingConfig {
     /// Console output sink. `None` disables console logging.
     console_output: Option<LogOutput>,
     console_format: LogFormat,
+    /// Collapse consecutive identical console events into a repeat summary.
+    console_dedup: bool,
     directives: Vec<String>,
     extra_layers: Vec<Box<dyn Layer<Registry> + Send + Sync + 'static>>,
 }
@@ -130,6 +139,7 @@ impl Default for TracingConfig {
             // Default: human-readable text → stderr (preserves existing behaviour).
             console_output: Some(LogOutput::Stderr),
             console_format: LogFormat::Text,
+            console_dedup: false,
             directives: Vec::new(),
             extra_layers: Vec::new(),
         }
@@ -154,6 +164,16 @@ impl TracingConfig {
     /// Set the console log format.
     pub fn with_format(mut self, format: LogFormat) -> Self {
         self.console_format = format;
+        self
+    }
+
+    /// Enable or disable deduplication of consecutive identical console events.
+    ///
+    /// When enabled, a run of identical events (same message, level and target)
+    /// is written only once, followed by a `previous message repeated N times`
+    /// summary when a different event arrives. See [`dedup::DeduplicatingFormatter`].
+    pub fn with_deduplication(mut self, enabled: bool) -> Self {
+        self.console_dedup = enabled;
         self
     }
 
@@ -199,6 +219,7 @@ impl TracingConfig {
         let TracingConfig {
             console_output,
             console_format,
+            console_dedup,
             directives,
             extra_layers,
         } = self;
@@ -226,56 +247,24 @@ impl TracingConfig {
         let mut layers = vec![JsonStorageLayer.boxed()];
 
         if let Some(output) = console_output {
-            match (output, &console_format) {
-                (LogOutput::Stdout, LogFormat::Json) => {
+            let (writer, guard, ansi) = match output {
+                LogOutput::Stdout => {
                     let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
-                    layers.push(
-                        tracing_subscriber::fmt::layer()
-                            .json()
-                            .with_timer(UtcTime::rfc_3339())
-                            .with_writer(writer)
-                            .with_filter(make_filter(&directives)?)
-                            .boxed(),
-                    );
-                    guards.push(guard);
+                    (writer, guard, std::io::stdout().is_terminal())
                 }
-                (LogOutput::Stdout, LogFormat::Text) => {
-                    let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
-                    layers.push(
-                        tracing_subscriber::fmt::layer()
-                            .with_ansi(std::io::stdout().is_terminal())
-                            .with_timer(UtcTime::rfc_3339())
-                            .with_writer(writer)
-                            .with_filter(make_filter(&directives)?)
-                            .boxed(),
-                    );
-                    guards.push(guard);
-                }
-                (LogOutput::Stderr, LogFormat::Json) => {
+                LogOutput::Stderr => {
                     let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
-                    layers.push(
-                        tracing_subscriber::fmt::layer()
-                            .json()
-                            .with_timer(UtcTime::rfc_3339())
-                            .with_writer(writer)
-                            .with_filter(make_filter(&directives)?)
-                            .boxed(),
-                    );
-                    guards.push(guard);
+                    (writer, guard, std::io::stderr().is_terminal())
                 }
-                (LogOutput::Stderr, LogFormat::Text) => {
-                    let (writer, guard) = tracing_appender::non_blocking(std::io::stderr());
-                    layers.push(
-                        tracing_subscriber::fmt::layer()
-                            .with_ansi(std::io::stderr().is_terminal())
-                            .with_timer(UtcTime::rfc_3339())
-                            .with_writer(writer)
-                            .with_filter(make_filter(&directives)?)
-                            .boxed(),
-                    );
-                    guards.push(guard);
-                }
-            }
+            };
+            layers.push(console_layer(
+                writer,
+                &console_format,
+                ansi,
+                console_dedup,
+                make_filter(&directives)?,
+            ));
+            guards.push(guard);
         }
 
         // add any additionally configured layers
@@ -293,6 +282,43 @@ impl TracingConfig {
 
         tracing::debug!("Logging initialized!");
         Ok(guards)
+    }
+}
+
+/// Build a console logging layer for the given writer, format and options (e.g. ANSI terminal
+/// colors, log deduplication).
+fn console_layer(
+    writer: NonBlocking,
+    format: &LogFormat,
+    ansi: bool,
+    dedup: bool,
+    filter: EnvFilter,
+) -> Box<dyn Layer<Registry> + Send + Sync + 'static> {
+    match format {
+        LogFormat::Json => {
+            let fmt = Format::default().json().with_timer(UtcTime::rfc_3339());
+            let layer = tracing_subscriber::fmt::layer().json().with_writer(writer);
+            if dedup {
+                let fmt = DeduplicatingFormatter::new(fmt).with_format(LogFormat::Json);
+                layer.event_format(fmt).with_filter(filter).boxed()
+            } else {
+                layer.event_format(fmt).with_filter(filter).boxed()
+            }
+        }
+        LogFormat::Text => {
+            let fmt = Format::default()
+                .with_timer(UtcTime::rfc_3339())
+                .with_ansi(ansi);
+            let layer = tracing_subscriber::fmt::layer().with_writer(writer);
+            if dedup {
+                layer
+                    .event_format(DeduplicatingFormatter::new(fmt))
+                    .with_filter(filter)
+                    .boxed()
+            } else {
+                layer.event_format(fmt).with_filter(filter).boxed()
+            }
+        }
     }
 }
 

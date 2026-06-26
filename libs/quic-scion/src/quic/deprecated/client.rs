@@ -14,7 +14,11 @@
 
 //! QUIC client module for establishing connections over SCION transport.
 
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use ring::{
     error::Unspecified,
@@ -29,6 +33,9 @@ use crate::{
     buf_factory::{BufFactory, PooledBuf},
     socket::{BoxedSocketError, GenericScionUdpSocket},
 };
+
+/// Log at most 1 IO error every 3 seconds.
+const IO_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(3);
 
 /// A QUIC connection over SCION.
 #[derive(Clone)]
@@ -189,6 +196,9 @@ impl QuicConnectionDriver {
 
         let mut send_buffer = [0; DEFAULT_MAX_UDP_PAYLOAD_SIZE];
 
+        // The last time a send error was logged, used to debounce the warnings.
+        let mut last_send_error: Option<Instant> = None;
+
         // Bookkeeping variables for the next packet to send.
         let mut send_size;
         let mut target_address;
@@ -300,7 +310,13 @@ impl QuicConnectionDriver {
                     pending_send = None;
                     match res {
                         Ok(()) => send_size = 0,
-                        Err(err) => tracing::warn!(?err, "Failed to send on the underlying socket"),
+                        // XXX: We only log the error such that the QUIC connection driver doesn't
+                        // quit.
+                        Err(err) => debounced_warn(
+                            &mut last_send_error,
+                            "Failed to send on the underlying socket",
+                            err,
+                        ),
                     }
                 }
             }
@@ -337,4 +353,17 @@ fn generate_connection_id() -> Result<squiche::ConnectionId<'static>, Unspecifie
     let mut scid = [0; squiche::MAX_CONN_ID_LEN];
     SystemRandom::new().fill(&mut scid)?;
     Ok(squiche::ConnectionId::from_vec(scid.to_vec()))
+}
+
+/// Logs a warning message when an error occurs.
+///
+/// Logging will only be performed if at least [`IO_ERROR_LOG_INTERVAL`] has elapsed since the last
+/// error was logged.
+// Inspired by quinn's `log_sendmsg_error`.
+fn debounced_warn(last_error: &mut Option<Instant>, msg: &str, err: impl core::fmt::Debug) {
+    let now = Instant::now();
+    if last_error.is_none_or(|t| now.saturating_duration_since(t) > IO_ERROR_LOG_INTERVAL) {
+        *last_error = Some(now);
+        tracing::warn!(?err, "{msg}");
+    }
 }
