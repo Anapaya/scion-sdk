@@ -303,8 +303,8 @@ impl<T> QuicScionServerEndpoint<T> {
             dcid,
             Box::new(QuicScionConn {
                 asn_pair: IsdAsnPair {
-                    from: from.isd_asn(),
-                    to: self.local_addr.isd_asn(),
+                    from: self.local_addr.isd_asn(),
+                    to: from.isd_asn(),
                 },
                 inner: conn,
                 app: NoApp,

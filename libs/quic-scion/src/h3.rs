@@ -14,9 +14,16 @@
 
 //! HTTP/3 over SCION transport.
 //!
-//! [`service`] is the modern sans-I/O HTTP/3 server. The legacy stack (its
-//! client and server) lives under [`deprecated`] and is retained only until its
+//! The modern stack is sans-I/O: a per-connection
+//! [`QuicScionApplication`](crate::app::QuicScionApplication) stepped in lockstep
+//! by the connection driver, with streaming `http_body` bodies flow-controlled by
+//! the QUIC stream window. It is split into a [`client`] and a [`server`], with
+//! their shared machinery in `common`.
+//!
+//! The legacy stack lives under [`deprecated`] and is retained only until its
 //! remaining call sites migrate.
 
+pub mod client;
+pub(crate) mod common;
 pub mod deprecated;
-pub mod service;
+pub mod server;

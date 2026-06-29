@@ -31,8 +31,7 @@ use futures::SinkExt;
 use http::{Request, Response};
 use http_body::{Body, Frame};
 use scion_sdk_quic_scion::{
-    h3::service::{H3Error, H3RequestBody, Http3Server, Http3ServerConfig},
-    http::HttpService,
+    h3::server::{H3Error, H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
     quic::{
         config::QuicConfig,
         connection::ConnectionHandle,

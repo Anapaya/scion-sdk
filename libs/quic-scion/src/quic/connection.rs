@@ -295,7 +295,7 @@ impl<A> WeakConnectionHandle<A> {
 
 /// The state of a SCION QUIC connection.
 pub struct QuicScionConn<A = NoApp> {
-    /// Source/Dest ISD-ASN pair.
+    /// Source/Dest ISD-ASN pair oriented from the server to the client.
     pub asn_pair: IsdAsnPair,
     /// QUIC Connection.
     pub inner: Connection,

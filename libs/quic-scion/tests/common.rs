@@ -191,7 +191,13 @@ impl GenericScionUdpSocket for MockScionSocket {
                 )) as BoxedSocketError
             })?;
 
-            if datagram.dst != self.local_addr {
+            // Route by the standard socket address only, ignoring the ISD-AS:
+            // the endpoint-based QUIC stack tags outgoing packets with the
+            // *local* ISD-AS rather than the peer's, so an ISD-AS-sensitive
+            // comparison would drop legitimate server->client replies. Test
+            // peers always have distinct socket addresses, so this still routes
+            // unambiguously.
+            if datagram.dst.socket_addr() != self.local_addr.socket_addr() {
                 continue; // Ignore datagrams not addressed to this socket
             }
             let data = datagram.data;
