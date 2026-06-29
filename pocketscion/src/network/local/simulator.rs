@@ -235,10 +235,12 @@ impl LocalNetworkSimulation<'_> {
                 .map(Into::into)
             }
             LocalAsRoutingAction::IngressSCMPHandleRequest { interface_id } => {
-                debug_assert_eq!(
-                    self.local_if_id, interface_id,
-                    "This should always be the interface of the router"
-                );
+                if interface_id != 0 {
+                    debug_assert_eq!(
+                        self.local_if_id, interface_id,
+                        "This should always be the interface of the router"
+                    );
+                }
                 self.handle_scmp(false, packet)
                     .context("error handling SCMP request")?
                     .map(Into::into)
