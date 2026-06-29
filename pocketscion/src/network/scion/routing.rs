@@ -17,11 +17,9 @@
 
 use chrono::{DateTime, Utc};
 use derive_more::Display;
-use scion_proto::{
-    address::{IsdAsn, ScionAddr},
-    packet::ScionPacketRaw,
-    path::crypto::ForwardingKey,
-    scmp::ScmpErrorMessage,
+use sciparse::{
+    dataplane_path::standard::mac::ForwardingKey, identifier::isd_asn::IsdAsn,
+    packet::view::ScionPacketView, payload::scmp::model::ScmpErrorMessage,
 };
 
 pub mod spec;
@@ -38,6 +36,11 @@ impl ScionNetworkTime {
     /// New ScionNetworkTime from a unix epoch in seconds.
     pub fn from_timestamp_secs(secs: u32) -> Self {
         ScionNetworkTime(secs)
+    }
+
+    /// Returns the current unix epoch in seconds.
+    pub fn timestamp_secs(&self) -> u32 {
+        self.0
     }
 
     /// Converts the internal timestamp to a [`DateTime<Utc>`].
@@ -76,7 +79,7 @@ pub trait RoutingLogic {
     /// Note; You can .into the result into a [AsRoutingAction] directly.
     fn route(
         local_as: IsdAsn,
-        scion_packet: &mut ScionPacketRaw,
+        scion_packet: &mut ScionPacketView,
         ingress_interface_id: u16,
         now: ScionNetworkTime,
         as_forwarding_key: &ForwardingKey,
@@ -108,11 +111,8 @@ pub enum LocalAsRoutingAction {
         /// Interface ID where the packet should be sent
         interface_id: u16,
     },
-    /// Packet should be forwarded to the given local address
-    ForwardLocal {
-        /// Address to forward the packet to.
-        target_address: ScionAddr,
-    },
+    /// Packet should be forwarded to the local network
+    ForwardLocal,
     /// A SCMP error response should be sent
     SendSCMPErrorResponse(ScmpErrorMessage),
     /// Packet should be forwarded to an external AS not simulated in PocketScion.

@@ -15,7 +15,6 @@
 
 use std::{collections::BTreeMap, num::NonZeroU16, time::Duration, vec};
 
-use bytes::Bytes;
 use chrono::Utc;
 use ipnet::IpNet;
 use pocketscion::{
@@ -23,11 +22,12 @@ use pocketscion::{
     state::PocketScionState,
     util::topologies::{IA132, IA212},
 };
-use scion_proto::{
-    address::{ScionAddr, SocketAddr},
-    packet::{ByEndpoint, ScionPacketScmp, ScionPacketUdp},
-    scmp::{ScmpEchoRequest, ScmpExternalInterfaceDown, ScmpMessage},
-    wire_encoding::{WireDecode as _, WireEncodeVec as _},
+use sciparse::{
+    address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
+    core::{convert::TryFromView, encode::WireEncode, model::Model, view::View},
+    dataplane_path::view::ScionDpPathViewExt,
+    packet::model::{ScionScmpPacket, ScionUdpPacket},
+    payload::scmp::model::{ScmpEchoRequest, ScmpExternalInterfaceDown, ScmpMessage},
 };
 use test_log::test;
 use tokio::time::timeout;
@@ -68,36 +68,40 @@ async fn echo() {
             .expect("Failed to receive packet");
         buf.truncate(len);
 
-        let packet =
-            ScionPacketUdp::decode(&mut buf.as_slice()).expect("Failed to decode SCION UDP packet");
+        let (packet, rest) =
+            ScionUdpPacket::try_from_slice(&buf).expect("Failed to decode SCION UDP packet");
+        debug_assert!(rest.is_empty(), "packet was not fully consumed");
 
         tracing::info!(
             "Server received packet from {}: {}",
-            packet.source().unwrap(),
-            String::from_utf8_lossy(packet.payload())
+            packet.src_scion_addr().unwrap(),
+            String::from_utf8_lossy(&packet.payload.payload)
         );
 
-        let response_payload = format!("Echo: {}", String::from_utf8_lossy(packet.payload()));
-        let response_endp = ByEndpoint {
-            source: packet.destination().unwrap(),
-            destination: packet.source().unwrap(),
-        };
+        let response_payload =
+            format!("Echo: {}", String::from_utf8_lossy(&packet.payload.payload));
         let response_path = packet
-            .headers
+            .header
             .path
-            .to_reversed()
+            .clone()
+            .into_reversed()
             .expect("Failed to reverse path");
-        let response_pkt = ScionPacketUdp::new(
-            response_endp,
+
+        let response_pkt = ScionUdpPacket::new(
+            packet.dst_socket_addr().unwrap(),
+            packet.src_socket_addr().unwrap(),
             response_path.clone(),
             response_payload.into(),
-        )
-        .expect("Failed to create response packet");
+        );
 
-        let resp_raw = response_pkt.encode_to_bytes_vec().concat();
+        let pkt = response_pkt
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("Failed to encode response SCION UDP packet");
+        debug_assert!(rest.is_empty(), "response packet was not fully consumed");
 
         server_socket
-            .send_to(&resp_raw, src_addr)
+            .send_to(pkt.as_slice(), src_addr)
             .await
             .expect("Failed to send packet");
     });
@@ -107,25 +111,26 @@ async fn echo() {
         .paths(IA132, IA212, Utc::now())
         .unwrap()
         .remove(0)
-        .data_plane_path;
+        .dp_path()
+        .to_model();
 
     // Spawn a task for the client.
     let client_task = tokio::spawn(async move {
         // Construct a simple SCION UDP packet.
-        let packet = ScionPacketUdp::new(
-            ByEndpoint {
-                source: SocketAddr::from_std(IA132, client_addr),
-                destination: SocketAddr::from_std(IA212, server_addr),
-            },
+        let packet = ScionUdpPacket::new(
+            ScionSocketAddr::new(IA132, client_addr.ip().into(), client_addr.port()),
+            ScionSocketAddr::new(IA212, server_addr.ip().into(), server_addr.port()),
             dp_path,
             b"Hello SCION!".as_ref().into(),
-        )
-        .expect("Failed to create SCION packet");
+        );
 
-        let pkt_raw = packet.encode_to_bytes_vec().concat();
+        let pkt_raw = packet
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("Failed to encode SCION UDP packet");
 
         client_socket
-            .send_to(&pkt_raw, ia132_router_addr)
+            .send_to(pkt_raw.as_slice(), ia132_router_addr)
             .await
             .expect("Failed to send packet");
 
@@ -136,18 +141,19 @@ async fn echo() {
             .expect("Failed to receive packet");
         recv_buf.truncate(len);
 
-        let response_pkt = ScionPacketUdp::decode(&mut recv_buf.as_slice())
+        let (pkt, rest) = ScionUdpPacket::try_from_slice(recv_buf.as_slice())
             .expect("Failed to decode response SCION UDP packet");
+
+        debug_assert!(rest.is_empty(), "response packet was not fully consumed");
 
         tracing::info!(
             "Client received packet from {}: {}",
-            response_pkt.source().unwrap(),
-            String::from_utf8_lossy(response_pkt.payload())
+            pkt.src_socket_addr().unwrap(),
+            String::from_utf8_lossy(pkt.payload.payload.as_ref())
         );
 
         assert_eq!(
-            response_pkt.payload(),
-            &Bytes::from(b"Echo: Hello SCION!".as_ref()),
+            pkt.payload.payload, b"Echo: Hello SCION!",
             "Unexpected response payload"
         );
     });
@@ -196,41 +202,44 @@ async fn send_scmp() {
                 .expect("Failed to receive packet");
             buf.truncate(len);
 
-            let packet = ScionPacketScmp::decode(&mut buf.as_slice())
+            let (packet, rest) = ScionScmpPacket::try_from_slice(buf.as_slice())
                 .expect("Failed to decode SCION SCMP packet");
+
+            debug_assert!(rest.is_empty(), "packet was not fully consumed");
 
             tracing::info!(
                 "Receiver received SCMP packet from {}: {:?}",
-                packet.headers.address.source().unwrap(),
-                packet.message
+                packet.src_scion_addr().unwrap(),
+                packet.payload
             );
+
+            let src = packet
+                .src_scion_addr()
+                .expect("Failed to get source SCION address");
+            let dst = packet
+                .dst_scion_addr()
+                .expect("Failed to get destination SCION address");
 
             // Send a simple acknowledgment back
             let response_payload = b"SCMP received";
-            let response_pkt = ScionPacketUdp::new(
-                ByEndpoint {
-                    source: SocketAddr::new(
-                        packet.headers.address.destination().unwrap(),
-                        receiver_addr.port(),
-                    ),
-                    destination: SocketAddr::new(
-                        packet.headers.address.source().unwrap(),
-                        sender_addr.port(),
-                    ),
-                },
+            let response_pkt = ScionUdpPacket::new(
+                ScionSocketAddr::new(dst.isd_asn(), dst.host(), receiver_addr.port()),
+                ScionSocketAddr::new(src.isd_asn(), src.host(), sender_addr.port()),
                 packet
-                    .headers
+                    .header
                     .path
-                    .to_reversed()
+                    .into_reversed()
                     .expect("Failed to reverse path"),
                 response_payload.as_ref().into(),
-            )
-            .expect("Failed to create response packet");
+            );
 
-            let resp_raw = response_pkt.encode_to_bytes_vec().concat();
+            let resp_raw = response_pkt
+                .into_raw()
+                .encode_to_owned_view()
+                .expect("Failed to encode response SCION UDP packet");
 
             receiver_socket
-                .send_to(&resp_raw, src_addr)
+                .send_to(resp_raw.as_slice(), src_addr)
                 .await
                 .expect("Failed to send packet");
         }
@@ -243,63 +252,64 @@ async fn send_scmp() {
         .paths(IA132, IA212, Utc::now())
         .unwrap()
         .remove(0)
-        .data_plane_path;
+        .dp_path()
+        .to_model();
 
     let sender_task = tokio::spawn(async move {
         // Send SCMP echo request with correct identifier (receiver's port)
         let echo_request = ScmpMessage::EchoRequest(ScmpEchoRequest::new(
             receiver_addr.port(),
             1,
-            Bytes::from_static(b"echo test data"),
+            b"echo test data".to_vec(),
         ));
 
-        let echo_packet = ScionPacketScmp::new(
-            ByEndpoint {
-                source: ScionAddr::new(IA132, sender_addr.ip().into()),
-                destination: ScionAddr::new(IA212, receiver_addr.ip().into()),
-            },
+        let echo_packet = ScionScmpPacket::new(
+            ScionAddr::new(IA132, sender_addr.ip().into()),
+            ScionAddr::new(IA212, receiver_addr.ip().into()),
             dp_path.clone(),
             echo_request,
-        )
-        .expect("Failed to create SCMP echo packet");
+        );
 
-        let echo_raw = echo_packet.encode_to_bytes_vec().concat();
+        let echo_raw = echo_packet
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("Failed to encode SCMP echo packet");
         sender_socket
-            .send_to(&echo_raw, ia132_router_addr)
+            .send_to(echo_raw.as_slice(), ia132_router_addr)
             .await
             .expect("Failed to send SCMP echo packet");
 
         // Send SCMP external interface down with quoted UDP packet
         // Create a UDP packet that will be quoted in the SCMP error
-        let quoted_udp = ScionPacketUdp::new(
-            ByEndpoint {
-                source: SocketAddr::from_std(IA212, receiver_addr), // receiver as source
-                destination: SocketAddr::from_std(IA132, sender_addr), // sender as destination
-            },
+        let quoted_udp = ScionUdpPacket::new(
+            ScionSocketAddr::new(IA212, receiver_addr.ip().into(), receiver_addr.port()), /* receiver as source */
+            ScionSocketAddr::new(IA132, sender_addr.ip().into(), sender_addr.port()), /* sender as destination */
             dp_path.clone(),
-            Bytes::from_static(b"quoted payload"),
-        )
-        .expect("Failed to create quoted UDP packet");
+            b"quoted payload".to_vec(),
+        );
 
         let interface_down = ScmpMessage::ExternalInterfaceDown(ScmpExternalInterfaceDown::new(
             IA132,
             42,
-            quoted_udp.encode_to_bytes_vec().concat().into(),
+            quoted_udp
+                .encode_to_vec()
+                .expect("Failed to encode quoted UDP packet"),
         ));
 
-        let interface_down_packet = ScionPacketScmp::new(
-            ByEndpoint {
-                source: ScionAddr::new(IA132, sender_addr.ip().into()),
-                destination: ScionAddr::new(IA212, receiver_addr.ip().into()),
-            },
+        let interface_down_packet = ScionScmpPacket::new(
+            ScionAddr::new(IA132, sender_addr.ip().into()),
+            ScionAddr::new(IA212, receiver_addr.ip().into()),
             dp_path,
             interface_down,
-        )
-        .expect("Failed to create SCMP interface down packet");
+        );
 
-        let interface_down_raw = interface_down_packet.encode_to_bytes_vec().concat();
+        let interface_down_raw = interface_down_packet
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("Failed to encode SCMP interface down packet");
+
         sender_socket
-            .send_to(&interface_down_raw, ia132_router_addr)
+            .send_to(interface_down_raw.as_slice(), ia132_router_addr)
             .await
             .expect("Failed to send SCMP interface down packet");
 
@@ -312,18 +322,19 @@ async fn send_scmp() {
                 .expect("Failed to receive acknowledgment");
             recv_buf.truncate(len);
 
-            let response_pkt = ScionPacketUdp::decode(&mut recv_buf.as_slice())
+            let (pkt, rest) = ScionUdpPacket::try_from_slice(recv_buf.as_slice())
                 .expect("Failed to decode response SCION UDP packet");
+            debug_assert!(rest.is_empty(), "response packet was not fully consumed");
 
             tracing::info!(
                 "Sender received acknowledgment from {}: {}",
-                response_pkt.source().unwrap(),
-                String::from_utf8_lossy(response_pkt.payload())
+                pkt.src_socket_addr().unwrap(),
+                String::from_utf8_lossy(&pkt.payload.payload)
             );
 
             assert_eq!(
-                response_pkt.payload(),
-                &Bytes::from(b"SCMP received".as_ref()),
+                &pkt.payload.payload,
+                b"SCMP received".as_ref(),
                 "Unexpected acknowledgment payload"
             );
         }
@@ -389,7 +400,11 @@ async fn snap_interface_forwarding() {
 
     // Hypothetical endhost behind the SNAP (packets to this address are forwarded to snap_socket)
     let endhost_behind_snap_addr = "10.0.0.42:8080".parse::<std::net::SocketAddr>().unwrap();
-    let endhost_behind_snap_scion_addr = SocketAddr::from_std(IA132, endhost_behind_snap_addr);
+    let endhost_behind_snap_scion_addr = ScionSocketAddr::new(
+        IA132,
+        endhost_behind_snap_addr.ip().into(),
+        endhost_behind_snap_addr.port(),
+    );
 
     tracing::info!(
         %snap_addr,
@@ -398,7 +413,8 @@ async fn snap_interface_forwarding() {
         "Starting SNAP interface forwarding test"
     );
 
-    let remote_scion_addr = SocketAddr::from_std(IA212, remote_addr);
+    let remote_scion_addr =
+        ScionSocketAddr::new(IA212, remote_addr.ip().into(), remote_addr.port());
     let test_payload_1 = b"Test from remote to endhost behind SNAP";
     let test_payload_2 = b"Response from endhost behind SNAP to remote";
 
@@ -414,16 +430,18 @@ async fn snap_interface_forwarding() {
 
         tracing::info!(%src_addr, "SNAP socket received packet");
 
-        let packet = ScionPacketUdp::decode(&mut buf.as_slice())
+        let (packet, rest) = ScionUdpPacket::try_from_slice(buf.as_slice())
             .expect("Failed to decode SCION UDP packet at SNAP socket");
+        debug_assert!(rest.is_empty(), "response packet was not fully consumed");
 
         assert_eq!(
-            packet.payload().as_ref(),
-            test_payload_1,
+            &packet.payload.payload, test_payload_1,
             "SNAP socket received incorrect payload"
         );
         assert_eq!(
-            packet.destination().unwrap(),
+            packet
+                .dst_socket_addr()
+                .expect("Failed to get destination SCION socket address"),
             endhost_behind_snap_scion_addr,
             "Packet destination should be the endhost behind SNAP"
         );
@@ -432,22 +450,25 @@ async fn snap_interface_forwarding() {
 
         // Test Case 1b: SNAP Socket → remote
         let reversed_path = packet
-            .headers
+            .header
             .path
-            .to_reversed()
+            .clone()
+            .into_reversed()
             .expect("Failed to reverse path");
 
-        let response_pkt = ScionPacketUdp::new(
-            ByEndpoint {
-                source: endhost_behind_snap_scion_addr,
-                destination: packet.source().unwrap(),
-            },
+        let response_pkt = ScionUdpPacket::new(
+            endhost_behind_snap_scion_addr,
+            packet
+                .src_socket_addr()
+                .expect("Failed to get source SCION socket address"),
             reversed_path,
             test_payload_2.as_ref().into(),
-        )
-        .expect("Failed to create response packet");
+        );
 
-        let response_raw = response_pkt.encode_to_bytes_vec().concat();
+        let response_raw = response_pkt
+            .encode_to_vec()
+            .expect("Failed to encode response SCION UDP packet");
+
         snap_socket
             .send_to(&response_raw, ia132_router_addr)
             .await
@@ -461,20 +482,20 @@ async fn snap_interface_forwarding() {
         .paths(IA212, IA132, Utc::now())
         .unwrap()
         .remove(0)
-        .data_plane_path;
+        .dp_path()
+        .to_model();
 
     // Test Case 1a: remote → endhost behind SNAP
-    let packet_to_snap = ScionPacketUdp::new(
-        ByEndpoint {
-            source: remote_scion_addr,
-            destination: endhost_behind_snap_scion_addr,
-        },
+    let packet_to_snap = ScionUdpPacket::new(
+        remote_scion_addr,
+        endhost_behind_snap_scion_addr,
         dp_path,
-        test_payload_1.as_ref().into(),
-    )
-    .expect("Failed to create packet to endhost behind SNAP");
+        test_payload_1.to_vec(),
+    );
 
-    let pkt_raw = packet_to_snap.encode_to_bytes_vec().concat();
+    let pkt_raw = packet_to_snap
+        .encode_to_vec()
+        .expect("Failed to encode SCION UDP packet");
     remote_socket
         .send_to(&pkt_raw, ia212_router_addr)
         .await
@@ -495,18 +516,19 @@ async fn snap_interface_forwarding() {
     .expect("Failed to receive at remote socket");
     recv_buf.truncate(len);
 
-    let response_pkt =
-        ScionPacketUdp::decode(&mut recv_buf.as_slice()).expect("Failed to decode response packet");
-
+    let (response_pkt, rest) = ScionUdpPacket::try_from_slice(recv_buf.as_slice())
+        .expect("Failed to decode response packet");
+    debug_assert!(rest.is_empty(), "response packet was not fully consumed");
     tracing::info!("Remote received response from endhost behind SNAP");
 
     assert_eq!(
-        response_pkt.payload().as_ref(),
-        test_payload_2,
+        &response_pkt.payload.payload, test_payload_2,
         "Remote received incorrect payload from endhost behind SNAP"
     );
     assert_eq!(
-        response_pkt.source().unwrap(),
+        response_pkt
+            .src_socket_addr()
+            .expect("Failed to get source SCION socket address"),
         endhost_behind_snap_scion_addr,
         "Response source should be the endhost behind SNAP"
     );
@@ -576,8 +598,10 @@ async fn snap_excluded_networks() {
         "Starting SNAP excluded networks test"
     );
 
-    let excluded_scion_addr = SocketAddr::from_std(IA132, excluded_addr);
-    let remote_scion_addr = SocketAddr::from_std(IA212, remote_addr);
+    let excluded_scion_addr =
+        ScionSocketAddr::new(IA132, excluded_addr.ip().into(), excluded_addr.port());
+    let remote_scion_addr =
+        ScionSocketAddr::new(IA212, remote_addr.ip().into(), remote_addr.port());
     let test_payload_1 = b"Test from remote to excluded";
     let test_payload_2 = b"Response from excluded to remote";
 
@@ -608,12 +632,12 @@ async fn snap_excluded_networks() {
 
         tracing::info!("Excluded socket received packet from {}", src_addr);
 
-        let packet = ScionPacketUdp::decode(&mut buf.as_slice())
+        let (packet, rest) = ScionUdpPacket::try_from_slice(buf.as_slice())
             .expect("Failed to decode SCION UDP packet at excluded socket");
+        debug_assert!(rest.is_empty(), "packet was not fully consumed");
 
         assert_eq!(
-            packet.payload().as_ref(),
-            test_payload_1,
+            &packet.payload.payload, test_payload_1,
             "Excluded socket received incorrect payload"
         );
 
@@ -621,22 +645,23 @@ async fn snap_excluded_networks() {
 
         // Test Case 2b: Excluded Socket → remote
         let reversed_path = packet
-            .headers
+            .header
             .path
-            .to_reversed()
+            .clone()
+            .into_reversed()
             .expect("Failed to reverse path");
 
-        let response_pkt = ScionPacketUdp::new(
-            ByEndpoint {
-                source: SocketAddr::from_std(IA132, excluded_addr),
-                destination: packet.source().unwrap(),
-            },
+        let response_pkt = ScionUdpPacket::new(
+            ScionSocketAddr::new(IA132, excluded_addr.ip().into(), excluded_addr.port()),
+            packet.src_socket_addr().unwrap(),
             reversed_path,
             test_payload_2.as_ref().into(),
-        )
-        .expect("Failed to create response packet");
+        );
 
-        let response_raw = response_pkt.encode_to_bytes_vec().concat();
+        let response_raw = response_pkt
+            .encode_to_vec()
+            .expect("Failed to encode response SCION UDP packet");
+
         excluded_socket
             .send_to(&response_raw, ia132_router_addr)
             .await
@@ -650,20 +675,21 @@ async fn snap_excluded_networks() {
         .paths(IA212, IA132, Utc::now())
         .unwrap()
         .remove(0)
-        .data_plane_path;
+        .dp_path()
+        .to_model();
 
     // Test Case 2a: remote → Excluded Socket
-    let packet_to_excluded = ScionPacketUdp::new(
-        ByEndpoint {
-            source: remote_scion_addr,
-            destination: excluded_scion_addr,
-        },
+    let packet_to_excluded = ScionUdpPacket::new(
+        remote_scion_addr,
+        excluded_scion_addr,
         dp_path,
         test_payload_1.as_ref().into(),
-    )
-    .expect("Failed to create packet to excluded");
+    );
 
-    let pkt_raw = packet_to_excluded.encode_to_bytes_vec().concat();
+    let pkt_raw = packet_to_excluded
+        .encode_to_vec()
+        .expect("Failed to encode SCION UDP packet");
+
     remote_socket
         .send_to(&pkt_raw, ia212_router_addr)
         .await
@@ -684,14 +710,14 @@ async fn snap_excluded_networks() {
     .expect("Failed to receive at remote socket");
     recv_buf.truncate(len);
 
-    let response_pkt =
-        ScionPacketUdp::decode(&mut recv_buf.as_slice()).expect("Failed to decode response packet");
+    let (response_pkt, rest) = ScionUdpPacket::try_from_slice(recv_buf.as_slice())
+        .expect("Failed to decode response packet");
+    debug_assert!(rest.is_empty(), "response packet was not fully consumed");
 
     tracing::info!("Remote received response from excluded");
 
     assert_eq!(
-        response_pkt.payload().as_ref(),
-        test_payload_2,
+        &response_pkt.payload.payload, test_payload_2,
         "Remote received incorrect payload from excluded"
     );
 

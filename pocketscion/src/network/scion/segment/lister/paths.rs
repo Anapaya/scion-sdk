@@ -14,10 +14,9 @@
 
 //! Listing paths at an AS
 
-use bytes::Bytes;
-use scion_proto::{
-    address::IsdAsn,
-    path::{Path, combinator::combine},
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    path::{ScionPath, combinator::combine},
 };
 
 use crate::network::scion::{segment::registry::SegmentRegistry, topology::ScionTopology};
@@ -39,23 +38,18 @@ impl SegmentRegistry {
         dst: IsdAsn,
         valid_after: chrono::DateTime<chrono::Utc>,
         topo: &ScionTopology,
-    ) -> anyhow::Result<Vec<Path<Bytes>>> {
-        let segments = self.endhost_list_segments(src.into(), src.into(), dst.into())?;
+    ) -> anyhow::Result<Vec<ScionPath>> {
+        let segments = self.endhost_list_segments(src, src, dst)?;
 
         let (core_segments, non_core_segments) = {
             let sciparse_segments = segments.into_path_segments(topo, valid_after, 0, 255)?;
 
             (
-                sciparse_segments
-                    .core
-                    .into_iter()
-                    .map(|seg| seg.into())
-                    .collect(),
+                sciparse_segments.core.into_iter().collect(),
                 sciparse_segments
                     .down
                     .into_iter()
                     .chain(sciparse_segments.up)
-                    .map(|seg| seg.into())
                     .collect(),
             )
         };

@@ -19,6 +19,8 @@ use proptest::{
     strategy::ValueTree,
 };
 
+pub mod test_builder;
+
 #[cfg(feature = "fuzz")]
 pub mod fuzz;
 

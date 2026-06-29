@@ -639,7 +639,7 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     {
         let payload = b"correct IA";
         let dst = SocketAddr::new(
-            ScionAddr::new(IA132, receiver_ip.into()),
+            ScionAddr::new(IA132.into(), receiver_ip.into()),
             receiver_addr.port(),
         );
         let pkt = local_packet(dst, payload);
@@ -671,7 +671,10 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     // Test 3: Wrong destination IP → should be dropped.
     {
         let wrong_ip: IpAddr = "127.0.0.2".parse().unwrap();
-        let dst = SocketAddr::new(ScionAddr::new(IA132, wrong_ip.into()), receiver_addr.port());
+        let dst = SocketAddr::new(
+            ScionAddr::new(IA132.into(), wrong_ip.into()),
+            receiver_addr.port(),
+        );
         let pkt = local_packet(dst, b"wrong ip");
         sender_raw.send(pkt).await.unwrap();
         let result = tokio::time::timeout(

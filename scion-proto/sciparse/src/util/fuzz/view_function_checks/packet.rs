@@ -36,7 +36,7 @@ pub fn exec_every_view_function(view: &mut ScionRawPacketView) {
     // ── Packet-level accessors ────────────────────────────────────────
     read_slice_bounds(view.payload());
     touch_slice_bounds(view.payload_mut());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 
     // ── Header sub-view ───────────────────────────────────────────────
     black_box(view.header());
@@ -85,7 +85,7 @@ pub fn exec_every_view_function(view: &mut ScionRawPacketView) {
 fn exec_udp_packet_view(view: &ScionUdpPacketView) {
     black_box(view.header());
     read_slice_bounds(view.payload());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 
     let udp = view.udp();
     black_box(udp.src_port());
@@ -93,13 +93,13 @@ fn exec_udp_packet_view(view: &ScionUdpPacketView) {
     black_box(udp.length());
     black_box(udp.checksum());
     read_slice_bounds(udp.payload());
-    read_slice_bounds(udp.as_bytes());
+    read_slice_bounds(udp.as_slice());
 
     // Round-trip back to raw
     let raw = view.into_raw();
     black_box(raw.header());
     read_slice_bounds(raw.payload());
-    read_slice_bounds(raw.as_bytes());
+    read_slice_bounds(raw.as_slice());
 }
 
 /// Exercises getters and setters on a mutable [`ScionUdpPacketView`].
@@ -122,7 +122,7 @@ fn exec_udp_packet_view_mut(view: &mut ScionUdpPacketView) {
 fn exec_scmp_packet_view(view: &ScionScmpPacketView) {
     black_box(view.header());
     read_slice_bounds(view.payload());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 
     let scmp = view.scmp();
     black_box(scmp.message_type());
@@ -130,13 +130,13 @@ fn exec_scmp_packet_view(view: &ScionScmpPacketView) {
     black_box(scmp.checksum());
     black_box(scmp.dst_port());
     black_box(scmp.message());
-    read_slice_bounds(scmp.as_bytes());
+    read_slice_bounds(scmp.as_slice());
 
     // Round-trip back to raw
     let raw = view.into_raw();
     black_box(raw.header());
     read_slice_bounds(raw.payload());
-    read_slice_bounds(raw.as_bytes());
+    read_slice_bounds(raw.as_slice());
 }
 
 /// Exercises getters and setters on a mutable [`ScionScmpPacketView`].

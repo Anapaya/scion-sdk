@@ -18,7 +18,10 @@
 //! They contain the encoded dataplane path and optional metadata about the path, such as expiration
 //! time, MTU, and interfaces used by the path.
 
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr};
+
+use prost_types::Timestamp;
+use scion_protobuf::daemon::v1 as rpc;
 
 use crate::{
     core::view::View,
@@ -28,7 +31,11 @@ use crate::{
         view::{ScionDpPathView, ScionDpPathViewExt, ScionDpPathViewExtMut},
     },
     identifier::isd_asn::IsdAsn,
-    path::metadata::{geo::GeoCoordinates, link::LinkMeta, path_interface::PathInterface},
+    path::metadata::{
+        geo::GeoCoordinates,
+        link::{LinkMeta, LinkType},
+        path_interface::PathInterface,
+    },
     rpc::FromRpcError,
 };
 
@@ -276,7 +283,7 @@ impl ScionPath {
     /// - `src_ia`: The ISD-AS of the path's source.
     /// - `dst_ia`: The ISD-AS of the path's destination.
     pub fn from_rpc(
-        rpc_path: scion_protobuf::daemon::v1::Path,
+        rpc_path: rpc::Path,
         src_ia: IsdAsn,
         dst_ia: IsdAsn,
     ) -> Result<Self, FromRpcError> {
@@ -343,8 +350,7 @@ impl ScionPath {
                 .expiration
                 .map(|ts| ts.seconds)
                 .ok_or("RPC payload missing expiration timestamp")?
-                .try_into()
-                .map_err(|_| "RPC timestamp does not fit in u64")?;
+                as u64;
 
             let mtu: u16 = rpc_path
                 .mtu
@@ -355,11 +361,9 @@ impl ScionPath {
             // last interface which is the destination
             if rpc_path.latency.len() == expected_count_links {
                 for (meta, latency) in interface_meta.iter_mut().zip(rpc_path.latency.into_iter()) {
-                    meta.latency = Some(
-                        latency
-                            .try_into()
-                            .map_err(|_| "Failed to convert latency")?,
-                    );
+                    // A negative latency indicates that no latency is supplied, so we treat it as
+                    // None
+                    meta.latency = latency.try_into().ok();
                 }
             }
 
@@ -370,14 +374,15 @@ impl ScionPath {
                     .iter_mut()
                     .zip(rpc_path.bandwidth.into_iter())
                 {
-                    meta.bandwidth = Some(bandwidth);
+                    // Bandwith of 0 indicates that no bandwidth is supplied
+                    meta.bandwidth = (bandwidth > 0).then_some(bandwidth);
                 }
             }
 
             // Collect geo info if available, one per interface
             if rpc_path.geo.len() == interface_count {
                 for (meta, geo_info) in interface_meta.iter_mut().zip(rpc_path.geo.into_iter()) {
-                    meta.geo_info = Some(GeoCoordinates::from_rpc(geo_info));
+                    meta.geo_info = GeoCoordinates::try_from_rpc(geo_info);
                 }
             }
 
@@ -436,5 +441,121 @@ impl ScionPath {
             Some(path_meta),
             next_hop,
         ))
+    }
+
+    /// Converts the [ScionPath] into an RPC path.
+    pub fn to_rpc(&self) -> rpc::Path {
+        // Creating a new rpc::Path struct first for simplicity, then copying the fields over to a
+        // new struct to ensure all fields are set.
+        let mut rpc_path = rpc::Path {
+            ..Default::default()
+        };
+
+        rpc_path.raw = self.dp_path.as_slice().to_vec();
+        rpc_path.interface = self.next_hop.map(|addr| {
+            rpc::Interface {
+                address: Some(rpc::Underlay {
+                    address: addr.to_string(),
+                }),
+            }
+        });
+
+        if let Some(meta) = &self.metadata {
+            rpc_path.mtu = meta.mtu as u32;
+            rpc_path.expiration = Some(Timestamp {
+                //XXX(ake): Let's see if we are still using unix epoch at ~292 billion CE
+                seconds: meta.expiration.try_into().unwrap_or(i64::MAX),
+                nanos: 0,
+            });
+            rpc_path.epic_auths = meta.epic_auth.clone().map(|auth| auth.into_rpc());
+
+            if let Some(if_meta) = &meta.interfaces {
+                rpc_path.interfaces = if_meta
+                    .iter()
+                    .map(|meta| {
+                        rpc::PathInterface {
+                            isd_as: meta.interface.isd_asn.to_u64(),
+                            id: meta.interface.id as u64,
+                        }
+                    })
+                    .collect();
+
+                rpc_path.latency = if_meta
+                    .iter()
+                    .map(|latency| {
+                        match latency.latency {
+                            Some(latency) => {
+                                prost_types::Duration {
+                                    // XXX(ake): I hope most links won't have multiple hundered
+                                    // years of latency.
+                                    seconds: latency.as_secs().try_into().unwrap_or(i64::MAX),
+                                    nanos: latency.subsec_nanos().try_into().unwrap_or(i32::MAX),
+                                }
+                            }
+                            // XXX(ake): a negative value indicates that no latency is supplied
+                            None => {
+                                prost_types::Duration {
+                                    seconds: -1,
+                                    nanos: 0,
+                                }
+                            }
+                        }
+                    })
+                    .collect();
+
+                rpc_path.bandwidth = if_meta
+                    .iter()
+                    .map(|meta| meta.bandwidth.unwrap_or(0))
+                    .collect();
+
+                rpc_path.geo = if_meta
+                    .iter()
+                    .map(|meta| {
+                        meta.geo_info
+                            .as_ref()
+                            .map(|geo| geo.into_rpc())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+
+                rpc_path.link_type = if_meta
+                    .iter()
+                    .map(|meta| {
+                        match &meta.link {
+                            Some(LinkMeta::Egress(link_type)) => link_type.to_i32(),
+                            _ => LinkType::Unset.to_i32(),
+                        }
+                    })
+                    .collect();
+
+                // collect notes if available, must be one per AS (total_interfaces / 2 + 1)
+                let expected_count_ases = if_meta.len() / 2 + 1;
+                if let Some(notes) = &meta.notes {
+                    // XXX(ake): don't really have a good idea to validate the notes or pad them to
+                    // the expected length
+                    if notes.len() == expected_count_ases {
+                        rpc_path.notes = notes.clone();
+                    }
+                }
+            }
+        }
+
+        // XXX(ake): Doing this to catch any new fields added to the rpc::Path struct in the future,
+        // so we don't forget to set them here. Compiler should easily optimize this away.
+        rpc::Path {
+            raw: rpc_path.raw,
+            interface: rpc_path.interface,
+            interfaces: rpc_path.interfaces,
+            mtu: rpc_path.mtu,
+            expiration: rpc_path.expiration,
+            latency: rpc_path.latency,
+            bandwidth: rpc_path.bandwidth,
+            geo: rpc_path.geo,
+            link_type: rpc_path.link_type,
+            internal_hops: rpc_path.internal_hops,
+            notes: rpc_path.notes,
+            epic_auths: rpc_path.epic_auths,
+            discovery_information: HashMap::default(), // TODO: add support for discovery info
+        }
     }
 }

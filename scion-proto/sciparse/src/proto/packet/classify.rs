@@ -20,7 +20,7 @@
 
 use crate::{
     address::socket_addr::ScionSocketAddr,
-    core::encode::{EncodeError, WireEncode},
+    core::encode::WireEncode,
     identifier::isd_asn::IsdAsn,
     packet::{
         model::{ScionRawPacket, ScionScmpPacket, ScionUdpPacket},
@@ -32,7 +32,7 @@ use crate::{
 ///
 /// Each variant wraps a reference to the original [`ScionPacketView`] together with any port
 /// information that could be deduced. The reference allows callers to access the raw packet bytes
-/// (via [`View::as_bytes`](crate::core::view::View::as_bytes)) without a copy.
+/// (via [`View::as_slice`](crate::core::view::View::as_slice)) without a copy.
 ///
 /// Use [`ClassifiedPacketView::dst_socket_addr`] to obtain the destination [`ScionSocketAddr`].
 pub enum ClassifiedPacketView<'a> {
@@ -62,9 +62,29 @@ impl<'a> ClassifiedPacketView<'a> {
         };
 
         let isd_asn: IsdAsn = packet.header().dst_ia();
-        let host = packet.header().dst_host_addr().ok()?.scion_host_addr()?;
+        let host = packet
+            .header()
+            .dst_host_addr()
+            .ok()?
+            .scion_host_addr()
+            .ok()?;
 
         Some(ScionSocketAddr::new(isd_asn, host, dst_port))
+    }
+
+    /// Returns `true` if the classified packet is a UDP packet.
+    pub fn is_udp(&self) -> bool {
+        matches!(self, ClassifiedPacketView::Udp(_))
+    }
+
+    /// Returns `true` if the classified packet is a SCMP packet.
+    pub fn is_scmp(&self) -> bool {
+        matches!(self, ClassifiedPacketView::Scmp(_))
+    }
+
+    /// Returns `true` if the classified packet is neither a UDP nor a SCMP packet.
+    pub fn is_other(&self) -> bool {
+        matches!(self, ClassifiedPacketView::Other(_))
     }
 }
 
@@ -93,17 +113,40 @@ impl ClassifiedPacket {
         };
 
         let isd_asn: IsdAsn = header.address.dst_ia;
-        let host = header.address.dst_host_addr.scion_host_addr()?;
+        let host = header.address.dst_host_addr.scion_host_addr().ok()?;
 
         Some(ScionSocketAddr::new(isd_asn, host, dst_port))
     }
 
     /// Converts the classified packet back into a raw packet.
-    pub fn into_raw(self) -> Result<ScionRawPacket, EncodeError> {
+    #[inline]
+    pub fn into_raw(self) -> ScionRawPacket {
         match self {
             ClassifiedPacket::Udp(packet) => packet.into_raw(),
             ClassifiedPacket::Scmp(packet) => packet.into_raw(),
-            ClassifiedPacket::Other(packet) => Ok(packet),
+            ClassifiedPacket::Other(packet) => packet,
+        }
+    }
+
+    /// Converts the classified packet into a UDP packet if it is a UDP packet, or returns the
+    /// original classified packet if it is not.
+    #[inline]
+    #[allow(clippy::result_large_err)]
+    pub fn try_into_udp(self) -> Result<ScionUdpPacket, Self> {
+        match self {
+            ClassifiedPacket::Udp(packet) => Ok(packet),
+            _ => Err(self),
+        }
+    }
+
+    /// Converts the classified packet into a SCMP packet if it is a SCMP packet, or returns the
+    /// original classified packet if it is not.
+    #[inline]
+    #[allow(clippy::result_large_err)]
+    pub fn try_into_scmp(self) -> Result<ScionScmpPacket, Self> {
+        match self {
+            ClassifiedPacket::Scmp(packet) => Ok(packet),
+            _ => Err(self),
         }
     }
 
@@ -141,6 +184,23 @@ impl WireEncode for ClassifiedPacket {
             ClassifiedPacket::Scmp(packet) => packet.required_size(),
             ClassifiedPacket::Other(packet) => packet.required_size(),
         }
+    }
+}
+impl From<ClassifiedPacket> for ScionRawPacket {
+    fn from(packet: ClassifiedPacket) -> Self {
+        packet.into_raw()
+    }
+}
+impl TryFrom<ClassifiedPacket> for ScionUdpPacket {
+    type Error = ClassifiedPacket;
+    fn try_from(packet: ClassifiedPacket) -> Result<Self, Self::Error> {
+        packet.try_into_udp()
+    }
+}
+impl TryFrom<ClassifiedPacket> for ScionScmpPacket {
+    type Error = ClassifiedPacket;
+    fn try_from(packet: ClassifiedPacket) -> Result<Self, Self::Error> {
+        packet.try_into_scmp()
     }
 }
 
@@ -208,7 +268,7 @@ pub mod ptest {
                     any::<UdpDatagram>(),
                 )
                     .prop_map(|(mut header, payload)| {
-                        header.common.next_header = ProtocolNumber::Udp.into();
+                        header.common.next_header = ProtocolNumber::Udp;
                         ClassifiedPacket::Udp(ScionPacket { header, payload })
                     }),
                 params.scmp => (
@@ -216,7 +276,7 @@ pub mod ptest {
                     ScmpMessage::arbitrary_with(params.scmp_params),
                 )
                     .prop_map(|(mut header, payload)| {
-                        header.common.next_header = ProtocolNumber::Scmp.into();
+                        header.common.next_header = ProtocolNumber::Scmp;
                         ClassifiedPacket::Scmp(ScionPacket { header, payload })
                     }),
                 params.other => (
@@ -225,8 +285,8 @@ pub mod ptest {
                 )
                     .prop_map(|(mut header, payload)| {
                         header.common.next_header = match header.common.next_header {
-                            17 => 255, // Avoid generating UDP next_header for the Other variant
-                            202 => 255, // Avoid generating SCMP next_header for the Other variant
+                            ProtocolNumber::Udp => ProtocolNumber::Other(255), // Avoid generating UDP next_header for the Other variant
+                            ProtocolNumber::Scmp => ProtocolNumber::Other(255), // Avoid generating SCMP next_header for the Other variant
                             v => v,
                         };
                         ClassifiedPacket::Other(ScionPacket { header, payload })

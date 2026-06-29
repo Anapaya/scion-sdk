@@ -24,10 +24,19 @@
 use std::{net::IpAddr, ops::ControlFlow};
 
 use anyhow::Context;
-use scion_proto::{
-    address::{IsdAsn, ScionAddr},
-    packet::{ByEndpoint, NextHeader, ScionPacketUdp},
-    wire_encoding::{WireDecode, WireEncodeVec},
+use sciparse::{
+    address::{addr::ScionAddr, ip_addr::ScionIpAddr, socket_addr::ScionSocketAddr},
+    core::{
+        convert::{TryFromView, TryToModel},
+        encode::WireEncode,
+        model::Model,
+    },
+    identifier::isd_asn::IsdAsn,
+    packet::{
+        model::{ScionRawPacket, ScionUdpPacket},
+        view::ScionPacketView,
+    },
+    payload::ProtocolNumber,
 };
 use serde::{Deserialize, Serialize};
 use tokio::select;
@@ -141,7 +150,7 @@ impl NetworkForwarder {
                     }
                 }
                 res = self.udp_sock.recv_from(&mut recv_buf[..]) => {
-                    if let ControlFlow::Break(_) = self.handle_real_recv(&recv_buf, res).await {
+                    if let ControlFlow::Break(_) = self.handle_real_recv(&mut recv_buf, res).await {
                         break;
                     }
                 }
@@ -153,7 +162,7 @@ impl NetworkForwarder {
 
     async fn handle_real_recv(
         &self,
-        recv_buf: &[u8; 65535],
+        recv_buf: &mut [u8; 65535],
         res: Result<(usize, std::net::SocketAddr), std::io::Error>,
     ) -> ControlFlow<()> {
         match res {
@@ -166,10 +175,10 @@ impl NetworkForwarder {
                     return ControlFlow::Continue(());
                 }
 
-                let mut pkt_bytes = &recv_buf[..size];
-                let pkt = match scion_proto::packet::ScionPacketRaw::decode(&mut pkt_bytes) {
+                let pkt_bytes = &recv_buf[..size];
+                let pkt = match ScionRawPacket::try_from_slice(pkt_bytes) {
                     // forward the packet to the network simulation
-                    Ok(pkt) => pkt,
+                    Ok((pkt, _rest)) => pkt,
                     Err(e) => {
                         tracing::warn!(
                             error = ?e,
@@ -193,7 +202,23 @@ impl NetworkForwarder {
                     }
                 };
 
-                match self.sim_sock.try_send(pkt, ScionNetworkTime::now()) {
+                // Overwrite the recv buffer with the encoded packet, so that we can forward it to
+                // the sim socket without an extra copy.
+                let (updated_view, _rest) = match pkt.encode_to_view(recv_buf) {
+                    Ok(view) => view,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = ?e,
+                            "Failed to encode packet for forwarding, dropping packet"
+                        );
+                        return ControlFlow::Continue(());
+                    }
+                };
+
+                match self
+                    .sim_sock
+                    .try_send(updated_view, ScionNetworkTime::now())
+                {
                     Ok(_) => (),
                     Err(e) => {
                         tracing::warn!(
@@ -214,7 +239,7 @@ impl NetworkForwarder {
 
     async fn handle_sim_recv(
         &self,
-        res: Result<scion_proto::packet::ScionPacketRaw, std::io::Error>,
+        res: Result<Box<ScionPacketView>, std::io::Error>,
     ) -> ControlFlow<()> {
         match res {
             Ok(pkt) => {
@@ -223,7 +248,18 @@ impl NetworkForwarder {
                     self.sim_sock.scion_addr().isd_asn(),
                     self.forward_addr.ip().into(),
                 );
-                let pkt = match change_packet_addresses(None, Some(dst), pkt) {
+                let model = match pkt.try_to_model() {
+                    Ok(model) => model,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = ?e,
+                            "Failed to convert packet view to model, dropping packet"
+                        );
+                        return ControlFlow::Continue(());
+                    }
+                };
+
+                let pkt = match change_packet_addresses(None, Some(dst), model) {
                     Ok(pkt) => pkt,
                     Err(e) => {
                         tracing::warn!(
@@ -234,11 +270,18 @@ impl NetworkForwarder {
                     }
                 };
 
-                match self
-                    .udp_sock
-                    .send_to(&pkt.encode_to_bytes_vec().concat(), self.forward_addr)
-                    .await
-                {
+                let encoded = match pkt.encode_to_vec() {
+                    Ok(encoded) => encoded,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = ?e,
+                            "Failed to encode packet for forwarding, dropping packet"
+                        );
+                        return ControlFlow::Continue(());
+                    }
+                };
+
+                match self.udp_sock.send_to(&encoded, self.forward_addr).await {
                     Ok(_) => (),
                     Err(e) => {
                         tracing::warn!(
@@ -269,61 +312,61 @@ impl NetworkForwarder {
 /// If no source or destination address can be determined (either from the provided addresses or the
 /// packet), an error is returned.
 fn change_packet_addresses(
-    source: Option<scion_proto::address::ScionAddr>,
-    destination: Option<scion_proto::address::ScionAddr>,
-    pkt: scion_proto::packet::ScionPacketRaw,
-) -> anyhow::Result<scion_proto::packet::ScionPacketRaw> {
-    match pkt.headers.common.next_header {
-        NextHeader::UDP => {
-            let udp = ScionPacketUdp::try_from(pkt).context("Failed to parse packet as UDP")?;
+    set_source: Option<ScionAddr>,
+    set_destination: Option<ScionAddr>,
+    mut pkt: ScionRawPacket,
+) -> anyhow::Result<ScionRawPacket> {
+    match pkt.header.common.next_header {
+        ProtocolNumber::Udp => {
+            let mut udp = ScionUdpPacket::try_from(pkt).context("Failed to parse packet as UDP")?;
 
-            let src_port = udp.src_port();
-            let dst_port = udp.dst_port();
+            let src_port = udp.payload.src_port;
+            let dst_port = udp.payload.dst_port;
 
-            let source = source
-                .map(|s| scion_proto::address::SocketAddr::new(s, src_port))
-                .or_else(|| udp.source())
-                .context("Packet is missing source address")?;
-            let destination = destination
-                .map(|d| scion_proto::address::SocketAddr::new(d, dst_port))
-                .or_else(|| udp.destination())
-                .context("Packet is missing destination address")?;
+            let source = match set_source {
+                Some(s) => ScionSocketAddr::new(s.isd_asn(), s.host(), src_port),
+                None => {
+                    udp.src_socket_addr()
+                        .context("Packet has bad source address")?
+                }
+            };
 
-            // Create a new UDP packet with the updated addresses and correct checksum
-            let new_udp = ScionPacketUdp::new(
-                ByEndpoint {
-                    source,
-                    destination,
-                },
-                udp.headers.path,
-                udp.datagram.payload,
-            )
-            .context("Failed to create new UDP packet with updated addresses")?;
+            let destination = match set_destination {
+                Some(d) => ScionSocketAddr::new(d.isd_asn(), d.host(), dst_port),
+                None => {
+                    udp.dst_socket_addr()
+                        .context("Packet has bad destination address")?
+                }
+            };
 
-            Ok(new_udp.into())
+            // Changes the source and destination addresses of the given UDP packet to the
+            // provided addresses.
+            udp.set_src_socket_addr(source);
+            udp.set_dst_socket_addr(destination);
+
+            Ok(udp.into())
         }
         _ => {
-            let source = source
-                .or_else(|| pkt.headers.address.source())
-                .context("Packet is missing source address")?;
-            let destination = destination
-                .or_else(|| pkt.headers.address.destination())
-                .context("Packet is missing destination address")?;
+            let source = match set_source {
+                Some(s) => s,
+                None => {
+                    pkt.src_scion_addr()
+                        .context("Packet has bad source address")?
+                }
+            };
+            let destination = match set_destination {
+                Some(d) => d,
+                None => {
+                    pkt.dst_scion_addr()
+                        .context("Packet has bad destination address")?
+                }
+            };
 
-            // Create a new packet with the updated addresses and the same payload and path
-            let new_pkt = scion_proto::packet::ScionPacketRaw::new(
-                ByEndpoint {
-                    source,
-                    destination,
-                },
-                pkt.headers.path,
-                pkt.payload,
-                pkt.headers.common.next_header,
-                pkt.headers.common.flow_id,
-            )
-            .context("Failed to create new packet with updated addresses")?;
+            // Changes the source and destination addresses of the packet to the provided addresses.
+            pkt.set_dst_scion_addr(destination);
+            pkt.set_src_scion_addr(source);
 
-            Ok(new_pkt)
+            Ok(pkt)
         }
     }
 }
@@ -343,7 +386,7 @@ impl PocketScionState {
         let mut guard = self.write();
         match guard
             .network_forwarders
-            .entry(ScionAddr::new(local_as, sim_addr.into()))
+            .entry(ScionIpAddr::new(local_as, sim_addr))
         {
             std::collections::btree_map::Entry::Occupied(_) => {
                 anyhow::bail!(
@@ -366,7 +409,7 @@ impl PocketScionState {
     }
 
     /// Returns a list of all network forwarders in the system state, along with their state.
-    pub fn network_forwarders(&self) -> Vec<(ScionAddr, NetworkForwarderState)> {
+    pub fn network_forwarders(&self) -> Vec<(ScionIpAddr, NetworkForwarderState)> {
         self.read()
             .network_forwarders
             .iter()
@@ -379,13 +422,13 @@ impl PocketScionState {
 mod tests {
     use std::net::IpAddr;
 
-    use bytes::Bytes;
     use chrono::Utc;
-    use scion_proto::{
-        address::{IsdAsn, ScionAddr, SocketAddr},
-        packet::{ByEndpoint, ScionPacketRaw, ScionPacketUdp},
-        path::DataPlanePath,
-        wire_encoding::{WireDecode, WireEncodeVec},
+    use sciparse::{
+        address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
+        core::{convert::TryFromView, encode::WireEncode},
+        dataplane_path::model::DpPath,
+        identifier::isd_asn::IsdAsn,
+        packet::model::{ScionRawPacket, ScionUdpPacket},
     };
     use tokio::time::{Duration, timeout};
 
@@ -441,15 +484,10 @@ mod tests {
             .expect("sender stack");
         let sender_socket = sender_stack.bind_udp(0).expect("bind sim udp");
 
-        let payload = Bytes::from_static(b"hello-from-sim");
-        let dst = SocketAddr::new(ScionAddr::new(local_as, forwarder_ip.into()), 4242);
+        let payload = b"hello-from-sim".to_vec();
+        let dst = ScionSocketAddr::new(local_as, forwarder_ip.into(), 4242);
         sender_socket
-            .try_send(
-                dst,
-                DataPlanePath::EmptyPath,
-                payload,
-                ScionNetworkTime::now(),
-            )
+            .try_send(dst, DpPath::Empty, payload, ScionNetworkTime::now())
             .expect("send sim packet");
 
         let mut buf = [0u8; 2048];
@@ -460,10 +498,10 @@ mod tests {
 
         assert_eq!(addr, listen_addr, "forwarder should send to peer"); // peer receives from forwarder
 
-        let mut pkt_bytes = &buf[..size];
-        let pkt = ScionPacketRaw::decode(&mut pkt_bytes).expect("decode packet");
-        let dest = pkt.headers.address.destination().expect("dest address");
-        let src = pkt.headers.address.source().expect("src address");
+        let pkt_bytes = &buf[..size];
+        let (pkt, _rest) = ScionRawPacket::try_from_slice(pkt_bytes).expect("decode packet");
+        let dest = pkt.dst_scion_addr().expect("dst address");
+        let src = pkt.src_scion_addr().expect("src address");
 
         assert_eq!(dest, ScionAddr::new(local_as, forward_addr.ip().into())); // destination translated to forwarder peer IP
         assert_eq!(src, ScionAddr::new(local_as, sender_ip.into())); // source preserved from sim sender
@@ -505,20 +543,17 @@ mod tests {
         let receiver_socket = receiver_stack.bind_udp(43000).expect("bind receiver udp");
 
         let src_ip: IpAddr = "10.0.0.9".parse().unwrap();
-        let src_addr = SocketAddr::new(ScionAddr::new(local_as, src_ip.into()), 5555);
-        let dst_addr = SocketAddr::new(ScionAddr::new(local_as, receiver_ip.into()), 43000);
-        let packet = ScionPacketUdp::new(
-            ByEndpoint {
-                source: src_addr,
-                destination: dst_addr,
-            },
-            DataPlanePath::EmptyPath,
-            Bytes::from_static(b"hello-from-real"),
-        )
-        .expect("build packet");
+        let src_addr = ScionSocketAddr::new(local_as, src_ip.into(), 5555);
+        let dst_addr = ScionSocketAddr::new(local_as, receiver_ip.into(), 43000);
+        let packet = ScionUdpPacket::new(
+            src_addr,
+            dst_addr,
+            DpPath::Empty,
+            b"hello-from-real".to_vec(),
+        );
 
         peer_socket
-            .send_to(&packet.encode_to_bytes_vec().concat(), listen_addr)
+            .send_to(&packet.encode_to_vec().expect("encode packet"), listen_addr)
             .await
             .expect("send to forwarder");
 
@@ -527,13 +562,13 @@ mod tests {
             .expect("recv timeout")
             .expect("recv packet");
 
-        let source = recv.source().expect("source addr");
-        let destination = recv.destination().expect("destination addr");
+        let source = recv.src_socket_addr().expect("source addr");
+        let destination = recv.dst_socket_addr().expect("destination addr");
 
         assert_eq!(destination, dst_addr); // destination preserved for sim receiver
         assert_eq!(
             source,
-            SocketAddr::new(ScionAddr::new(local_as, forwarder_ip.into()), 5555)
+            ScionSocketAddr::new(local_as, forwarder_ip.into(), 5555)
         ); // source IP rewritten to forwarder sim address
 
         forwarder_task.abort();

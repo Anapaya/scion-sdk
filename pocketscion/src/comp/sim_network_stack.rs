@@ -22,14 +22,18 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use bytes::Bytes;
-use scion_proto::{
-    address::{IsdAsn, ScionAddr, SocketAddr},
-    packet::{ByEndpoint, NextHeader, ScionPacketRaw, ScionPacketUdp},
-    path::DataPlanePath,
-};
 use scion_sdk_quic_scion::socket::{BoxedSocketError, GenericScionUdpSocket};
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::{
+    address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
+    core::{model::Model, view::View},
+    dataplane_path::{model::DpPath, view::ScionDpPathViewRef},
+    identifier::isd_asn::IsdAsn,
+    packet::{
+        model::ScionUdpPacket,
+        view::{ScionPacketView, ScionRawPacketView, ScionUdpPacketView},
+    },
+    payload::ProtocolNumber,
+};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::{
@@ -45,8 +49,8 @@ pub struct NetSimStack(Arc<NetSimStackInner>);
 struct NetSimStackInner {
     state: PocketScionState,
 
-    udp_receivers: RwLock<HashMap<u16, mpsc::Sender<ScionPacketUdp>>>,
-    raw_recevers: RwLock<Vec<mpsc::Sender<ScionPacketRaw>>>,
+    udp_receivers: RwLock<HashMap<u16, mpsc::Sender<Box<ScionUdpPacketView>>>>,
+    raw_recevers: RwLock<Vec<mpsc::Sender<Box<ScionRawPacketView>>>>,
 
     local_as: IsdAsn,
     bind_addr: IpAddr,
@@ -136,7 +140,7 @@ impl NetSimStack {
 
     /// Dispatches a packet to the network simulator, with the given timestamp. The packet will be
     /// sent from the local AS.
-    fn send(&self, packet: ScionPacketRaw, timestamp: ScionNetworkTime) {
+    fn send(&self, packet: &mut ScionPacketView, timestamp: ScionNetworkTime) {
         self.0
             .state
             .dispatch_to_network_sim(self.0.local_as, 0, timestamp, packet);
@@ -144,14 +148,10 @@ impl NetSimStack {
 }
 
 impl Receiver for NetSimStackInner {
-    fn receive_packet(&self, packet: ScionPacketRaw) {
+    fn receive_packet(&self, packet: &ScionPacketView) {
         // Check IP addr
-        let dest_addr = packet.headers.address.destination();
-        if !dest_addr
-            .iter()
-            .flat_map(|addr| addr.local_address())
-            .any(|addr| addr == self.bind_addr)
-        {
+        let dest_addr = packet.header().dst_host_addr().ok().and_then(|a| a.ip());
+        if dest_addr != Some(self.bind_addr) {
             tracing::warn!(
                 packet_destination = ?dest_addr,
                 local_address = ?self.bind_addr,
@@ -167,7 +167,7 @@ impl Receiver for NetSimStackInner {
             for raw_rx in raw_recv.iter() {
                 match raw_rx.try_reserve() {
                     Ok(permit) => {
-                        permit.send(packet.clone());
+                        permit.send(packet.to_boxed());
                         forwarded_once = true;
                     }
                     Err(e) => {
@@ -181,9 +181,9 @@ impl Receiver for NetSimStackInner {
         }
 
         // Check packet type
-        if packet.headers.common.next_header == NextHeader::UDP {
+        if packet.header().next_header() == ProtocolNumber::Udp {
             // Forward to UDP receivers based on destination port.
-            let pkt = match ScionPacketUdp::try_from(packet.clone()) {
+            let pkt = match packet.try_into_udp() {
                 Ok(pkt) => pkt,
                 Err(e) => {
                     tracing::warn!(
@@ -195,10 +195,10 @@ impl Receiver for NetSimStackInner {
             };
             let udp_receivers = self.udp_receivers.read().unwrap();
 
-            let Some(udp) = udp_receivers.get(&pkt.dst_port()) else {
+            let Some(udp) = udp_receivers.get(&pkt.udp().dst_port()) else {
                 if !forwarded_once {
                     tracing::warn!(
-                        port = pkt.dst_port(),
+                        port = pkt.udp().dst_port(),
                         "Received UDP packet for port that has no receiver, and no raw receivers to forward to, dropping packet"
                     );
                 }
@@ -206,11 +206,11 @@ impl Receiver for NetSimStackInner {
             };
 
             match udp.try_reserve() {
-                Ok(permit) => permit.send(pkt),
+                Ok(permit) => permit.send(pkt.to_boxed()),
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
-                        port = pkt.dst_port(),
+                        port = pkt.udp().dst_port(),
                         "UDP socket receiver is full, dropping packet for this receiver"
                     );
                 }
@@ -224,7 +224,7 @@ impl Receiver for NetSimStackInner {
 /// To create a socket, call [NetSimStack::bind_udp()].
 pub struct NetSimUdpSocket {
     stack: NetSimStack,
-    rx_queue: Mutex<mpsc::Receiver<ScionPacketUdp>>,
+    rx_queue: Mutex<mpsc::Receiver<Box<ScionUdpPacketView>>>,
     port: u16,
 }
 
@@ -233,7 +233,7 @@ impl NetSimUdpSocket {
         stack: NetSimStack,
         rx_queue_size: usize,
         port: u16,
-    ) -> (Self, mpsc::Sender<ScionPacketUdp>) {
+    ) -> (Self, mpsc::Sender<Box<ScionUdpPacketView>>) {
         let (rx_queue_sender, rx_queue) = mpsc::channel(rx_queue_size);
         (
             Self {
@@ -256,37 +256,35 @@ impl NetSimUdpSocket {
     /// Sends a raw SCION packet through the socket to the network simulator.
     pub fn try_send(
         &self,
-        dst: scion_proto::address::SocketAddr,
-        path: DataPlanePath<Bytes>,
-        payload: Bytes,
+        dst: ScionSocketAddr,
+        path: DpPath,
+        payload: Vec<u8>,
         timestamp: ScionNetworkTime,
     ) -> io::Result<()> {
-        let packet = ScionPacketUdp::new(
-            ByEndpoint {
-                source: SocketAddr::new(
-                    ScionAddr::new(self.stack.0.local_as, self.stack.0.bind_addr.into()),
-                    self.port,
-                ),
-                destination: dst,
-            },
+        let packet = ScionUdpPacket::new(
+            ScionSocketAddr::new(
+                self.stack.0.local_as,
+                self.stack.0.bind_addr.into(),
+                self.port,
+            ),
+            dst,
             path,
             payload,
-        )
-        .map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Failed to construct SCION packet: {e}"),
-            )
-        })?;
+        );
 
-        self.stack.send(packet.into(), timestamp);
+        let mut view = packet
+            .into_raw()
+            .encode_to_owned_view()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        self.stack.send(&mut view, timestamp);
 
         Ok(())
     }
 
     /// Tries to receive a packet from the socket's receive queue, returning an error if the queue
     /// is empty or if the socket has been disconnected.
-    pub fn try_recv(&self) -> io::Result<ScionPacketUdp> {
+    pub fn try_recv(&self) -> io::Result<Box<ScionUdpPacketView>> {
         match self
             .rx_queue
             .try_lock()
@@ -315,7 +313,7 @@ impl NetSimUdpSocket {
 
     /// Asynchronously receives a packet from the socket's receive queue, returning an error if the
     /// socket has been disconnected.
-    pub async fn recv(&self) -> io::Result<ScionPacketUdp> {
+    pub async fn recv(&self) -> io::Result<Box<ScionUdpPacketView>> {
         match self.rx_queue.lock().await.recv().await {
             Some(p) => Ok(p),
             None => {
@@ -328,9 +326,10 @@ impl NetSimUdpSocket {
     }
 
     /// Returns the local socket address of this socket.
-    pub fn socket_addr(&self) -> SocketAddr {
-        SocketAddr::new(
-            ScionAddr::new(self.stack.0.local_as, self.stack.0.bind_addr.into()),
+    pub fn socket_addr(&self) -> ScionSocketAddr {
+        ScionSocketAddr::new(
+            self.stack.0.local_as,
+            self.stack.0.bind_addr.into(),
             self.port,
         )
     }
@@ -342,11 +341,14 @@ impl NetSimUdpSocket {
 /// To create a socket, call [NetSimStack::bind_raw()].
 pub struct NetSimRawSocket {
     stack: NetSimStack,
-    rx_queue: Mutex<mpsc::Receiver<ScionPacketRaw>>,
+    rx_queue: Mutex<mpsc::Receiver<Box<ScionRawPacketView>>>,
 }
 
 impl NetSimRawSocket {
-    fn new(stack: NetSimStack, rx_queue_size: usize) -> (Self, mpsc::Sender<ScionPacketRaw>) {
+    fn new(
+        stack: NetSimStack,
+        rx_queue_size: usize,
+    ) -> (Self, mpsc::Sender<Box<ScionRawPacketView>>) {
         let (rx_queue_sender, rx_queue) = mpsc::channel(rx_queue_size);
         (
             Self {
@@ -358,14 +360,18 @@ impl NetSimRawSocket {
     }
 
     /// Sends a raw SCION packet through the socket to the network simulator.
-    pub fn try_send(&self, packet: ScionPacketRaw, timestamp: ScionNetworkTime) -> io::Result<()> {
+    pub fn try_send(
+        &self,
+        packet: &mut ScionRawPacketView,
+        timestamp: ScionNetworkTime,
+    ) -> io::Result<()> {
         self.stack.send(packet, timestamp);
         Ok(())
     }
 
     /// Tries to receive a packet from the socket's receive queue, returning an error if the queue
     /// is empty or if the socket has been disconnected.
-    pub fn try_recv(&self) -> io::Result<ScionPacketRaw> {
+    pub fn try_recv(&self) -> io::Result<Box<ScionRawPacketView>> {
         match self
             .rx_queue
             .try_lock()
@@ -394,7 +400,7 @@ impl NetSimRawSocket {
 
     /// Asynchronously receives a packet from the socket's receive queue, returning an error if the
     /// socket has been disconnected.
-    pub async fn recv(&self) -> io::Result<ScionPacketRaw> {
+    pub async fn recv(&self) -> io::Result<Box<ScionRawPacketView>> {
         match self.rx_queue.lock().await.recv().await {
             Some(p) => Ok(p),
             None => {
@@ -422,10 +428,10 @@ pub trait NetSimPathProvider: Send + Sync + 'static {
     /// This function internally will reverse the given path if required.
     ///
     /// This can be used to populate the path provider with paths learned from incoming packets.
-    fn inform_path(&self, _src_as: IsdAsn, _dst_as: IsdAsn, _path: &DataPlanePath) {}
+    fn inform_path(&self, _src_as: IsdAsn, _dst_as: IsdAsn, _path: ScionDpPathViewRef<'_>) {}
 
     /// Returns a path from the given source AS to the given destination AS, if one exists.
-    fn get_path(&self, src_as: IsdAsn, dst_as: IsdAsn) -> Option<DataPlanePath>;
+    fn get_path(&self, src_as: IsdAsn, dst_as: IsdAsn) -> Option<DpPath>;
 }
 
 /// A path-aware UDP socket using the Network Simulator Stack using provided paths from a
@@ -449,11 +455,7 @@ impl<P: NetSimPathProvider> PathAwareNetSimUdpSocket<P> {
     /// Sends a packet to the given destination address, using the path provider to obtain a path
     /// from the local AS to the destination AS. Returns an error if no path is found or if sending
     /// fails for any reason.
-    pub fn try_send(
-        &self,
-        dst: scion_proto::address::SocketAddr,
-        payload: Bytes,
-    ) -> io::Result<()> {
+    pub fn try_send(&self, dst: ScionSocketAddr, payload: Vec<u8>) -> io::Result<()> {
         let path = self
             .path_provider
             .get_path(self.socket.stack.0.local_as, dst.isd_asn())
@@ -474,15 +476,15 @@ impl<P: NetSimPathProvider> PathAwareNetSimUdpSocket<P> {
 
     /// Attempts to receive a packet from the socket's receive queue, returning an error if no
     /// packet is available or if the socket has been disconnected.
-    pub fn try_recv(&mut self) -> io::Result<ScionPacketUdp> {
+    pub fn try_recv(&mut self) -> io::Result<Box<ScionUdpPacketView>> {
         let pkt = self.socket.try_recv()?;
         // Inform the path provider of the path from the source AS to the local AS based on
         // the received packet.
-        if let (Some(src_addr), Some(dst_addr)) = (pkt.source(), pkt.destination()) {
+        if let (Ok(src_addr), Ok(dst_addr)) = (pkt.src_scion_addr(), pkt.dst_scion_addr()) {
             self.path_provider.inform_path(
                 src_addr.isd_asn(),
                 dst_addr.isd_asn(),
-                &pkt.headers.path,
+                pkt.header().path(),
             );
         }
 
@@ -491,15 +493,15 @@ impl<P: NetSimPathProvider> PathAwareNetSimUdpSocket<P> {
 
     /// Asynchronously receives a packet from the socket's receive queue, returning an error if the
     /// socket has been disconnected.
-    pub async fn recv(&self) -> io::Result<ScionPacketUdp> {
+    pub async fn recv(&self) -> io::Result<Box<ScionUdpPacketView>> {
         let pkt = self.socket.recv().await?;
         // Inform the path provider of the path from the source AS to the local AS based on
         // the received packet.
-        if let (Some(src_addr), Some(dst_addr)) = (pkt.source(), pkt.destination()) {
+        if let (Ok(src_addr), Ok(dst_addr)) = (pkt.src_scion_addr(), pkt.dst_scion_addr()) {
             self.path_provider.inform_path(
                 src_addr.isd_asn(),
                 dst_addr.isd_asn(),
-                &pkt.headers.path,
+                pkt.header().path(),
             );
         }
 
@@ -515,7 +517,7 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
         payload: &[u8],
         destination: ScionSocketAddr,
     ) -> Result<(), BoxedSocketError> {
-        self.try_send(destination.into(), Bytes::copy_from_slice(payload))
+        self.try_send(destination, payload.to_vec())
             .map_err(|e| Box::new(e) as BoxedSocketError)?;
         Ok(())
     }
@@ -532,23 +534,18 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
                 .await
                 .map_err(|e| Box::new(e) as BoxedSocketError)?;
 
-            let sci_addr = match pkt.headers.address.source() {
-                Some(addr) => addr,
-                None => {
-                    tracing::warn!("Received packet with unknown source address, dropping packet");
+            let sock_addr = match pkt.src_socket_addr() {
+                Ok(addr) => addr,
+                Err(e) => {
+                    tracing::warn!("Dropping packet: {e}");
                     continue;
                 }
             };
 
-            let port = pkt.src_port();
-
-            break (
-                pkt,
-                ScionSocketAddr::new(sci_addr.isd_asn().into(), sci_addr.host().into(), port),
-            );
+            break (pkt, sock_addr);
         };
 
-        let payload = pkt.payload();
+        let payload = pkt.udp().payload();
 
         // Copy the payload into the provided buffer, truncating if necessary.
         let payload_len = std::cmp::min(buf.len(), payload.len());
@@ -560,7 +557,7 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
     /// Returns the local socket address of this socket.
     fn local_addr(&self) -> ScionSocketAddr {
         ScionSocketAddr::new(
-            self.socket.stack.0.local_as.into(),
+            self.socket.stack.0.local_as,
             self.socket.stack.0.bind_addr.into(),
             self.socket.port,
         )
@@ -588,12 +585,16 @@ impl PocketScionState {
 mod tests {
     use std::net::IpAddr;
 
-    use bytes::Bytes;
     use chrono::Utc;
-    use scion_proto::{
-        address::{IsdAsn, ScionAddr, SocketAddr},
-        packet::{ByEndpoint, ScionPacketUdp},
-        path::DataPlanePath,
+    use sciparse::{
+        address::socket_addr::ScionSocketAddr,
+        core::{encode::WireEncode, view::View},
+        dataplane_path::model::DpPath,
+        identifier::isd_asn::IsdAsn,
+        packet::{
+            model::ScionUdpPacket,
+            view::{ScionPacketView, ScionUdpPacketView},
+        },
     };
     use tokio::time::{Duration, timeout};
 
@@ -629,33 +630,29 @@ mod tests {
         let raw_socket = stack.bind_raw();
 
         let src_ip: IpAddr = "10.0.0.9".parse().unwrap();
-        let src = SocketAddr::new(ScionAddr::new(local_as, src_ip.into()), 50000);
-        let dst = SocketAddr::new(ScionAddr::new(local_as, bind_ip.into()), 40000);
-        let payload = Bytes::from_static(b"hello");
-        let packet = ScionPacketUdp::new(
-            ByEndpoint {
-                source: src,
-                destination: dst,
-            },
-            DataPlanePath::EmptyPath,
-            payload.clone(),
-        )
-        .expect("build packet");
+        let src = ScionSocketAddr::new(local_as, src_ip.into(), 50000);
+        let dst = ScionSocketAddr::new(local_as, bind_ip.into(), 40000);
+        let payload = b"hello".to_vec();
+        let packet = ScionUdpPacket::new(src, dst, DpPath::Empty, payload.clone());
+        let mut encoded = packet.encode_to_vec().expect("failed to encode packet");
+        let (pkt, _rest) =
+            ScionPacketView::from_mut_slice(&mut encoded).expect("failed to create packet view");
 
-        state.dispatch_to_network_sim(local_as, 0, ScionNetworkTime::now(), packet.clone().into());
+        state.dispatch_to_network_sim(local_as, 0, ScionNetworkTime::now(), pkt);
 
         let recv_udp = timeout(Duration::from_secs(2), udp_socket.recv())
             .await
             .expect("udp recv timeout")
             .expect("udp recv packet");
-        assert_eq!(recv_udp.payload(), &payload); // UDP socket receives payload
+        assert_eq!(&recv_udp.udp().payload(), &payload); // UDP socket receives payload
 
         let recv_raw = timeout(Duration::from_secs(2), raw_socket.recv())
             .await
             .expect("raw recv timeout")
             .expect("raw recv packet");
-        let recv_raw_udp: ScionPacketUdp = recv_raw.try_into().expect("raw packet as UDP");
-        assert_eq!(recv_raw_udp.payload(), &payload); // raw socket receives same payload
+        let recv_raw_udp: &ScionUdpPacketView =
+            recv_raw.try_into_udp().expect("raw recv packet is not UDP");
+        assert_eq!(&recv_raw_udp.udp().payload(), &payload); // raw socket receives same payload
     }
 
     #[tokio::test]
@@ -676,15 +673,10 @@ mod tests {
         let sender_socket = sender_stack.bind_udp(0).expect("bind sender udp");
         let receiver_socket = receiver_stack.bind_udp(41000).expect("bind receiver udp");
 
-        let dst = SocketAddr::new(ScionAddr::new(local_as, receiver_ip.into()), 41000);
-        let payload = Bytes::from_static(b"cross-stack");
+        let dst = ScionSocketAddr::new(local_as, receiver_ip.into(), 41000);
+        let payload = b"cross-stack".to_vec();
         sender_socket
-            .try_send(
-                dst,
-                DataPlanePath::EmptyPath,
-                payload.clone(),
-                ScionNetworkTime::now(),
-            )
+            .try_send(dst, DpPath::Empty, payload.clone(), ScionNetworkTime::now())
             .expect("send packet");
 
         let recv = timeout(Duration::from_secs(2), receiver_socket.recv())
@@ -692,9 +684,9 @@ mod tests {
             .expect("recv timeout")
             .expect("recv packet");
 
-        assert_eq!(recv.payload(), &payload); // receiver gets payload
+        assert_eq!(&recv.udp().payload(), &payload); // receiver gets payload
         assert_eq!(
-            recv.source().expect("source addr"),
+            recv.src_socket_addr().expect("src socket addr"),
             sender_socket.socket_addr()
         );
     }

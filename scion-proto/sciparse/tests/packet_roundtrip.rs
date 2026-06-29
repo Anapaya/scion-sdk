@@ -18,7 +18,7 @@ use std::panic::catch_unwind;
 
 use proptest::{prelude::ProptestConfig, prop_assert, prop_assert_eq, proptest};
 use sciparse::{
-    core::{encode::WireEncode, view::View},
+    core::{convert::TryFromView, encode::WireEncode, view::View},
     packet::{
         classify::ClassifiedPacket,
         model::{ScionRawPacket, ScionScmpPacket, ScionUdpPacket},
@@ -81,7 +81,8 @@ fn assert_packet_eq(
     packet: &ClassifiedPacket,
     view: &mut sciparse::packet::view::ScionPacketView,
 ) -> Result<(), proptest::prelude::TestCaseError> {
-    let reconstructed = ScionRawPacket::from_view(view).expect("Converting view to packet failed");
+    let reconstructed =
+        ScionRawPacket::try_from_view(view).expect("Converting view to packet failed");
 
     match packet {
         ClassifiedPacket::Scmp(input) => {

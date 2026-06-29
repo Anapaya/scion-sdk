@@ -36,7 +36,7 @@ pub fn exec_info_field_view(view: &InfoFieldView) {
     black_box(view.flags());
     black_box(view.segment_id());
     black_box(view.timestamp());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 }
 
 /// Exercises every getter and setter on an [`InfoFieldView`] (mutable).
@@ -57,7 +57,7 @@ pub fn exec_hop_field_view(view: &HopFieldView) {
     black_box(view.cons_ingress());
     black_box(view.cons_egress());
     black_box(view.mac());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 }
 
 /// Exercises every getter and setter on a [`HopFieldView`] (mutable).
@@ -82,7 +82,7 @@ pub fn exec_standard_path_view(view: &StandardPathView) {
     black_box(view.seg2_len());
     black_box(view.info_field_count());
     black_box(view.hop_field_count());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 
     // Iterate info fields via slice accessor
     for info_field in view.info_fields() {
@@ -192,7 +192,7 @@ pub fn exec_onehop_path_view(view: &OneHopPathView) {
     black_box(hop2.ingress_interface(info));
     black_box(hop2.egress_interface(info));
 
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 }
 
 /// Exercises every getter and setter on a [`OneHopPathView`] (mutable).
@@ -203,7 +203,7 @@ pub fn exec_onehop_path_view_mut(view: &mut OneHopPathView) {
     exec_info_field_view_mut(info);
 
     let [hop1, hop2] = view.mut_hop_fields();
-    let h2 = hop2.as_bytes().to_vec();
+    let h2 = hop2.as_slice().to_vec();
     exec_hop_field_view_mut(hop1);
     exec_hop_field_view_mut(hop2);
 
@@ -216,6 +216,6 @@ pub fn exec_onehop_path_view_mut(view: &mut OneHopPathView) {
     // Reset the second hop to the original values to avoid leaving the view in a modified state.
     unsafe {
         let [_, hop2] = view.mut_hop_fields();
-        hop2.as_bytes_mut().copy_from_slice(&h2);
+        hop2.as_slice_mut().copy_from_slice(&h2);
     }
 }

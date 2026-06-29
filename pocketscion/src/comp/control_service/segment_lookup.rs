@@ -18,7 +18,6 @@ use std::{collections::HashMap, fmt::Debug, time::Duration};
 use anyhow::Context;
 use axum::{Router, extract::State, routing::post};
 use chrono::Utc;
-use scion_proto::{address::IsdAsn, path::EXP_TIME_UNIT};
 use scion_protobuf::control_plane::v1::{
     SegmentsRequest, SegmentsResponse,
     segment_lookup_service_server::{SegmentLookupService, SegmentLookupServiceServer},
@@ -28,6 +27,7 @@ use scion_sdk_axum_connect_rpc::{
     error::{CrpcError, CrpcErrorCode},
     extractor::ConnectRpc,
 };
+use sciparse::{dataplane_path::standard::types::EXP_TIME_UNIT, identifier::isd_asn::IsdAsn};
 use tokio::task::spawn_blocking;
 
 use crate::state::PocketScionState;
@@ -152,7 +152,7 @@ impl PsSegmentLookupService {
                 true => {
                     segment_registry
                         .core_list_segments(
-                            this.local_ia.into(),
+                            this.local_ia,
                             req.src_isd_as.into(),
                             req.dst_isd_as.into(),
                         )
@@ -161,7 +161,7 @@ impl PsSegmentLookupService {
                 false => {
                     segment_registry
                         .non_core_list_segments(
-                            this.local_ia.into(),
+                            this.local_ia,
                             req.src_isd_as.into(),
                             req.dst_isd_as.into(),
                         )

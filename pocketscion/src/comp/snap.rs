@@ -23,7 +23,7 @@ use std::{
 
 use derive_more::Display;
 use pem::Pem;
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 use snap_control::{
     api::crpc::model::{SnapDataPlane, SnapDataPlaneResolver},
@@ -181,7 +181,7 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
         let snap = sstate.snaps.get(&self.snap_id).expect("SNAP not found");
 
         let isd_ases: Vec<sciparse::identifier::isd_asn::IsdAsn> =
-            snap.isd_ases().into_iter().map(Into::into).collect();
+            snap.isd_ases().into_iter().collect();
 
         self.io_config
             .snap_data_plane_addr(self.snap_id)

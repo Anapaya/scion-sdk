@@ -31,8 +31,8 @@ use pocketscion::{
     state::PocketScionState,
     util::addr_to_http_url,
 };
-use scion_proto::address::IsdAsn;
 use scion_protobuf::daemon::v1::{AsRequest, AsResponse};
+use sciparse::identifier::isd_asn::IsdAsn;
 
 #[test_log::test(tokio::test)]
 #[timeout(10_000)]

@@ -80,7 +80,7 @@ impl Debug for UdpDatagram {
             .finish()
     }
 }
-impl PayloadEncode for UdpDatagram {
+impl PayloadEncode for &UdpDatagram {
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         UdpDatagramLayout::HEADER_SIZE_BYTES + self.payload.len()
     }
@@ -125,6 +125,34 @@ impl PayloadEncode for UdpDatagram {
         }
 
         self.required_size(header_and_extensions_size)
+    }
+}
+impl PayloadEncode for UdpDatagram {
+    fn required_size(&self, header_and_extensions_size: usize) -> usize {
+        (&self).required_size(header_and_extensions_size)
+    }
+
+    fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        (&self).wire_valid()
+    }
+
+    unsafe fn encode_unchecked(
+        &self,
+        buf: &mut [u8],
+        address_header: &AddressHeader,
+        header_and_extensions_size: usize,
+    ) -> usize {
+        unsafe { (&self).encode_unchecked(buf, address_header, header_and_extensions_size) }
+    }
+}
+impl AsRef<UdpDatagram> for UdpDatagram {
+    fn as_ref(&self) -> &UdpDatagram {
+        self
+    }
+}
+impl AsMut<UdpDatagram> for UdpDatagram {
+    fn as_mut(&mut self) -> &mut UdpDatagram {
+        self
     }
 }
 

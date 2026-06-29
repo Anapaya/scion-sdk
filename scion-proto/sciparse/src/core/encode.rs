@@ -76,9 +76,18 @@ pub trait WireEncode {
     }
 
     /// Encodes the structure into a new `Vec<u8>`.
-    fn encode_to_vec(&self) -> Result<Vec<u8>, EncodeError> {
+    fn encode_to_vec(&self) -> Result<Vec<u8>, InvalidStructureError> {
+        self.wire_valid()?;
         let mut buf = vec![0u8; self.required_size()];
-        self.encode(&mut buf)?;
+
+        // SAFETY: buffer length is checked above
+        let len = unsafe { self.encode_unchecked(&mut buf) };
+
+        debug_assert!(
+            len == buf.len(),
+            "encode_unchecked must write exactly required_size bytes"
+        );
+
         Ok(buf)
     }
 }

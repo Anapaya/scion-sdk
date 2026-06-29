@@ -39,7 +39,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
     black_box(view.code());
     black_box(view.checksum());
     black_box(view.dst_port());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 
     view.set_code(black_box(view.code()));
     view.set_checksum(black_box(view.checksum()));
@@ -54,7 +54,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.checksum());
             black_box(v.reserved());
             read_slice_bounds(v.offending_packet());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::PacketTooBig(v) => {
             black_box(v.message_type());
@@ -63,7 +63,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.reserved());
             black_box(v.mtu());
             read_slice_bounds(v.offending_packet());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::ParameterProblem(v) => {
             black_box(v.message_type());
@@ -72,7 +72,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.reserved());
             black_box(v.pointer());
             read_slice_bounds(v.offending_packet());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::ExternalInterfaceDown(v) => {
             black_box(v.message_type());
@@ -81,7 +81,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.isd_asn());
             black_box(v.interface_id());
             read_slice_bounds(v.offending_packet());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::InternalConnectivityDown(v) => {
             black_box(v.message_type());
@@ -91,7 +91,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.ingress_interface_id());
             black_box(v.egress_interface_id());
             read_slice_bounds(v.offending_packet());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::EchoRequest(v) => {
             black_box(v.message_type());
@@ -100,7 +100,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.identifier());
             black_box(v.sequence_number());
             read_slice_bounds(v.data());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::EchoReply(v) => {
             black_box(v.message_type());
@@ -109,7 +109,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.identifier());
             black_box(v.sequence_number());
             read_slice_bounds(v.data());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::TracerouteRequest(v) => {
             black_box(v.message_type());
@@ -119,7 +119,7 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.sequence_number());
             black_box(v.isd_asn());
             black_box(v.interface_id());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::TracerouteReply(v) => {
             black_box(v.message_type());
@@ -129,14 +129,14 @@ pub fn exec_every_view_function(view: &mut ScmpPayloadView) {
             black_box(v.sequence_number());
             black_box(v.isd_asn());
             black_box(v.interface_id());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
         ScmpMessageView::Unknown(v) => {
             black_box(v.message_type());
             black_box(v.code());
             black_box(v.checksum());
             read_slice_bounds(v.message_specific_data());
-            read_slice_bounds(v.as_bytes());
+            read_slice_bounds(v.as_slice());
         }
     }
 

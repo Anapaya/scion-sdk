@@ -22,15 +22,17 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use bytes::Bytes;
-use scion_proto::{
-    address::{IsdAsn, ScionAddr, ServiceAddr, SocketAddr},
-    packet::ScionPacketUdp,
-    path::DataPlanePath,
-};
 use scion_protobuf::control_plane::v1::{ServiceResolutionRequest, ServiceResolutionResponse};
 use scion_sdk_quic_scion::quic::config::QuicConfig;
-use sciparse::{core::encode::WireEncode, dataplane_path::onehop::model::OneHopPath};
+use sciparse::{
+    address::{host_addr::ServiceAddr, socket_addr::ScionSocketAddr},
+    dataplane_path::{
+        onehop::model::OneHopPath,
+        view::{ScionDpPathView, ScionDpPathViewExt, ScionDpPathViewExtMut},
+    },
+    identifier::isd_asn::IsdAsn,
+    packet::view::ScionUdpPacketView,
+};
 use serde::{Deserialize, Serialize};
 use tokio::{task, time::timeout};
 use utoipa::ToSchema;
@@ -189,7 +191,7 @@ impl ControlService {
         &self,
         egress_interface: ScionGlobalInterfaceId,
         svc_addr: ServiceAddr,
-    ) -> anyhow::Result<(IsdAsn, std::net::SocketAddr, DataPlanePath)> {
+    ) -> anyhow::Result<(IsdAsn, std::net::SocketAddr, ScionDpPathView)> {
         // Service Address is resolved through a UDP Packet with the Service Resolution Request in
         // the payload.
         let sock = self
@@ -230,18 +232,8 @@ impl ControlService {
             255,
         );
 
-        let mut path_buf = vec![0u8; path.required_size()];
-        path.encode(&mut path_buf)?;
-
-        let path = DataPlanePath::Unsupported {
-            path_type: scion_proto::path::PathType::OneHop,
-            bytes: Bytes::from_owner(path_buf),
-        };
-
-        let destination = SocketAddr::new(
-            ScionAddr::new(peer_as_if.isd_as, svc_addr.into()),
-            0, // Port is not relevant for service resolution request
-        );
+        // Port is set to 0, since it's irrelevant for service resolution
+        let destination = ScionSocketAddr::new(peer_as_if.isd_as, svc_addr.into(), 0);
 
         tracing::debug!(
             out_if = %egress_interface,
@@ -250,9 +242,9 @@ impl ControlService {
             "Sending service resolution request",
         );
 
-        let payload = Bytes::from_owner(prost::Message::encode_to_vec(&payload));
+        let payload = prost::Message::encode_to_vec(&payload);
 
-        match sock.try_send(destination, path, payload, ScionNetworkTime::now()) {
+        match sock.try_send(destination, path.into(), payload, ScionNetworkTime::now()) {
             Ok(_) => {}
             Err(e) => {
                 bail!("Failed to send service resolution request packet: {e}");
@@ -261,11 +253,11 @@ impl ControlService {
 
         // Wait for response and parse it as Service Resolution Response
 
-        let res_pkt: ScionPacketUdp = timeout(Duration::from_secs(10), sock.recv())
+        let res_pkt: Box<ScionUdpPacketView> = timeout(Duration::from_secs(10), sock.recv())
             .await
             .context("Failed to receive service resolution response from network simulator")??;
 
-        let res: ServiceResolutionResponse = prost::Message::decode(&res_pkt.payload()[..])
+        let res: ServiceResolutionResponse = prost::Message::decode(res_pkt.udp().payload())
             .context("Failed to decode service resolution response payload")?;
 
         tracing::debug!(
@@ -289,10 +281,9 @@ impl ControlService {
 
         // Note: in the response, we expect the path to have been converted to a standard path
         // Reverse the path
-        let path = res_pkt
-            .headers
-            .path
-            .to_reversed()
+
+        let mut path = res_pkt.header().path().to_owned_view();
+        path.try_reverse()
             .context("Failed to reverse response path")?;
 
         tracing::debug!(

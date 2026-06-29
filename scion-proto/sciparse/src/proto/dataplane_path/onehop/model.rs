@@ -17,9 +17,13 @@
 use tinyvec::{array_vec, tiny_vec};
 
 use crate::{
-    core::encode::WireEncode,
+    core::{
+        convert::{FromView, TryFromModel},
+        encode::WireEncode,
+        model::Model,
+    },
     dataplane_path::{
-        onehop::layout::OneHopPathLayout,
+        onehop::{layout::OneHopPathLayout, view::OneHopPathView},
         standard::{
             mac::{ForwardingKey, algo::mac_beta_step},
             model::{HopField, InfoField, Segment, StandardPath},
@@ -119,10 +123,15 @@ impl OneHopPath {
     /// Since the One Hop does not track which hop it is currently on, the caller must ensure that
     /// the Segment ID is correctly set to reflect the final hop of the path before calling this
     /// method.
-    pub fn into_reversed_standard_path(self) -> Result<StandardPath, Self> {
+    pub fn into_reversed_standard_path(self) -> Result<StandardPath, (PathReverseError, Self)> {
         if self.hops[1].cons_ingress == 0 {
             // The second hop is not set, we cannot reverse the path
-            return Err(self);
+            return Err((
+                PathReverseError::new(
+                    "Cannot reverse a one-hop path whose second hop has not been set yet",
+                ),
+                self,
+            ));
         }
 
         let OneHopPath {
@@ -163,16 +172,6 @@ impl OneHopPath {
         Ok(())
     }
 }
-impl OneHopPath {
-    /// Creates a OneHopPath from a OneHopPathView.
-    pub fn from_view(view: &crate::proto::dataplane_path::onehop::view::OneHopPathView) -> Self {
-        let info: InfoField = InfoField::from_view(view.info_field());
-        let [hop1, hop2] = view.hop_fields();
-        let hops = [HopField::from_view(hop1), HopField::from_view(hop2)];
-
-        Self { info, hops }
-    }
-}
 impl WireEncode for OneHopPath {
     fn required_size(&self) -> usize {
         OneHopPathLayout::SIZE_BYTES
@@ -196,6 +195,23 @@ impl WireEncode for OneHopPath {
         }
 
         OneHopPathLayout::SIZE_BYTES
+    }
+}
+impl Model for OneHopPath {
+    type ViewType = OneHopPathView;
+}
+impl TryFromModel for OneHopPathView {
+    type ModelType = OneHopPath;
+}
+impl FromView for OneHopPath {
+    type ViewType = OneHopPathView;
+
+    fn from_view(view: &Self::ViewType) -> Self {
+        let info: InfoField = InfoField::from_view(view.info_field());
+        let [hop1, hop2] = view.hop_fields();
+        let hops = [HopField::from_view(hop1), HopField::from_view(hop2)];
+
+        Self { info, hops }
     }
 }
 

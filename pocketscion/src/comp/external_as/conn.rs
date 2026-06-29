@@ -16,10 +16,10 @@
 
 use std::{io, net::SocketAddr, sync::Arc};
 
-use scion_proto::{
-    address::IsdAsn,
-    packet::ScionPacketRaw,
-    wire_encoding::{WireDecode, WireEncodeVec},
+use sciparse::{
+    core::view::View,
+    identifier::isd_asn::IsdAsn,
+    packet::view::{ScionPacketView, ScionRawPacketView},
 };
 use tokio::net::UdpSocket;
 
@@ -51,21 +51,23 @@ impl ExternalAsConnection {
 
     /// Sends a packet to the External AS peer address.
     #[expect(unused)]
-    pub async fn send(&self, send_msg: ScionPacketRaw) -> io::Result<usize> {
-        let bytes: Vec<u8> = send_msg.encode_to_bytes_vec().concat();
-
-        self.socket.send_to(&bytes, self.peer_addr).await
+    pub async fn send(&self, send_msg: &ScionRawPacketView) -> io::Result<usize> {
+        self.socket
+            .send_to(send_msg.as_slice(), self.peer_addr)
+            .await
     }
 
     /// Attempts to send a packet to the External AS peer address, returning an error if the
     /// send buffer is full or if another socket error occurs.
-    pub fn try_send(&self, send_msg: ScionPacketRaw) -> io::Result<usize> {
-        let bytes: Vec<u8> = send_msg.encode_to_bytes_vec().concat();
-
-        self.socket.try_send_to(&bytes, self.peer_addr)
+    pub fn try_send(&self, send_msg: &ScionRawPacketView) -> io::Result<usize> {
+        self.socket.try_send_to(send_msg.as_slice(), self.peer_addr)
     }
 
-    fn check_recv(&self, buf: &[u8], recv_addr: SocketAddr) -> io::Result<ScionPacketRaw> {
+    fn check_recv<'buf>(
+        &self,
+        buf: &'buf mut [u8],
+        recv_addr: SocketAddr,
+    ) -> io::Result<&'buf mut ScionPacketView> {
         let recv_ip = recv_addr.ip();
         let peer_ip = self.peer_addr.ip();
 
@@ -80,7 +82,8 @@ impl ExternalAsConnection {
             ));
         }
 
-        let packet = ScionPacketRaw::decode(&mut &buf[..])
+        // We ignore extra bytes in the packet
+        let (packet, _rest) = ScionPacketView::from_mut_slice(buf)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         Ok(packet)
@@ -88,11 +91,12 @@ impl ExternalAsConnection {
 
     /// Receives a packet from the External AS, validating that it comes from the expected peer
     /// address and returns the decoded packet, otherwise continues to wait for the next packet.
-    pub async fn recv(&self, buf: &mut [u8]) -> io::Result<ScionPacketRaw> {
-        loop {
+    pub async fn recv<'buf>(&self, buf: &'buf mut [u8]) -> io::Result<&'buf mut ScionPacketView> {
+        let size = loop {
             let (size, recv_addr) = self.socket.recv_from(buf).await?;
-            match self.check_recv(&buf[..size], recv_addr) {
-                Ok(pkt) => return Ok(pkt),
+
+            match self.check_recv(&mut buf[..size], recv_addr) {
+                Ok(pkt) => break pkt.as_slice().len(),
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
@@ -101,16 +105,24 @@ impl ExternalAsConnection {
                     );
                 }
             }
-        }
+        };
+
+        // Sadly required because of conditional borrowing in the loop above
+
+        // SAFETY: We just verified that the buffer contains a valid packet, so it's safe to create
+        // a view over it without checking again.
+        let view = unsafe { ScionPacketView::from_mut_slice_unchecked(&mut buf[..size]) };
+
+        Ok(view)
     }
 
     /// Attempts to receive a packet from the External AS, returning an error if the recv buffer
     /// is empty, or if another socket error occurs or if the received packet was
     /// invalid.
     #[expect(unused)]
-    pub fn try_recv(&self, buf: &mut [u8]) -> io::Result<ScionPacketRaw> {
+    pub fn try_recv<'buf>(&self, buf: &'buf mut [u8]) -> io::Result<&'buf mut ScionPacketView> {
         let (size, recv_addr) = self.socket.try_recv_from(buf)?;
-        self.check_recv(&buf[..size], recv_addr)
+        self.check_recv(&mut buf[..size], recv_addr)
     }
 
     /// Returns the peer address configured for this connection

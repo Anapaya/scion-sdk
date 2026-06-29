@@ -30,13 +30,13 @@ impl SegmentRegistry {
         src_as: sciparse::identifier::isd_asn::IsdAsn,
         dst_as: sciparse::identifier::isd_asn::IsdAsn,
     ) -> anyhow::Result<ListSegmentsOutput<'_>> {
-        let src = Src::new(src_as, self.core_segments().is_known_as(src_as.into()))?;
-        let dst = Dst::new(dst_as, self.core_segments().is_known_as(dst_as.into()));
+        let src = Src::new(src_as, self.core_segments().is_known_as(src_as))?;
+        let dst = Dst::new(dst_as, self.core_segments().is_known_as(dst_as));
 
         let src_cores = self
             .core_segments()
             .iter_known_ases()
-            .filter(|a| a.isd() == src.isd().into())
+            .filter(|a| a.isd() == src.isd())
             .collect::<Vec<_>>();
 
         let core_hint = match src_cores.len() {
@@ -46,7 +46,7 @@ impl SegmentRegistry {
                     src_as.isd()
                 )
             }
-            1 => CoreHint::Single((*src_cores[0]).into()),
+            1 => CoreHint::Single(*src_cores[0]),
             _ => CoreHint::Multiple,
         };
 

@@ -16,7 +16,7 @@
 use std::{any::type_name, collections::BTreeMap};
 
 use anyhow::Context;
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 use serde_with::{base64::Base64, serde_as};
 use utoipa::{

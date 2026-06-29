@@ -16,11 +16,10 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-use bytes::Bytes;
-use scion_proto::{
-    address::IsdAsn,
-    packet::ScionPacketRaw,
-    path::{Path, combinator::combine},
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    packet::view::ScionRawPacketView,
+    path::{ScionPath, combinator::combine},
 };
 
 use crate::{
@@ -73,10 +72,9 @@ impl PocketScionRuntime {
         valid_after: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<ListPathSegments> {
         let sguard = self.state.read();
-        let segments =
-            sguard
-                .segment_registry
-                .endhost_list_segments(src.into(), src.into(), dst.into())?;
+        let segments = sguard
+            .segment_registry
+            .endhost_list_segments(src, src, dst)?;
 
         segments.into_path_segments(&sguard.topology, valid_after, 0, 255)
     }
@@ -92,31 +90,16 @@ impl PocketScionRuntime {
         src: IsdAsn,
         dst: IsdAsn,
         valid_after: chrono::DateTime<chrono::Utc>,
-    ) -> anyhow::Result<Vec<Path<Bytes>>> {
+    ) -> anyhow::Result<Vec<ScionPath>> {
         let sguard = self.state.read();
-        let segments =
-            sguard
-                .segment_registry
-                .endhost_list_segments(src.into(), src.into(), dst.into())?;
+        let segments = sguard
+            .segment_registry
+            .endhost_list_segments(src, src, dst)?;
 
         let (core_segments, non_core_segments) = {
-            let sciparse_segments =
-                segments.into_path_segments(&sguard.topology, valid_after, 0, 255)?;
+            let segs = segments.into_path_segments(&sguard.topology, valid_after, 0, 255)?;
 
-            // TODO: once sciparse is the norm, this should be removed
-            (
-                sciparse_segments
-                    .core
-                    .into_iter()
-                    .map(|seg| seg.into())
-                    .collect(),
-                sciparse_segments
-                    .down
-                    .into_iter()
-                    .chain(sciparse_segments.up)
-                    .map(|seg| seg.into())
-                    .collect(),
-            )
+            (segs.core, segs.down.into_iter().chain(segs.up).collect())
         };
 
         Ok(combine(src, dst, core_segments, non_core_segments))
@@ -218,7 +201,7 @@ impl PocketScionRuntime {
         local_as: IsdAsn,
         local_interface: u16,
         now: ScionNetworkTime,
-        packet: ScionPacketRaw,
+        packet: &mut ScionRawPacketView,
     ) {
         self.state
             .dispatch_to_network_sim(local_as, local_interface, now, packet);

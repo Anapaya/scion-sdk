@@ -134,11 +134,9 @@ impl TryFrom<ScionHostAddr> for Ipv6Addr {
     }
 }
 impl TryFrom<WireHostAddr> for ScionHostAddr {
-    type Error = &'static str;
+    type Error = UnknownAddressTypeError;
     fn try_from(value: WireHostAddr) -> Result<Self, Self::Error> {
-        value
-            .scion_host_addr()
-            .ok_or("Can't convert WireHostAddr::Unknown to ScionHostAddr")
+        value.scion_host_addr()
     }
 }
 impl_from!(IpAddr, ScionHostAddr, |value| ScionHostAddr::from_ip(value));
@@ -348,13 +346,13 @@ impl WireHostAddr {
     }
 
     /// Returns the address as a [ScionHostAddr] if it is a recognized address type (IPv4, IPv6, or
-    /// service). Returns None if the address type is unknown.
-    pub fn scion_host_addr(&self) -> Option<ScionHostAddr> {
+    /// service) or an error if it is an unknown address type.
+    pub fn scion_host_addr(&self) -> Result<ScionHostAddr, UnknownAddressTypeError> {
         match self {
-            WireHostAddr::V4(v4) => Some(ScionHostAddr::V4(*v4)),
-            WireHostAddr::V6(v6) => Some(ScionHostAddr::V6(*v6)),
-            WireHostAddr::Svc(svc) => Some(ScionHostAddr::Svc(*svc)),
-            WireHostAddr::Unknown { .. } => None,
+            WireHostAddr::V4(v4) => Ok(ScionHostAddr::V4(*v4)),
+            WireHostAddr::V6(v6) => Ok(ScionHostAddr::V6(*v6)),
+            WireHostAddr::Svc(svc) => Ok(ScionHostAddr::Svc(*svc)),
+            WireHostAddr::Unknown { id, .. } => Err(UnknownAddressTypeError { id: *id }),
         }
     }
 
@@ -497,6 +495,26 @@ impl From<WireHostAddrType> for u8 {
             }
         }
     }
+}
+
+/// Errors related to parsing a [WireHostAddr] to a [ScionHostAddr] directly from the wire.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WireHostAddrError {
+    /// The advertised address type does not match the expected length of the byte buffer.
+    #[error(transparent)]
+    HostAddressSizeError(#[from] HostAddressSizeError),
+    /// The address type is unknown and cannot be converted to a ScionHostAddr.
+    #[error(transparent)]
+    UnknownAddressType(#[from] UnknownAddressTypeError),
+}
+
+/// The [WireHostAddr] contained an address type that is not recognized by this version of the
+/// library or is invalid.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, thiserror::Error)]
+#[error("Unknown address type with id {id}")]
+pub struct UnknownAddressTypeError {
+    /// The unrecognized address type identifier.
+    pub id: u8,
 }
 
 /// Error indicating a mismatch between expected and actual address sizes.

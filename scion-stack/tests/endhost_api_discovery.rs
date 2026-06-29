@@ -43,12 +43,12 @@ async fn should_successfully_connect_with_endhost_api_discovery() -> anyhow::Res
     state.set_topology(topo);
 
     // Setup snaps
-    state.add_snap(server_ia)?;
-    state.add_snap(client_ia)?;
+    state.add_snap(server_ia.into())?;
+    state.add_snap(client_ia.into())?;
 
     // Add Endhost APIs
-    state.add_endhost_api(vec![server_ia]);
-    state.add_endhost_api(vec![client_ia]);
+    state.add_endhost_api(vec![server_ia.into()]);
+    state.add_endhost_api(vec![client_ia.into()]);
 
     // Setup Discovery API
     let endhost_api_discovery_id = state.add_endhost_api_discovery_api();

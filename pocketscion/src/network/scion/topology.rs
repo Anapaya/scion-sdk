@@ -22,7 +22,7 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use scion_proto::address::{Isd, IsdAsn};
+use sciparse::identifier::{isd::Isd, isd_asn::IsdAsn};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 

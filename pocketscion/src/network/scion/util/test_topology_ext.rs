@@ -14,9 +14,9 @@
 
 //! Extension trait for building a ScionTopology from a TestPathContext
 
-use scion_proto::{
-    address::{Asn, Isd, IsdAsn},
-    path::test_builder::{TestPathContext, TestRoutingLinkType},
+use sciparse::{
+    identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+    util::test_builder::{TestPathContext, TestRoutingLinkType},
 };
 
 use crate::network::scion::{

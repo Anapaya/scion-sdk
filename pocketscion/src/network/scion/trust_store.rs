@@ -31,8 +31,8 @@ use p256::{
 use pem::Pem;
 use rcgen::Issuer;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use scion_proto::address::{Isd, IsdAsn};
 use scion_sdk_trc::trc::{ParseTrcError, Trc, TrcId};
+use sciparse::identifier::{isd::Isd, isd_asn::IsdAsn};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use utoipa::{PartialSchema, ToSchema};
@@ -71,7 +71,7 @@ impl TrustStore {
         let trc =
             StoreTrc::from_raw(raw_trc.clone()).context("failed to parse TRC from raw bytes")?;
 
-        let isd: Isd = trc.trc.id().isd.into();
+        let isd: Isd = trc.trc.id().isd;
 
         match self.isds.entry(isd) {
             std::collections::btree_map::Entry::Occupied(_) => {
@@ -97,17 +97,14 @@ impl TrustStore {
     /// is not performed.
     fn generate_trc(isd: Isd, core_ases: &[IsdAsn]) -> anyhow::Result<StoreTrc> {
         let id = TrcId {
-            isd: isd.into(),
+            isd,
             base: 1,
             serial: 1,
         };
-        let sci_core_ases: Vec<sciparse::identifier::isd_asn::IsdAsn> =
-            core_ases.iter().map(|ia| (*ia).into()).collect();
-
         let now = SystemTime::now();
         let trc = Trc::new_unsigned(
             id,
-            &sci_core_ases,
+            core_ases,
             now,
             now + TRC_VALIDITY,
             &format!("pocketscion generated TRC for ISD {isd}"),
@@ -658,7 +655,7 @@ impl<'de> Deserialize<'de> for StoreKeyDer {
 #[cfg(test)]
 mod tests {
     use rustls::pki_types::pem::PemObject;
-    use scion_proto::address::Asn;
+    use sciparse::identifier::asn::Asn;
 
     use super::*;
 

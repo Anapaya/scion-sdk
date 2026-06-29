@@ -17,9 +17,10 @@
 use crate::{
     address::addr::ScionAddr,
     core::{
+        convert::{FromView, TryFromView},
         encode::{EncodeError, InvalidStructureError, WireEncode},
         layout::Layout,
-        view::{View, ViewConversionError},
+        view::ViewConversionError,
         write::unchecked_bit_range_be_write,
     },
     dataplane_path::{model::DpPath, types::PathType},
@@ -27,6 +28,7 @@ use crate::{
         layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
         view::ScionHeaderView,
     },
+    payload::ProtocolNumber,
     scion::{
         address::host_addr::{WireHostAddr, WireHostAddrType},
         identifier::isd_asn::IsdAsn,
@@ -47,24 +49,6 @@ pub struct ScionPacketHeader {
     pub path: DpPath,
 }
 impl ScionPacketHeader {
-    /// Constructs a `ScionPacketHeader` from a `ScionHeaderView`
-    pub fn from_view(view: &ScionHeaderView) -> Result<Self, ViewConversionError> {
-        Ok(ScionPacketHeader {
-            common: CommonHeader::from_view(view),
-            address: AddressHeader::from_view(view)?,
-            path: DpPath::from_view(&view.path()),
-        })
-    }
-
-    /// Attempts to construct a `ScionPacketHeader` from a byte slice
-    ///
-    /// Returns a tuple containing the `ScionPacketHeader` and the remaining slice after the header.
-    /// On failure, returns a `ViewConversionError`.
-    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
-        let (view, rest) = ScionHeaderView::from_slice(buf)?;
-        Ok((Self::from_view(view)?, rest))
-    }
-
     /// Returns the size of the SCION packet header in 4-byte units used in the header length field.
     fn size_units(&self) -> u8 {
         (self.required_size() / 4) as u8
@@ -159,6 +143,16 @@ impl ScionPacketHeader {
         Ok(unsafe { self.encode_unchecked(buf, payload_size) })
     }
 }
+impl TryFromView for ScionPacketHeader {
+    type ViewType = ScionHeaderView;
+    fn try_from_view(view: &Self::ViewType) -> Result<Self, ViewConversionError> {
+        Ok(ScionPacketHeader {
+            common: CommonHeader::from_view(view),
+            address: AddressHeader::try_from_view(view)?,
+            path: DpPath::from_view(&view.path()),
+        })
+    }
+}
 
 /// Represents the common header of a SCION packet
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -170,19 +164,7 @@ pub struct CommonHeader {
     /// Next header type
     ///
     /// Indicates the type of header that follows the SCION header. E.g., UDP, TCP, etc.
-    pub next_header: u8,
-}
-
-impl CommonHeader {
-    /// Constructs a `CommonHeader` from a `ScionHeaderView`
-    pub fn from_view(view: &ScionHeaderView) -> Self {
-        debug_assert!(view.version() == Self::VERSION, "Unsupported SCION version");
-        CommonHeader {
-            traffic_class: view.traffic_class(),
-            flow_id: view.flow_id(),
-            next_header: view.next_header(),
-        }
-    }
+    pub next_header: ProtocolNumber,
 }
 // Wire Encode (needs size, so can't use trait)
 impl CommonHeader {
@@ -220,7 +202,7 @@ impl CommonHeader {
             unchecked_bit_range_be_write(buf, CHL::VERSION_RNG, Self::VERSION);
             unchecked_bit_range_be_write(buf, CHL::TRAFFIC_CLASS_RNG, self.traffic_class);
             unchecked_bit_range_be_write(buf, CHL::FLOW_ID_RNG, self.flow_id);
-            unchecked_bit_range_be_write(buf, CHL::NEXT_HEADER_RNG, self.next_header);
+            unchecked_bit_range_be_write::<u8>(buf, CHL::NEXT_HEADER_RNG, self.next_header.into());
             unchecked_bit_range_be_write(buf, CHL::HEADER_LEN_RNG, header_len_units);
             unchecked_bit_range_be_write(buf, CHL::PAYLOAD_LEN_RNG, payload_size);
             unchecked_bit_range_be_write::<u8>(buf, CHL::PATH_TYPE_RNG, path_type.into());
@@ -232,6 +214,17 @@ impl CommonHeader {
         }
 
         CommonHeaderLayout::SIZE_BYTES
+    }
+}
+impl FromView for CommonHeader {
+    type ViewType = ScionHeaderView;
+    fn from_view(view: &Self::ViewType) -> Self {
+        debug_assert!(view.version() == Self::VERSION, "Unsupported SCION version");
+        CommonHeader {
+            traffic_class: view.traffic_class(),
+            flow_id: view.flow_id(),
+            next_header: view.next_header(),
+        }
     }
 }
 
@@ -256,20 +249,6 @@ impl AddressHeader {
             dst_host_addr: dst.host().into(),
             src_host_addr: src.host().into(),
         }
-    }
-
-    /// Constructs an `AddressHeader` from a `ScionHeaderView`
-    pub fn from_view(view: &ScionHeaderView) -> Result<Self, ViewConversionError> {
-        Ok(AddressHeader {
-            dst_ia: IsdAsn::new(view.dst_isd(), view.dst_as()),
-            src_ia: IsdAsn::new(view.src_isd(), view.src_as()),
-            dst_host_addr: view
-                .dst_host_addr()
-                .map_err(|_| ViewConversionError::Other("invalid dst_host_addr"))?,
-            src_host_addr: view
-                .src_host_addr()
-                .map_err(|_| ViewConversionError::Other("invalid src_host_addr"))?,
-        })
     }
 
     /// Returns the destination address type
@@ -327,6 +306,21 @@ impl WireEncode for AddressHeader {
         }
 
         self.required_size()
+    }
+}
+impl TryFromView for AddressHeader {
+    type ViewType = ScionHeaderView;
+    fn try_from_view(view: &Self::ViewType) -> Result<Self, ViewConversionError> {
+        Ok(AddressHeader {
+            dst_ia: view.dst_ia(),
+            src_ia: view.src_ia(),
+            dst_host_addr: view
+                .dst_host_addr()
+                .map_err(|_| ViewConversionError::Other("invalid dst_host_addr"))?,
+            src_host_addr: view
+                .src_host_addr()
+                .map_err(|_| ViewConversionError::Other("invalid src_host_addr"))?,
+        })
     }
 }
 
@@ -394,7 +388,7 @@ pub mod ptest {
                             common: CommonHeader {
                                 traffic_class,
                                 flow_id,
-                                next_header,
+                                next_header: next_header.into(),
                             },
                             address: AddressHeader {
                                 dst_ia,

@@ -42,13 +42,10 @@ impl StateEndhostSegmentLister {
     /// - `app_state` : The shared pocket SCION state
     /// - `local_ases`: The local ASes of this segment lister. Only segments from these ASes will be
     ///   listed.
-    pub fn new(
-        app_state: PocketScionState,
-        local_ases: BTreeSet<scion_proto::address::IsdAsn>,
-    ) -> Self {
+    pub fn new(app_state: PocketScionState, local_ases: BTreeSet<IsdAsn>) -> Self {
         Self {
             app_state,
-            local_ases: local_ases.into_iter().map(Into::into).collect(),
+            local_ases,
         }
     }
 }
@@ -57,8 +54,8 @@ impl StateEndhostSegmentLister {
 impl SegmentsDiscovery for StateEndhostSegmentLister {
     async fn list_segments(
         &self,
-        src: sciparse::identifier::isd_asn::IsdAsn,
-        dst: sciparse::identifier::isd_asn::IsdAsn,
+        src: IsdAsn,
+        dst: IsdAsn,
         _page_size: i32,
         _page_token: String,
     ) -> Result<SegmentsPage, SegmentsError> {

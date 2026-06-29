@@ -38,6 +38,7 @@ use crate::{
         view::{ScionDpPathViewRef, ScionDpPathViewRefMut},
     },
     header::layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
+    payload::ProtocolNumber,
     scion::{
         address::host_addr::{HostAddressSizeError, WireHostAddr, WireHostAddrType},
         identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
@@ -57,7 +58,15 @@ impl ScionHeaderView {
     gen_field_read!(version, CommonHeaderLayout::VERSION_RNG, u8);
     gen_field_read!(traffic_class, CommonHeaderLayout::TRAFFIC_CLASS_RNG, u8);
     gen_field_read!(flow_id, CommonHeaderLayout::FLOW_ID_RNG, u32);
-    gen_field_read!(next_header, CommonHeaderLayout::NEXT_HEADER_RNG, u8);
+
+    /// Returns the next header protocol number.
+    #[inline]
+    pub fn next_header(&self) -> ProtocolNumber {
+        // SAFETY: buffer size is checked on construction
+        unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::NEXT_HEADER_RNG) }
+            .into()
+    }
+
     gen_field_read!(payload_len, CommonHeaderLayout::PAYLOAD_LEN_RNG, u16);
 
     /// Returns the header length in bytes
@@ -69,15 +78,6 @@ impl ScionHeaderView {
                 * 4
         }
     }
-
-    /// Returns the path type bit range
-    /// TODO(uniquefine): create constructors for SCMP messages that make this function
-    /// unnecessary.
-    #[inline]
-    pub fn path_type_range(&self) -> BitRange {
-        CommonHeaderLayout::PATH_TYPE_RNG
-    }
-
     /// Returns the path type
     #[inline]
     pub fn path_type(&self) -> PathType {
@@ -101,6 +101,14 @@ impl ScionHeaderView {
         unsafe { unchecked_bit_range_be_read::<u8>(&self.0, CommonHeaderLayout::SRC_ADDR_INFO_RNG) }
             .into()
     }
+
+    /// Returns the path type bit range
+    /// TODO(uniquefine): create constructors for SCMP messages that make this function
+    /// unnecessary.
+    #[inline]
+    pub fn path_type_range(&self) -> BitRange {
+        CommonHeaderLayout::PATH_TYPE_RNG
+    }
 }
 // Mut Common header
 impl ScionHeaderView {
@@ -108,7 +116,18 @@ impl ScionHeaderView {
     gen_field_write!(set_version, CommonHeaderLayout::VERSION_RNG, u8);
     gen_field_write!(set_traffic_class, CommonHeaderLayout::TRAFFIC_CLASS_RNG, u8);
     gen_field_write!(set_flow_id, CommonHeaderLayout::FLOW_ID_RNG, u32);
-    gen_field_write!(set_next_header, CommonHeaderLayout::NEXT_HEADER_RNG, u8);
+    /// Sets the next header protocol number.
+    #[inline]
+    pub fn set_next_header(&mut self, value: ProtocolNumber) {
+        use crate::core::write::unchecked_bit_range_be_write;
+        unsafe {
+            unchecked_bit_range_be_write::<u8>(
+                &mut self.0,
+                CommonHeaderLayout::NEXT_HEADER_RNG,
+                value.into(),
+            )
+        }
+    }
     gen_unsafe_field_write!(set_payload_len, CommonHeaderLayout::PAYLOAD_LEN_RNG, u16);
 
     /// Sets the header length in bytes.

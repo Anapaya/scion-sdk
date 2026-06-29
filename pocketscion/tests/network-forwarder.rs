@@ -17,7 +17,6 @@
 use std::net::IpAddr;
 
 use anyhow::Context;
-use bytes::Bytes;
 use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
@@ -28,13 +27,14 @@ use pocketscion::{
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
 };
-use scion_proto::{
-    address::{IsdAsn, ScionAddr, SocketAddr},
-    packet::{ByEndpoint, ScionPacketRaw, ScionPacketUdp},
-    path::DataPlanePath,
-    wire_encoding::{WireDecode, WireEncodeVec},
-};
 use scion_sdk_utils::rustls::select_ring_crypto_provider;
+use sciparse::{
+    address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
+    core::{convert::TryFromView, encode::WireEncode},
+    dataplane_path::model::DpPath,
+    identifier::isd_asn::IsdAsn,
+    packet::model::{ScionRawPacket, ScionUdpPacket},
+};
 use tokio::time::{Duration, timeout as tokio_timeout};
 
 #[test_log::test(tokio::test)]
@@ -86,13 +86,13 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
     );
 
     // Send packet from sim stack to external socket via network forwarder.
-    let sim_payload = Bytes::from_static(b"sim-to-real");
-    let sim_destination = SocketAddr::new(ScionAddr::new(local_as, sim_forwarder_ip.into()), 50000);
+    let sim_payload = b"sim-to-real".to_vec();
+    let sim_destination = ScionSocketAddr::new(local_as, sim_forwarder_ip.into(), 50000);
     sim_socket
         .try_send(
             sim_destination,
-            DataPlanePath::EmptyPath,
-            sim_payload.clone(),
+            DpPath::Empty,
+            sim_payload,
             ScionNetworkTime::now(),
         )
         .context("send sim packet")?;
@@ -106,14 +106,13 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
     .context("timeout waiting for forwarder send")?
     .context("recv packet")?;
 
-    let mut pkt_bytes = &recv_buf[..size];
-    let pkt = ScionPacketRaw::decode(&mut pkt_bytes).context("decode forwarded packet")?;
-    let dest = pkt
-        .headers
-        .address
-        .destination()
-        .context("missing destination")?;
-    let src = pkt.headers.address.source().context("missing source")?;
+    let pkt_bytes = &recv_buf[..size];
+    let (pkt, rest) =
+        ScionRawPacket::try_from_slice(pkt_bytes).context("decode forwarded packet")?;
+    debug_assert!(rest.is_empty(), "packet was not fully consumed");
+
+    let dest = pkt.dst_scion_addr().context("bad destination")?;
+    let src = pkt.src_scion_addr().context("bad source")?;
 
     assert_eq!(
         addr.port(),
@@ -133,25 +132,19 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
     );
 
     // Send packet from external socket to sim stack via network forwarder.
-    let real_payload = Bytes::from_static(b"real-to-sim");
-    let real_packet = ScionPacketUdp::new(
-        ByEndpoint {
-            source: SocketAddr::new(
-                ScionAddr::new(local_as, "10.0.0.9".parse::<IpAddr>()?.into()),
-                5555,
-            ),
-            destination: SocketAddr::new(ScionAddr::new(local_as, sim_sock_ip.into()), 50000),
-        },
-        DataPlanePath::EmptyPath,
+    let real_payload = b"real-to-sim".to_vec();
+    let real_packet = ScionUdpPacket::new(
+        ScionSocketAddr::new(local_as, "10.0.0.9".parse::<IpAddr>()?.into(), 5555),
+        ScionSocketAddr::new(local_as, sim_sock_ip.into(), 50000),
+        DpPath::Empty,
         real_payload.clone(),
     )
-    .context("build real packet")?;
+    .into_raw()
+    .encode_to_vec()
+    .context("encode real packet")?;
 
     external_socket
-        .send_to(
-            &real_packet.encode_to_bytes_vec().concat(),
-            forwarder_sock_addr,
-        )
+        .send_to(&real_packet, forwarder_sock_addr)
         .await
         .context("send to forwarder")?;
 
@@ -160,10 +153,10 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
         .context("timeout waiting for sim recv")?
         .context("recv sim packet")?;
 
-    assert_eq!(recv.payload(), &real_payload, "receiver got payload");
+    assert_eq!(recv.udp().payload(), &real_payload, "receiver got payload");
     assert_eq!(
-        recv.source().context("missing source")?,
-        SocketAddr::new(ScionAddr::new(local_as, sim_forwarder_ip.into()), 5555),
+        recv.src_socket_addr().context("bad source")?,
+        ScionSocketAddr::new(local_as, sim_forwarder_ip.into(), 5555),
         "source rewritten to forwarder sim address"
     );
 

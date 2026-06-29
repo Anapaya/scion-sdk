@@ -32,9 +32,8 @@ use sciparse::{
         view::View as _,
     },
     dataplane_path::model::DpPath,
-    header::model::AddressHeader,
     identifier::isd_asn::IsdAsn,
-    packet::{model::ScionScmpPacketRef, view::ScionPacketView},
+    packet::{model::ScionScmpPacket, view::ScionPacketView},
     payload::scmp::{self, types::ScmpParameterProblemCode},
 };
 use snap_tun::{
@@ -415,15 +414,11 @@ where
         target_buf: &mut Packet,
     ) -> Result<usize, EncodeError> {
         let scmp_message = create_inbound_scmp_error(err);
-        let scmp_packet_model = ScionScmpPacketRef::new_from_parts(
-            AddressHeader {
-                src_ia: dst_addr.isd_asn(),
-                src_host_addr: local_addr.into(),
-                dst_ia: dst_addr.isd_asn(),
-                dst_host_addr: dst_addr.host().into(),
-            },
+        let scmp_packet_model = ScionScmpPacket::new(
+            ScionAddr::new(dst_addr.isd_asn(), local_addr),
+            dst_addr,
             DpPath::Empty,
-            &scmp_message,
+            scmp_message,
         );
         scmp_packet_model.encode(target_buf)
     }
@@ -447,7 +442,7 @@ fn create_inbound_scmp_error(err: PacketPolicyError) -> scmp::model::ScmpMessage
                     .src_host_addr_range()
                     .containing_byte_range()
                     .start as u16,
-                offending_packet_view.as_bytes().to_vec(),
+                offending_packet_view.as_slice().to_vec(),
             )
             .into()
         }
@@ -459,7 +454,7 @@ fn create_inbound_scmp_error(err: PacketPolicyError) -> scmp::model::ScmpMessage
                     .path_type_range()
                     .containing_byte_range()
                     .start as u16,
-                offending_packet_view.as_bytes().to_vec(),
+                offending_packet_view.as_slice().to_vec(),
             )
             .into()
         }

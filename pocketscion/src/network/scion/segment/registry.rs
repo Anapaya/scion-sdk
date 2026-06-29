@@ -19,7 +19,7 @@ use std::{
     sync::LazyLock,
 };
 
-use scion_proto::address::{Isd, IsdAsn};
+use sciparse::identifier::{isd::Isd, isd_asn::IsdAsn};
 
 use crate::network::scion::{
     segment::{
@@ -28,10 +28,10 @@ use crate::network::scion::{
     },
     topology::{FastTopologyLookup, ScionTopology, visitor::walk_all_links_parallel},
 };
-
 /// Keeps all available [LinkSegment] for a topology.
 ///
-/// A [LinkSegment] is a more general representation of a [scion_proto::path::PathSegment]
+/// A [LinkSegment] is a more general representation of a
+/// [Segment](sciparse::dataplane_path::standard::model::Segment)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentRegistry {
     core_segments: LinkSegmentStore,
@@ -280,7 +280,7 @@ impl LinkSegmentStore {
         };
 
         for segment in segments.into_iter() {
-            let bucket_id = AsPair::new(segment.start_as.into(), segment.end_as.into());
+            let bucket_id = AsPair::new(segment.start_as, segment.end_as);
 
             let all_segment_bucket = cache.all_segments.entry(bucket_id).or_default();
             let bucket_index = all_segment_bucket.len();
@@ -309,13 +309,13 @@ impl LinkSegmentStore {
 
             cache
                 .end_as_to_segment
-                .entry(segment.end_as.into())
+                .entry(segment.end_as)
                 .or_default()
                 .push(segment_id);
 
             cache
                 .start_as_to_segment
-                .entry(segment.start_as.into())
+                .entry(segment.start_as)
                 .or_default()
                 .push(segment_id);
 
@@ -420,7 +420,7 @@ impl LinkSegmentStore {
 
 #[cfg(test)]
 mod tests {
-    use scion_proto::address::Isd;
+    use sciparse::identifier::isd::Isd;
 
     use crate::network::scion::{
         segment::registry::SegmentRegistry,
@@ -567,7 +567,7 @@ mod tests {
     mod link_segment_store {
         use std::{collections::HashSet, str::FromStr};
 
-        use scion_proto::address::IsdAsn;
+        use sciparse::identifier::isd_asn::IsdAsn;
 
         use super::*;
         use crate::network::scion::segment::{model::LinkSegment, registry::LinkSegmentStore};
@@ -617,7 +617,7 @@ mod tests {
                     .iter()
                     .map(|id| store.segment(id).unwrap())
                     .map(|s| {
-                        assert_eq!(s.end_as, ias.into(), "Segment does not end at expected AS");
+                        assert_eq!(s.end_as, ias, "Segment does not end at expected AS");
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(segments.len(), expected_count);
@@ -638,11 +638,7 @@ mod tests {
                     .iter()
                     .map(|id| store.segment(id).unwrap())
                     .map(|s| {
-                        assert_eq!(
-                            s.start_as,
-                            ias.into(),
-                            "Segment does not start at expected AS"
-                        );
+                        assert_eq!(s.start_as, ias, "Segment does not start at expected AS");
                     })
                     .collect::<Vec<_>>();
                 assert_eq!(segments.len(), expected_count);
@@ -661,12 +657,8 @@ mod tests {
             let check = move |start: IsdAsn, end: IsdAsn, expected_count: usize| {
                 let segments = store.segments(start, end);
                 segments.iter().for_each(|s| {
-                    assert_eq!(
-                        s.start_as,
-                        start.into(),
-                        "Segment does not start at expected AS"
-                    );
-                    assert_eq!(s.end_as, end.into(), "Segment does not end at expected AS");
+                    assert_eq!(s.start_as, start, "Segment does not start at expected AS");
+                    assert_eq!(s.end_as, end, "Segment does not end at expected AS");
                 });
                 assert_eq!(segments.len(), expected_count);
             };

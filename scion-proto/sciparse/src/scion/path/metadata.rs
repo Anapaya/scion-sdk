@@ -164,17 +164,24 @@ pub mod geo {
         }
 
         /// Creates a new [GeoCoordinates] instance from a protobuf message.
-        pub fn from_rpc(value: scion_protobuf::daemon::v1::GeoCoordinates) -> Self {
+        ///
+        /// Returns None if all fields are empty or zero, indicating that no geographic information
+        /// is available.
+        pub fn try_from_rpc(value: scion_protobuf::daemon::v1::GeoCoordinates) -> Option<Self> {
+            if value.latitude == 0.0 && value.longitude == 0.0 && value.address.is_empty() {
+                return None;
+            }
+
             let address = match value.address.is_empty() {
                 false => Some(value.address),
                 true => None,
             };
 
-            Self {
+            Some(Self {
                 latitude: value.latitude,
                 longitude: value.longitude,
                 address,
-            }
+            })
         }
 
         /// Converts this [GeoCoordinates] instance into a protobuf message.
@@ -187,11 +194,6 @@ pub mod geo {
         }
     }
     impl_from!(
-        scion_protobuf::daemon::v1::GeoCoordinates,
-        GeoCoordinates,
-        |v| GeoCoordinates::from_rpc(v)
-    );
-    impl_from!(
         GeoCoordinates,
         scion_protobuf::daemon::v1::GeoCoordinates,
         |v| v.into_rpc()
@@ -200,6 +202,8 @@ pub mod geo {
 
 /// An interface used in a path, identified by owning ISD-AS and interfaces ID.
 pub mod path_interface {
+    use std::fmt::Display;
+
     use crate::{core::macros::impl_from, identifier::isd_asn::IsdAsn, rpc::FromRpcError};
 
     /// An interface used in a path, identified by owning ISD-AS and interfaces ID.
@@ -238,6 +242,11 @@ pub mod path_interface {
                 isd_as: self.isd_asn.into(),
                 id: self.id as u64,
             }
+        }
+    }
+    impl Display for PathInterface {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}#{}", self.isd_asn, self.id)
         }
     }
     impl_from!(

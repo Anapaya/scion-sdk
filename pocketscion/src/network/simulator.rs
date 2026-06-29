@@ -14,8 +14,10 @@
 
 //! Full network Simulation for SCION and Local Network
 
+use std::sync::atomic::AtomicU64;
+
 use anyhow::Context;
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
+use sciparse::{core::model::Model, identifier::isd_asn::IsdAsn, packet::view::ScionRawPacketView};
 use tracing::info_span;
 
 use crate::network::{
@@ -30,6 +32,9 @@ use crate::network::{
         topology::ScionTopology,
     },
 };
+
+// We trace the dispatch of each packet with a unique ID for better observability.
+static ID_CTR: AtomicU64 = AtomicU64::new(1);
 
 /// Network simulation for SCION, modelling inter-AS and intra-AS routing
 ///
@@ -80,26 +85,32 @@ impl NetworkSimulator<'_> {
         local_as: IsdAsn,
         local_interface: u16,
         now: ScionNetworkTime,
-        mut packet: ScionPacketRaw,
+        packet: &mut ScionRawPacketView,
     ) {
-        let fallible = || {
-            let _s = info_span!("net-sim", local = %local_as).entered();
-
+        let mut fallible = || {
             // Simulate routing
-            tracing::trace!(%local_as, "Dispatching packet at AS");
+            tracing::trace!("Dispatching packet at AS");
             let routing_output = ScionNetworkSim::simulate_traversal::<SpecRoutingLogic>(
                 self.topology,
-                &mut packet,
+                packet,
                 now,
                 local_as,
                 local_interface,
                 self.ignore_macs,
             )
-            .context("error simula`ting packet traversal")?;
+            .context("error simulating packet traversal")?;
 
             let router = self
                 .topology
                 .get_router(&routing_output.at_as, routing_output.at_ingress_interface);
+
+            // Add dst AS to span for better observability of routing results
+            tracing::Span::current().record("eas", tracing::field::display(&routing_output.at_as));
+
+            tracing::trace!(
+                ?routing_output.action,
+                "Routing result"
+            );
 
             // Simulate Local Handling
             if let Some(reply) = LocalNetworkSimulation::new(
@@ -112,11 +123,23 @@ impl NetworkSimulator<'_> {
             .handle_local_routing_action(routing_output.action, packet)
             .context("local simulation failed")?
             {
-                self.dispatch(routing_output.at_as, 0, now, reply);
+                tracing::trace!("Dispatching local reply");
+
+                self.dispatch(
+                    routing_output.at_as,
+                    0,
+                    now,
+                    &mut reply
+                        .encode_to_owned_view()
+                        .context("Failed to encode response")?,
+                );
             };
 
             anyhow::Ok(())
         };
+
+        let id = ID_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let _s = info_span!("sim", p = id, ias = %local_as, eas = tracing::field::Empty).entered();
 
         match fallible() {
             Ok(_) => {}
@@ -135,7 +158,7 @@ impl NetworkSimulator<'_> {
         &self,
         local_as: IsdAsn,
         local_router_if: u16,
-        packet: ScionPacketRaw,
+        packet: &mut ScionRawPacketView,
     ) -> Option<DispatchEffect> {
         let router = self.topology.get_router(&local_as, local_router_if);
 
@@ -159,10 +182,11 @@ mod test {
     };
 
     use ipnet::IpNet;
-    use scion_proto::{
-        address::ScionAddr,
-        packet::classify_scion_packet,
-        path::test_builder::{TestPathBuilder, TestPathContext},
+    use sciparse::{
+        address::addr::ScionAddr,
+        core::convert::TryToModel,
+        packet::{classify::ClassifiedPacketView, model::ScionRawPacket},
+        util::test_builder::{TestPathBuilder, TestPathContext},
     };
 
     use super::*;
@@ -176,7 +200,7 @@ mod test {
         dst_dp: Arc<MockReceiver>,
         ctx: TestPathContext,
         targets: NetworkReceiverRegistry,
-        packet: ScionPacketRaw,
+        packet: Box<ScionRawPacketView>,
     }
 
     /// Sets up a bidirectional test with two endpoints, each having a MockReceiver.
@@ -217,14 +241,19 @@ mod test {
             dst,
             src_dp,
             dst_dp,
-            packet: test.scion_packet_udp(&[1, 2], 22222, 11111).into(),
+            packet: test
+                .scion_packet_udp(&[1, 2], 22222, 11111)
+                .into_raw()
+                .encode_to_owned_view()
+                .expect("Failed to encode packet"),
             ctx: test,
             targets,
         }
     }
 
     mod scmp_handling {
-        use scion_proto::scmp::{ScmpEchoRequest, ScmpMessage};
+
+        use sciparse::payload::scmp::model::{ScmpEchoRequest, ScmpMessage};
 
         use super::*;
         use crate::network::scion::util::test_topology_ext::TestPathContextTopologyExt;
@@ -244,18 +273,20 @@ mod test {
 
             let topology = test.ctx.build_topology();
 
-            println!("{}", topology.format_mermaid());
             NetworkSimulator::new(&test.targets, &Default::default(), &topology, false).dispatch(
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
-                test.ctx
+                &mut test
+                    .ctx
                     .scion_packet_scmp(ScmpMessage::EchoRequest(ScmpEchoRequest::new(
                         1,
                         2,
-                        vec![1, 2, 3].into(),
+                        vec![1, 2, 3],
                     )))
-                    .into(),
+                    .into_raw()
+                    .encode_to_owned_view()
+                    .expect("Failed to encode SCMP EchoRequest"),
             );
 
             assert_eq!(test.dst_dp.rx_count(), 0, "Dst should not have rx");
@@ -267,13 +298,14 @@ mod test {
             );
 
             let scmp_packet = test.src_dp.last_recv().unwrap();
-            let scmp = classify_scion_packet(scmp_packet.clone())
+            let scmp = scmp_packet
+                .classify()
                 .expect("Should classify SCMP packet")
                 .try_into_scmp()
                 .expect("Should convert to SCMP packet");
 
-            let ScmpMessage::EchoReply(scmp_echo_reply) = scmp.message else {
-                panic!("Expected SCMP EchoReply message, got {:?}", scmp.message);
+            let ScmpMessage::EchoReply(scmp_echo_reply) = scmp.payload else {
+                panic!("Expected SCMP EchoReply message, got {:?}", scmp.payload);
             };
 
             assert_eq!(
@@ -294,16 +326,15 @@ mod test {
 
     mod svc_resolution {
 
-        use std::net::SocketAddr;
+        use std::{io::Cursor, net::SocketAddr};
 
-        use bytes::Bytes;
-        use scion_proto::{
-            address::{ScionAddrSvc, ServiceAddr},
-            packet::{ByEndpoint, ScionPacketUdp},
-            path::DataPlanePath,
-        };
         use scion_protobuf::control_plane::v1::{
             ServiceResolutionRequest, ServiceResolutionResponse,
+        };
+        use sciparse::{
+            address::{addr::ScionAddrSvc, host_addr::ServiceAddr, socket_addr::ScionSocketAddr},
+            dataplane_path::{model::DpPath, view::ScionDpPathViewExt},
+            packet::model::ScionUdpPacket,
         };
 
         use super::*;
@@ -348,30 +379,30 @@ mod test {
 
             use prost::Message;
 
-            let req_packet = ScionPacketUdp::new(
-                ByEndpoint::<scion_proto::address::SocketAddr> {
-                    source: scion_proto::address::SocketAddr::new(src_addr, 12345),
-                    destination: scion_proto::address::SocketAddr::new(dst_addr.into(), 54321),
-                },
-                path.data_plane_path,
-                Bytes::from_owner(ServiceResolutionRequest {}.encode_to_vec()),
+            let mut req_packet = ScionUdpPacket::new(
+                ScionSocketAddr::new(src_addr.isd_asn(), src_addr.host(), 12345),
+                ScionSocketAddr::new(dst_addr.isd_asn, dst_addr.host.into(), 54321),
+                path.dp_path().to_model(),
+                ServiceResolutionRequest {}.encode_to_vec(),
             )
-            .unwrap();
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("Should encode");
 
             NetworkSimulator::new(&network_receivers, &Default::default(), &topology, false)
-                .dispatch(src_ia, 0, ScionNetworkTime(0), req_packet.into());
+                .dispatch(src_ia, 0, ScionNetworkTime(0), &mut req_packet);
 
             let recv = src_receiver
                 .last_recv()
                 .expect("Should have received a packet");
 
-            let udp: ScionPacketUdp = recv.try_into().expect("Should have received a udp packet");
+            let udp: ScionUdpPacket = recv.try_into().expect("Should have received a udp packet");
             assert!(
-                matches!(udp.headers.path, DataPlanePath::Standard(_)),
+                matches!(udp.header.path, DpPath::Standard(_)),
                 "Expected a Standard path in the response"
             );
 
-            let rsp = ServiceResolutionResponse::decode(udp.payload().to_owned())
+            let rsp = ServiceResolutionResponse::decode(Cursor::new(&udp.payload.payload))
                 .expect("Should decode ServiceResolutionResponse");
 
             let ip = rsp
@@ -388,8 +419,9 @@ mod test {
 
     mod dispatch {
 
-        use scion_proto::scmp::{
-            DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpMessage,
+        use sciparse::payload::scmp::{
+            model::{ScmpDestinationUnreachable, ScmpMessage},
+            types::ScmpDestinationUnreachableCode,
         };
 
         use super::*;
@@ -397,7 +429,7 @@ mod test {
 
         #[test_log::test]
         fn should_dispatch_outgoing_packet() {
-            let test = setup(
+            let mut test = setup(
                 |src, dst| {
                     TestPathBuilder::new(src, dst)
                         .up()
@@ -415,7 +447,7 @@ mod test {
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
-                test.packet.clone(),
+                &mut test.packet,
             );
 
             assert_eq!(test.dst_dp.rx_count(), 1, "Should have received one packet");
@@ -424,7 +456,7 @@ mod test {
 
         #[test_log::test]
         fn should_respond_with_destination_unreachable_when_ip_not_bound() {
-            let test = setup(
+            let mut test = setup(
                 |src, dst| {
                     TestPathBuilder::new(src, dst)
                         .up()
@@ -441,7 +473,7 @@ mod test {
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
-                test.packet.clone(),
+                &mut test.packet,
             );
 
             assert_eq!(test.dst_dp.rx_count(), 0, "Dst should not have rx");
@@ -453,15 +485,16 @@ mod test {
             );
 
             let scmp_packet = test.src_dp.last_recv().unwrap();
-            let scmp = classify_scion_packet(scmp_packet.clone())
+            let scmp = scmp_packet
+                .classify()
                 .expect("Should classify SCMP packet")
                 .try_into_scmp()
                 .expect("Should convert to SCMP packet");
 
             let ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable {
-                code: DestinationUnreachableCode::AddressUnreachable,
+                code: ScmpDestinationUnreachableCode::AddressUnreachable,
                 ..
-            }) = scmp.message
+            }) = scmp.payload
             else {
                 panic!(
                     "Expected SCMP Destination Unreachable message with AddressUnreachable code"
@@ -477,7 +510,7 @@ mod test {
                     .add_hop(0, 1)
                     .add_hop(1, 0)
             };
-            let test = setup(test, 1234567, None); // Packet TTL expired - fails directly
+            let mut test = setup(test, 1234567, None); // Packet TTL expired - fails directly
 
             let topology = test.ctx.build_topology();
             let ext_as_registry = ExternalAsRegistry::new();
@@ -485,7 +518,7 @@ mod test {
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
-                test.packet.clone(),
+                &mut test.packet,
             );
 
             assert_eq!(test.src_dp.rx_count(), 1, "Should have rx one packet");
@@ -503,7 +536,7 @@ mod test {
                     .add_hop(1, 0)
             };
 
-            let test = setup(test, 1234567, None);
+            let mut test = setup(test, 1234567, None);
 
             let topology = test.ctx.build_topology();
             let ext_as_registry = ExternalAsRegistry::new();
@@ -511,7 +544,7 @@ mod test {
                 test.src.isd_asn(),
                 0,
                 ScionNetworkTime(test.ctx.timestamp),
-                test.packet.clone(),
+                &mut test.packet,
             );
 
             assert_eq!(test.dst_dp.rx_count(), 0, "Dst should not have rx");
@@ -524,7 +557,7 @@ mod test {
     struct MockReceiver {
         dispatch_count: AtomicUsize,
         scmp_count: AtomicUsize,
-        last_packet: Mutex<Option<ScionPacketRaw>>,
+        last_packet: Mutex<Option<ScionRawPacket>>,
     }
     impl MockReceiver {
         pub fn rx_count(&self) -> usize {
@@ -536,28 +569,26 @@ mod test {
             self.scmp_count.load(std::sync::atomic::Ordering::Relaxed)
         }
 
-        pub fn last_recv(&self) -> Option<ScionPacketRaw> {
+        pub fn last_recv(&self) -> Option<ScionRawPacket> {
             self.last_packet.lock().unwrap().clone()
         }
     }
 
     impl Receiver for MockReceiver {
-        fn receive_packet(&self, packet: ScionPacketRaw) {
-            let packet_type =
-                classify_scion_packet(packet.clone()).expect("All packets should be valid");
+        fn receive_packet(&self, packet: &ScionRawPacketView) {
+            let packet_type = packet.classify().expect("All packets should be valid");
             self.dispatch_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-            match packet_type {
-                scion_proto::packet::PacketClassification::ScmpWithDestination(..)
-                | scion_proto::packet::PacketClassification::ScmpWithoutDestination(..) => {
-                    self.scmp_count
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                _ => {}
+            if let ClassifiedPacketView::Scmp(..) = packet_type {
+                self.scmp_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
 
-            self.last_packet.lock().unwrap().replace(packet);
+            self.last_packet
+                .lock()
+                .unwrap()
+                .replace(packet.try_to_model().expect("Should convert to model"));
         }
     }
 }

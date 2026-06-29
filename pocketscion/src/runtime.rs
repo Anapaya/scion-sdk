@@ -543,7 +543,7 @@ impl PocketScionRuntime {
         io_config: &IoConfig,
     ) -> anyhow::Result<()> {
         for (sci_addr, forwarder_state) in pstate.network_forwarders() {
-            if sci_addr.local_address().unwrap() != forwarder_state.sim_addr {
+            if sci_addr.ip() != forwarder_state.sim_addr {
                 return Err(io::Error::other(format!(
                     "SCION address {sci_addr} does not match the simulation address \
                      {sim_addr} configured for the forwarder",

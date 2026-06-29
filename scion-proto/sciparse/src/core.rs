@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod convert;
 pub mod debug;
 pub mod encode;
 pub mod layout;
+pub mod model;
 pub mod view;
 
 pub(crate) mod macros;

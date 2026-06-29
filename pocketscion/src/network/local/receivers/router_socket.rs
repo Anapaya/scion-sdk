@@ -16,8 +16,10 @@
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use ipnet::IpNet;
-use scion_proto::packet::{ScionPacketRaw, classify_scion_packet};
-use sciparse::{core::view::View, packet::view::ScionPacketView};
+use sciparse::{
+    core::view::View,
+    packet::view::{ScionPacketView, ScionRawPacketView},
+};
 use snap_dataplane::dispatcher::Dispatcher;
 
 use crate::network::local::receivers::Receiver;
@@ -105,27 +107,22 @@ impl<D: Dispatcher> Clone for SharedRouterSocket<D> {
 }
 
 impl<D: Dispatcher> Receiver for SharedRouterSocket<D> {
-    fn receive_packet(&self, packet: ScionPacketRaw) {
-        let classified_packet = match classify_scion_packet(packet) {
-            Ok(classification) => classification,
+    fn receive_packet(&self, packet: &ScionRawPacketView) {
+        let classified_packet = match packet.classify() {
+            Ok(classified) => classified,
             Err(e) => {
-                tracing::error!(error = %e, "Failed to classify SCION packet");
+                tracing::warn!(error = %e, "Failed to classify SCION packet");
                 return;
             }
         };
 
-        let dst_addr = match classified_packet.destination() {
+        let dst_addr = match classified_packet
+            .dst_socket_addr()
+            .and_then(|socket_addr| socket_addr.socket_addr())
+        {
             Some(addr) => addr,
             None => {
-                tracing::error!("Could not extract destination address from SCION packet");
-                return;
-            }
-        };
-
-        let dst_addr = match dst_addr.local_address() {
-            Some(addr) => addr,
-            None => {
-                tracing::error!("Svc address not supported");
+                tracing::warn!("Failed to extract source address from SCION packet");
                 return;
             }
         };
@@ -152,8 +149,8 @@ impl<D: Dispatcher> Receiver for SharedRouterSocket<D> {
 
         // Send the packet on the UDP socket.
         // XXX(shitz): This allocates a new buffer for each packet.
-        let raw = classified_packet.encode_to_vec();
-        if let Err(e) = self.0.socket.try_send_to(&raw, forward_to) {
+        let raw = packet.as_slice();
+        if let Err(e) = self.0.socket.try_send_to(raw, forward_to) {
             tracing::error!(error = %e, %dst_addr, "Failed to send packet");
         }
     }

@@ -15,7 +15,7 @@
 //!
 //! Allows to define custom behavior for ASes that are marked as external in the topology.
 
-use scion_proto::packet::ScionPacketRaw;
+use sciparse::packet::view::ScionRawPacketView;
 
 use crate::network::scion::topology::ScionGlobalInterfaceId;
 
@@ -34,6 +34,6 @@ pub trait ExternalAsHandler: Sync + Send {
         &self,
         from_interface: ScionGlobalInterfaceId,
         to_interface: ScionGlobalInterfaceId,
-        packet: &mut ScionPacketRaw,
+        packet: &mut ScionRawPacketView,
     );
 }

@@ -145,7 +145,7 @@ mod wire_manipulation {
             if let Ok((view, _rest)) = ScionHeaderView::from_mut_slice(&mut buf) {
                 // ── Payload-level header field mutations ──────────────
                 if let Some(nh) = self.next_header {
-                    view.set_next_header(nh);
+                    view.set_next_header(nh.into());
                 }
 
                 if let Some(pl) = self.payload_len {

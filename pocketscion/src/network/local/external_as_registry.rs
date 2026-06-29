@@ -17,7 +17,7 @@
 
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 
 use crate::network::local::external_as_handler::ExternalAsHandler;
 

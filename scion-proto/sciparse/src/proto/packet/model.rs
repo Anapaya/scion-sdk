@@ -17,9 +17,12 @@
 use std::{fmt::Debug, ops::Deref};
 
 use crate::{
-    address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
+    address::{addr::ScionAddr, host_addr::UnknownAddressTypeError, socket_addr::ScionSocketAddr},
     core::{
+        convert::{TryFromModel, TryFromView},
         encode::{EncodeError, InvalidStructureError, WireEncode},
+        macros::impl_from,
+        model::Model,
         view::{View, ViewConversionError},
     },
     dataplane_path::model::DpPath,
@@ -29,7 +32,7 @@ use crate::{
     },
     packet::{
         classify::{ClassifiedPacket, ClassifyError},
-        view::{ScionPacketView, ScionScmpPacketView, ScionUdpPacketView},
+        view::{ScionPacketView, ScionRawPacketView, ScionScmpPacketView, ScionUdpPacketView},
     },
     payload::{
         ProtocolNumber, encode::PayloadEncode, scmp::model::ScmpMessage, udp::model::UdpDatagram,
@@ -44,34 +47,58 @@ pub struct ScionPacket<T: PayloadEncode> {
     /// Payload
     pub payload: T,
 }
+// Methods for all packet types
 impl<T: PayloadEncode> ScionPacket<T> {
     /// Converts this packet into a raw packet with an owned `Vec<u8>` payload by encoding the
     /// payload
-    pub fn into_raw(self) -> Result<ScionRawPacket, EncodeError> {
+    pub fn into_raw(self) -> ScionRawPacket {
         let header_size = self.header.required_size();
         let payload_size = self.payload.required_size(header_size);
         let mut buf = vec![0u8; payload_size];
         let size = self
             .payload
-            .encode(&mut buf[..], &self.header.address, header_size)?;
+            .encode(&mut buf[..], &self.header.address, header_size)
+            .expect("Buffer size must be sufficient based on required_size");
 
         debug_assert_eq!(
             size, payload_size,
-            "Encoded payload size does not match expected size"
+            "Encoded payload size must match required_size calculation"
         );
 
-        Ok(ScionPacket {
+        ScionPacket {
             header: self.header,
             payload: buf,
-        })
+        }
     }
-}
-impl Debug for ScionPacket<Vec<u8>> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScionPacket")
-            .field("header", &self.header)
-            .field("payload", &format_args!("{} bytes", self.payload.len()))
-            .finish()
+
+    /// Returns the source SCION address of the packet.
+    ///
+    /// If a unknown address type is encountered in the source host address, an error is returned.
+    pub fn src_scion_addr(&self) -> Result<ScionAddr, UnknownAddressTypeError> {
+        let host = self.header.address.src_host_addr.scion_host_addr()?;
+        Ok(ScionAddr::new(self.header.address.src_ia, host))
+    }
+
+    /// Sets the source SCION address of the packet by updating the appropriate fields in the
+    /// header.
+    pub fn set_src_scion_addr(&mut self, addr: ScionAddr) {
+        self.header.address.src_ia = addr.isd_asn();
+        self.header.address.src_host_addr = addr.host().into();
+    }
+
+    /// Returns the destination SCION address of the packet.
+    ///
+    /// If a unknown address type is encountered in the destination host address, an error is
+    /// returned.
+    pub fn dst_scion_addr(&self) -> Result<ScionAddr, UnknownAddressTypeError> {
+        let host = self.header.address.dst_host_addr.scion_host_addr()?;
+        Ok(ScionAddr::new(self.header.address.dst_ia, host))
+    }
+
+    /// Sets the destination SCION address of the packet by updating the appropriate fields in the
+    pub fn set_dst_scion_addr(&mut self, addr: ScionAddr) {
+        self.header.address.dst_ia = addr.isd_asn();
+        self.header.address.dst_host_addr = addr.host().into();
     }
 }
 impl<T: PayloadEncode> WireEncode for ScionPacket<T> {
@@ -126,7 +153,7 @@ impl ScionRawPacket {
                 common: CommonHeader {
                     traffic_class: 0,
                     flow_id: 0,
-                    next_header: next_header.into(),
+                    next_header,
                 },
                 address: AddressHeader::new(src, dst),
                 path,
@@ -148,7 +175,7 @@ impl ScionRawPacket {
     /// Meaning if the payload contains a valid UDP datagram followed by extra bytes, the extra
     /// bytes will be ignored.
     pub fn classify(self) -> Result<ClassifiedPacket, ClassifyError> {
-        match self.header.common.next_header.into() {
+        match self.header.common.next_header {
             ProtocolNumber::Scmp => {
                 ScionScmpPacket::try_from_raw(self)
                     .map_err(ClassifyError::MalformedScmp)
@@ -162,24 +189,34 @@ impl ScionRawPacket {
             _ => Ok(ClassifiedPacket::Other(self.to_owned())),
         }
     }
+}
+impl Debug for ScionRawPacket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScionPacket")
+            .field("header", &self.header)
+            .field("payload", &format_args!("{} bytes", self.payload.len()))
+            .finish()
+    }
+}
+impl Model for ScionRawPacket {
+    type ViewType = ScionRawPacketView;
+}
+impl TryFromModel for ScionRawPacketView {
+    type ModelType = ScionRawPacket;
+}
+impl TryFromView for ScionRawPacket {
+    type ViewType = ScionPacketView;
 
-    /// Constructs a [ScionPacket] from a [ScionHeaderView]
-    pub fn from_view(view: &ScionPacketView) -> Result<Self, ViewConversionError> {
+    fn try_from_view(view: &Self::ViewType) -> Result<Self, ViewConversionError> {
         ScionRawPacketRef::from_view(view).map(|packet_ref| packet_ref.to_owned())
     }
-
-    /// Parses a [ScionPacket] from a byte slice, returning the packet and any remaining bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
-        ScionRawPacketRef::from_slice(buf).map(|(packet_ref, rest)| (packet_ref.to_owned(), rest))
-    }
 }
-impl TryFrom<&ScionPacketView> for ScionRawPacket {
-    type Error = ViewConversionError;
-
-    fn try_from(view: &ScionPacketView) -> Result<Self, Self::Error> {
-        Self::from_view(view)
-    }
-}
+impl_from!(ScionPacket<ScmpMessage>, ScionRawPacket, |scmp_packet| {
+    scmp_packet.into_raw()
+});
+impl_from!(ScionPacket<UdpDatagram>, ScionRawPacket, |udp_packet| {
+    udp_packet.into_raw()
+});
 
 /// Raw SCION packet with referenced payload
 pub type ScionRawPacketRef<'a> = ScionPacket<&'a [u8]>;
@@ -187,7 +224,7 @@ impl<'a> ScionPacket<&'a [u8]> {
     /// Constructs a [ScionPacket] from a [ScionHeaderView] and payload slice
     pub fn from_view(view: &'a ScionPacketView) -> Result<Self, ViewConversionError> {
         Ok(Self {
-            header: ScionPacketHeader::from_view(view.header())?,
+            header: ScionPacketHeader::try_from_view(view.header())?,
             payload: view.payload(),
         })
     }
@@ -195,7 +232,7 @@ impl<'a> ScionPacket<&'a [u8]> {
     /// Parses a [ScionPacket] from a byte slice, returning the packet and any remaining bytes.
     pub fn from_slice(buf: &'a [u8]) -> Result<(Self, &'a [u8]), ViewConversionError> {
         let payload_size = ScionHeaderView::from_slice(buf)?.0.payload_len();
-        let (header, rest) = ScionPacketHeader::from_slice(buf)?;
+        let (header, rest) = ScionPacketHeader::try_from_slice(buf)?;
         let (payload, rest) = rest.split_at_checked(payload_size as usize).ok_or(
             ViewConversionError::BufferTooSmall {
                 at: "Payload",
@@ -217,7 +254,7 @@ impl Debug for ScionPacket<&[u8]> {
 }
 
 // Methods for all RAW packet types
-impl<'a, BytePayload: PayloadEncode + Deref<Target = [u8]>> ScionPacket<BytePayload> {
+impl<'a, RawT: PayloadEncode + Deref<Target = [u8]>> ScionPacket<RawT> {
     /// Clones the packet, converting the payload to an owned `Vec<u8>`.
     pub fn to_owned(self) -> ScionRawPacket {
         ScionPacket {
@@ -249,28 +286,13 @@ impl ScionScmpPacket {
                 common: CommonHeader {
                     traffic_class: 0,
                     flow_id: 0,
-                    next_header: ProtocolNumber::Scmp.into(),
+                    next_header: ProtocolNumber::Scmp,
                 },
                 address: AddressHeader::new(src, dst),
                 path,
             },
             payload,
         }
-    }
-
-    /// Parses a `ScionScmpPacket` from a byte slice, returning the packet and any remaining bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
-        let (packet_ref, rest) = ScionScmpPacketView::from_slice(buf)?;
-        let packet = Self::from_view(packet_ref)?;
-        Ok((packet, rest))
-    }
-
-    /// Constructs a `ScionScmpPacket` from a `ScionScmpPacketView`
-    pub fn from_view(view: &ScionScmpPacketView) -> Result<Self, ViewConversionError> {
-        let header = ScionPacketHeader::from_view(view.header())?;
-        let payload = ScmpMessage::from_view(&view.scmp().message());
-
-        Ok(Self { header, payload })
     }
 
     /// Attempts to construct a `ScionScmpPacket` from a `ScionRawPacket` by parsing the payload as
@@ -288,13 +310,6 @@ impl ScionScmpPacket {
         })
     }
 }
-impl TryFrom<&ScionScmpPacketView> for ScionScmpPacket {
-    type Error = ViewConversionError;
-
-    fn try_from(view: &ScionScmpPacketView) -> Result<Self, Self::Error> {
-        Self::from_view(view)
-    }
-}
 impl Debug for ScionScmpPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScionScmpPacket")
@@ -303,30 +318,26 @@ impl Debug for ScionScmpPacket {
             .finish()
     }
 }
+impl Model for ScionScmpPacket {
+    type ViewType = ScionScmpPacketView;
+}
+impl TryFromModel for ScionScmpPacketView {
+    type ModelType = ScionScmpPacket;
+}
+impl TryFromView for ScionScmpPacket {
+    type ViewType = ScionScmpPacketView;
 
-/// SCMP SCION packet with referenced payload
-pub type ScionScmpPacketRef<'a> = ScionPacket<&'a ScmpMessage>;
-impl<'a> ScionPacket<&'a ScmpMessage> {
-    /// Constructs a [ScionScmpPacketRef] from the given parts, inferring header fields as needed.
-    pub fn new_from_parts(address: AddressHeader, path: DpPath, payload: &'a ScmpMessage) -> Self {
-        let header = ScionPacketHeader {
-            common: CommonHeader {
-                traffic_class: 0,
-                flow_id: 0,
-                next_header: ProtocolNumber::Scmp.into(),
-            },
-            address,
-            path,
-        };
-        Self { header, payload }
+    fn try_from_view(view: &Self::ViewType) -> Result<Self, ViewConversionError> {
+        let header = ScionPacketHeader::try_from_view(view.header())?;
+        let payload = ScmpMessage::from_view(&view.scmp().message());
+
+        Ok(Self { header, payload })
     }
 }
-impl Debug for ScionScmpPacketRef<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScionScmpPacketRef")
-            .field("header", &self.header)
-            .field("payload", &self.payload)
-            .finish()
+impl TryFrom<ScionRawPacket> for ScionScmpPacket {
+    type Error = ViewConversionError;
+    fn try_from(raw_packet: ScionRawPacket) -> Result<Self, Self::Error> {
+        Self::try_from_raw(raw_packet)
     }
 }
 
@@ -344,7 +355,7 @@ impl ScionUdpPacket {
                 common: CommonHeader {
                     traffic_class: 0,
                     flow_id: 0,
-                    next_header: ProtocolNumber::Udp.into(),
+                    next_header: ProtocolNumber::Udp,
                 },
                 address: AddressHeader::new(src.scion_addr(), dst.scion_addr()),
                 path,
@@ -359,27 +370,12 @@ impl ScionUdpPacket {
             common: CommonHeader {
                 traffic_class: 0,
                 flow_id: 0,
-                next_header: ProtocolNumber::Udp.into(),
+                next_header: ProtocolNumber::Udp,
             },
             address,
             path,
         };
         Self { header, payload }
-    }
-
-    /// Parses a [ScionUdpPacket] from a byte slice, returning the packet and any remaining bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
-        let (packet_ref, rest) = ScionUdpPacketView::from_slice(buf)?;
-        let packet = Self::from_view(packet_ref)?;
-        Ok((packet, rest))
-    }
-
-    /// Constructs a [ScionUdpPacket] from a [ScionUdpPacketView]
-    pub fn from_view(view: &ScionUdpPacketView) -> Result<Self, ViewConversionError> {
-        let header = ScionPacketHeader::from_view(view.header())?;
-        let payload = UdpDatagram::from_view(view.udp());
-
-        Ok(Self { header, payload })
     }
 
     /// Attempts to construct a `ScionUdpPacket` from a `ScionRawPacket` by parsing the payload as
@@ -397,13 +393,6 @@ impl ScionUdpPacket {
         })
     }
 }
-impl TryFrom<&ScionUdpPacketView> for ScionUdpPacket {
-    type Error = ViewConversionError;
-
-    fn try_from(view: &ScionUdpPacketView) -> Result<Self, Self::Error> {
-        Self::from_view(view)
-    }
-}
 impl Debug for ScionUdpPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScionUdpPacket")
@@ -412,7 +401,81 @@ impl Debug for ScionUdpPacket {
             .finish()
     }
 }
+impl Model for ScionUdpPacket {
+    type ViewType = ScionUdpPacketView;
+}
+impl TryFromModel for ScionUdpPacketView {
+    type ModelType = ScionUdpPacket;
+}
+impl TryFromView for ScionUdpPacket {
+    type ViewType = ScionUdpPacketView;
 
+    fn try_from_view(view: &Self::ViewType) -> Result<Self, ViewConversionError> {
+        let header = ScionPacketHeader::try_from_view(view.header())?;
+        let payload = UdpDatagram::from_view(view.udp());
+
+        Ok(Self { header, payload })
+    }
+}
+impl TryFrom<ScionRawPacket> for ScionUdpPacket {
+    type Error = ViewConversionError;
+
+    fn try_from(packet: ScionRawPacket) -> Result<Self, Self::Error> {
+        Self::try_from_raw(packet)
+    }
+}
+
+impl ScionUdpPacket {
+    /// Encodes this packet into a Boxed `ScionUdpPacketView`
+    ///
+    /// Returns an error if encoding fails, which can occur if the packet structure is invalid.
+    pub fn encode_to_udp_view(&self) -> Result<Box<ScionUdpPacketView>, EncodeError> {
+        let encoded = self.encode_to_vec()?;
+        let view = ScionUdpPacketView::from_boxed(encoded.into())
+            .expect("All encodeable packets should be valid views");
+
+        Ok(view)
+    }
+
+    /// Returns the source SCION socket address of the packet.
+    ///
+    /// If a unknown address type is encountered in the source host address, an error is returned.
+    pub fn src_socket_addr(&self) -> Result<ScionSocketAddr, UnknownAddressTypeError> {
+        let src_port = self.payload.as_ref().src_port;
+        let isd_asn = self.header.address.src_ia;
+        let scion_addr = self.header.address.src_host_addr.scion_host_addr()?;
+
+        Ok(ScionSocketAddr::new(isd_asn, scion_addr, src_port))
+    }
+
+    /// Sets the source SCION socket address of the packet by updating the appropriate fields in the
+    /// header and payload.
+    pub fn set_src_socket_addr(&mut self, socket_addr: ScionSocketAddr) {
+        self.header.address.src_ia = socket_addr.isd_asn();
+        self.header.address.src_host_addr = socket_addr.host().into();
+        self.payload.as_mut().src_port = socket_addr.port();
+    }
+
+    /// Returns the destination SCION socket address of the packet.
+    ///
+    /// If a unknown address type is encountered in the destination host address, an error is
+    /// returned.
+    pub fn dst_socket_addr(&self) -> Result<ScionSocketAddr, UnknownAddressTypeError> {
+        let dst_port = self.payload.as_ref().dst_port;
+        let isd_asn = self.header.address.dst_ia;
+        let scion_addr = self.header.address.dst_host_addr.scion_host_addr()?;
+
+        Ok(ScionSocketAddr::new(isd_asn, scion_addr, dst_port))
+    }
+
+    /// Sets the destination SCION socket address of the packet by updating the appropriate fields
+    /// in the header and payload.
+    pub fn set_dst_socket_addr(&mut self, socket_addr: ScionSocketAddr) {
+        self.header.address.dst_ia = socket_addr.isd_asn();
+        self.header.address.dst_host_addr = socket_addr.host().into();
+        self.payload.as_mut().dst_port = socket_addr.port();
+    }
+}
 /// Support for [`proptest::arbitrary`].
 #[cfg(feature = "proptest")]
 pub mod ptest {
@@ -459,7 +522,7 @@ pub mod ptest {
                 any::<UdpDatagram>(),
             )
                 .prop_map(|(mut header, payload)| {
-                    header.common.next_header = ProtocolNumber::Udp.into();
+                    header.common.next_header = ProtocolNumber::Udp;
                     ScionPacket { header, payload }
                 })
                 .boxed()
@@ -485,7 +548,7 @@ pub mod ptest {
                 ScmpMessage::arbitrary_with(params.scmp_message),
             )
                 .prop_map(|(mut header, payload)| {
-                    header.common.next_header = ProtocolNumber::Scmp.into();
+                    header.common.next_header = ProtocolNumber::Scmp;
                     ScionPacket { header, payload }
                 })
                 .boxed()

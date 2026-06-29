@@ -17,7 +17,7 @@
 use anyhow::Context;
 use rcgen::{DistinguishedName, ExtendedKeyUsagePurpose, Issuer, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 
 const RELATIVE_DISTINGUISHED_NAME_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 55324, 1, 2, 1];
 const SCION_ROOT_CA_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 55324, 1, 3, 3];

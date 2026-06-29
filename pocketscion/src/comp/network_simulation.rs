@@ -18,7 +18,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Context;
 use ipnet::IpNet;
-use scion_proto::address::{IsdAsn, ServiceAddr};
+use sciparse::{address::host_addr::ServiceAddr, identifier::isd_asn::IsdAsn};
 
 use crate::{
     network::{

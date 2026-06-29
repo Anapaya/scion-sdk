@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 
 use super::{CertifiedKeyPair, StoreCertificateDer, StoreKeyDer};

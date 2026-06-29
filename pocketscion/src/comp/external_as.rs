@@ -22,7 +22,7 @@ use std::{
 };
 
 use anyhow::Context;
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw};
+use sciparse::{identifier::isd_asn::IsdAsn, packet::view::ScionRawPacketView};
 use serde::{Deserialize, Serialize};
 use tokio::{
     net::UdpSocket,
@@ -198,7 +198,7 @@ impl ExternalAsHandler for ExternalAsService {
         &self,
         from: ScionGlobalInterfaceId,
         to: ScionGlobalInterfaceId,
-        packet: &mut ScionPacketRaw,
+        packet: &mut ScionRawPacketView,
     ) {
         let Some(iface) = self
             .as_interfaces
@@ -271,7 +271,7 @@ impl ExternalAsLink {
         &self,
         from: ScionGlobalInterfaceId,
         to: ScionGlobalInterfaceId,
-        packet: &mut ScionPacketRaw,
+        packet: &mut ScionRawPacketView,
     ) {
         if from != self.internal_if {
             // Simulation should not send incorrect packets
@@ -293,7 +293,7 @@ impl ExternalAsLink {
             return;
         }
 
-        match self.conn.try_send(packet.clone()) {
+        match self.conn.try_send(packet) {
             Ok(_) => {}
             Err(e) => {
                 match e.kind() {

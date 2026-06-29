@@ -21,7 +21,7 @@ use std::{
 
 use anyhow::bail;
 use ipnet::IpNet;
-use scion_proto::address::{IsdAsn, ServiceAddr};
+use sciparse::{address::host_addr::ServiceAddr, identifier::isd_asn::IsdAsn};
 
 use crate::network::local::receivers::Receiver;
 
@@ -254,7 +254,7 @@ impl std::fmt::Debug for LocalNetworkReceivers {
 mod tests {
     use std::{net::Ipv4Addr, str::FromStr};
 
-    use scion_proto::packet::ScionPacketRaw;
+    use sciparse::packet::view::ScionRawPacketView;
 
     use super::*;
     #[test]
@@ -389,7 +389,7 @@ mod tests {
     #[derive(Default)]
     struct MockReceiver;
     impl Receiver for MockReceiver {
-        fn receive_packet(&self, _packet: ScionPacketRaw) {
+        fn receive_packet(&self, _packet: &ScionRawPacketView) {
             // No-op
         }
     }

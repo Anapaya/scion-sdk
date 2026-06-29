@@ -83,6 +83,17 @@ bitflags::bitflags! {
         const _ = !0;
     }
 }
+impl InfoFieldFlags {
+    /// Returns true if the construction direction flag is set.
+    pub fn cons_dir(&self) -> bool {
+        self.contains(InfoFieldFlags::CONS_DIR)
+    }
+
+    /// Returns true if the peering flag is set.
+    pub fn peering(&self) -> bool {
+        self.contains(InfoFieldFlags::PEERING)
+    }
+}
 
 // HopFieldFlags
 bitflags::bitflags! {

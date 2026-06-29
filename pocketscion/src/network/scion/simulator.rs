@@ -18,7 +18,10 @@
 //! Returns the Action the Packet has to take at the final AS
 
 use anyhow::Context;
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw, path::crypto::ForwardingKey};
+use sciparse::{
+    dataplane_path::standard::mac::ForwardingKey, identifier::isd_asn::IsdAsn,
+    packet::view::ScionRawPacketView,
+};
 
 use crate::network::scion::{
     routing::{
@@ -50,7 +53,7 @@ impl ScionNetworkSim {
     ///   entered from inside the AS, otherwise it entered from a link to another AS
     pub fn simulate_traversal<RoutingImpl: RoutingLogic>(
         topology: &ScionTopology,
-        scion_packet: &mut ScionPacketRaw,
+        scion_packet: &mut ScionRawPacketView,
         now: ScionNetworkTime,
         ingress_asn: IsdAsn,
         ingress_interface: u16,
@@ -97,7 +100,7 @@ impl ScionNetworkSim {
     ///   entered from inside the AS, otherwise it entered from a link to another AS
     pub fn iter<'input, AsRoutingImpl: RoutingLogic>(
         topology: &'input ScionTopology,
-        scion_packet: &'input mut ScionPacketRaw,
+        scion_packet: &'input mut ScionRawPacketView,
         now: ScionNetworkTime,
         ingress_asn: IsdAsn,
         ingress_interface: u16,
@@ -117,7 +120,7 @@ impl ScionNetworkSim {
 /// Iterator over the traversal steps of a SCION packet through a topology.
 pub struct ScionNetworkSimIter<'input, AsRoutingImpl: RoutingLogic> {
     topology: &'input ScionTopology,
-    scion_packet: &'input mut ScionPacketRaw,
+    scion_packet: &'input mut ScionRawPacketView,
     now: ScionNetworkTime,
 
     current_as: IsdAsn,
@@ -147,7 +150,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
     ///   entered from inside the AS.
     fn new(
         topology: &'input ScionTopology,
-        scion_packet: &'input mut ScionPacketRaw,
+        scion_packet: &'input mut ScionRawPacketView,
         now: ScionNetworkTime,
         ingress_as: IsdAsn,
         ingress_interface: u16,
@@ -338,13 +341,10 @@ pub struct ScionNetworkSimOutput {
 mod tests {
     use std::net::Ipv4Addr;
 
-    use bytes::{Bytes, BytesMut};
     use helper::*;
-    use scion_proto::{
-        address::{ScionAddr, ScionAddrV4},
-        packet::{ByEndpoint, FlowId, ScionPacketRaw},
-        path::{DataPlanePath, EncodedStandardPath},
-        scmp::ScmpErrorMessage,
+    use sciparse::{
+        address::addr::{ScionAddr, ScionAddrV4},
+        payload::scmp::model::ScmpErrorMessage,
     };
 
     use super::*;
@@ -380,7 +380,7 @@ mod tests {
             "1-4".parse().unwrap(),
             Ipv4Addr::new(2, 2, 2, 2),
         ));
-        let mut packet = raw_scion_packet(src_addr, dst_addr, &Bytes::from_static(b"Test Payload"));
+        let mut packet = raw_scion_packet(src_addr, dst_addr, b"Test Payload".to_vec());
 
         let result = ScionNetworkSim::simulate_traversal::<MockScionPacketProcessor>(
             &topology,
@@ -393,9 +393,7 @@ mod tests {
         .expect("should not fail to route");
 
         match result.action {
-            LocalAsRoutingAction::ForwardLocal { target_address } => {
-                assert_eq!(target_address, dst_addr, "Target address mismatch");
-            }
+            LocalAsRoutingAction::ForwardLocal => {}
             _ => {
                 panic!(
                     "expected a local forwarding decision, but got: {:?}",
@@ -449,7 +447,7 @@ mod tests {
             Ipv4Addr::new(2, 2, 2, 2),
         ));
 
-        let mut packet = raw_scion_packet(src_addr, dst_addr, &Bytes::from_static(b"Test Payload"));
+        let mut packet = raw_scion_packet(src_addr, dst_addr, b"Test Payload".to_vec());
 
         let result = ScionNetworkSim::simulate_traversal::<MockScionPacketProcessor>(
             &topology,
@@ -509,7 +507,7 @@ mod tests {
 
         let src_addr = ScionAddr::V4(ScionAddrV4::new(as1.isd_as(), Ipv4Addr::new(1, 1, 1, 1)));
         let dst_addr = ScionAddr::V4(ScionAddrV4::new(as4.isd_as(), Ipv4Addr::new(2, 2, 2, 2)));
-        let mut packet = raw_scion_packet(src_addr, dst_addr, &Bytes::from_static(b"Test Payload"));
+        let mut packet = raw_scion_packet(src_addr, dst_addr, b"Test Payload".to_vec());
 
         let mut iter = ScionNetworkSim::iter::<MockScionPacketProcessor>(
             &topology,
@@ -552,9 +550,7 @@ mod tests {
             &mut iter,
             6,
             as4.isd_as(),
-            AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal {
-                target_address: dst_addr,
-            }),
+            AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal),
             true,
         );
 
@@ -592,10 +588,11 @@ mod tests {
     }
 
     mod helper {
-        use bytes::BufMut;
-        use scion_proto::{
-            scmp::{ScmpErrorMessage, ScmpParameterProblem},
-            wire_encoding::{WireDecode, WireEncodeVec},
+        use sciparse::{
+            core::{model::Model, view::View},
+            dataplane_path::model::DpPath,
+            packet::{model::ScionRawPacket, view::ScionPacketView},
+            payload::scmp::{model::ScmpParameterProblem, types::ScmpParameterProblemCode},
         };
 
         use super::*;
@@ -608,7 +605,7 @@ mod tests {
         impl RoutingLogic for MockScionPacketProcessor {
             fn route(
                 _local_as: IsdAsn,
-                scion_packet: &mut ScionPacketRaw,
+                scion_packet: &mut ScionRawPacketView,
                 ingress_interface_id: u16,
                 _now: ScionNetworkTime,
                 _as_forwarding_key: &ForwardingKey,
@@ -618,9 +615,7 @@ mod tests {
                 if ingress_interface_id == 6 {
                     // Simulate a decision to handle the packet as a SCMP request at the ingress
                     // interface
-                    return Ok(AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal {
-                        target_address: scion_packet.headers.address.destination().unwrap(),
-                    }));
+                    return Ok(AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal));
                 }
 
                 interface_link_type_lookup(ingress_interface_id + 1) // For mock - Egress must be one higher than ingress
@@ -631,9 +626,10 @@ mod tests {
                         );
                         ScmpErrorMessage::ParameterProblem(
                             ScmpParameterProblem::new(
-                                scion_proto::scmp::ParameterProblemCode::UnknownHopFieldConsEgressInterface // note - this would need to be normalized from travel direction but not for mock
-                                , 0
-                                , scion_packet.encode_to_bytes_vec().concat().into())
+                                ScmpParameterProblemCode::UnknownHopFieldConsEgressInterface, // note - this would need to be normalized from travel direction but not for mock
+                                 0,
+                                scion_packet.as_slice().to_vec()
+                            )
                         )
                     })?;
 
@@ -650,30 +646,18 @@ mod tests {
         pub fn raw_scion_packet(
             source_addr: ScionAddr,
             dest_addr: ScionAddr,
-            payload: &Bytes,
-        ) -> ScionPacketRaw {
-            let endpoints = ByEndpoint {
-                source: source_addr,
-                destination: dest_addr,
-            };
-
-            // Construct a simple one hop path:
-            // https://docs.scion.org/en/latest/protocols/scion-header.html#path-type-onehoppath
-            let mut path_raw = BytesMut::with_capacity(36);
-            path_raw.put_u32(0x0000_2000);
-            path_raw.put_slice(&[0_u8; 32]);
-            let dp_path = DataPlanePath::Standard(
-                EncodedStandardPath::decode(&mut path_raw.freeze()).unwrap(),
-            );
-
-            ScionPacketRaw::new(
-                endpoints,
+            payload: Vec<u8>,
+        ) -> Box<ScionPacketView> {
+            let dp_path = DpPath::Empty;
+            ScionRawPacket::new(
+                source_addr,
+                dest_addr,
                 dp_path,
-                payload.clone(),
-                0,
-                FlowId::new(0).unwrap(),
+                sciparse::payload::ProtocolNumber::Other(0),
+                payload,
             )
-            .unwrap()
+            .encode_to_owned_view()
+            .expect("should be able to encode a SCION packet")
         }
     }
 }

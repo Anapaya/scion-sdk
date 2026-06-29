@@ -33,15 +33,14 @@ impl SegmentRegistry {
     ) -> anyhow::Result<ListSegmentsOutput<'a>> {
         let core_store = self.core_segments();
         let isd_store = self
-            .isd_segments(&local.isd().into())
+            .isd_segments(&local.isd())
             .context("missing ISD store for this AS")?;
 
-        if !core_store.is_known_as(local.into()) {
+        if !core_store.is_known_as(local) {
             bail!("only core ASes can use this function");
         }
 
-        let query_type =
-            Query::classify(local, src_as, dst_as, core_store.is_known_as(dst_as.into()))?;
+        let query_type = Query::classify(local, src_as, dst_as, core_store.is_known_as(dst_as))?;
 
         tracing::debug!(
             ?local,
@@ -59,7 +58,7 @@ impl SegmentRegistry {
                     // be stored in the direction of propagation in the appliance implementation.
                     // In other words, we must return segments originated from `dst_asn`, and
                     // terminated at `local`.
-                    .segments(dst_asn.into(), local.into())
+                    .segments(dst_asn, local)
                     .iter()
                     .by_ref()
                     .collect();
@@ -77,9 +76,9 @@ impl SegmentRegistry {
                     // be stored in the direction of propagation in the appliance implementation.
                     // In other words, we must return segments originated from any core AS and
                     // terminated at `local`.
-                    .segments_by_end_as(local.into())
+                    .segments_by_end_as(local)
                     .iter()
-                    .filter(|s| s.bucket.start_as.isd() == isd.into())
+                    .filter(|s| s.bucket.start_as.isd() == isd)
                     .filter_map(|s| core_store.segment(s))
                     .collect();
 
@@ -92,7 +91,7 @@ impl SegmentRegistry {
             // Core to Down query
             Query::Down(dst_asn) => {
                 let segs = isd_store
-                    .segments(local.into(), IsdAsn::new(local.isd(), dst_asn).into())
+                    .segments(local, IsdAsn::new(local.isd(), dst_asn))
                     .iter()
                     .by_ref()
                     .collect();

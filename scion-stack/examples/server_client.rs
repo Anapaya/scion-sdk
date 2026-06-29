@@ -127,7 +127,7 @@ async fn main() -> Result<(), anyhow::Error> {
         // Create SCION Network Access Points (SNAPs)
         for snap_config in &cfg.pocket_scion.scion_access_points {
             // Add a new SNAP to the system state
-            let snap_id = system_state.add_snap(snap_config.isd_as)?;
+            let snap_id = system_state.add_snap(snap_config.isd_as.into())?;
 
             // Then add an IO config to declare how this control plane can be reached
             io_config.set_snap_control_addr(snap_id, snap_config.control_api_addr);

@@ -88,7 +88,7 @@ impl Dispatcher for TunnelGatewayDispatcher {
             }
         };
 
-        let raw_bytes = packet.as_bytes();
+        let raw_bytes = packet.as_slice();
         let mut pooled_packet = self.pool.get();
         pooled_packet.as_mut()[..raw_bytes.len()].copy_from_slice(raw_bytes);
         pooled_packet.truncate(raw_bytes.len());

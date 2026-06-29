@@ -51,19 +51,6 @@ pub enum AdvanceError {
     InvalidPathState(&'static str),
 }
 
-/// Error type for failures during path advance with validation.
-#[derive(Debug, thiserror::Error)]
-pub enum AdvanceValidateError<E: Debug> {
-    /// The validator returned an error during validation of a hop field or segment
-    /// change.
-    #[error("validation failed: {0}")]
-    ValidationFailed(E),
-    /// The advance process failed due to an invalid path state, such as an out of
-    /// bounds index.
-    #[error("advance failed: {0}")]
-    AdvanceFailed(#[from] AdvanceError),
-}
-
 /// Trait to allow validating hop fields and segment changes during path advance.
 pub trait AdvanceValidator {
     /// The error type returned by the validator when validation fails
@@ -82,8 +69,11 @@ pub trait AdvanceValidator {
     /// returned by the advance function.
     fn validate_hop(
         &self,
+        hop_index: usize,
         hop_field: &HopFieldView,
         info_field: &InfoFieldView,
+        is_segment_start: bool,
+        is_segment_end: bool,
     ) -> Result<(), Self::Error>;
 
     /// Validates a segment change
@@ -96,6 +86,7 @@ pub trait AdvanceValidator {
     ///   followed by an Up Segment)
     fn validate_segment_change(
         &self,
+        hop_index: usize,
         current_hop_field: &HopFieldView,
         current_info_field: &InfoFieldView,
         next_hop_field: &HopFieldView,
@@ -109,8 +100,11 @@ impl AdvanceValidator for NoValidation {
     #[inline]
     fn validate_hop(
         &self,
+        _hop_index: usize,
         _hop_field: &HopFieldView,
         _info_field: &InfoFieldView,
+        _is_segment_start: bool,
+        _is_segment_end: bool,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -118,6 +112,7 @@ impl AdvanceValidator for NoValidation {
     #[inline]
     fn validate_segment_change(
         &self,
+        _hop_index: usize,
         _current_hop_field: &HopFieldView,
         _current_info_field: &InfoFieldView,
         _next_hop_field: &HopFieldView,
@@ -128,7 +123,8 @@ impl AdvanceValidator for NoValidation {
 }
 
 /// Result of advancing the ingress of a path
-pub struct IngressAdvanceResult {
+#[derive(Debug)]
+pub struct IngressAdvanceOutput {
     /// An SCMP alert was present on the packet, indicating it should be processed at
     /// the ingress router
     ///
@@ -155,6 +151,25 @@ pub enum IngressAdvanceAction {
     ForwardLocal,
 }
 
+/// Result of advancing the ingress of a path, including potential validation errors
+#[derive(Debug)]
+pub enum IngressValidateResult<ValidationErrorType> {
+    /// The path was successfully advanced and validated, and can be processed according to the
+    /// returned [IngressAdvanceOutput].
+    Ok(IngressAdvanceOutput),
+    /// The path was successfully advanced, but validation failed with the provided error.
+    ValidationFailed(IngressAdvanceOutput, ValidationErrorType),
+}
+impl<E> IngressValidateResult<E> {
+    /// Converts the IngressAdvanceValidateResult into a Result
+    pub fn into_result(self) -> Result<IngressAdvanceOutput, (IngressAdvanceOutput, E)> {
+        match self {
+            IngressValidateResult::Ok(output) => Ok(output),
+            IngressValidateResult::ValidationFailed(output, err) => Err((output, err)),
+        }
+    }
+}
+
 impl StandardPathView {
     /// Advances the path at ingress, without performing any validation.
     ///
@@ -164,28 +179,24 @@ impl StandardPathView {
     pub fn advance_ingress(
         &mut self,
         from_internal_interface: bool,
-    ) -> Result<IngressAdvanceResult, AdvanceError> {
-        self.advance_ingress_with_validator(NoValidation, from_internal_interface)
-            .map_err(|e| {
-                match e {
-                    AdvanceValidateError::AdvanceFailed(err) => err,
-                    AdvanceValidateError::ValidationFailed(_) => {
-                        // NoValidation cannot fail validation, so this branch should be
-                        // unreachable
-                        unreachable!()
-                    }
-                }
-            })
+    ) -> Result<IngressAdvanceOutput, AdvanceError> {
+        match self.advance_ingress_with_validator(NoValidation, from_internal_interface)? {
+            IngressValidateResult::Ok(ingress_advance_result) => Ok(ingress_advance_result),
+            IngressValidateResult::ValidationFailed(..) => {
+                unreachable!("NoValidation is Infallible")
+            }
+        }
     }
 
     /// Advances the path at ingress.
     ///
     /// If successful, the path is updated in-place to reflect the advance, and an
-    /// [`IngressAdvanceResult`] indicating the next steps for processing the packet is
+    /// [`IngressAdvanceOutput`] indicating the next steps for processing the packet is
     /// returned.
     ///
-    /// If the path is invalid or the advance process fails for any reason, an error is
-    /// returned and the path is not modified.
+    /// If the path is invalid an error is returned and the path is not modified.
+    /// A validation error will be returned with the [IngressAdvanceOutput] if the path is useable
+    /// but the validation failed.
     ///
     /// This function itself only performs minimal validation.
     ///
@@ -205,7 +216,7 @@ impl StandardPathView {
         &mut self,
         validator: ValidatorType,
         from_internal_interface: bool,
-    ) -> Result<IngressAdvanceResult, AdvanceValidateError<E>>
+    ) -> Result<IngressValidateResult<E>, AdvanceError>
     where
         ValidatorType: AdvanceValidator<Error = E>,
         E: Debug,
@@ -215,16 +226,21 @@ impl StandardPathView {
         let curr_hop_idx = self.curr_hop_field_idx() as usize;
         let curr_info_idx = self.curr_info_field_idx() as usize;
 
-        let (seg_idx, end_of_segment) = self
+        let (seg_idx, start_of_segment, end_of_segment) = self
             .calculate_segment_index(curr_hop_idx)
             .ok_or(AdvanceError::HopOutOfBounds(curr_hop_idx as u8))?;
+
+        if start_of_segment && end_of_segment {
+            return Err(AdvanceError::InvalidPathState(
+                "Path contains a segment with a single hop",
+            ));
+        }
 
         if seg_idx != curr_info_idx {
             return Err(AdvanceError::InvalidSegmentIndex {
                 expected: seg_idx,
                 actual: curr_info_idx,
-            }
-            .into());
+            });
         }
 
         let is_final_hop = curr_hop_idx + 1 >= hop_field_count as usize;
@@ -254,9 +270,15 @@ impl StandardPathView {
         }
 
         // Validate the current hop field
-        validator
-            .validate_hop(&curr_hop_copy, &curr_info_copy)
-            .map_err(AdvanceValidateError::ValidationFailed)?;
+        let mut validation_err = validator
+            .validate_hop(
+                curr_hop_idx,
+                &curr_hop_copy,
+                &curr_info_copy,
+                start_of_segment,
+                end_of_segment,
+            )
+            .err();
 
         // Check if we have an SCMP alert at the ingress router.
         let scmp_alert = curr_hop_copy
@@ -276,7 +298,7 @@ impl StandardPathView {
         let res = match (is_final_hop, end_of_segment) {
             // FINAL_HOP: process at local destination
             (true, true) => {
-                IngressAdvanceResult {
+                IngressAdvanceOutput {
                     scmp_alert,
                     ingress_interface: curr_ingress_interface,
                     action: IngressAdvanceAction::ForwardLocal,
@@ -284,7 +306,7 @@ impl StandardPathView {
             }
             // NORMAL ADVANCE: continue to egress
             (false, false) => {
-                IngressAdvanceResult {
+                IngressAdvanceOutput {
                     scmp_alert,
                     ingress_interface: curr_ingress_interface,
                     action: IngressAdvanceAction::ContinueEgress {
@@ -301,22 +323,33 @@ impl StandardPathView {
                     .info_field(seg_idx + 1)
                     .ok_or(AdvanceError::InfoOutOfBounds((seg_idx + 1) as u8))?;
 
-                // Validate the segment change
-                validator
-                    .validate_segment_change(
-                        &curr_hop_copy,
-                        &curr_info_copy,
-                        next_hop_field,
-                        next_info_field,
-                    )
-                    .map_err(AdvanceValidateError::ValidationFailed)?;
-
+                // Validate the segment change if previous validation did not fail yet
+                validation_err = validation_err.or_else(|| {
+                    validator
+                        .validate_segment_change(
+                            curr_hop_idx,
+                            &curr_hop_copy,
+                            &curr_info_copy,
+                            next_hop_field,
+                            next_info_field,
+                        )
+                        .err()
+                });
                 let egress_if = next_hop_field.egress_interface(next_info_field);
 
-                // Validate the current hop field
-                validator
-                    .validate_hop(next_hop_field, next_info_field)
-                    .map_err(AdvanceValidateError::ValidationFailed)?;
+                // Validate the current hop field if validation did not fail yet
+
+                validation_err = validation_err.or_else(|| {
+                    validator
+                        .validate_hop(
+                            curr_hop_idx + 1,
+                            next_hop_field,
+                            next_info_field,
+                            true,  // We are at the start of the new segment
+                            false, // Can't be the end of the new segment
+                        )
+                        .err()
+                });
 
                 // Advance the hop field index by one
                 self.set_curr_hop_field((curr_hop_idx + 1) as u8);
@@ -325,7 +358,7 @@ impl StandardPathView {
                 // NOTE: We are ignoring SCMP alerts which are set on the segment change
                 // hop fields.
 
-                IngressAdvanceResult {
+                IngressAdvanceOutput {
                     scmp_alert,
                     ingress_interface: curr_ingress_interface,
                     action: IngressAdvanceAction::ContinueEgress { egress_if },
@@ -348,7 +381,10 @@ impl StandardPathView {
             .expect("If we can get the current hop field without mut, we can get it with mut") =
             curr_hop_copy;
 
-        Ok(res)
+        match validation_err {
+            Some(err) => Ok(IngressValidateResult::ValidationFailed(res, err)),
+            None => Ok(IngressValidateResult::Ok(res)),
+        }
     }
 }
 
@@ -357,12 +393,32 @@ impl StandardPathView {
 /// The router may choose to drop the packet after processing the alert, or it may
 /// choose to continue processing and forward the packet with the given
 /// egress interface.
-pub struct EgressAdvanceResult {
+#[derive(Debug)]
+pub struct EgressAdvanceOutput {
     /// An SCMP alert was present on the packet, indicating it should be processed at
     /// the egress router.
     pub scmp_alert: bool,
     /// The egress interface according to the packet.
     pub egress_interface: u16,
+}
+
+/// Result of advancing the egress of a path, including potential validation errors
+#[derive(Debug)]
+pub enum EgressValidateResult<ValidationErrorType> {
+    /// The path was successfully advanced and validated, and can be processed according to the
+    /// returned [EgressAdvanceOutput].
+    Ok(EgressAdvanceOutput),
+    /// The path was successfully advanced, but validation failed with the provided error.
+    ValidationFailed(EgressAdvanceOutput, ValidationErrorType),
+}
+impl<E> EgressValidateResult<E> {
+    /// Converts the EgressAdvanceValidateResult into a Result
+    pub fn into_result(self) -> Result<EgressAdvanceOutput, (EgressAdvanceOutput, E)> {
+        match self {
+            EgressValidateResult::Ok(output) => Ok(output),
+            EgressValidateResult::ValidationFailed(output, err) => Err((output, err)),
+        }
+    }
 }
 
 impl StandardPathView {
@@ -371,18 +427,13 @@ impl StandardPathView {
     /// See [`Self::advance_egress_with_validator`] for a version of this function that allows
     /// providing a validator to perform extended validation during the advance process.
     #[inline]
-    pub fn advance_egress(&mut self) -> Result<EgressAdvanceResult, AdvanceError> {
-        self.advance_egress_with_validator(NoValidation)
-            .map_err(|e| {
-                match e {
-                    AdvanceValidateError::AdvanceFailed(err) => err,
-                    AdvanceValidateError::ValidationFailed(_) => {
-                        // NoValidation cannot fail validation, so this branch should be
-                        // unreachable
-                        unreachable!()
-                    }
-                }
-            })
+    pub fn advance_egress(&mut self) -> Result<EgressAdvanceOutput, AdvanceError> {
+        match self.advance_egress_with_validator(NoValidation)? {
+            EgressValidateResult::Ok(egress_advance_result) => Ok(egress_advance_result),
+            EgressValidateResult::ValidationFailed(..) => {
+                unreachable!("NoValidation is Infallible")
+            }
+        }
     }
 
     /// Advances the path at the egress of a router.
@@ -396,7 +447,7 @@ impl StandardPathView {
     pub fn advance_egress_with_validator<ValidatorType, E>(
         &mut self,
         validator: ValidatorType,
-    ) -> Result<EgressAdvanceResult, AdvanceValidateError<E>>
+    ) -> Result<EgressValidateResult<E>, AdvanceError>
     where
         ValidatorType: AdvanceValidator<Error = E>,
         E: Debug + Display,
@@ -406,7 +457,7 @@ impl StandardPathView {
         let curr_hop_idx = self.curr_hop_field_idx() as usize;
         let curr_info_idx = self.curr_info_field_idx() as usize;
 
-        let (seg_idx, end_of_segment) = self
+        let (seg_idx, start_of_segment, end_of_segment) = self
             .calculate_segment_index(curr_hop_idx)
             .ok_or(AdvanceError::HopOutOfBounds(curr_hop_idx as u8))?;
 
@@ -414,8 +465,7 @@ impl StandardPathView {
             return Err(AdvanceError::InvalidSegmentIndex {
                 expected: seg_idx,
                 actual: curr_info_idx,
-            }
-            .into());
+            });
         }
 
         let is_final_hop = curr_hop_idx + 1 >= hop_field_count as usize;
@@ -436,7 +486,7 @@ impl StandardPathView {
 
         if is_final_hop {
             // We are at the end of the path, we can't advance further
-            return Err(AdvanceError::HopOutOfBounds(curr_hop_idx as u8 + 1).into());
+            return Err(AdvanceError::HopOutOfBounds(curr_hop_idx as u8 + 1));
         }
 
         if end_of_segment {
@@ -444,23 +494,27 @@ impl StandardPathView {
             // ingress.
             return Err(AdvanceError::InvalidPathState(
                 "Path is at segment end, which must have been handled at ingress",
-            )
-            .into());
+            ));
         }
 
         if seg_idx != curr_info_idx {
             return Err(AdvanceError::InvalidSegmentIndex {
                 expected: seg_idx,
                 actual: curr_info_idx,
-            }
-            .into());
+            });
         }
 
         // Process
 
-        validator
-            .validate_hop(&curr_hop_copy, &curr_info_copy)
-            .map_err(AdvanceValidateError::ValidationFailed)?;
+        let validation_error = validator
+            .validate_hop(
+                curr_hop_idx,
+                &curr_hop_copy,
+                &curr_info_copy,
+                start_of_segment,
+                end_of_segment,
+            )
+            .err();
 
         // Update segment_id if we are in construction dir
         if in_construction_dir {
@@ -495,10 +549,15 @@ impl StandardPathView {
             curr_hop_copy;
         self.set_curr_hop_field((curr_hop_idx + 1) as u8);
 
-        Ok(EgressAdvanceResult {
+        let out = EgressAdvanceOutput {
             scmp_alert,
             egress_interface: curr_hop_copy.egress_interface(&curr_info_copy),
-        })
+        };
+
+        match validation_error {
+            Some(err) => Ok(EgressValidateResult::ValidationFailed(out, err)),
+            None => Ok(EgressValidateResult::Ok(out)),
+        }
     }
 }
 
@@ -509,6 +568,7 @@ pub struct InvalidMacError {
     expected: HopFieldMac,
     actual: HopFieldMac,
 }
+
 /// A validator for advancing a standard path, only checking the validity of hop field MACs.
 ///
 /// This is not intended to be used in production, as it does not perform any other validation,
@@ -525,8 +585,11 @@ impl AdvanceValidator for HopMacValidator {
     #[inline]
     fn validate_hop(
         &self,
+        _hop_index: usize,
         hop_field: &HopFieldView,
         info_field: &InfoFieldView,
+        _is_segment_start: bool,
+        _is_segment_end: bool,
     ) -> Result<(), Self::Error> {
         let mac = hop_field.mac();
         let expected_mac = calculate_hop_mac(
@@ -551,6 +614,7 @@ impl AdvanceValidator for HopMacValidator {
     #[inline]
     fn validate_segment_change(
         &self,
+        _hop_index: usize,
         _current_hop_field: &HopFieldView,
         _current_info_field: &InfoFieldView,
         _next_hop_field: &HopFieldView,
@@ -695,13 +759,30 @@ mod tests {
                 proptest::test_runner::TestCaseError::Fail(
                     format!("First Advance ingress failed: {e:?}").into(),
                 )
+            })?
+            .into_result()
+            .map_err(|(output, err)| {
+                proptest::test_runner::TestCaseError::Fail(
+                    format!("First Advance ingress validation failed: {err:?}, output: {output:?}")
+                        .into(),
+                )
             })?;
 
-        view.advance_egress_with_validator(validator).map_err(|e| {
-            proptest::test_runner::TestCaseError::Fail(
-                format!("First Advance egress failed: {e:?}").into(),
-            )
-        })?;
+        view.advance_egress_with_validator(validator.clone())
+            .map_err(|e| {
+                proptest::test_runner::TestCaseError::Fail(
+                    format!("Second Advance egress failed: {e:?}").into(),
+                )
+            })?
+            .into_result()
+            .map_err(|(output, err)| {
+                proptest::test_runner::TestCaseError::Fail(
+                    format!(
+                        "Second Advance ingress validation failed: {err:?}, output: {output:?}"
+                    )
+                    .into(),
+                )
+            })?;
 
         let mut steps = 1;
         loop {
@@ -711,6 +792,13 @@ mod tests {
                 .map_err(|e| {
                     proptest::test_runner::TestCaseError::Fail(
                         format!("Advance failed: {e:?}").into(),
+                    )
+                })?
+                .into_result()
+                .map_err(|(output, err)| {
+                    proptest::test_runner::TestCaseError::Fail(
+                        format!("Advance ingress validation failed: {err:?}, output: {output:?}")
+                            .into(),
                     )
                 })?;
 
@@ -731,9 +819,19 @@ mod tests {
                 break;
             }
 
-            view.advance_egress_with_validator(validator).map_err(|e| {
-                proptest::test_runner::TestCaseError::Fail(format!("Advance failed: {e:?}").into())
-            })?;
+            view.advance_egress_with_validator(validator.clone())
+                .map_err(|e| {
+                    proptest::test_runner::TestCaseError::Fail(
+                        format!("Advance failed: {e:?}").into(),
+                    )
+                })?
+                .into_result()
+                .map_err(|(output, err)| {
+                    proptest::test_runner::TestCaseError::Fail(
+                        format!("Advance egress validation failed: {err:?}, output: {output:?}")
+                            .into(),
+                    )
+                })?;
         }
 
         Ok(())

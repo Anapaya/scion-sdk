@@ -22,7 +22,7 @@ use std::{
     thread,
 };
 
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 
 use crate::network::scion::topology::{FastTopologyLookup, ScionAs, ScionLink};
 

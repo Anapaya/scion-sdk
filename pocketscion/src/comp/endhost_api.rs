@@ -25,8 +25,8 @@ use endhost_api_models::{
     UnderlayDiscovery,
     underlays::{ScionRouter, Snap, Underlays},
 };
-use scion_proto::address::IsdAsn;
 use scion_sdk_observability::info_trace_layer;
+use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use utoipa::ToSchema;
@@ -150,7 +150,7 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
         request_as: sciparse::identifier::isd_asn::IsdAsn,
     ) -> endhost_api_models::underlays::Underlays {
         let this = self.own_state().expect("endhost api must exist");
-        let request_as: IsdAsn = request_as.into();
+        let request_as: IsdAsn = request_as;
 
         if !(request_as.matches_any_in(&this.local_ases)) {
             // Request AS not local - can't list
@@ -185,7 +185,7 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
             };
 
             udp_underlay.push(ScionRouter {
-                isd_as: router.isd_as.into(),
+                isd_as: router.isd_as,
                 internal_interface,
                 interfaces: router.if_ids.iter().map(|intf| intf.get()).collect(),
             })
@@ -222,7 +222,7 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
 
             snap_underlay.push(Snap {
                 address: addr_to_http_url(address),
-                isd_ases: snap_isd_ases.into_iter().map(Into::into).collect(),
+                isd_ases: snap_isd_ases.into_iter().collect(),
             });
         }
 
@@ -319,26 +319,26 @@ mod tests {
             disc_snaps: (
                 Snap {
                     address: addr_to_http_url(snap11),
-                    isd_ases: vec![ia1.into()],
+                    isd_ases: vec![ia1],
                 },
                 Snap {
                     address: addr_to_http_url(snap12),
-                    isd_ases: vec![ia2.into()],
+                    isd_ases: vec![ia2],
                 },
                 Snap {
                     address: addr_to_http_url(snap13),
-                    isd_ases: vec![ia3.into()],
+                    isd_ases: vec![ia3],
                 },
             ),
 
             disc_udp_underlays: (
                 ScionRouter {
-                    isd_as: ia1.into(),
+                    isd_as: ia1,
                     internal_interface: addr(31),
                     interfaces: vec![1],
                 },
                 ScionRouter {
-                    isd_as: ia2.into(),
+                    isd_as: ia2,
                     internal_interface: addr(32),
                     interfaces: vec![1],
                 },
@@ -390,7 +390,7 @@ mod tests {
         };
 
         // Non Local - should return none
-        let res = service.list_underlays(t.ias.1.into());
+        let res = service.list_underlays(t.ias.1);
         assert!(res.snap_underlay.is_empty());
         assert!(res.udp_underlay.is_empty());
     }
@@ -407,7 +407,7 @@ mod tests {
                 io_config: io.clone(),
             };
 
-            let res = service.list_underlays(t.ias.0.into());
+            let res = service.list_underlays(t.ias.0);
             let expected = Underlays {
                 udp_underlay: vec![t.disc_udp_underlays.0],
                 snap_underlay: vec![t.disc_snaps.0],
@@ -424,7 +424,7 @@ mod tests {
                 system_state: state.clone(),
                 io_config: io.clone(),
             };
-            let res = service.list_underlays(t.ias.1.into());
+            let res = service.list_underlays(t.ias.1);
             let expected = Underlays {
                 udp_underlay: vec![t.disc_udp_underlays.1],
                 snap_underlay: vec![t.disc_snaps.1],
@@ -441,7 +441,7 @@ mod tests {
                 system_state: state.clone(),
                 io_config: io.clone(),
             };
-            let res = service.list_underlays(t.ias.2.into());
+            let res = service.list_underlays(t.ias.2);
             let expected = Underlays {
                 udp_underlay: vec![],
                 snap_underlay: vec![t.disc_snaps.2],
@@ -464,7 +464,7 @@ mod tests {
         {
             let (_, _, t) = setup().unwrap();
 
-            let res = service.list_underlays(t.ias.0.into());
+            let res = service.list_underlays(t.ias.0);
             let expected = Underlays {
                 udp_underlay: vec![t.disc_udp_underlays.0],
                 snap_underlay: vec![t.disc_snaps.0],
@@ -477,7 +477,7 @@ mod tests {
         {
             let (_, _, t) = setup().unwrap();
 
-            let res = service.list_underlays(t.ias.1.into());
+            let res = service.list_underlays(t.ias.1);
             let expected = Underlays {
                 udp_underlay: vec![t.disc_udp_underlays.1],
                 snap_underlay: vec![t.disc_snaps.1],
@@ -490,7 +490,7 @@ mod tests {
         {
             let (_, _, t) = setup().unwrap();
 
-            let res = service.list_underlays(t.ias.2.into());
+            let res = service.list_underlays(t.ias.2);
             let expected = Underlays {
                 udp_underlay: vec![],
                 snap_underlay: vec![t.disc_snaps.2],

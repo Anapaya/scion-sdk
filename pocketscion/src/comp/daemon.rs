@@ -20,11 +20,11 @@ pub mod model;
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, bail};
-use scion_proto::address::IsdAsn;
 use scion_protobuf::daemon::v1::{
     self as proto, AsRequest, daemon_service_server::DaemonServiceServer,
 };
 use scion_sdk_axum_connect_rpc::error::CrpcError;
+use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tonic::service::Routes;
@@ -39,7 +39,7 @@ use crate::{
 /// SCION Daemon service implementation through PocketScion
 pub struct PsDaemonService {
     /// The local ISD-AS of the SCION Daemon instance.
-    local_ia: scion_proto::address::IsdAsn,
+    local_ia: IsdAsn,
     /// Shared state of the PocketScion application, used to fulfill requests.
     state: PocketScionState,
     /// IO configuration, used to determine the underlay next hop for paths if no override is set.
@@ -48,7 +48,7 @@ pub struct PsDaemonService {
 impl PsDaemonService {
     /// Creates a new PsDaemonService with the given local ISD-AS and shared state.
     pub async fn start(
-        isd_asn: scion_proto::address::IsdAsn,
+        isd_asn: IsdAsn,
         state: PocketScionState,
         io_config: IoConfig,
         socket: TcpListener,
@@ -141,7 +141,7 @@ impl DaemonService for PsDaemonService {
         match self_state.override_path_underlay_next_hop {
             Some(next_hop) => {
                 for path in &mut paths {
-                    path.underlay_next_hop = Some(next_hop);
+                    path.set_next_hop(Some(next_hop));
                 }
             }
             None => {
@@ -174,23 +174,23 @@ impl DaemonService for PsDaemonService {
                 }
 
                 for path in &mut paths {
-                    match path.first_hop_egress_interface() {
+                    match path.first_egress_interface() {
                         None => {
-                            path.underlay_next_hop = fallback;
+                            path.set_next_hop(fallback);
                             continue;
                         }
                         Some(intf) => {
                             // try to find a matching interface in the local AS
                             for (if_ids, socket_addr) in &interfaces {
                                 if if_ids.contains(&intf.id) {
-                                    path.underlay_next_hop = Some(*socket_addr);
+                                    path.set_next_hop(Some(*socket_addr));
                                     break;
                                 }
                             }
 
                             // if none of the interfaces matched, use the fallback
-                            if path.underlay_next_hop.is_none() {
-                                path.underlay_next_hop = fallback;
+                            if path.next_hop().is_none() {
+                                path.set_next_hop(fallback);
                             }
                         }
                     }
@@ -198,7 +198,7 @@ impl DaemonService for PsDaemonService {
             }
         }
 
-        let paths = paths.into_iter().map(|p| p.into_grpc()).collect();
+        let paths = paths.into_iter().map(|p| p.to_rpc()).collect();
         return Ok(proto::PathsResponse { paths });
     }
 

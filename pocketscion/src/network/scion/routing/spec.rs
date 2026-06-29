@@ -11,160 +11,123 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Routing Logic based on the Scion Specification
+
+//! SCION routing logic
 
 // TODO: Peer link handling is not implemented yet
 
-use bytes::Bytes;
-use scion_proto::{
-    address::IsdAsn,
-    packet::{
-        ScionHeaders, ScionPacketRaw,
-        layout::{BitOffset, ScionPacketOffset},
-    },
-    path::{
-        DataPlanePath, HopField, HopFieldIndex, InfoField, InfoFieldIndex, MetaHeader, PathType,
-        StandardPath, crypto::ForwardingKey,
-    },
-    scmp::{
-        ParameterProblemCode, ScmpErrorMessage, ScmpExternalInterfaceDown, ScmpParameterProblem,
-    },
-    wire_encoding::WireEncodeVec,
-};
 use sciparse::{
     core::view::View,
-    dataplane_path::{onehop::view::OneHopPathView, standard::types::InfoFieldFlags},
+    dataplane_path::{standard::mac::ForwardingKey, view::ScionDpPathViewRefMut},
+    identifier::isd_asn::IsdAsn,
+    packet::view::ScionRawPacketView,
+    payload::scmp::{
+        model::{ScmpErrorMessage, ScmpParameterProblem},
+        types::ScmpParameterProblemCode,
+    },
 };
-use tracing::info_span;
 
 use crate::network::scion::routing::{
-    AsRoutingAction, AsRoutingInterfaceState, AsRoutingLinkType as LinkType, LocalAsRoutingAction,
-    RoutingLogic, ScionNetworkTime,
+    AsRoutingAction, AsRoutingInterfaceState, LocalAsRoutingAction, RoutingLogic, ScionNetworkTime,
+    spec::{onehop::OneHopRoutingLogic, standard::StdRoutingLogic},
 };
 
-/// Routing Logic based on the Scion Specification.
+pub mod onehop;
+pub mod standard;
+
+/// SCION Routing logic
 pub struct SpecRoutingLogic;
 
 impl RoutingLogic for SpecRoutingLogic {
     fn route(
         local_as: IsdAsn,
-        scion_packet: &mut ScionPacketRaw,
+        scion_packet: &mut ScionRawPacketView,
         ingress_interface_id: u16,
         now: ScionNetworkTime,
         as_forwarding_key: &ForwardingKey,
         interface_link_type_lookup: impl Fn(u16) -> Option<AsRoutingInterfaceState>,
         ignore_macs: bool,
-    ) -> Result<super::AsRoutingAction, scion_proto::scmp::ScmpErrorMessage> {
+    ) -> Result<super::AsRoutingAction, ScmpErrorMessage> {
         // Extract path from the packet
 
-        info_span!("route", ias=?local_as, iid=?ingress_interface_id).in_scope(|| {
-            match &scion_packet.headers.path {
-                DataPlanePath::Standard(encoded_standard_path) => {
-                    let mut standard_path =
-                        match StandardPath::try_from(encoded_standard_path.clone()) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Failed to decode standard path");
-                                return Err(create_path_decode_error(scion_packet, e));
-                            }
-                        };
+        let res = match scion_packet.header_mut().path_mut() {
+            ScionDpPathViewRefMut::Standard(path) => {
+                let result = StdRoutingLogic::handle_standard_path(
+                    local_as,
+                    path,
+                    ingress_interface_id,
+                    now,
+                    as_forwarding_key,
+                    &interface_link_type_lookup,
+                    ignore_macs,
+                );
 
-                    let result = Self::handle_standard_path(
-                        local_as,
-                        scion_packet,
-                        &mut standard_path,
-                        ingress_interface_id,
-                        now,
-                        as_forwarding_key,
-                        &interface_link_type_lookup,ignore_macs,
-                    );
-
-                    // always update packet path
-                    scion_packet.headers.path = DataPlanePath::Standard(standard_path.into());
-
-                    result
-                }
-                DataPlanePath::EmptyPath => {
-                    let target_address =
-                        scion_packet.headers.address.destination().ok_or_else(|| {
-                            tracing::warn!("Could not read destination address");
-                            scmp_parameter_problem(
-                                scion_packet,
-                                ParameterProblemCode::UnknownAddressFormat,
-                                |_| ScionPacketOffset::address_header().dst_host_addr(),
-                            )
-                        })?;
-
-                    Ok(LocalAsRoutingAction::ForwardLocal { target_address }.into())
-                }
-                DataPlanePath::Unsupported {
-                    path_type,
-                    bytes,
-                } => {
-                    match path_type {
-                        PathType::OneHop =>  {
-                            let ohp = match OneHopPathView::from_slice(bytes) {
-                                Ok((view,rest)) => {
-                                    if !rest.is_empty() {
-                                        tracing::warn!(remaining_bytes = rest.len(), "One-hop path has remaining bytes after parsing");
-                                    }
-
-                                    view
-                                },
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "Failed to decode one-hop path");
-                                    return Err(scmp_parameter_problem(
-                                        scion_packet,
-                                        ParameterProblemCode::InvalidPath,
-                                        |_| BitOffset::new(0) //TODO: This should point to the path bytes
-                                    ));
-                                }
-                            };
-
-                            let mut ohp = ohp.to_boxed();
-                            let result = Self::handle_one_hop_path(
-                                local_as,
-                                &mut ohp,
-                                scion_packet,
-                                ingress_interface_id,
-                                now,
-                                as_forwarding_key,
-                                &interface_link_type_lookup,
-                                ignore_macs,
-                            );
-
-                            // always update packet path
-                            scion_packet.headers.path = DataPlanePath::Unsupported {
-                                path_type: PathType::OneHop,
-                                bytes: Bytes::from_owner(ohp.as_bytes().to_vec()),
-                                //TODO: Sciparse should offer a function to convert a boxed view to a vec without copying
-                            };
-
-                            result
-                        }
-                        _ => {
-                            tracing::warn!(path_type = ?path_type, "Received unsupported path type");
-                            Err(scmp_parameter_problem(
-                                scion_packet,
-                                ParameterProblemCode::UnknownPathType,
-                                |_| ScionPacketOffset::common_header().path_type(),
-                            ))
-
+                match result {
+                    Ok(action) => Ok(action),
+                    Err(err) => {
+                        match err.to_scmp_error(local_as, scion_packet) {
+                            Some(reply) => Err(reply),
+                            None => Ok(AsRoutingAction::Drop),
                         }
                     }
                 }
             }
-        })
+            ScionDpPathViewRefMut::OneHop(path) => {
+                let result = OneHopRoutingLogic::handle_one_hop_path(
+                    local_as,
+                    path,
+                    ingress_interface_id,
+                    now,
+                    as_forwarding_key,
+                    &interface_link_type_lookup,
+                    ignore_macs,
+                );
+
+                match result {
+                    Ok(action) => Ok(action),
+                    Err(err) => {
+                        match err.to_scmp_error(scion_packet) {
+                            Some(reply) => Err(reply),
+                            None => Ok(AsRoutingAction::Drop),
+                        }
+                    }
+                }
+            }
+            ScionDpPathViewRefMut::Empty => Ok(LocalAsRoutingAction::ForwardLocal.into()),
+            ScionDpPathViewRefMut::Unsupported { .. } => {
+                // Can't send a reply, since we don't know the path type, so we just drop
+                // the packet
+                return Ok(AsRoutingAction::Drop);
+            }
+        };
+
+        let action = res?;
+
+        if let AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal) = action {
+            let dst_ia = scion_packet.header().dst_ia();
+            if local_as != dst_ia {
+                return Err(ScmpParameterProblem::new(
+                    ScmpParameterProblemCode::NonLocalDelivery,
+                    0,
+                    scion_packet.as_slice().to_vec(),
+                )
+                .into());
+            };
+        }
+
+        Ok(action)
     }
 }
 
 /// Next Action to be taken after Ingress Router processing
-enum IngressNextAction {
+pub enum IngressNextAction {
     /// Processing is complete
     Complete(AsRoutingAction),
     /// Processing continues at the given egress interface
-    #[expect(unused)]
-    ContinueEgress { egress_interface_id: u16 },
+    ContinueEgress {
+        /// The egress interface id to continue processing at
+        egress_interface_id: u16,
+    },
 }
 
 impl From<AsRoutingAction> for IngressNextAction {
@@ -173,1023 +136,10 @@ impl From<AsRoutingAction> for IngressNextAction {
     }
 }
 
-impl SpecRoutingLogic {
-    fn handle_one_hop_path(
-        local_as: IsdAsn,
-        one_hop_path: &mut OneHopPathView,
-        scion_packet: &ScionPacketRaw,
-        ingress_interface_id: u16,
-        now: ScionNetworkTime,
-        as_forwarding_key: &ForwardingKey,
-        interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-        ignore_macs: bool,
-    ) -> Result<AsRoutingAction, ScmpErrorMessage> {
-        // TODO: We skip all non required checks at the moment as well as SCMP handling
-
-        // Ingress
-        if ingress_interface_id != 0 {
-            let next_action = info_span!("ingress").in_scope(|| {
-                Self::handle_one_hop_path_ingress(
-                    local_as,
-                    one_hop_path,
-                    scion_packet,
-                    ingress_interface_id,
-                    now,
-                    as_forwarding_key,
-                    interface_link_type_lookup,
-                    ignore_macs,
-                )
-            })?;
-
-            match next_action {
-                IngressNextAction::Complete(action) => return Ok(action),
-                IngressNextAction::ContinueEgress { .. } => {
-                    unreachable!(
-                        "A one hop path can't continue on egress if it was received from an external interface"
-                    )
-                }
-            };
-        };
-
-        // Egress
-        info_span!("egress").in_scope(|| {
-            Self::handle_one_hop_path_egress(
-                local_as,
-                scion_packet,
-                one_hop_path,
-                now,
-                as_forwarding_key,
-                interface_link_type_lookup,
-                ignore_macs,
-            )
-        })
-    }
-
-    // Packet with one-hop path received from external, must be forwarded locally if valid
-    fn handle_one_hop_path_ingress(
-        _local_as: IsdAsn,
-        path: &mut OneHopPathView,
-        scion_packet: &ScionPacketRaw,
-        ingress_interface_id: u16,
-        _now: ScionNetworkTime,
-        as_forwarding_key: &ForwardingKey,
-        _interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-        _ignore_macs: bool,
-    ) -> Result<IngressNextAction, ScmpErrorMessage> {
-        // TODO: We skip all non required checks at the moment, as well as SCMP handling and
-        // interface down handling
-
-        let dst = scion_packet.headers.address.destination().ok_or_else(|| {
-            tracing::warn!("Could not read destination address");
-            scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::UnknownAddressFormat,
-                |_| ScionPacketOffset::address_header().dst_host_addr(),
-            )
-        })?;
-
-        let is_construction_dir = path.info_field().flags().contains(InfoFieldFlags::CONS_DIR);
-
-        // check if the hop field is empty
-        if *path.hop_fields()[1].mac().as_bytes() == [0u8; 6] {
-            if !is_construction_dir {
-                tracing::warn!("One-hop path in non-construction direction has empty hop field");
-                return Err(scmp_parameter_problem(
-                    scion_packet,
-                    ParameterProblemCode::InvalidPath,
-                    |_| {
-                        BitOffset::new(0) // TODO: This should point to the hop field
-                    },
-                ));
-            }
-
-            path.set_second_hop(ingress_interface_id, *as_forwarding_key, true);
-        } else {
-            // TODO: Skipped checks
-        }
-
-        // If not in construction direction, update segment id
-        if !is_construction_dir {
-            let curr_hop_mac = {
-                let [_, hf2] = path.hop_fields();
-                hf2.mac()
-            };
-
-            let info_field = path.info_field_mut();
-            let current_seg_id = info_field.segment_id();
-            let new_seg_id =
-                current_seg_id ^ u16::from_be_bytes([curr_hop_mac[0], curr_hop_mac[1]]);
-
-            info_field.set_segment_id(new_seg_id);
-        }
-
-        // Since this is a one hop received from external, this must be forwarded locally
-        Ok(IngressNextAction::Complete(
-            LocalAsRoutingAction::ForwardLocal {
-                target_address: dst,
-            }
-            .into(),
-        ))
-    }
-
-    /// Handle outgoing packet with one-hop path. This is only possible for packets that were
-    /// received from the local AS (ingress interface ID 0)
-    fn handle_one_hop_path_egress(
-        _local_as: IsdAsn,
-        _scion_packet: &ScionPacketRaw,
-        path: &mut OneHopPathView,
-        _now: ScionNetworkTime,
-        _forwarding_key: &ForwardingKey,
-        _interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-        _ignore_macs: bool,
-    ) -> Result<AsRoutingAction, ScmpErrorMessage> {
-        // TODO: We skip all non required checks at the moment, as well as SCMP handling and
-        // interface down handling
-        let is_construction_dir = path.info_field().flags().contains(InfoFieldFlags::CONS_DIR);
-
-        // UPDATE: Segment ID if we are in construction direction
-        if is_construction_dir {
-            let curr_hop_mac = {
-                let [hf1, _] = path.hop_fields();
-                hf1.mac()
-            };
-
-            let info_field = path.info_field_mut();
-            let current_seg_id = info_field.segment_id();
-            let new_seg_id =
-                current_seg_id ^ u16::from_be_bytes([curr_hop_mac[0], curr_hop_mac[1]]);
-
-            info_field.set_segment_id(new_seg_id);
-        } else {
-            tracing::warn!(
-                "One-hop path in non-construction direction should be upgraded to a standard path"
-            );
-        }
-
-        let egress = path.hop_fields()[0].cons_egress();
-
-        // Since this is a one hop path going out from local, we forward to the next hop
-        Ok(AsRoutingAction::ForwardNextHop {
-            egress_interface_id: egress,
-        })
-    }
-}
-
-impl SpecRoutingLogic {
-    fn handle_standard_path(
-        local_as: IsdAsn,
-        scion_packet: &ScionPacketRaw,
-        standard_path: &mut StandardPath,
-        ingress_interface_id: u16,
-        now: ScionNetworkTime,
-        as_forwarding_key: &ForwardingKey,
-        interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-        ignore_macs: bool,
-    ) -> Result<AsRoutingAction, ScmpErrorMessage> {
-        // Ingress checks are not run for packets coming from inside the AS
-        if ingress_interface_id != 0 {
-            let next_action = info_span!("ingress").in_scope(|| {
-                Self::standard_path_ingress(
-                    local_as,
-                    scion_packet,
-                    &scion_packet.headers,
-                    standard_path,
-                    ingress_interface_id,
-                    now,
-                    as_forwarding_key,
-                    interface_link_type_lookup,
-                    ignore_macs,
-                )
-            })?;
-
-            match next_action {
-                IngressNextAction::Complete(action) => return Ok(action),
-                IngressNextAction::ContinueEgress { .. } => {}
-            };
-        }
-
-        info_span!("egress").in_scope(|| {
-            Self::standard_path_egress(
-                local_as,
-                scion_packet,
-                standard_path,
-                now,
-                as_forwarding_key,
-                interface_link_type_lookup,
-                ignore_macs,
-            )
-        })
-    }
-
-    /// Ingress processing of a standard path
-    ///
-    /// Returns [IngressNextAction]
-    fn standard_path_ingress(
-        local_as: IsdAsn,
-        scion_packet: &ScionPacketRaw,
-        headers: &ScionHeaders,
-        path: &mut StandardPath,
-        ingress_interface_id: u16,
-        now: ScionNetworkTime,
-        forwarding_key: &ForwardingKey,
-        interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-        ignore_macs: bool,
-    ) -> Result<IngressNextAction, ScmpErrorMessage> {
-        let StandardPath {
-            hop_fields,
-            info_fields,
-            path_meta,
-        } = path;
-
-        // We don't handle messages from local in this function
-        if ingress_interface_id == 0 {
-            let msg = "Packet reached ingress function from interface ID 0";
-            debug_assert!(false, "{msg}");
-            tracing::warn!(msg);
-            return Ok(AsRoutingAction::Drop.into());
-        }
-
-        // Extracting all our data
-        let current_hop_index = path_meta.hop_field_index();
-        let current_hop = try_get_hop(scion_packet, hop_fields, current_hop_index)?;
-
-        let current_info_index = path_meta.info_field_index();
-        let current_info = try_get_mut_info(scion_packet, info_fields, current_info_index)?;
-
-        let _span = info_span!("@", hop = current_hop_index, seg = current_info_index).entered();
-        let current_cons_dir = current_info.cons_dir;
-
-        let (in_interface, out_interface) = current_hop.interfaces(current_info.cons_dir);
-        let (in_scmp_alert, out_scmp_alert) = current_hop.alerts(current_info.cons_dir);
-
-        let (current_segment_start, current_segment_end) =
-            try_get_segment_range(scion_packet, path_meta, current_info_index as u8)?;
-
-        let is_final_hop = current_hop_index == hop_fields.len() - 1;
-        let is_segment_end = current_hop_index == current_segment_end - 1;
-        let is_segment_change = is_segment_end && !is_final_hop;
-        let is_construction_dir = current_info.cons_dir;
-
-        // CHECK: Ingress Interface must be the same as the one in the current hop
-        if ingress_interface_id != in_interface {
-            tracing::warn!(
-                expected = in_interface,
-                found = ingress_interface_id,
-                "Received packet on wrong ingress interface"
-            );
-
-            let packet = scion_packet.encode_to_bytes_vec().concat();
-            let (code, pointer) = match is_construction_dir {
-                true => {
-                    (
-                        ParameterProblemCode::UnknownHopFieldConsIngressInterface,
-                        ScionPacketOffset::std_path(&packet)
-                            .hop_field(current_hop_index as u8)
-                            .cons_ingress(),
-                    )
-                }
-                false => {
-                    (
-                        ParameterProblemCode::UnknownHopFieldConsEgressInterface,
-                        ScionPacketOffset::std_path(&packet)
-                            .hop_field(current_hop_index as u8)
-                            .cons_egress(),
-                    )
-                }
-            };
-
-            return Err(ScmpParameterProblem::new(code, pointer.bytes(), packet.into()).into());
-        }
-
-        // CHECK: Hop Field must be valid
-        Self::validate_hop_field(
-            scion_packet,
-            (current_segment_start, current_segment_end),
-            current_info,
-            current_info_index,
-            current_hop,
-            current_hop_index,
-            now,
-        )?;
-
-        // UPDATE: Segment ID if we are going against construction direction
-        if !is_construction_dir {
-            current_info.seg_id ^= u16::from_be_bytes([current_hop.mac[0], current_hop.mac[1]]);
-        }
-
-        // CHECK: MAC Auth
-        if !ignore_macs
-            && calculate_hop_mac(current_hop, current_info, forwarding_key) != current_hop.mac
-        {
-            return Err(mac_error(
-                scion_packet,
-                current_hop_index,
-                current_info_index,
-                current_info,
-            ));
-        }
-
-        // CHECK: Ensure egress is valid if it exists
-        if out_interface != 0 {
-            ensure_interface_up(
-                local_as,
-                scion_packet,
-                out_interface,
-                true,
-                current_cons_dir,
-                current_hop_index,
-                interface_link_type_lookup,
-            )?;
-        }
-
-        // HANDLING: Packet request SCMP handling at ingress router
-        if in_scmp_alert {
-            // UPDATE: Unset the router alert
-            let hop_field = &mut hop_fields[current_hop_index];
-            match is_construction_dir {
-                true => hop_field.ingress_router_alert = false,
-                false => hop_field.egress_router_alert = false,
-            }
-
-            return Ok(IngressNextAction::Complete(
-                LocalAsRoutingAction::IngressSCMPHandleRequest {
-                    interface_id: in_interface,
-                }
-                .into(),
-            ));
-        }
-
-        // HANDLING: Packet was valid, we are the final hop -> Forward packet locally
-        if is_final_hop {
-            let target_address = headers.address.destination().ok_or_else(|| {
-                tracing::warn!("Unknown destination address");
-                scmp_parameter_problem(
-                    scion_packet,
-                    ParameterProblemCode::UnknownAddressFormat,
-                    |_| ScionPacketOffset::address_header().dst_host_addr(),
-                )
-            })?;
-
-            if target_address.isd_asn() != local_as {
-                tracing::warn!("Destination address not in local AS: {target_address:?}");
-                return Err(scmp_parameter_problem(
-                    scion_packet,
-                    ParameterProblemCode::NonLocalDelivery,
-                    |_| ScionPacketOffset::address_header().dst_host_addr(),
-                ));
-            };
-
-            return Ok(IngressNextAction::Complete(
-                super::LocalAsRoutingAction::ForwardLocal { target_address }.into(),
-            ));
-        };
-
-        // HANDLING: Packet was valid, no segment change, continue egress processing
-        if !is_segment_change {
-            return Ok(IngressNextAction::ContinueEgress {
-                egress_interface_id: out_interface,
-            });
-        }
-
-        // ########################################################
-        // Segment Change
-
-        if out_scmp_alert {
-            return Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::ErroneousHeaderField,
-                |p| {
-                    ScionPacketOffset::std_path(p)
-                        .hop_field(current_hop_index as u8)
-                        .travel_ingress_router_alert(current_info.cons_dir)
-                },
-            ));
-        }
-
-        // UPDATE: Advance Hop and Info field index
-        let new_info_index = current_info_index + 1;
-        let new_info = try_get_mut_info(scion_packet, info_fields, new_info_index)?;
-
-        let new_hop_index = current_hop_index + 1;
-        let new_hop = try_get_hop(scion_packet, hop_fields, new_hop_index)?;
-
-        let (new_in_scmp_alert, _) = new_hop.alerts(new_info.cons_dir);
-        if new_in_scmp_alert {
-            return Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::ErroneousHeaderField,
-                |p| {
-                    ScionPacketOffset::std_path(p)
-                        .hop_field(new_hop_index as u8)
-                        .travel_ingress_router_alert(new_info.cons_dir)
-                },
-            ));
-        }
-
-        let (_, new_out_interface) = new_hop.interfaces(new_info.cons_dir);
-
-        path_meta.current_info_field =
-            InfoFieldIndex::new(new_info_index as u8).ok_or_else(|| {
-                tracing::warn!("Info field was out of bounds after update: {new_info_index}",);
-                scmp_parameter_problem(scion_packet, ParameterProblemCode::InvalidPath, |p| {
-                    ScionPacketOffset::std_path(p)
-                        .path_meta_header()
-                        .current_info_field()
-                })
-            })?;
-
-        path_meta.current_hop_field = HopFieldIndex::new(new_hop_index as u8).ok_or_else(|| {
-            tracing::warn!("Hop field was out of bounds after update: {new_hop_index}",);
-            scmp_parameter_problem(scion_packet, ParameterProblemCode::InvalidPath, |p| {
-                ScionPacketOffset::std_path(p)
-                    .path_meta_header()
-                    .current_hop_field()
-            })
-        })?;
-
-        // CHECK: Hop Field must be valid
-        Self::validate_hop_field(
-            scion_packet,
-            try_get_segment_range(scion_packet, path_meta, new_info_index as u8)?,
-            new_info,
-            new_info_index,
-            new_hop,
-            new_hop_index,
-            now,
-        )?;
-
-        // CHECK: Segment change must have valid link combinations
-        let initial_in_link_type = get_interface_type(
-            scion_packet,
-            current_hop_index,
-            true,
-            current_cons_dir,
-            interface_link_type_lookup,
-            in_interface,
-        )?;
-        let new_out_link_type = get_interface_type(
-            scion_packet,
-            new_hop_index,
-            false,
-            new_info.cons_dir,
-            interface_link_type_lookup,
-            new_out_interface,
-        )?;
-        let segment_change_valid = match (initial_in_link_type, new_out_link_type) {
-            // Valid
-            (LinkType::LinkToCore, LinkType::LinkToChild) => true, // CORE to DOWN
-            (LinkType::LinkToChild, LinkType::LinkToCore) => true, // UP to CORE
-            (LinkType::LinkToChild, LinkType::LinkToChild) => true, // UP to DOWN
-            (LinkType::LinkToChild, LinkType::LinkToPeer) => true, // UP to PEER
-            (LinkType::LinkToPeer, LinkType::LinkToChild) => true, // PEER to DOWN
-
-            // Drop (Core loop)
-            (LinkType::LinkToCore, LinkType::LinkToCore) => false, // CORE to CORE
-
-            // Drop (Valley routing)
-            (LinkType::LinkToParent, LinkType::LinkToParent) => false, // DOWN to UP
-            (LinkType::LinkToPeer, LinkType::LinkToParent) => false,   // PEER to UP
-
-            // Drop (Path Splicing)
-            (LinkType::LinkToParent, LinkType::LinkToChild) => false, // DOWN to UP
-            (LinkType::LinkToChild, LinkType::LinkToParent) => false, // UP to UP
-            // Invalid configuration
-            _ => false,
-        };
-
-        if !segment_change_valid {
-            tracing::warn!(
-                "Invalid Segment Change ({initial_in_link_type:?}, {new_out_link_type:?})"
-            );
-
-            return Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::InvalidSegmentChange,
-                |p| {
-                    ScionPacketOffset::std_path(p)
-                        .hop_field(current_hop_index as u8)
-                        .base()
-                },
-            ));
-        }
-
-        Ok(IngressNextAction::ContinueEgress {
-            egress_interface_id: new_out_interface,
-        })
-    }
-
-    fn standard_path_egress(
-        local_as: IsdAsn,
-        scion_packet: &ScionPacketRaw,
-        path: &mut StandardPath,
-        now: ScionNetworkTime,
-        forwarding_key: &ForwardingKey,
-        interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-        ignore_macs: bool,
-    ) -> Result<AsRoutingAction, ScmpErrorMessage> {
-        let StandardPath {
-            hop_fields,
-            info_fields,
-            path_meta,
-        } = path;
-
-        // Extracting all our data
-        let current_hop_index = path_meta.hop_field_index();
-        let current_hop = try_get_hop(scion_packet, hop_fields, current_hop_index)?;
-
-        let current_info_index = path_meta.info_field_index();
-        let current_info = try_get_mut_info(scion_packet, info_fields, current_info_index)?;
-
-        let _span = info_span!("", hop = current_hop_index, seg = current_info_index).entered();
-
-        let (_, out_interface) = current_hop.interfaces(current_info.cons_dir);
-        let (_, out_scmp_alert) = current_hop.alerts(current_info.cons_dir);
-
-        let (current_segment_start, current_segment_end) =
-            try_get_segment_range(scion_packet, path_meta, current_info_index as u8)?;
-
-        let is_final_hop = path_meta.hop_field_index() == hop_fields.len() - 1;
-        let is_seg_end = current_hop_index + 1 == current_segment_end;
-        let is_seg_change = is_seg_end && !is_final_hop;
-        let is_construction_dir = current_info.cons_dir;
-
-        if is_final_hop {
-            tracing::warn!("Packet reached final hop at egress");
-            return Ok(AsRoutingAction::Drop);
-        }
-        if is_seg_change {
-            debug_assert!(false, "No segment change should reach egress code");
-            return Ok(AsRoutingAction::Drop);
-        }
-        if is_seg_end {
-            debug_assert!(false, "No segment end should reach egress code");
-            return Ok(AsRoutingAction::Drop);
-        }
-
-        // CHECK: Valid egress interface
-        if out_interface == 0 {
-            tracing::warn!("Packet egress interface can't be 0 at egress");
-            return Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::ErroneousHeaderField,
-                |p| {
-                    ScionPacketOffset::std_path(p)
-                        .hop_field(current_hop_index as u8)
-                        .travel_egress(current_info.cons_dir)
-                },
-            ));
-        }
-
-        // CHECK: Hop Field must be valid
-        Self::validate_hop_field(
-            scion_packet,
-            (current_segment_start, current_segment_end),
-            current_info,
-            current_info_index,
-            current_hop,
-            current_hop_index,
-            now,
-        )?;
-
-        // CHECK: MAC Auth
-        if !ignore_macs
-            && calculate_hop_mac(current_hop, current_info, forwarding_key) != current_hop.mac
-        {
-            return Err(mac_error(
-                scion_packet,
-                current_hop_index,
-                current_info_index,
-                current_info,
-            ));
-        }
-
-        // CHECK: Ensure egress interface is valid and up
-        ensure_interface_up(
-            local_as,
-            scion_packet,
-            out_interface,
-            true,
-            current_info.cons_dir,
-            current_hop_index,
-            interface_link_type_lookup,
-        )?;
-
-        // HANDLING: Packet request SCMP handling at egress router
-        if out_scmp_alert {
-            // UPDATE: Unset the router alert
-            let hop_field = &mut hop_fields[current_hop_index];
-            match is_construction_dir {
-                true => hop_field.egress_router_alert = false,
-                false => hop_field.ingress_router_alert = false,
-            }
-            return Ok(LocalAsRoutingAction::EgressSCMPHandleRequest {
-                interface_id: out_interface,
-            }
-            .into());
-        }
-
-        // UPDATE: Segment ID if we are in construction direction
-        if is_construction_dir {
-            current_info.seg_id ^= u16::from_be_bytes([current_hop.mac[0], current_hop.mac[1]]);
-        }
-
-        // UPDATE: Advance Hop Field
-        path_meta.current_hop_field =
-            HopFieldIndex::new(current_hop_index as u8 + 1).ok_or_else(|| {
-                tracing::warn!(
-                    "Hop field was out of bounds after update: {}",
-                    current_hop_index + 1
-                );
-                scmp_parameter_problem(scion_packet, ParameterProblemCode::InvalidPath, |p| {
-                    ScionPacketOffset::std_path(p)
-                        .path_meta_header()
-                        .current_hop_field()
-                })
-            })?;
-
-        // Forward to the next hop
-        Ok(super::AsRoutingAction::ForwardNextHop {
-            egress_interface_id: out_interface,
-        })
-    }
-
-    fn validate_hop_field(
-        scion_packet: &ScionPacketRaw,
-        (segment_start, segment_end): (usize, usize),
-        info_field: &InfoField,
-        info_field_index: usize,
-        hop_field: &HopField,
-        hop_index: usize,
-        now: ScionNetworkTime,
-    ) -> Result<(), ScmpErrorMessage> {
-        // CHECK: Hop index must be within the segment range
-        if hop_index < segment_start || hop_index >= segment_end {
-            tracing::warn!(
-                idx = hop_index,
-                start = segment_start,
-                end = segment_end,
-                "Hop index out of bounds for the current segment"
-            );
-
-            return Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::InvalidPath,
-                |p| {
-                    ScionPacketOffset::std_path(p)
-                        .path_meta_header()
-                        .current_hop_field()
-                },
-            ));
-        }
-
-        // CHECK: Time must not be in the future
-        if info_field.timestamp() > now.date_time() {
-            tracing::warn!(
-                "Packet has a future timestamp: {} > {}",
-                info_field.timestamp(),
-                now.date_time()
-            );
-
-            return Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::InvalidPath,
-                |p| {
-                    ScionPacketOffset::std_path(p)
-                        .info_field(info_field_index as u8)
-                        .timestamp()
-                },
-            ));
-        }
-
-        // CHECK: Expiration must not be in the past
-        if hop_field.expiry_time(info_field) < now.date_time() {
-            tracing::warn!(
-                "Packet Segment has expired: {} < {}",
-                hop_field.expiry_time(info_field),
-                now.date_time()
-            );
-            return Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::PathExpired,
-                |p| {
-                    ScionPacketOffset::std_path(p)
-                        .hop_field(hop_index as u8)
-                        .exp_time()
-                },
-            ));
-        }
-
-        Ok(())
-    }
-}
-
-fn calculate_hop_mac(
-    hop_field: &HopField,
-    info_field: &InfoField,
-    forwarding_key: &ForwardingKey,
-) -> [u8; 6] {
-    scion_proto::path::crypto::calculate_hop_mac(
-        info_field.seg_id,
-        info_field.timestamp_epoch,
-        hop_field.exp_time,
-        hop_field.cons_ingress,
-        hop_field.cons_egress,
-        forwarding_key,
-    )
-}
-
-//
-// Data Accessor helpers
-
-fn get_interface_type(
-    scion_packet: &ScionPacketRaw,
-    hop_field_index: usize,
-    egress: bool,
-    cons_dir: bool,
-    interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-    interface_id: u16,
-) -> Result<LinkType, ScmpErrorMessage> {
-    return match interface_id {
-        0 => {
-            tracing::warn!(
-                hop = hop_field_index,
-                "Interface ID 0 is not valid for link type lookup"
-            );
-            Err(scmp_parameter_problem(
-                scion_packet,
-                ParameterProblemCode::InvalidPath,
-                |p| calc_offset(p, hop_field_index, egress == cons_dir),
-            ))
-        }
-        _ => {
-            match interface_link_type_lookup(interface_id) {
-                Some(link_type) => Ok(link_type.link_type),
-                None => {
-                    tracing::warn!(
-                        hop = hop_field_index,
-                        if_id = interface_id,
-                        "Unknown interface id"
-                    );
-
-                    let cons_egress = egress == cons_dir;
-                    let code = match cons_egress {
-                        true => ParameterProblemCode::UnknownHopFieldConsEgressInterface,
-                        false => ParameterProblemCode::UnknownHopFieldConsIngressInterface,
-                    };
-
-                    Err(scmp_parameter_problem(scion_packet, code, |p| {
-                        calc_offset(p, hop_field_index, cons_egress)
-                    }))
-                }
-            }
-        }
-    };
-
-    fn calc_offset(scion_packet: &[u8], hop_field_index: usize, cons_egress: bool) -> BitOffset {
-        match cons_egress {
-            true => {
-                ScionPacketOffset::std_path(scion_packet)
-                    .hop_field(hop_field_index as u8)
-                    .cons_egress()
-            }
-            false => {
-                ScionPacketOffset::std_path(scion_packet)
-                    .hop_field(hop_field_index as u8)
-                    .cons_ingress()
-            }
-        }
-    }
-}
-
-/// Returns the index range of the current segment in the path.
-///
-/// The returned tuple (start, end) represents a half-open range where:
-/// - `start` is the index of the first hop field in the segment (inclusive)
-/// - `end` is the index just after the last hop field in the segment (exclusive)
-///
-/// Returns None if the current hop field index is out of bounds.
-pub fn try_get_segment_range(
-    scion_packet: &ScionPacketRaw,
-    meta_header: &MetaHeader,
-    segment_index: u8,
-) -> Result<(usize, usize), ScmpErrorMessage> {
-    let segment_index = segment_index as usize;
-
-    // Check if segment index is valid
-    if segment_index >= meta_header.segment_lengths.len() {
-        tracing::warn!("Segment index {segment_index} is out of bounds for the segment lengths");
-        return Err(scmp_parameter_problem(
-            scion_packet,
-            ParameterProblemCode::InvalidPath,
-            |p| {
-                ScionPacketOffset::std_path(p)
-                    .path_meta_header()
-                    .current_info_field()
-            },
-        ));
-    }
-
-    // Sum up every segment length before the current segment to get the start index
-    let start_idx = meta_header.segment_lengths[..segment_index]
-        .iter()
-        .map(|length| length.get() as usize)
-        .sum();
-
-    // The end index is the start index plus the length of the current segment
-    let end_idx = start_idx + meta_header.segment_lengths[segment_index].get() as usize;
-
-    Ok((start_idx, end_idx))
-}
-
-//
-// Error generation helpers
-
-fn mac_error(
-    scion_packet: &ScionPacketRaw,
-    current_hop_index: usize,
-    current_info_index: usize,
-    current_info: &InfoField,
-) -> ScmpErrorMessage {
-    tracing::warn!(
-        "MAC does not match C:{} @ S{}:H{} - SegId: {}",
-        current_info.cons_dir,
-        current_info_index,
-        current_hop_index,
-        current_info.seg_id
-    );
-    scmp_parameter_problem(
-        scion_packet,
-        ParameterProblemCode::InvalidHopFieldMac,
-        |p| {
-            ScionPacketOffset::std_path(p)
-                .hop_field(current_hop_index as u8)
-                .mac()
-        },
-    )
-}
-
-fn scmp_parameter_problem(
-    scion_packet: &ScionPacketRaw,
-    code: ParameterProblemCode,
-    pointer: impl FnOnce(&[u8]) -> BitOffset,
-) -> ScmpErrorMessage {
-    let packet: Bytes = scion_packet.encode_to_bytes_vec().concat().into();
-    ScmpParameterProblem::new(code, pointer(&packet).bytes(), packet).into()
-}
-
-/// Ensure that the interface is valid and up
-fn ensure_interface_up(
-    local_ias: IsdAsn,
-    scion_packet: &ScionPacketRaw,
-    interface_id: u16,
-    egress: bool,
-    is_cons_dir: bool,
-    hop_field_index: usize,
-    interface_link_type_lookup: &impl Fn(u16) -> Option<AsRoutingInterfaceState>,
-) -> Result<(), ScmpErrorMessage> {
-    match interface_link_type_lookup(interface_id) {
-        Some(interface) => {
-            if interface.is_up {
-                return Ok(());
-            }
-
-            tracing::warn!("Interface {interface_id} is down");
-
-            Err(ScmpExternalInterfaceDown::new(
-                local_ias,
-                interface_id as u64,
-                scion_packet.encode_to_bytes_vec().concat().into(),
-            )
-            .into())
-        }
-        None => {
-            let cons_egress = egress == is_cons_dir;
-
-            tracing::warn!("Unknown interface id: {interface_id}");
-
-            match cons_egress {
-                true => {
-                    Err(scmp_parameter_problem(
-                        scion_packet,
-                        ParameterProblemCode::UnknownHopFieldConsEgressInterface,
-                        |p| {
-                            ScionPacketOffset::std_path(p)
-                                .hop_field(hop_field_index as u8)
-                                .cons_egress()
-                        },
-                    ))
-                }
-                false => {
-                    Err(scmp_parameter_problem(
-                        scion_packet,
-                        ParameterProblemCode::UnknownHopFieldConsIngressInterface,
-                        |p| {
-                            ScionPacketOffset::std_path(p)
-                                .hop_field(hop_field_index as u8)
-                                .cons_ingress()
-                        },
-                    ))
-                }
-            }
-        }
-    }
-}
-
-fn create_path_decode_error(
-    scion_packet: &mut ScionPacketRaw,
-    e: scion_proto::packet::DecodeError,
-) -> scion_proto::scmp::ScmpErrorMessage {
-    let packet: Bytes = scion_packet.encode_to_bytes_vec().concat().into();
-    let path_offset = ScionPacketOffset::std_path(&packet);
-    let (code, pointer) = match e {
-        scion_proto::packet::DecodeError::InvalidPath(kind) => {
-            match kind {
-                scion_proto::path::DataPlanePathErrorKind::InvalidSegmentLengths => {
-                    (
-                        ParameterProblemCode::InvalidPath,
-                        path_offset.path_meta_header().seg_len_0(),
-                    )
-                }
-                scion_proto::path::DataPlanePathErrorKind::InfoFieldOutOfRange => {
-                    (
-                        ParameterProblemCode::InvalidPath,
-                        path_offset.path_meta_header().current_info_field(),
-                    )
-                }
-                scion_proto::path::DataPlanePathErrorKind::HopFieldOutOfRange => {
-                    (
-                        ParameterProblemCode::InvalidPath,
-                        path_offset.path_meta_header().current_hop_field(),
-                    )
-                }
-                _ => (ParameterProblemCode::InvalidPath, path_offset.base()),
-            }
-        }
-        _ => (ParameterProblemCode::InvalidPath, path_offset.base()),
-    };
-    ScmpParameterProblem::new(code, pointer.bytes(), packet).into()
-}
-
-fn try_get_hop<'hop>(
-    scion_packet: &ScionPacketRaw,
-    hop_fields: &'hop [HopField],
-    hop_index: usize,
-) -> Result<&'hop HopField, ScmpErrorMessage> {
-    if let Some(hop) = hop_fields.get(hop_index) {
-        return Ok(hop);
-    }
-
-    tracing::warn!(
-        index = hop_index,
-        actual = hop_fields.len(),
-        "Hop field index out of bounds",
-    );
-
-    Err(scmp_parameter_problem(
-        scion_packet,
-        ParameterProblemCode::InvalidPath,
-        |p| {
-            ScionPacketOffset::std_path(p)
-                .path_meta_header()
-                .current_hop_field()
-        },
-    ))
-}
-
-fn try_get_mut_info<'info>(
-    scion_packet: &ScionPacketRaw,
-    info_fields: &'info mut [InfoField],
-    info_index: usize,
-) -> Result<&'info mut InfoField, ScmpErrorMessage> {
-    let len = info_fields.len();
-    if let Some(info) = info_fields.get_mut(info_index) {
-        return Ok(info);
-    }
-
-    tracing::warn!(
-        index = info_index,
-        actual = len,
-        "Info field index out of bounds",
-    );
-
-    Err(scmp_parameter_problem(
-        scion_packet,
-        ParameterProblemCode::InvalidPath,
-        |p| {
-            ScionPacketOffset::std_path(p)
-                .path_meta_header()
-                .current_info_field()
-        },
-    ))
-}
-
 #[cfg(test)]
 mod tests {
 
-    use std::str::FromStr;
-
     use helper::*;
-    use scion_proto::{address::EndhostAddr, path::test_builder::TestPathBuilder};
 
     use super::*;
     const SECONDS_PER_EXP_UNIT: u32 = 337;
@@ -1197,16 +147,21 @@ mod tests {
     mod one_hop_path {
         use std::str::FromStr;
 
-        use scion_proto::{address::EndhostAddr, packet::ByEndpoint};
-        use sciparse::{core::encode::WireEncode, dataplane_path::onehop::model::OneHopPath};
+        use sciparse::{
+            address::ip_addr::ScionIpAddr,
+            core::{convert::ToModel, model::Model},
+            dataplane_path::{onehop::model::OneHopPath, view::ScionDpPathViewRef},
+            packet::model::ScionRawPacket,
+            payload::ProtocolNumber,
+        };
 
         use super::*;
-        use crate::network::scion::topology::ScionAs;
+        use crate::network::scion::{routing::AsRoutingLinkType, topology::ScionAs};
 
         #[test_log::test]
         fn should_ping_pong_one_hop_path() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionIpAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionIpAddr::from_str("1-3,4.4.4.4").unwrap();
 
             let src_as = ScionAs::new_core(src_address.isd_asn());
             let src_forwarding_key = src_as.forwarding_key().unwrap();
@@ -1224,35 +179,28 @@ mod tests {
                     1 => {
                         Some(AsRoutingInterfaceState {
                             is_up: true,
-                            link_type: LinkType::LinkToCore,
+                            link_type: AsRoutingLinkType::LinkToCore,
                         })
                     }
                     2 => {
                         Some(AsRoutingInterfaceState {
                             is_up: true,
-                            link_type: LinkType::LinkToCore,
+                            link_type: AsRoutingLinkType::LinkToCore,
                         })
                     }
                     _ => None,
                 }
             };
 
-            let ohp = OneHopPath::new(src_interface, 0, 0, src_forwarding_key, 255);
-
-            let mut packet = ScionPacketRaw::new(
-                ByEndpoint {
-                    source: src_address.into(),
-                    destination: dst_address.into(),
-                },
-                DataPlanePath::Unsupported {
-                    path_type: PathType::OneHop,
-                    bytes: ohp.encode_to_vec().unwrap().into(),
-                },
-                Bytes::new(),
-                0,
-                0.into(),
+            let mut packet = ScionRawPacket::new(
+                src_address.into(),
+                dst_address.into(),
+                OneHopPath::new(src_interface, 0, 0, src_forwarding_key, 255).into(),
+                ProtocolNumber::Other(0),
+                Vec::new(),
             )
-            .unwrap();
+            .encode_to_owned_view()
+            .expect("Failed to encode packet");
 
             let action = SpecRoutingLogic::route(
                 src_address.isd_asn(),
@@ -1286,40 +234,28 @@ mod tests {
 
             assert_eq!(
                 action,
-                AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal {
-                    target_address: dst_address.into()
-                }),
+                AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal),
                 "Packet should be forwarded locally at the destination"
             );
 
-            let path = match packet.headers.path().data_plane_path {
-                DataPlanePath::Unsupported { path_type, bytes } => {
-                    assert_eq!(path_type, PathType::OneHop, "Path type should be OneHop");
-                    let (ohp, _) = OneHopPathView::from_slice(&bytes).unwrap();
-                    let [_, hop2] = ohp.hop_fields();
-                    assert_eq!(
-                        hop2.cons_ingress(),
-                        2,
-                        "Dst ingress interface should be set after traversing the path"
-                    );
-                    assert_ne!(
-                        *hop2.mac().as_bytes(),
-                        [0; 6],
-                        "MAC should be set after traversing the path"
-                    );
-
-                    let ohp = OneHopPath::from_view(ohp);
-
-                    scion_proto::path::StandardPath::from_sciparse_standard_path(
-                        ohp.into_reversed_standard_path().unwrap(),
-                    )
+            let path = match packet.header().path() {
+                ScionDpPathViewRef::OneHop(path) => {
+                    path.to_model()
+                        .into_reversed_standard_path()
+                        .expect("Failed to convert OneHopPath to StandardPath")
                 }
                 _ => panic!("Path should be decodable as OneHop"),
             };
 
-            packet.headers.path = DataPlanePath::Standard(path.into());
-            packet.headers.address.host.reverse();
-            packet.headers.address.ia.reverse();
+            let mut packet = ScionRawPacket::new(
+                dst_address.into(),
+                src_address.into(),
+                path.into(),
+                ProtocolNumber::Other(0),
+                Vec::new(),
+            )
+            .encode_to_owned_view()
+            .expect("Failed to encode packet");
 
             let action = SpecRoutingLogic::route(
                 dst_address.isd_asn(),
@@ -1355,9 +291,7 @@ mod tests {
 
             assert_eq!(
                 action,
-                AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal {
-                    target_address: src_address.into()
-                }),
+                AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal),
                 "After reversing, the packet should be forwarded locally at the src"
             );
         }
@@ -1367,44 +301,19 @@ mod tests {
 
         use std::str::FromStr;
 
-        use scion_proto::{address::EndhostAddr, path::test_builder::TestPathBuilder};
+        use sciparse::{
+            address::addr::ScionAddr, payload::scmp::types::ScmpParameterProblemCode,
+            util::test_builder::TestPathBuilder,
+        };
 
         use super::*;
 
         #[test_log::test]
-        fn should_correctly_route_empty_path() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
-                .using_info_timestamp(0)
-                .build(1);
-
-            let action = SpecRoutingLogic::route(
-                IsdAsn(0),
-                &mut test_ctx.scion_packet_udp(&[1, 2], 1234, 1234).into(),
-                0,
-                ScionNetworkTime::from_timestamp_secs(test_ctx.timestamp),
-                &ForwardingKey::default(),
-                |_| None,
-                false,
-            )
-            .expect("Empty path should not fail");
-
-            assert_eq!(
-                action,
-                AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal {
-                    target_address: dst_address.into()
-                }),
-                "Empty path should forward to local address"
-            );
-        }
-
-        #[test_log::test]
         fn should_correctly_route_simple_path() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .using_forwarding_key([3; 16])
@@ -1418,13 +327,11 @@ mod tests {
                     egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
-                    LocalAsRoutingAction::ForwardLocal {
-                        target_address: dst_address.into(),
-                    },
+                    LocalAsRoutingAction::ForwardLocal,
                 )));
 
             // Final Egress interface can also be non 0
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1436,17 +343,15 @@ mod tests {
                     egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
-                    LocalAsRoutingAction::ForwardLocal {
-                        target_address: dst_address.into(),
-                    },
+                    LocalAsRoutingAction::ForwardLocal,
                 )));
         }
 
         #[test_log::test]
         fn should_correctly_route_segment_changes() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1470,17 +375,15 @@ mod tests {
                     egress_interface_id: 3,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
-                    LocalAsRoutingAction::ForwardLocal {
-                        target_address: dst_address.into(),
-                    },
+                    LocalAsRoutingAction::ForwardLocal,
                 )));
         }
 
         #[test_log::test]
         fn should_fail_on_invalid_segment_change() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .core()
                 .add_hop(0, 1)
@@ -1493,9 +396,9 @@ mod tests {
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
                 .next_hop_should_fail()
-                .expect_parameter_problem(ParameterProblemCode::InvalidSegmentChange);
+                .expect_parameter_problem(ScmpParameterProblemCode::InvalidSegmentChange);
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .down()
                 .add_hop(0, 1)
@@ -1508,9 +411,9 @@ mod tests {
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
                 .next_hop_should_fail()
-                .expect_parameter_problem(ParameterProblemCode::InvalidSegmentChange);
+                .expect_parameter_problem(ScmpParameterProblemCode::InvalidSegmentChange);
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1523,15 +426,15 @@ mod tests {
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
                 .next_hop_should_fail()
-                .expect_parameter_problem(ParameterProblemCode::InvalidSegmentChange);
+                .expect_parameter_problem(ScmpParameterProblemCode::InvalidSegmentChange);
         }
 
         #[test_log::test]
         fn should_fail_with_non_local_destination() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1541,15 +444,15 @@ mod tests {
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
                 .next_hop_should_fail_with_local_as(IsdAsn(1234))
-                .expect_parameter_problem(ParameterProblemCode::NonLocalDelivery);
+                .expect_parameter_problem(ScmpParameterProblemCode::NonLocalDelivery);
         }
 
         #[test_log::test]
         fn should_fail_on_invalid_egress() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .down()
                 .add_hop(0, 1)
@@ -1559,15 +462,17 @@ mod tests {
             SpecTestCtx::new(test_ctx)
                 .with_custom_link_lookup(|_| None)
                 .next_hop_should_fail()
-                .expect_parameter_problem(ParameterProblemCode::UnknownHopFieldConsEgressInterface);
+                .expect_parameter_problem(
+                    ScmpParameterProblemCode::UnknownHopFieldConsEgressInterface,
+                );
         }
 
         #[test_log::test]
         fn should_fail_on_down_egress() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .down()
                 .add_hop_with_egress_down(0, 1)
@@ -1581,10 +486,10 @@ mod tests {
 
         #[test_log::test]
         fn should_fail_on_invalid_mac() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .using_forwarding_key([3; 16])
@@ -1592,19 +497,19 @@ mod tests {
                 .using_forwarding_key([1; 16])
                 .add_hop(2, 0)
                 .build_with_path_modifier(1, |mut p| {
-                    p.hop_fields[0].mac = [0; 6]; // Invalid MAC
+                    p.segments[0].hop_fields[0].mac = [0; 6].into(); // Invalid MAC
                     p
                 });
             SpecTestCtx::new(test_ctx)
                 .next_hop_should_fail()
-                .expect_parameter_problem(ParameterProblemCode::InvalidHopFieldMac);
+                .expect_parameter_problem(ScmpParameterProblemCode::InvalidHopFieldMac);
         }
 
         #[test_log::test]
         fn should_drop_on_single_hop() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .core()
                 .add_hop(0, 1)
@@ -1614,17 +519,69 @@ mod tests {
                 .next_hop_should_succeed(Option::Some(AsRoutingAction::Drop));
         }
     }
+
+    mod empty_path {
+        use std::str::FromStr;
+
+        use sciparse::{
+            address::addr::ScionAddr, core::model::Model,
+            dataplane_path::standard::mac::ForwardingKey, util::test_builder::TestPathBuilder,
+        };
+
+        use crate::network::scion::routing::{
+            AsRoutingAction, LocalAsRoutingAction, RoutingLogic, ScionNetworkTime,
+            spec::SpecRoutingLogic,
+        };
+
+        #[test_log::test]
+        fn should_correctly_route_empty_path() {
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-1,4.4.4.4").unwrap();
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
+                .using_info_timestamp(0)
+                .build(1);
+
+            let action = SpecRoutingLogic::route(
+                src_address.isd_asn(),
+                &mut test_ctx
+                    .scion_packet_udp(&[1, 2], 1234, 1234)
+                    .into_raw()
+                    .encode_to_owned_view()
+                    .unwrap(),
+                0,
+                ScionNetworkTime::from_timestamp_secs(test_ctx.timestamp),
+                &ForwardingKey::default(),
+                |_| None,
+                false,
+            )
+            .expect("Empty path should not fail");
+
+            assert_eq!(
+                action,
+                AsRoutingAction::Local(LocalAsRoutingAction::ForwardLocal),
+                "Empty path should forward to local address"
+            );
+        }
+    }
+
     mod time {
+        use std::str::FromStr;
+
+        use sciparse::{
+            address::addr::ScionAddr, payload::scmp::types::ScmpParameterProblemCode,
+            util::test_builder::TestPathBuilder,
+        };
+
         use super::*;
 
         #[test_log::test]
         fn should_fail_with_bad_timestamps() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // Timestamp in future
             helper::SpecTestCtx::new(
-                TestPathBuilder::new(src_address.into(), dst_address.into())
+                TestPathBuilder::new(src_address, dst_address)
                     .using_info_timestamp(1)
                     .up()
                     .add_hop(0, 1)
@@ -1632,11 +589,11 @@ mod tests {
                     .build(0),
             )
             .next_hop_should_fail()
-            .expect_parameter_problem(ParameterProblemCode::InvalidPath);
+            .expect_parameter_problem(ScmpParameterProblemCode::InvalidPath);
 
             // Timestamp expired
             helper::SpecTestCtx::new(
-                TestPathBuilder::new(src_address.into(), dst_address.into())
+                TestPathBuilder::new(src_address, dst_address)
                     .using_info_timestamp(0)
                     .with_hop_expiry(0)
                     .up()
@@ -1645,16 +602,16 @@ mod tests {
                     .build(SECONDS_PER_EXP_UNIT + 1),
             )
             .next_hop_should_fail()
-            .expect_parameter_problem(ParameterProblemCode::PathExpired);
+            .expect_parameter_problem(ScmpParameterProblemCode::PathExpired);
         }
 
         #[test_log::test]
         fn should_not_fail_with_good_timestamp() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
             helper::SpecTestCtx::new(
-                TestPathBuilder::new(src_address.into(), dst_address.into())
+                TestPathBuilder::new(src_address, dst_address)
                     .using_info_timestamp(0)
                     .with_hop_expiry(0)
                     .up()
@@ -1667,13 +624,20 @@ mod tests {
     }
 
     mod scmp {
+        use std::str::FromStr;
+
+        use sciparse::{
+            address::addr::ScionAddr, payload::scmp::types::ScmpParameterProblemCode,
+            util::test_builder::TestPathBuilder,
+        };
+
         use super::*;
 
         #[test_log::test]
         fn should_handle_ingress_scmp_requests() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1691,10 +655,10 @@ mod tests {
 
         #[test_log::test]
         fn should_handle_egress_scmp_requests() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1713,11 +677,11 @@ mod tests {
 
         #[test_log::test]
         fn should_ignore_egress_scmp_on_final_hop() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // No egress scmp on final hop
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1729,43 +693,17 @@ mod tests {
                     egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
-                    LocalAsRoutingAction::ForwardLocal {
-                        target_address: dst_address.into(),
-                    },
-                )));
-        }
-
-        #[test_log::test]
-        fn should_ignore_ingress_scmp_on_first_hop() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
-
-            // No ingress scmp on first hop
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
-                .using_info_timestamp(0)
-                .up()
-                .add_hop_with_alerts(0, true, 1, false)
-                .add_hop(2, 0)
-                .build(1);
-
-            helper::SpecTestCtx::new(test_ctx)
-                .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                    egress_interface_id: 1,
-                }))
-                .next_hop_should_succeed(Some(AsRoutingAction::Local(
-                    LocalAsRoutingAction::ForwardLocal {
-                        target_address: dst_address.into(),
-                    },
+                    LocalAsRoutingAction::ForwardLocal,
                 )));
         }
 
         #[test_log::test]
         fn should_fail_with_scmp_during_segment_change() {
-            let src_address = EndhostAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = EndhostAddr::from_str("1-3,4.4.4.4").unwrap();
+            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
+            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
 
             // Not before segment change
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1778,10 +716,10 @@ mod tests {
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
                 .next_hop_should_fail()
-                .expect_parameter_problem(ParameterProblemCode::ErroneousHeaderField);
+                .expect_parameter_problem(ScmpParameterProblemCode::ErroneousHeaderField);
 
             // Not after segment change
-            let test_ctx = TestPathBuilder::new(src_address.into(), dst_address.into())
+            let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
@@ -1794,19 +732,19 @@ mod tests {
             helper::SpecTestCtx::new(test_ctx)
                 .next_hop_should_succeed(None)
                 .next_hop_should_fail()
-                .expect_parameter_problem(ParameterProblemCode::ErroneousHeaderField);
+                .expect_parameter_problem(ScmpParameterProblemCode::ErroneousHeaderField);
         }
     }
 
     mod helper {
-        use scion_proto::{
-            address::IsdAsn,
-            packet::ScionPacketRaw,
-            path::{
-                DataPlanePath,
-                test_builder::{TestPathBuilderHopField, TestPathContext},
-            },
-            scmp::{ParameterProblemCode, ScmpErrorMessage},
+
+        use sciparse::{
+            core::model::Model,
+            dataplane_path::view::ScionDpPathViewRef,
+            identifier::isd_asn::IsdAsn,
+            packet::view::ScionRawPacketView,
+            payload::scmp::{model::ScmpErrorMessage, types::ScmpParameterProblemCode},
+            util::test_builder::{TestPathBuilderHopField, TestPathContext},
         };
 
         use crate::network::scion::routing::{
@@ -1817,7 +755,7 @@ mod tests {
         /// Helper to iterate over test steps
         pub struct SpecTestCtx {
             pub test_context: TestPathContext,
-            pub packet: ScionPacketRaw,
+            pub packet: Box<ScionRawPacketView>,
             pub last_error: Option<ScmpErrorMessage>,
             pub custom_link_lookup: Option<Box<dyn Fn(u16) -> Option<AsRoutingInterfaceState>>>,
         }
@@ -1825,7 +763,11 @@ mod tests {
         impl SpecTestCtx {
             pub fn new(test_context: TestPathContext) -> Self {
                 Self {
-                    packet: test_context.scion_packet_udp(&[1, 2], 22222, 11111).into(),
+                    packet: test_context
+                        .scion_packet_udp(&[1, 2], 22222, 11111)
+                        .into_raw()
+                        .encode_to_owned_view()
+                        .expect("Failed to encode packet"),
                     test_context,
                     last_error: None,
                     custom_link_lookup: None,
@@ -1849,14 +791,14 @@ mod tests {
             fn lookup_interface(
                 custom_link_lookup: Option<impl Fn(u16) -> Option<AsRoutingInterfaceState>>,
                 hop_fields: &[TestPathBuilderHopField],
-                current_hop_index: usize,
+                current_hop_index: u8,
                 interface_id: u16,
             ) -> Option<AsRoutingInterfaceState> {
                 if let Some(ref custom_lookup) = custom_link_lookup {
                     return custom_lookup(interface_id);
                 }
 
-                let current = &hop_fields[current_hop_index];
+                let current = &hop_fields[current_hop_index as usize];
 
                 match interface_id {
                     val if current.ingress_if == val => {
@@ -1883,7 +825,7 @@ mod tests {
                 };
 
                 // On segment change, can also use the next hop fields interfaces
-                let next = &hop_fields[current_hop_index + 1];
+                let next = &hop_fields[current_hop_index as usize + 1];
 
                 match interface_id {
                     val if next.ingress_if == val => {
@@ -1929,14 +871,12 @@ mod tests {
                     .flat_map(|s| s.hop_fields.clone())
                     .collect::<Vec<_>>();
 
-                let current_hop_index = match self.packet.headers.path {
-                    DataPlanePath::Standard(ref mut path) => {
-                        path.meta_header().current_hop_field.get() as usize
-                    }
+                let current_hop_index = match self.packet.header().path() {
+                    ScionDpPathViewRef::Standard(ref mut path) => path.curr_hop_field_idx(),
                     _ => panic!("Unexpected path type"),
                 };
 
-                let hop = &test_hops[current_hop_index];
+                let hop = &test_hops[current_hop_index as usize];
 
                 let custom_lookup = self.custom_link_lookup.as_ref().map(|f| f.as_ref());
                 let action = SpecRoutingLogic::route(
@@ -1991,15 +931,12 @@ mod tests {
                     .flat_map(|s| s.hop_fields.clone())
                     .collect::<Vec<_>>();
 
-                let current_hop_index = match self.packet.headers.path {
-                    DataPlanePath::Standard(ref mut path) => {
-                        path.meta_header().current_hop_field.get() as usize
-                    }
+                let current_hop_index = match self.packet.header().path() {
+                    ScionDpPathViewRef::Standard(ref mut path) => path.curr_hop_field_idx(),
                     _ => panic!("Unexpected path type"),
                 };
 
-                let hop = &test_hops[current_hop_index];
-
+                let hop = &test_hops[current_hop_index as usize];
                 let custom_lookup = self.custom_link_lookup.as_ref().map(|f| f.as_ref());
                 let err = SpecRoutingLogic::route(
                     local_as,
@@ -2050,7 +987,7 @@ mod tests {
             }
 
             /// Expects the last error to be a ParameterProblem error with the specified code.
-            pub fn expect_parameter_problem(self, expected_code: ParameterProblemCode) -> Self {
+            pub fn expect_parameter_problem(self, expected_code: ScmpParameterProblemCode) -> Self {
                 let Some(ScmpErrorMessage::ParameterProblem(problem)) = &self.last_error else {
                     panic!(
                         "Expected a ParameterProblem error but had {:?}",

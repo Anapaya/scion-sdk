@@ -24,7 +24,7 @@ use std::{collections::BTreeMap, net::SocketAddr, num::NonZero};
 
 use derive_more::Display;
 use ipnet::IpNet;
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 use snap_dataplane::state::Id;
 use utoipa::ToSchema;

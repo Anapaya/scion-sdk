@@ -131,22 +131,22 @@ pub trait View {
     }
 
     /// Returns the underlying byte representation of the view
-    fn as_bytes(&self) -> &[u8];
+    fn as_slice(&self) -> &[u8];
 
     /// Returns the underlying mutable byte representation of the view
     ///
     /// # Safety
     /// The caller must ensure that the buffer is not mutated in a way that would invalidate the
     /// view. e.g. by changing the fields that have an effect on `has_required_size`.
-    unsafe fn as_bytes_mut(&mut self) -> &mut [u8];
+    unsafe fn as_slice_mut(&mut self) -> &mut [u8];
 
     /// Returns the underlying byte representation of the view as a boxed slice.
-    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]>;
+    fn as_slice_boxed(self: Box<Self>) -> Box<[u8]>;
 
     /// Copies the view into a new boxed slice
     #[inline]
     fn to_boxed(&self) -> Box<Self> {
-        unsafe { Self::from_boxed_unchecked(self.as_bytes().to_vec().into_boxed_slice()) }
+        unsafe { Self::from_boxed_unchecked(self.as_slice().to_vec().into_boxed_slice()) }
     }
 
     /// Converts the slice into the view without checking sizes
@@ -181,7 +181,7 @@ pub trait View {
         &self,
         buf: &'buf mut [u8],
     ) -> Result<(&'buf mut Self, &'buf mut [u8]), ViewConversionError> {
-        let this_buf = self.as_bytes();
+        let this_buf = self.as_slice();
         if buf.len() < this_buf.len() {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "buf",
@@ -328,15 +328,15 @@ pub(crate) mod macros {
                     Ok(layout.size_bytes())
                 }
 
-                fn as_bytes(&self) -> &[u8] {
+                fn as_slice(&self) -> &[u8] {
                     &self.0
                 }
 
-                unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+                unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
                     &mut self.0
                 }
 
-                fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+                fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
                     // SAFETY: repr(transparent) over [u8], identical fat pointer layout
                     unsafe { std::mem::transmute(self) }
                 }

@@ -211,7 +211,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use chrono::Utc;
-    use scion_proto::address::IsdAsn;
+    use sciparse::identifier::isd_asn::IsdAsn;
     use url::Url;
 
     use super::*;

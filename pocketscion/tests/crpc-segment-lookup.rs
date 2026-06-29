@@ -29,11 +29,13 @@ use pocketscion::{
     state::PocketScionState,
     util::{addr_to_http_url, path_providers::ManualPathProvider},
 };
-use scion_proto::{address::IsdAsn, path::DataPlanePath};
 use scion_protobuf::control_plane::v1::{SegmentsRequest, SegmentsResponse};
 use scion_sdk_quic_scion::quic::config::QuicConfig;
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::{
+    address::socket_addr::ScionSocketAddr, dataplane_path::model::DpPath,
+    identifier::isd_asn::IsdAsn,
+};
 
 #[test_log::test(tokio::test)]
 #[timeout(10_000)]
@@ -83,10 +85,11 @@ async fn control_service_crpc_lookup() -> anyhow::Result<()> {
     };
 
     // Set the path to be used in the packet
-    ns_socket.path_provider.set_path(DataPlanePath::EmptyPath);
+    ns_socket.path_provider.set_path(DpPath::Empty);
+    let remote = cs_addr;
 
     let client = CrpcClient::with_quic_config(
-        ScionSocketAddr::new(ia2.into(), cs_addr.ip().into(), cs_addr.port()),
+        ScionSocketAddr::new(ia2, remote.ip().into(), remote.port()),
         Arc::new(ns_socket),
         None,
         None,

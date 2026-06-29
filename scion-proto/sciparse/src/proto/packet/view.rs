@@ -20,6 +20,7 @@ use std::{fmt::Debug, mem::transmute};
 
 use super::classify::{ClassifiedPacketView, ClassifyError};
 use crate::{
+    address::{addr::ScionAddr, host_addr::WireHostAddrError, socket_addr::ScionSocketAddr},
     core::view::{View, ViewConversionError},
     header::{layout::ScionHeaderLayout, view::ScionHeaderView},
     payload::{ProtocolNumber, scmp::view::ScmpPayloadView, udp::view::UdpDatagramView},
@@ -73,6 +74,24 @@ impl<T> ScionPacketView<T> {
                 .get_unchecked(header_len..header_len + truncated_payload_len)
         }
     }
+
+    /// Returns the source SCION address of the packet.
+    ///
+    /// If a invalid or unknown address type is encountered in the source host address, an error is
+    /// returned.
+    pub fn src_scion_addr(&self) -> Result<ScionAddr, WireHostAddrError> {
+        let host = self.header().src_host_addr()?.scion_host_addr()?;
+        Ok(ScionAddr::new(self.header().src_ia(), host))
+    }
+
+    /// Returns the destination SCION address of the packet.
+    ///
+    /// If a invalid or unknown address type is encountered in the destination host address, an
+    /// error is returned.
+    pub fn dst_scion_addr(&self) -> Result<ScionAddr, WireHostAddrError> {
+        let host = self.header().dst_host_addr()?.scion_host_addr()?;
+        Ok(ScionAddr::new(self.header().dst_ia(), host))
+    }
 }
 
 /// A view over a raw SCION packet (payload protocol unspecified).
@@ -107,19 +126,19 @@ impl View for ScionRawPacketView {
     }
 
     #[inline]
-    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+    unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.1
     }
 
     #[inline]
-    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+    fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
         // SAFETY: This is safe because the view no longer exists after this call.
         // This just returns the underlying buffer.
         unsafe { std::mem::transmute(self) }
     }
 
     #[inline]
-    fn as_bytes(&self) -> &[u8] {
+    fn as_slice(&self) -> &[u8] {
         &self.1
     }
 }
@@ -169,7 +188,7 @@ impl ScionRawPacketView {
     /// are always classified as [`ClassifiedPacketView::Scmp`], with `dst_port` set to `None` when
     /// no port can be deduced. Never allocates.
     pub fn classify(&self) -> Result<ClassifiedPacketView<'_>, ClassifyError> {
-        match self.header().next_header().into() {
+        match self.header().next_header() {
             ProtocolNumber::Udp => {
                 let udp =
                     ScionUdpPacketView::try_from_raw(self).map_err(ClassifyError::MalformedUdp)?;
@@ -261,18 +280,18 @@ impl View for ScionUdpPacketView {
     }
 
     #[inline]
-    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+    unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.1
     }
 
     #[inline]
-    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+    fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
         // SAFETY: repr(transparent) over [u8], identical fat pointer layout
         unsafe { transmute(self) }
     }
 
     #[inline]
-    fn as_bytes(&self) -> &[u8] {
+    fn as_slice(&self) -> &[u8] {
         &self.1
     }
 }
@@ -289,7 +308,7 @@ impl ScionUdpPacketView {
     /// large enough for a UDP header but does not check the packets NextHeader field.
     pub fn try_from_raw(raw: &ScionRawPacketView) -> Result<&Self, ViewConversionError> {
         // There won't be any trailing bytes, so we can just use from_slice.
-        let (view, _) = ScionUdpPacketView::from_slice(raw.as_bytes())?;
+        let (view, _) = ScionUdpPacketView::from_slice(raw.as_slice())?;
         Ok(view)
     }
 
@@ -302,7 +321,7 @@ impl ScionUdpPacketView {
         let (view, _) = {
             // SAFETY: ScionUdpPacketView does not offer safe functions to change the size of the
             // buffer or mutable access to fields that would cause out of bounds access.
-            unsafe { ScionUdpPacketView::from_mut_slice(raw.as_bytes_mut())? }
+            unsafe { ScionUdpPacketView::from_mut_slice(raw.as_slice_mut())? }
         };
         Ok(view)
     }
@@ -312,24 +331,24 @@ impl ScionUdpPacketView {
     pub fn try_from_raw_owned(
         raw: Box<ScionRawPacketView>,
     ) -> Result<Box<Self>, ViewConversionError> {
-        ScionUdpPacketView::from_boxed(raw.as_bytes_boxed())
+        ScionUdpPacketView::from_boxed(raw.as_slice_boxed())
     }
 
     /// Converts a UDP packet view into a raw SCION packet view.
     pub fn into_raw(&self) -> &ScionRawPacketView {
         // Safety: The buffer is large enough for a SCION raw packet.
-        unsafe { ScionRawPacketView::from_slice_unchecked(self.as_bytes()) }
+        unsafe { ScionRawPacketView::from_slice_unchecked(self.as_slice()) }
     }
 
     /// Converts a UDP packet view into a raw SCION packet view.
     pub fn into_raw_mut(&mut self) -> &mut ScionRawPacketView {
         // Safety: The buffer is large enough for a SCION raw packet.
-        unsafe { ScionRawPacketView::from_mut_slice_unchecked(self.as_bytes_mut()) }
+        unsafe { ScionRawPacketView::from_mut_slice_unchecked(self.as_slice_mut()) }
     }
 
     /// Converts a UDP packet view into a raw SCION packet view.
     pub fn into_raw_owned(self: Box<Self>) -> Box<ScionRawPacketView> {
-        unsafe { ScionRawPacketView::from_boxed_unchecked(self.as_bytes_boxed()) }
+        unsafe { ScionRawPacketView::from_boxed_unchecked(self.as_slice_boxed()) }
     }
 
     /// Returns a UDP datagram view over packets payload.
@@ -340,6 +359,29 @@ impl ScionUdpPacketView {
         let (view, _) = UdpDatagramView::from_slice(self.payload())
             .expect("udp payload is not large enough for a UDP header");
         view
+    }
+
+    /// Returns the source SCION socket address of the packet.
+    ///
+    /// If a unknown address type is encountered in the source host address, an error is returned.
+    pub fn src_socket_addr(&self) -> Result<ScionSocketAddr, WireHostAddrError> {
+        let src_port = self.udp().src_port();
+        let isd_asn = self.header().src_ia();
+        let scion_addr = self.header().src_host_addr()?.scion_host_addr()?;
+
+        Ok(ScionSocketAddr::new(isd_asn, scion_addr, src_port))
+    }
+
+    /// Returns the destination SCION socket address of the packet.
+    ///
+    /// If a unknown address type is encountered in the destination host address, an error is
+    /// returned.
+    pub fn dst_socket_addr(&self) -> Result<ScionSocketAddr, WireHostAddrError> {
+        let dst_port = self.udp().dst_port();
+        let isd_asn = self.header().dst_ia();
+        let scion_addr = self.header().dst_host_addr()?.scion_host_addr()?;
+
+        Ok(ScionSocketAddr::new(isd_asn, scion_addr, dst_port))
     }
 }
 impl<'a> TryFrom<&'a ScionRawPacketView> for &'a ScionUdpPacketView {
@@ -411,18 +453,18 @@ impl View for ScionScmpPacketView {
     }
 
     #[inline]
-    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+    unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.1
     }
 
     #[inline]
-    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+    fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
         // SAFETY: repr(transparent) over [u8], identical fat pointer layout
         unsafe { transmute(self) }
     }
 
     #[inline]
-    fn as_bytes(&self) -> &[u8] {
+    fn as_slice(&self) -> &[u8] {
         &self.1
     }
 }
@@ -439,7 +481,7 @@ impl<'a> ScionScmpPacketView {
     /// large enough for a SCMP header but does not check the packets NextHeader field.
     pub fn try_from_raw(raw: &'a ScionRawPacketView) -> Result<&'a Self, ViewConversionError> {
         // There won't be any trailing bytes, so we can just use from_slice.
-        let (view, _) = ScionScmpPacketView::from_slice(raw.as_bytes())?;
+        let (view, _) = ScionScmpPacketView::from_slice(raw.as_slice())?;
         Ok(view)
     }
 
@@ -452,7 +494,7 @@ impl<'a> ScionScmpPacketView {
         let (view, _) = {
             // SAFETY: ScionScmpPacketView does not offer safe functions to change the size of the
             // buffer or mutable access to fields that would cause out of bounds access.
-            unsafe { ScionScmpPacketView::from_mut_slice(raw.as_bytes_mut())? }
+            unsafe { ScionScmpPacketView::from_mut_slice(raw.as_slice_mut())? }
         };
         Ok(view)
     }
@@ -463,13 +505,13 @@ impl<'a> ScionScmpPacketView {
         raw: Box<ScionRawPacketView>,
     ) -> Result<Box<Self>, ViewConversionError> {
         // We disregard any trailing bytes.
-        ScionScmpPacketView::from_boxed(raw.as_bytes_boxed())
+        ScionScmpPacketView::from_boxed(raw.as_slice_boxed())
     }
 
     /// Converts a SCMP packet view into a raw SCION packet view.
     pub fn into_raw(&self) -> &ScionRawPacketView {
         // Safety: The buffer is large enough for a SCION raw packet.
-        unsafe { ScionRawPacketView::from_slice_unchecked(self.as_bytes()) }
+        unsafe { ScionRawPacketView::from_slice_unchecked(self.as_slice()) }
     }
 
     /// Converts a SCMP packet view into a raw SCION packet view.
@@ -478,12 +520,12 @@ impl<'a> ScionScmpPacketView {
     /// The caller must ensure that the buffer is not mutated in a way that would invalidate the
     /// view. e.g. by changing the fields that have an effect on `has_required_size`.
     pub unsafe fn into_raw_mut(&mut self) -> &mut ScionRawPacketView {
-        unsafe { ScionRawPacketView::from_mut_slice_unchecked(self.as_bytes_mut()) }
+        unsafe { ScionRawPacketView::from_mut_slice_unchecked(self.as_slice_mut()) }
     }
 
     /// Converts a SCMP packet view into a raw SCION packet view.
     pub fn into_raw_owned(self: Box<Self>) -> Box<ScionRawPacketView> {
-        unsafe { ScionRawPacketView::from_boxed_unchecked(self.as_bytes_boxed()) }
+        unsafe { ScionRawPacketView::from_boxed_unchecked(self.as_slice_boxed()) }
     }
 
     /// Returns a SCMP payload view over packets payload.

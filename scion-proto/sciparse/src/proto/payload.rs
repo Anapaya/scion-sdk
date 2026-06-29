@@ -21,7 +21,7 @@ pub mod udp;
 /// See the [IETF SCION-dataplane RFC draft][rfc] for possible values.
 ///
 ///[rfc]: https://www.ietf.org/archive/id/draft-dekater-scion-dataplane-00.html#protnum
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ProtocolNumber {
     /// SCION/TCP next-header protocol number.
@@ -39,14 +39,19 @@ pub enum ProtocolNumber {
     /// Other, unrecognized protocol numbers.
     Other(u8),
 }
-
+impl ProtocolNumber {
+    /// Returns the protocol number as a `u8`.
+    pub fn to_u8(&self) -> u8 {
+        (*self).into()
+    }
+}
 impl From<u8> for ProtocolNumber {
     fn from(value: u8) -> Self {
         match value {
             6 => ProtocolNumber::Tcp,
+            17 => ProtocolNumber::Udp,
             43 => ProtocolNumber::Hbh,
             201 => ProtocolNumber::E2e,
-            17 => ProtocolNumber::Udp,
             202 => ProtocolNumber::Scmp,
             203 => ProtocolNumber::Bfd,
             other => ProtocolNumber::Other(other),

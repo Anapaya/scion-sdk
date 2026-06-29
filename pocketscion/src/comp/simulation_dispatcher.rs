@@ -13,8 +13,7 @@
 // limitations under the License.
 //! Dispatchers sending packets into the [NetworkSimulator]
 
-use scion_proto::{address::IsdAsn, packet::ScionPacketRaw, wire_encoding::WireDecode};
-use sciparse::{core::view::View, packet::view::ScionPacketView};
+use sciparse::{core::view::View, identifier::isd_asn::IsdAsn, packet::view::ScionPacketView};
 use snap_dataplane::dispatcher::Dispatcher;
 
 use crate::{
@@ -41,17 +40,11 @@ impl AsNetSimDispatcher {
 
 impl Dispatcher for AsNetSimDispatcher {
     fn try_dispatch(&self, packet: &ScionPacketView) {
-        // TODO(uniquefine): migrate NetworkSimulator to ScionPacketView
-        let packet = match ScionPacketRaw::decode(&mut packet.as_bytes()) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::debug!(error=%e, "AsNetSimDispatcher: failed to decode ScionPacketView");
-                return;
-            }
-        };
+        let mut clone = packet.to_boxed();
+
         let network_time = ScionNetworkTime::now();
         self.app_state
-            .dispatch_to_network_sim(self.local_as, 0, network_time, packet);
+            .dispatch_to_network_sim(self.local_as, 0, network_time, &mut clone);
     }
 }
 
@@ -70,21 +63,14 @@ impl NetSimDispatcher {
 
 impl Dispatcher for NetSimDispatcher {
     fn try_dispatch(&self, packet: &ScionPacketView) {
-        // TODO(uniquefine): migrate NetworkSimulator to ScionPacketView
-        let packet = match ScionPacketRaw::decode(&mut packet.as_bytes()) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::debug!(error=%e, "NetSimDispatcher: failed to decode ScionPacketView");
-                return;
-            }
-        };
+        let mut clone = packet.to_boxed();
         let network_time = ScionNetworkTime::now();
 
         self.app_state.dispatch_to_network_sim(
-            packet.headers.address.ia.source,
+            packet.header().src_ia(),
             0,
             network_time,
-            packet,
+            &mut clone,
         );
     }
 }
@@ -103,7 +89,7 @@ impl PocketScionState {
         local_as: IsdAsn,
         local_interface: u16,
         now: ScionNetworkTime,
-        packet: ScionPacketRaw,
+        packet: &mut ScionPacketView,
     ) {
         let state_guard = self.read();
 

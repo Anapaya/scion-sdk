@@ -47,7 +47,7 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     //
     // Setup minimal topology
     let mut topo = ScionTopologyBuilder::new();
-    topo.add_as(ScionAs::new_core(server_ia))?
+    topo.add_as(ScionAs::new_core(server_ia.into()))?
         .add_as(ScionAs::new_core("1-2".parse()?))?
         .add_link("1-1#1 core 1-2#1".parse()?)?;
 
@@ -55,8 +55,8 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
 
     //
     // Setup snap
-    let snap_id = state.add_snap(server_ia)?;
-    let _eh_api_id = state.add_endhost_api(vec![server_ia]);
+    let snap_id = state.add_snap(server_ia.into())?;
+    let _eh_api_id = state.add_endhost_api(vec![server_ia.into()]);
 
     //
     // Start PocketScion

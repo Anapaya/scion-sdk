@@ -18,7 +18,7 @@ pub mod minimal;
 
 use std::collections::BTreeMap;
 
-use scion_proto::address::{Asn, Isd, IsdAsn};
+use sciparse::identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn};
 use url::Url;
 
 use crate::{comp::endhost_api::EndhostApiId, runtime::PocketScionRuntime, util::addr_to_http_url};

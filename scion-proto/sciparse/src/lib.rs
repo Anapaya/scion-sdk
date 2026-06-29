@@ -93,8 +93,9 @@
 //!
 //! ```no_run
 //! # use sciparse::packet::model::ScionRawPacket;
-//! let buf: Vec<u8> = vec![/* ... */]; // Buffer containing a SCION packet
-//! let model = ScionRawPacket::from_slice(&buf[..]).expect("Failed to parse SCION packet");
+//! # use sciparse::core::convert::TryFromView;
+//! # let buf: Vec<u8> = vec![/* ... */]; // Buffer containing a SCION packet
+//! let model = ScionRawPacket::try_from_slice(&buf[..]).expect("Failed to parse SCION packet");
 //!
 //! println!("Parsed model: {:?}", model);
 //! ```
@@ -123,5 +124,6 @@ pub mod reexport {
     pub use proptest;
     pub use prost;
     pub use prost_types;
-    pub use scion_protobuf;
+    pub use scion_protobuf as protobuf;
+    pub use tinyvec;
 }

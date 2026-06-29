@@ -20,7 +20,17 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use crate::{core::encode::EncodeError, header::model::AddressHeader};
+use crate::header::model::AddressHeader;
+
+/// Error type for indicating that a provided buffer is too small for encoding.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, thiserror::Error)]
+#[error(
+    "buffer too small for payload encoding: expected at least {expected_size} bytes, got {actual_size} bytes"
+)]
+pub struct BufferTooSmallError {
+    expected_size: usize,
+    actual_size: usize,
+}
 
 /// Allows encoding scion packet payload models to wire format.
 ///
@@ -55,19 +65,21 @@ pub trait PayloadEncode: Debug + Send + Sync + PartialEq + PartialOrd + Hash {
 
     /// Writes the wire encoding into the provided buffer.
     ///
-    /// Returns the number of bytes written on success, or an
-    /// [`EncodeError::BufferTooSmall`] error containing the required size if
-    /// the buffer is too small.
+    /// Returns the number of bytes written on success, or an [`BufferTooSmallError`] error
+    /// containing the required size if the buffer is too small.
     fn encode(
         &self,
         buf: &mut [u8],
         address_header: &AddressHeader,
         // The size of the SCION packet header and all extension headers before the SCMP payload.
         header_and_extensions_size: usize,
-    ) -> Result<usize, EncodeError> {
+    ) -> Result<usize, BufferTooSmallError> {
         let required_size = self.required_size(header_and_extensions_size);
         if buf.len() < required_size {
-            return Err(EncodeError::BufferTooSmall(required_size));
+            return Err(BufferTooSmallError {
+                expected_size: required_size,
+                actual_size: buf.len(),
+            });
         }
 
         // SAFETY: buffer length is checked above.

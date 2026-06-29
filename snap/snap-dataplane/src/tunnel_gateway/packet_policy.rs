@@ -141,7 +141,7 @@ mod tests {
 
         let res = inbound_datagram_check(&packet, source_addrs[0].ip().unwrap());
         assert!(res.is_ok());
-        assert_eq!(&packet[..], res.unwrap().as_bytes());
+        assert_eq!(&packet[..], res.unwrap().as_slice());
     }
 
     #[test]

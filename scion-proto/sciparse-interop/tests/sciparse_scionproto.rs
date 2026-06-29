@@ -28,7 +28,7 @@ use scion_proto::{
 };
 use sciparse::{
     self,
-    core::{encode::WireEncode, view::View},
+    core::{convert::TryFromView, encode::WireEncode, view::View},
     dataplane_path::model::DpPath,
     header::layout::ScionHeaderLayout,
     packet::{
@@ -81,7 +81,7 @@ fn sciparse_scionproto_interop() {
         let (view, _) = ScionRawPacketView::from_slice(&original_buf)
             .expect("Parsing packet with sciparse failed");
 
-        let recreated_sciparse_packet = ScionRawPacket::from_view(view)
+        let recreated_sciparse_packet = ScionRawPacket::try_from_view(view)
             .expect("Converting sciparse packet view to proto packet failed")
             .classify()
             .unwrap();
@@ -199,7 +199,11 @@ fn compare_common_header(
         "traffic_class mismatch"
     );
     assert_eq!(sci.flow_id, proto.flow_id.get(), "flow_id mismatch");
-    assert_eq!(sci.next_header, proto.next_header, "next_header mismatch");
+    assert_eq!(
+        sci.next_header.to_u8(),
+        proto.next_header,
+        "next_header mismatch"
+    );
 }
 
 fn compare_address_header(

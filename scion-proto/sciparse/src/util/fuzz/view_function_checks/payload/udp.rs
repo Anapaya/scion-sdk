@@ -26,7 +26,7 @@ pub fn exec_every_view_function_ref(view: &UdpDatagramView) {
     black_box(view.length());
     black_box(view.checksum());
     read_slice_bounds(view.payload());
-    read_slice_bounds(view.as_bytes());
+    read_slice_bounds(view.as_slice());
 }
 
 /// Exercises every getter and setter on a [`UdpDatagramView`].

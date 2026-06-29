@@ -18,9 +18,9 @@
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use scion_proto::{address::IsdAsn, path::DataPlanePath};
 use scion_protobuf::control_plane::v1::{BeaconRequest, BeaconResponse};
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
+use sciparse::{dataplane_path::model::DpPath, identifier::isd_asn::IsdAsn};
 use url::Url;
 
 use crate::{
@@ -41,7 +41,7 @@ impl ControlServiceCrpcClient {
         network_stack: &NetSimStack,
         dst_ia: IsdAsn,
         dst_addr: std::net::SocketAddr,
-        path: DataPlanePath,
+        path: DpPath,
         cert_chain: &[StoreCertificateDer],
         cert_temp_dir: &CertificateTempDir,
     ) -> anyhow::Result<ControlServiceCrpcClient> {

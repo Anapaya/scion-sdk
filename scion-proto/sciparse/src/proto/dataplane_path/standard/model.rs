@@ -17,9 +17,10 @@ use tinyvec::{ArrayVec, TinyVec};
 
 use crate::{
     core::{
+        convert::{FromView, TryFromModel},
         encode::{InvalidStructureError, WireEncode},
         layout::Layout,
-        view::{View, ViewConversionError},
+        model::Model,
         write::unchecked_bit_range_be_write,
     },
     dataplane_path::{
@@ -52,45 +53,6 @@ impl StandardPath {
             current_hop_field: 0,
             segments: ArrayVec::new(),
         }
-    }
-}
-// Decoding
-impl StandardPath {
-    /// Constructs a `StandardPath` from a `StandardPathView`
-    pub fn from_view(view: &StandardPathView) -> Self {
-        let info_fields = view.info_fields();
-        let hop_fields = view.hop_fields();
-        let segment_sizes = [view.seg0_len(), view.seg1_len(), view.seg2_len()];
-
-        let mut segments = ArrayVec::new();
-        let mut hop_fields_iter = hop_fields.iter();
-
-        for (info_field, segment_size) in info_fields.iter().zip(segment_sizes.iter()) {
-            let segment = Segment {
-                info_field: InfoField::from_view(info_field),
-                hop_fields: hop_fields_iter
-                    .by_ref()
-                    .take(*segment_size as usize)
-                    .map(HopField::from_view)
-                    .collect(),
-            };
-
-            segments.push(segment);
-        }
-
-        StandardPath {
-            current_info_field: view.curr_info_field_idx(),
-            current_hop_field: view.curr_hop_field_idx(),
-            segments,
-        }
-    }
-
-    /// Parses a [StandardPath] from a byte slice, returning the parsed path and any remaining
-    /// unparsed bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
-        let (view, _rest) = StandardPathView::from_slice(buf)?;
-        let path = Self::from_view(view);
-        Ok((path, _rest))
     }
 }
 // Utility
@@ -210,7 +172,6 @@ impl StandardPath {
         Ok(())
     }
 }
-
 impl WireEncode for StandardPath {
     fn required_size(&self) -> usize {
         let [seg0, seg1, seg2] = self.segment_sizes();
@@ -299,6 +260,43 @@ impl WireEncode for StandardPath {
         SL::SIZE_BYTES + data_layout.size_bytes()
     }
 }
+impl Model for StandardPath {
+    type ViewType = StandardPathView;
+}
+impl TryFromModel for StandardPathView {
+    type ModelType = StandardPath;
+}
+impl FromView for StandardPath {
+    type ViewType = StandardPathView;
+
+    fn from_view(view: &Self::ViewType) -> Self {
+        let info_fields = view.info_fields();
+        let hop_fields = view.hop_fields();
+        let segment_sizes = [view.seg0_len(), view.seg1_len(), view.seg2_len()];
+
+        let mut segments = ArrayVec::new();
+        let mut hop_fields_iter = hop_fields.iter();
+
+        for (info_field, segment_size) in info_fields.iter().zip(segment_sizes.iter()) {
+            let segment = Segment {
+                info_field: InfoField::from_view(info_field),
+                hop_fields: hop_fields_iter
+                    .by_ref()
+                    .take(*segment_size as usize)
+                    .map(HopField::from_view)
+                    .collect(),
+            };
+
+            segments.push(segment);
+        }
+
+        StandardPath {
+            current_info_field: view.curr_info_field_idx(),
+            current_hop_field: view.curr_hop_field_idx(),
+            segments,
+        }
+    }
+}
 
 /// Represents a segment in a standard SCION path
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -340,16 +338,6 @@ pub struct InfoField {
     /// Used to determine if this segment currently valid.
     pub timestamp: u32,
 }
-impl InfoField {
-    /// Constructs a `InfoField` from a `InfoFieldView`
-    pub fn from_view(view: &InfoFieldView) -> Self {
-        InfoField {
-            flags: view.flags(),
-            segment_id: view.segment_id(),
-            timestamp: view.timestamp(),
-        }
-    }
-}
 impl WireEncode for InfoField {
     fn required_size(&self) -> usize {
         InfoFieldLayout::SIZE_BYTES
@@ -369,6 +357,23 @@ impl WireEncode for InfoField {
             unchecked_bit_range_be_write(buf, IFL::TIMESTAMP_RNG, self.timestamp);
         }
         self.required_size()
+    }
+}
+impl Model for InfoField {
+    type ViewType = InfoFieldView;
+}
+impl TryFromModel for InfoFieldView {
+    type ModelType = InfoField;
+}
+impl FromView for InfoField {
+    type ViewType = InfoFieldView;
+
+    fn from_view(view: &Self::ViewType) -> Self {
+        InfoField {
+            flags: view.flags(),
+            segment_id: view.segment_id(),
+            timestamp: view.timestamp(),
+        }
     }
 }
 
@@ -423,18 +428,6 @@ impl Default for HopField {
             cons_ingress: 0,
             cons_egress: 0,
             mac: HopFieldMac([0; 6]),
-        }
-    }
-}
-impl HopField {
-    /// Constructs a `HopField` from a `HopFieldView`
-    pub fn from_view(view: &HopFieldView) -> Self {
-        HopField {
-            flags: view.flags(),
-            expiration_units: view.exp_time(),
-            cons_ingress: view.cons_ingress(),
-            cons_egress: view.cons_egress(),
-            mac: view.mac(),
         }
     }
 }
@@ -499,6 +492,24 @@ impl WireEncode for HopField {
                 .copy_from_slice(&self.mac.0);
         }
         self.required_size()
+    }
+}
+impl Model for HopField {
+    type ViewType = HopFieldView;
+}
+impl TryFromModel for HopFieldView {
+    type ModelType = HopField;
+}
+impl FromView for HopField {
+    type ViewType = HopFieldView;
+    fn from_view(view: &Self::ViewType) -> Self {
+        HopField {
+            flags: view.flags(),
+            expiration_units: view.exp_time(),
+            cons_ingress: view.cons_ingress(),
+            cons_egress: view.cons_egress(),
+            mac: view.mac(),
+        }
     }
 }
 

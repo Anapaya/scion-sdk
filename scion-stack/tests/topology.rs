@@ -60,12 +60,12 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     //
     // Setup snaps
-    let server_snap_id = state.add_snap(server_ia)?;
-    let client_snap_id = state.add_snap(client_ia)?;
+    let server_snap_id = state.add_snap(server_ia.into())?;
+    let client_snap_id = state.add_snap(client_ia.into())?;
 
     // Setup endhost APIs
-    let _server_eh = state.add_endhost_api(vec![server_ia]);
-    let _client_eh = state.add_endhost_api(vec![client_ia]);
+    let _server_eh = state.add_endhost_api(vec![server_ia.into()]);
+    let _client_eh = state.add_endhost_api(vec![client_ia.into()]);
 
     //
     // Start PocketScion

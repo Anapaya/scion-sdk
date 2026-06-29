@@ -83,6 +83,6 @@ pub fn bias_to_packet_shape(data: &mut [u8]) {
         } else {
             NEXT_HEADER_SCMP
         };
-        view.set_next_header(proto);
+        view.set_next_header(proto.into());
     }
 }

@@ -22,7 +22,6 @@ scion-sdk-trc = { workspace = true }
 scion-sdk-utils = { workspace = true }
 
 sciparse = { workspace = true }
-scion-proto = { workspace = true }
 scion-protobuf = { workspace = true }
 
 snap-control = { workspace = true }

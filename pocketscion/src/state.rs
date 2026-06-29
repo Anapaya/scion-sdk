@@ -25,8 +25,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use dhsd::DhsdSecret;
 use pem::Pem;
-use scion_proto::address::{IsdAsn, ScionAddr};
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
+use sciparse::{address::ip_addr::ScionIpAddr, identifier::isd_asn::IsdAsn};
 
 use crate::{
     comp::{
@@ -111,7 +111,7 @@ pub struct PocketScionStateInner {
     /// The control service states in the system.
     pub control_service_states: BTreeMap<IsdAsn, ControlServiceState>,
     /// The network forwarders in the system.
-    pub network_forwarders: BTreeMap<ScionAddr, NetworkForwarderState>,
+    pub network_forwarders: BTreeMap<ScionIpAddr, NetworkForwarderState>,
     /// Optional global cache for segment listing results, used by the SegmentLookupService.
     pub segment_listing_cache: Option<SegmentListingCache>,
     /// Temporary directory for certificate files,

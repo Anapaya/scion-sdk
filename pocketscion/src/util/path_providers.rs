@@ -16,7 +16,13 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use scion_proto::{address::IsdAsn, path::DataPlanePath};
+use sciparse::{
+    dataplane_path::{
+        model::DpPath,
+        view::{ScionDpPathViewExt, ScionDpPathViewRef},
+    },
+    identifier::isd_asn::IsdAsn,
+};
 
 use crate::comp::sim_network_stack::NetSimPathProvider;
 
@@ -25,22 +31,18 @@ use crate::comp::sim_network_stack::NetSimPathProvider;
 #[derive(Debug, Default)]
 pub struct ManualPathProvider {
     /// The path to be returned by this path provider. Wrapped in a Mutex to allow mutation.
-    pub path: Mutex<Option<DataPlanePath>>,
+    pub path: Mutex<Option<DpPath>>,
 }
 
 impl ManualPathProvider {
     /// Sets the path to be returned by this path provider.
-    pub fn set_path(&self, path: DataPlanePath) {
+    pub fn set_path(&self, path: DpPath) {
         self.path.lock().unwrap().replace(path);
     }
 }
 
 impl NetSimPathProvider for ManualPathProvider {
-    fn get_path(
-        &self,
-        _src_as: IsdAsn,
-        _dst_as: IsdAsn,
-    ) -> Option<scion_proto::path::DataPlanePath> {
+    fn get_path(&self, _src_as: IsdAsn, _dst_as: IsdAsn) -> Option<DpPath> {
         self.path.lock().unwrap().clone()
     }
 }
@@ -49,7 +51,7 @@ impl NetSimPathProvider for ManualPathProvider {
 #[derive(Debug, Default)]
 pub struct MirroringPathProvider {
     /// Maps (src AS, dst AS) to the path to be used for packets from src AS to dst AS
-    pub paths: Mutex<HashMap<(IsdAsn, IsdAsn), DataPlanePath>>,
+    pub paths: Mutex<HashMap<(IsdAsn, IsdAsn), DpPath>>,
 }
 
 impl MirroringPathProvider {
@@ -58,25 +60,27 @@ impl MirroringPathProvider {
     /// This path may be overridden when the path provider is informed of a path from src AS to dst
     /// AS through `inform_path`.
     #[allow(dead_code)]
-    pub fn set_path(&self, src_as: IsdAsn, dst_as: IsdAsn, path: DataPlanePath) {
+    pub fn set_path(&self, src_as: IsdAsn, dst_as: IsdAsn, path: DpPath) {
         self.paths.lock().unwrap().insert((src_as, dst_as), path);
     }
 }
 
 impl NetSimPathProvider for MirroringPathProvider {
-    fn inform_path(&self, src_as: IsdAsn, dst_as: IsdAsn, path: &DataPlanePath) {
-        let mut reversed_path = path.clone();
-        let Ok(_) = reversed_path.reverse() else {
+    fn inform_path(&self, src_as: IsdAsn, dst_as: IsdAsn, path: ScionDpPathViewRef<'_>) {
+        let mut reversed_path = path.to_model();
+
+        let Ok(_) = reversed_path.try_reverse() else {
             tracing::debug!(src_as = %src_as, dst_as = %dst_as, "Failed to reverse path, not setting path for MirroringPathProvider");
             return;
         };
+
         self.paths
             .lock()
             .unwrap()
             .insert((dst_as, src_as), reversed_path);
     }
 
-    fn get_path(&self, src_as: IsdAsn, dst_as: IsdAsn) -> Option<DataPlanePath> {
+    fn get_path(&self, src_as: IsdAsn, dst_as: IsdAsn) -> Option<DpPath> {
         self.paths.lock().unwrap().get(&(src_as, dst_as)).cloned()
     }
 }

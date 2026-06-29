@@ -25,7 +25,7 @@ use scion_proto::{
     wire_encoding::{WireDecode, WireEncodeVec},
 };
 use sciparse::{
-    core::{encode::WireEncode, view::View},
+    core::{convert::TryFromView, encode::WireEncode, view::View},
     dataplane_path::{
         model::ptest::ArbitraryPathParams, standard::model::ptest::ArbitraryPathContext,
         view::ScionDpPathViewRef,
@@ -113,8 +113,9 @@ fn bench_parsing(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     for pkt in &packets {
-                        let (model, _rest) =
-                            black_box(ScionRawPacket::from_slice(pkt).expect("view parse failed"));
+                        let (model, _rest) = black_box(
+                            ScionRawPacket::try_from_slice(pkt).expect("view parse failed"),
+                        );
                         black_box(model);
                     }
                 });
@@ -179,17 +180,17 @@ fn bench_encode(c: &mut Criterion) {
             .iter()
             .map(|pkt| {
                 let (view, _) = ScionRawPacketView::from_slice(pkt).unwrap();
-                ScionRawPacket::from_view(view).unwrap()
+                ScionRawPacket::try_from_view(view).unwrap()
             })
             .collect();
 
         // As bytes for sciparse view (zero-copy, just returns the original byte slice).
         // This should be free, as it's just a pointer cast
-        c.bench_function(&format!("sciparse/view_as_bytes_{num}_packets"), |b| {
+        c.bench_function(&format!("sciparse/view_as_slice_{num}_packets"), |b| {
             b.iter(|| {
                 for pkt in &packets {
                     let view = unsafe { ScionRawPacketView::from_slice_unchecked(pkt) };
-                    let bytes = black_box(view.as_bytes());
+                    let bytes = black_box(view.as_slice());
                     black_box(bytes);
                 }
             });
@@ -294,7 +295,7 @@ fn bench_access(c: &mut Criterion) {
             .iter()
             .map(|pkt| {
                 let (view, _) = ScionRawPacketView::from_slice(pkt).unwrap();
-                ScionRawPacket::from_view(view).unwrap()
+                ScionRawPacket::try_from_view(view).unwrap()
             })
             .collect();
 

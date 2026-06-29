@@ -15,13 +15,18 @@
 //! SCION dataplane path model and encoding.
 
 use crate::{
-    core::encode::{InvalidStructureError, WireEncode},
+    core::{
+        convert::ToModel,
+        encode::{InvalidStructureError, WireEncode},
+        macros::impl_from,
+        model::Model,
+    },
     dataplane_path::{
         layout::ScionHeaderPathLayout,
         onehop::model::OneHopPath,
         standard::model::StandardPath,
         types::{PathReverseError, PathType},
-        view::ScionDpPathViewRef,
+        view::{ScionDpPathView, ScionDpPathViewRef},
     },
 };
 
@@ -51,11 +56,9 @@ impl DpPath {
     pub fn from_view(view: &ScionDpPathViewRef) -> Self {
         match *view {
             ScionDpPathViewRef::Standard(standard_view) => {
-                DpPath::Standard(StandardPath::from_view(standard_view))
+                DpPath::Standard(standard_view.to_model())
             }
-            ScionDpPathViewRef::OneHop(onehop_view) => {
-                DpPath::OneHop(OneHopPath::from_view(onehop_view))
-            }
+            ScionDpPathViewRef::OneHop(onehop_view) => DpPath::OneHop(onehop_view.to_model()),
             ScionDpPathViewRef::Empty => DpPath::Empty,
             ScionDpPathViewRef::Unsupported {
                 path_type,
@@ -67,6 +70,27 @@ impl DpPath {
                 }
             }
         }
+    }
+
+    /// Encodes the `DpPath` into a boxed view.
+    pub fn encode_to_owned_view(&self) -> Result<ScionDpPathView, InvalidStructureError> {
+        let res = match self {
+            DpPath::Standard(standard_path) => {
+                ScionDpPathView::Standard(standard_path.encode_to_owned_view()?)
+            }
+            DpPath::OneHop(onehop_path) => {
+                ScionDpPathView::OneHop(*onehop_path.encode_to_owned_view()?)
+            }
+            DpPath::Empty => ScionDpPathView::Empty,
+            DpPath::Unsupported { path_type, data } => {
+                ScionDpPathView::Unsupported {
+                    path_type: *path_type,
+                    data: data.clone().into_boxed_slice(),
+                }
+            }
+        };
+
+        Ok(res)
     }
 }
 impl DpPath {
@@ -90,11 +114,20 @@ impl DpPath {
 
     /// Attempts to reverse the path in place, if supported.
     ///
+    /// Note: A OneHop path will be converted into a Standard path upon reversal.
+    ///
     /// Returns an error if the path type is unsupported or if the path is invalid for reversal.
     pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
         match self {
             DpPath::Standard(path) => path.try_reverse(),
-            DpPath::OneHop(path) => path.try_reverse(),
+            DpPath::OneHop(path) => {
+                let rev = path
+                    .clone()
+                    .into_reversed_standard_path()
+                    .map_err(|(e, _)| e)?;
+                *self = DpPath::Standard(rev);
+                Ok(())
+            }
             DpPath::Empty => Ok(()),
             DpPath::Unsupported { .. } => {
                 Err(PathReverseError::new(
@@ -103,7 +136,23 @@ impl DpPath {
             }
         }
     }
+
+    /// Attempts to reverse the path in place, returning the reversed path on success.
+    ///
+    /// Note: A OneHop path will be converted into a Standard path upon reversal.
+    ///
+    /// Returns an error containing the original path and the reason for failure if reversal is not
+    /// possible.
+    #[allow(clippy::result_large_err)]
+    pub fn into_reversed(mut self) -> Result<Self, (Self, PathReverseError)> {
+        match self.try_reverse() {
+            Ok(()) => Ok(self),
+            Err(e) => Err((self, e)),
+        }
+    }
 }
+impl_from!(StandardPath, DpPath, |p| DpPath::Standard(p));
+impl_from!(OneHopPath, DpPath, |p| DpPath::OneHop(p));
 
 impl WireEncode for DpPath {
     fn required_size(&self) -> usize {

@@ -24,8 +24,11 @@ use std::{
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use scion_proto::address::{IsdAsn, ServiceAddr};
 use scion_protobuf::control_plane::v1::BeaconRequest;
+use sciparse::{
+    address::host_addr::ServiceAddr, dataplane_path::view::ScionDpPathViewExt,
+    identifier::isd_asn::IsdAsn,
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use utoipa::ToSchema;
@@ -190,7 +193,7 @@ impl BeaconingService {
                                 &cs.net_stack,
                                 dst_as,
                                 svc_addr,
-                                path,
+                                path.to_model(),
                                 &dst_cert_chain,
                                 &cert_tmp_dir,
                             )
@@ -596,8 +599,8 @@ impl BeaconGen {
         let peer_as = link.to;
 
         let link_segment = LinkSegment {
-            start_as: sending_as_interface.isd_as.into(),
-            end_as: peer_as.isd_as.into(),
+            start_as: sending_as_interface.isd_as,
+            end_as: peer_as.isd_as,
             links: VecDeque::from_iter([link]),
         };
 

@@ -16,7 +16,7 @@
 
 use std::net::IpAddr;
 
-use scion_proto::address::IsdAsn;
+use sciparse::identifier::isd_asn::IsdAsn;
 
 use crate::comp::{
     endhost_api::EndhostApiId, endhost_api_discovery::EndhostApiDiscoveryApiId, router::RouterId,

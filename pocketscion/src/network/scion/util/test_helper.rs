@@ -49,8 +49,8 @@ pub fn parse_segment(s: &str, use_link_type: ScionLinkType) -> anyhow::Result<Li
     }
 
     Ok(LinkSegment {
-        start_as: hops.front().unwrap().from.isd_as.into(),
-        end_as: hops.back().unwrap().to.isd_as.into(),
+        start_as: hops.front().unwrap().from.isd_as,
+        end_as: hops.back().unwrap().to.isd_as,
         links: hops,
     })
 }

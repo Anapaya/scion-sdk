@@ -36,11 +36,18 @@ use pocketscion::{
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
 };
-use scion_proto::{
-    address::{IsdAsn, ScionAddr},
-    packet::{ByEndpoint, ScionPacketRaw},
-    path::{DataPlanePath, HopFieldIndex, StandardPath, test_builder::TestPathBuilder},
-    wire_encoding::{WireDecode, WireEncodeVec},
+use sciparse::{
+    address::addr::ScionAddr,
+    core::{
+        convert::{TryFromView, TryToModel},
+        model::Model,
+        view::View,
+    },
+    dataplane_path::{model::DpPath, view::ScionDpPathViewExt},
+    identifier::isd_asn::IsdAsn,
+    packet::{model::ScionRawPacket, view::ScionRawPacketView},
+    payload::ProtocolNumber,
+    util::test_builder::TestPathBuilder,
 };
 use tokio::{net::UdpSocket, task::yield_now, time::timeout};
 
@@ -107,7 +114,8 @@ async fn external_as_should_work() -> anyhow::Result<()> {
 
             tracing::info!("External AS waiting for packet...");
             let (len, _) = socket.recv_from(&mut buf).await?;
-            let packet = ScionPacketRaw::decode(&mut &buf[..len])?;
+            let (packet, rest) = ScionRawPacket::try_from_slice(&buf[..len])?;
+            debug_assert!(rest.is_empty(), "packet was not fully consumed");
 
             Ok::<_, anyhow::Error>(packet)
         }
@@ -118,18 +126,16 @@ async fn external_as_should_work() -> anyhow::Result<()> {
     yield_now().await;
 
     // A packet sent to the external AS should be received by the external AS socket
-    let packet = ScionPacketRaw::new(
-        ByEndpoint {
-            source: addr1,
-            destination: addr2,
-        },
-        path1to2.data_plane_path,
-        "hello external AS".into(),
-        0,        // next header
-        0.into(), // flow ID
-    )?;
+    let mut packet = ScionRawPacket::new(
+        addr1,
+        addr2,
+        path1to2.dp_path().to_model(),
+        ProtocolNumber::Other(0),
+        b"hello external AS".to_vec(),
+    )
+    .encode_to_owned_view()?;
 
-    ps_rt.dispatch_packet(ia1, 0, network_time, packet.clone());
+    ps_rt.dispatch_packet(ia1, 0, network_time, &mut packet);
 
     let packet = timeout(std::time::Duration::from_secs(1), recv_task).await???;
     let payload: &[u8] = &packet.payload;
@@ -142,8 +148,8 @@ async fn external_as_should_work() -> anyhow::Result<()> {
 
     // Reverse path, and advance by one hop since the external AS would have already processed the
     // first hop.
-    let mut reversed_path = packet.headers.path.clone();
-    reversed_path.reverse()?;
+    let mut reversed_path = packet.header.path.clone();
+    reversed_path.try_reverse()?;
     reversed_path = test_specific_advance_path_hop(reversed_path)?;
 
     let wait_task = tokio::spawn({
@@ -159,21 +165,17 @@ async fn external_as_should_work() -> anyhow::Result<()> {
                 .clone()
         }
     });
-    let response_packet = ScionPacketRaw::new(
-        ByEndpoint {
-            source: addr2,
-            destination: addr1,
-        },
+    let response_packet = ScionRawPacket::new(
+        addr2,
+        addr1,
         reversed_path,
-        "hello local AS".into(),
-        0,        // next header
-        0.into(), // flow ID
-    )?
-    .encode_to_bytes_vec()
-    .concat();
+        ProtocolNumber::Other(0),
+        b"hello local AS".to_vec(),
+    )
+    .encode_to_owned_view()?;
 
     external_as_socket
-        .send_to(&response_packet, ext_as_listen_addr)
+        .send_to(response_packet.as_slice(), ext_as_listen_addr)
         .await?;
 
     let received_packet = timeout(std::time::Duration::from_secs(1), wait_task).await??;
@@ -184,7 +186,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
 }
 
 struct MockNetworkTarget {
-    last_received_packet: Mutex<Option<ScionPacketRaw>>,
+    last_received_packet: Mutex<Option<ScionRawPacket>>,
     notify: Arc<tokio::sync::Notify>,
 }
 impl MockNetworkTarget {
@@ -195,17 +197,23 @@ impl MockNetworkTarget {
         }
     }
 
-    async fn wait_for_packet(&self) -> ScionPacketRaw {
+    async fn wait_for_packet(&self) -> ScionRawPacket {
         self.notify.clone().notified_owned().await;
-        let guard: std::sync::MutexGuard<'_, Option<ScionPacketRaw>> =
-            self.last_received_packet.lock().unwrap();
-        guard.clone().expect("packet should be set when notified")
+        let guard = self.last_received_packet.lock().unwrap();
+        guard
+            .as_ref()
+            .expect("packet should be set when notified")
+            .clone()
     }
 }
 impl Receiver for MockNetworkTarget {
-    fn receive_packet(&self, _packet: ScionPacketRaw) {
+    fn receive_packet(&self, packet: &ScionRawPacketView) {
         let mut guard = self.last_received_packet.lock().unwrap();
-        *guard = Some(_packet);
+        *guard = Some(
+            packet
+                .try_to_model()
+                .expect("failed to convert packet to model"),
+        );
         self.notify.notify_waiters();
     }
 }
@@ -213,26 +221,12 @@ impl Receiver for MockNetworkTarget {
 // Advances the path by one hop in construction direction
 //
 // This function is not general and may only be used in this specific test
-fn test_specific_advance_path_hop(path: DataPlanePath) -> anyhow::Result<DataPlanePath> {
-    let DataPlanePath::Standard(path) = path else {
+fn test_specific_advance_path_hop(path: DpPath) -> anyhow::Result<DpPath> {
+    let DpPath::Standard(mut path) = path else {
         bail!("can only advance standard paths");
     };
 
-    let StandardPath {
-        hop_fields,
-        info_fields,
-        mut path_meta,
-    } = StandardPath::try_from(path)?;
+    path.current_hop_field += 1;
 
-    let current_hop = path_meta.current_hop_field;
-    path_meta.current_hop_field = HopFieldIndex::new_unchecked(current_hop.get() + 1);
-
-    Ok(DataPlanePath::Standard(
-        StandardPath {
-            hop_fields,
-            info_fields,
-            path_meta,
-        }
-        .into(),
-    ))
+    Ok(path.into())
 }

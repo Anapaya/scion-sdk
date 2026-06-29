@@ -178,15 +178,15 @@ impl View for OneHopPathView {
         Ok(layout.size_bytes())
     }
 
-    fn as_bytes(&self) -> &[u8] {
+    fn as_slice(&self) -> &[u8] {
         &self.0
     }
 
-    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+    unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
 
-    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+    fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
         // SAFETY: repr(transparent) over [u8; N]
         let sized: Box<[u8; OneHopPathLayout::SIZE_BYTES]> = unsafe { transmute(self) };
         sized

@@ -470,22 +470,29 @@ impl StandardPathView {
 
     /// Calculates the segment of the given hop field index in the path.
     ///
-    /// Returns (segment_idx, is_at_segment_end) if the hop field index is valid, or None if the hop
-    /// field index is out of bounds.
-    pub fn calculate_segment_index(&self, hop_idx: usize) -> Option<(usize, bool)> {
+    /// Returns (segment_idx, is_segment_start, is_segment_end) if the hop field index is valid,
+    /// or None if the hop field index is out of bounds.
+    pub fn calculate_segment_index(&self, hop_idx: usize) -> Option<(usize, bool, bool)> {
         let segment_lengths = [self.seg0_len(), self.seg1_len(), self.seg2_len()];
+        Self::_calculate_segment_index(hop_idx, segment_lengths)
+    }
+
+    fn _calculate_segment_index(
+        hop_idx: usize,
+        segment_lengths: [u8; 3],
+    ) -> Option<(usize, bool, bool)> {
         let mut seg_len_agg = 0;
 
         for (seg_idx, seg_len) in segment_lengths.into_iter().enumerate() {
-            seg_len_agg += seg_len as usize;
+            // Check if hop is part of this segment
+            if hop_idx < seg_len_agg + seg_len as usize {
+                let is_segment_start = hop_idx == seg_len_agg;
+                let is_segment_end = (hop_idx + 1) == (seg_len_agg + seg_len as usize);
 
-            if hop_idx + 1 == seg_len_agg {
-                // We are at the end of a segment
-                return Some((seg_idx, true));
-            } else if hop_idx + 1 < seg_len_agg {
-                // We are in the middle of a segment
-                return Some((seg_idx, false));
+                return Some((seg_idx, is_segment_start, is_segment_end));
             }
+
+            seg_len_agg += seg_len as usize;
         }
 
         // hop_idx is out of bounds
@@ -622,19 +629,19 @@ impl View for InfoFieldView {
     }
 
     #[inline]
-    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+    unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
 
     #[inline]
-    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+    fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
         // SAFETY: repr(transparent) over [u8; N]
         let sized: Box<[u8; InfoFieldLayout::SIZE_BYTES]> = unsafe { transmute(self) };
         sized
     }
 
     #[inline]
-    fn as_bytes(&self) -> &[u8] {
+    fn as_slice(&self) -> &[u8] {
         &self.0
     }
 }
@@ -726,19 +733,19 @@ impl View for HopFieldView {
     }
 
     #[inline]
-    unsafe fn as_bytes_mut(&mut self) -> &mut [u8] {
+    unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
 
     #[inline]
-    fn as_bytes_boxed(self: Box<Self>) -> Box<[u8]> {
+    fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
         // SAFETY: repr(transparent) over [u8; N]
         let sized: Box<[u8; HopFieldLayout::SIZE_BYTES]> = unsafe { transmute(self) };
         sized
     }
 
     #[inline]
-    fn as_bytes(&self) -> &[u8] {
+    fn as_slice(&self) -> &[u8] {
         &self.0
     }
 }
@@ -777,7 +784,7 @@ impl HopFieldView {
     /// `cons_egress` otherwise (reversed segment).
     #[inline]
     pub fn ingress_interface(&self, info_field: &InfoFieldView) -> u16 {
-        if info_field.flags().contains(InfoFieldFlags::CONS_DIR) {
+        if info_field.flags().cons_dir() {
             self.cons_ingress()
         } else {
             self.cons_egress()
@@ -790,11 +797,27 @@ impl HopFieldView {
     /// `cons_ingress` otherwise (reversed segment).
     #[inline]
     pub fn egress_interface(&self, info_field: &InfoFieldView) -> u16 {
-        if info_field.flags().contains(InfoFieldFlags::CONS_DIR) {
+        if info_field.flags().cons_dir() {
             self.cons_egress()
         } else {
             self.cons_ingress()
         }
+    }
+
+    /// Returns true if the hop field has a ingress scmp alert flag set in the direction the packet
+    /// is travelling.
+    #[inline]
+    pub fn ingress_scmp_alert(&self, info_field: &InfoFieldView) -> bool {
+        let cons_dir = info_field.flags().cons_dir();
+        self.flags().normalized_ingress_router_alert(cons_dir)
+    }
+
+    /// Returns true if the hop field has a egress scmp alert flag set in the direction the packet
+    /// is travelling.
+    #[inline]
+    pub fn egress_scmp_alert(&self, info_field: &InfoFieldView) -> bool {
+        let cons_dir = info_field.flags().cons_dir();
+        self.flags().normalized_egress_router_alert(cons_dir)
     }
 }
 // Mutable
@@ -822,6 +845,18 @@ impl HopFieldView {
         }
     }
 }
+// Util
+impl HopFieldView {
+    /// Calculates the absolute expiry timestamp of the hop field based on the timestamp of the info
+    /// field and the exp_time of the hop field.
+    ///
+    /// The timestamp is a unix epoch timestamp in seconds.
+    pub fn expiry_timestamp(&self, info: &InfoFieldView) -> u32 {
+        let info_expiry = info.timestamp();
+        let exp_time = exp_time_to_duration(self.exp_time()).as_secs();
+        info_expiry.saturating_add(exp_time.try_into().expect("expiry time fits in u32"))
+    }
+}
 impl Debug for HopFieldView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StandardPathHopFieldView")
@@ -842,6 +877,46 @@ impl HopMacInputSource for HopFieldView {
             exp_time: self.exp_time(),
             cons_ingress: self.cons_ingress(),
             cons_egress: self.cons_egress(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    mod standard_path_view {
+        use crate::dataplane_path::standard::view::StandardPathView;
+
+        #[test]
+        fn test() {
+            let tests = [
+                (0, [1, 0, 0], Some((0, true, true))),
+                (1, [1, 0, 0], None),
+                (0, [2, 0, 0], Some((0, true, false))),
+                (1, [2, 0, 0], Some((0, false, true))),
+                (2, [2, 0, 0], None),
+                (0, [3, 0, 0], Some((0, true, false))),
+                (1, [3, 0, 0], Some((0, false, false))),
+                (2, [3, 0, 0], Some((0, false, true))),
+                (3, [3, 0, 0], None),
+                (2, [2, 3, 0], Some((1, true, false))),
+                (3, [2, 3, 0], Some((1, false, false))),
+                (4, [2, 3, 0], Some((1, false, true))),
+                (5, [2, 3, 0], None),
+                (5, [2, 3, 4], Some((2, true, false))),
+                (6, [2, 3, 4], Some((2, false, false))),
+                (7, [2, 3, 4], Some((2, false, false))),
+                (8, [2, 3, 4], Some((2, false, true))),
+                (9, [2, 3, 4], None),
+            ];
+
+            for (test_idx, (hop_idx, seg_lens, expected)) in tests.iter().enumerate() {
+                let result = StandardPathView::_calculate_segment_index(*hop_idx, *seg_lens);
+                assert_eq!(
+                    result, *expected,
+                    "Failed for test {} hop_idx: {}, seg_lens: {:?}",
+                    test_idx, hop_idx, seg_lens
+                );
+            }
         }
     }
 }

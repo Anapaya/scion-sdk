@@ -31,9 +31,9 @@ use sciparse::{
 
 use crate::network::scion::topology::{DirectedScionLink, ScionAs, ScionLinkType, ScionTopology};
 
-/// More general representation of a [scion_proto::path::PathSegment]
+/// More general representation of a [SignedPathSegment]
 ///
-/// Use: `to_path_segment` to convert to a [scion_proto::path::PathSegment]
+/// Use: `to_path_segment` to convert to a [SignedPathSegment]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LinkSegment {
     pub(crate) start_as: IsdAsn,
@@ -90,7 +90,7 @@ impl LinkSegment {
         for hop in self.iter_hops(skip_tail) {
             let hop_as = topo
                 .as_map
-                .get(&hop.local_ias.into())
+                .get(&hop.local_ias)
                 .with_context(|| format!("error getting AS {} from topology", hop.local_ias))?;
 
             let (_isd_as, _is_core, forwarding_key) = match hop_as {
@@ -109,7 +109,7 @@ impl LinkSegment {
 
             let as_key_pair = topo
                 .trust_store
-                .as_key_pair(&hop.local_ias.into())
+                .as_key_pair(&hop.local_ias)
                 .with_context(|| {
                     format!(
                         "AS {} is missing an identity in the trust store",
@@ -189,9 +189,9 @@ impl LinkSegment {
         hop: &Hop,
     ) -> Vec<PeerEntry> {
         let peer_links = topo
-            .iter_scion_links_by_as(&hop.local_ias.into())
+            .iter_scion_links_by_as(&hop.local_ias)
             .filter(|link| link.link_type == ScionLinkType::Peer)
-            .filter_map(|link| link.get_directed_from(&hop.local_ias.into()))
+            .filter_map(|link| link.get_directed_from(&hop.local_ias))
             .collect::<Vec<_>>();
 
         let mut peer_entries = Vec::with_capacity(peer_links.len());
@@ -206,7 +206,7 @@ impl LinkSegment {
             let cons_egress = hop.egress_if;
 
             peer_entries.push(PeerEntry {
-                peer: peer_lnk.to.isd_as.into(),
+                peer: peer_lnk.to.isd_as,
                 peer_interface: peer_lnk.to.if_id, // The interface connecting the peer to us
                 peer_mtu: Self::HARDCODED_MTU,
                 hop_field: SegmentHopField {
@@ -273,24 +273,24 @@ impl Iterator for HopIter<'_> {
                 // First hop is egress only
                 Hop {
                     ingress_if: 0,
-                    local_ias: egr.from.isd_as.into(),
+                    local_ias: egr.from.isd_as,
                     egress_if: egr.from.if_id,
-                    next_ias: egr.to.isd_as.into(),
+                    next_ias: egr.to.isd_as,
                 }
             }
             (Some(ing), Some(egr)) => {
                 Hop {
                     ingress_if: ing.to.if_id,
-                    local_ias: egr.from.isd_as.into(),
+                    local_ias: egr.from.isd_as,
                     egress_if: egr.from.if_id,
-                    next_ias: egr.to.isd_as.into(),
+                    next_ias: egr.to.isd_as,
                 }
             }
             (Some(ing), None) if !self.skip_tail => {
                 // Last hop is ingress only
                 Hop {
                     ingress_if: ing.to.if_id,
-                    local_ias: ing.to.isd_as.into(),
+                    local_ias: ing.to.isd_as,
                     egress_if: 0,
                     next_ias: IsdAsn(0),
                 }
@@ -309,8 +309,7 @@ impl Iterator for HopIter<'_> {
 
 #[cfg(test)]
 mod tests {
-    use scion_proto::path::crypto::mac_chaining_step;
-    use sciparse::dataplane_path::standard::mac::algo::calculate_hop_mac;
+    use sciparse::dataplane_path::standard::mac::algo::{calculate_hop_mac, mac_beta_step};
 
     use super::*;
     mod hop_iter {
@@ -329,11 +328,11 @@ mod tests {
                 end_as: as_2,
                 links: VecDeque::from(vec![DirectedScionLink {
                     from: ScionGlobalInterfaceId {
-                        isd_as: as_1.into(),
+                        isd_as: as_1,
                         if_id: as_1_egress,
                     },
                     to: ScionGlobalInterfaceId {
-                        isd_as: as_2.into(),
+                        isd_as: as_2,
                         if_id: as_2_ingress,
                     },
                     link_type: ScionLinkType::Core,
@@ -376,22 +375,22 @@ mod tests {
                 links: VecDeque::from(vec![
                     DirectedScionLink {
                         from: ScionGlobalInterfaceId {
-                            isd_as: as_1.into(),
+                            isd_as: as_1,
                             if_id: as_1_egress,
                         },
                         to: ScionGlobalInterfaceId {
-                            isd_as: as_2.into(),
+                            isd_as: as_2,
                             if_id: as_2_ingress,
                         },
                         link_type: ScionLinkType::Core,
                     },
                     DirectedScionLink {
                         from: ScionGlobalInterfaceId {
-                            isd_as: as_2.into(),
+                            isd_as: as_2,
                             if_id: as_2_egress,
                         },
                         to: ScionGlobalInterfaceId {
-                            isd_as: as_3.into(),
+                            isd_as: as_3,
                             if_id: as_3_ingress,
                         },
                         link_type: ScionLinkType::Core,
@@ -436,7 +435,7 @@ mod tests {
             let hop = &entry.hop_entry.hop_field;
             let forwarding_key = &topo
                 .as_map
-                .get(&(entry.local).into())
+                .get(&(entry.local))
                 .expect("Failed to get AS from topology")
                 .forwarding_key()
                 .expect("All ASes in the segment should be simulated");
@@ -466,7 +465,7 @@ mod tests {
                 );
             }
 
-            accumulator = mac_chaining_step(accumulator, expected_mac);
+            accumulator = mac_beta_step(accumulator, expected_mac);
 
             assert_eq!(hop.mac.0, expected_mac, "MAC mismatch for hop {i}");
         }
@@ -497,13 +496,13 @@ mod tests {
             let as_2_peer = IsdAsn::from_str("2-2").unwrap();
 
             let mut topo = ScionTopologyBuilder::new();
-            topo.add_as(ScionAs::new_core(as1.into()).with_forwarding_key([1; 16]))
+            topo.add_as(ScionAs::new_core(as1).with_forwarding_key([1; 16]))
                 .unwrap()
-                .add_as(ScionAs::new_core(as2.into()).with_forwarding_key([2; 16]))
+                .add_as(ScionAs::new_core(as2).with_forwarding_key([2; 16]))
                 .unwrap()
-                .add_as(ScionAs::new_core(as3.into()).with_forwarding_key([3; 16]))
+                .add_as(ScionAs::new_core(as3).with_forwarding_key([3; 16]))
                 .unwrap()
-                .add_as(ScionAs::new_core(as_2_peer.into()).with_forwarding_key([4; 16]))
+                .add_as(ScionAs::new_core(as_2_peer).with_forwarding_key([4; 16]))
                 .unwrap();
 
             topo.add_link("1-1#1 core 1-2#2".parse().unwrap())

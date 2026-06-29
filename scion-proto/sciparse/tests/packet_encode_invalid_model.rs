@@ -252,7 +252,7 @@ mod packet_manipulation {
 
                     // ── Packet-level modifications ────────────────────
                     PacketModification::WrongNextHeader(nh) => {
-                        header.common.next_header = nh;
+                        header.common.next_header = nh.into();
                     }
                 }
             }

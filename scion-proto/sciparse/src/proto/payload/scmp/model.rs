@@ -178,9 +178,7 @@ impl ScmpMessage {
     pub fn dst_port(&self) -> Option<u16> {
         let udp_src_port = |offending_packet: &[u8]| {
             let (inner, _) = ScionRawPacketView::from_slice(offending_packet).ok()?;
-            if <u8 as Into<ProtocolNumber>>::into(inner.header().next_header())
-                != ProtocolNumber::Udp
-            {
+            if inner.header().next_header() != ProtocolNumber::Udp {
                 return None;
             }
             let (udp, _) = UdpDatagramView::from_slice(inner.payload()).ok()?;
@@ -520,13 +518,25 @@ macro_rules! error_message {
         }
     ) => {
         $(#[$outer])*
-        #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
+        #[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
         #[cfg_attr(feature = "proptest", derive(proptest_derive::Arbitrary))]
         pub struct $name {
             $($(#[$doc])* $vis $field: $type,)*
             /// The (truncated) packet that triggered the error.
             /// If the offending packet makes the resulting message longer than 1232 bytes, it is truncated.
             offending_packet: Vec<u8>,
+        }
+
+        impl ::core::fmt::Debug for $name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let mut d = f.debug_struct(stringify!($name));
+                $(d.field(stringify!($field), &self.$field);)*
+                d.field(
+                    "offending_packet",
+                    &format_offending_packet(&self.offending_packet),
+                );
+                d.finish()
+            }
         }
 
         impl $name {
@@ -562,6 +572,10 @@ macro_rules! error_message {
             }
         }
     };
+}
+
+fn format_offending_packet(offending_packet: &[u8]) -> String {
+    format!("<{} bytes>", offending_packet.len())
 }
 
 error_message!(

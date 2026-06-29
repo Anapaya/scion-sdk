@@ -50,8 +50,7 @@ pub struct ScmpPayloadView([u8]);
 impl Debug for ScmpPayloadView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpPayloadView")
-            .field("message_type", &self.message_type())
-            .field("code", &self.code())
+            .field("message", &self.message())
             .finish()
     }
 }
@@ -212,9 +211,7 @@ impl ScmpPayloadView {
     pub fn dst_port(&self) -> Option<u16> {
         let udp_src_port = |offending_packet: &[u8]| {
             let (inner, _) = ScionRawPacketView::from_slice(offending_packet).ok()?;
-            if <u8 as Into<ProtocolNumber>>::into(inner.header().next_header())
-                != ProtocolNumber::Udp
-            {
+            if inner.header().next_header() != ProtocolNumber::Udp {
                 return None;
             }
             let (udp, _) = UdpDatagramView::from_slice(inner.payload()).ok()?;
@@ -236,6 +233,7 @@ impl ScmpPayloadView {
 }
 
 /// A view over an SCMP message.
+#[derive(Debug, Clone, Copy)]
 pub enum ScmpMessageView<'a> {
     /// A view over an SCMP DestinationUnreachable message.
     DestinationUnreachable(&'a ScmpDestinationUnreachableMessageView),
@@ -258,8 +256,14 @@ pub enum ScmpMessageView<'a> {
     /// A view over an SCMP UnknownMessage message.
     Unknown(&'a ScmpUnknownMessageView),
 }
+impl ScmpMessageExt for ScmpMessageView<'_> {
+    fn to_ref(&self) -> ScmpMessageView<'_> {
+        *self
+    }
+}
 
 /// A mutable view over an SCMP message.
+#[derive(Debug)]
 pub enum ScmpMessageViewMut<'a> {
     /// A mutable view over an SCMP DestinationUnreachable message.
     DestinationUnreachable(&'a mut ScmpDestinationUnreachableMessageView),
@@ -281,6 +285,53 @@ pub enum ScmpMessageViewMut<'a> {
     TracerouteReply(&'a mut ScmpTracerouteReplyMessageView),
     /// A mutable view over an SCMP UnknownMessage message.
     Unknown(&'a mut ScmpUnknownMessageView),
+}
+impl ScmpMessageExt for ScmpMessageViewMut<'_> {
+    fn to_ref(&self) -> ScmpMessageView<'_> {
+        match self {
+            Self::DestinationUnreachable(a) => ScmpMessageView::DestinationUnreachable(a),
+            Self::PacketTooBig(a) => ScmpMessageView::PacketTooBig(a),
+            Self::ParameterProblem(a) => ScmpMessageView::ParameterProblem(a),
+            Self::ExternalInterfaceDown(a) => ScmpMessageView::ExternalInterfaceDown(a),
+            Self::InternalConnectivityDown(a) => ScmpMessageView::InternalConnectivityDown(a),
+            Self::EchoRequest(a) => ScmpMessageView::EchoRequest(a),
+            Self::EchoReply(a) => ScmpMessageView::EchoReply(a),
+            Self::TracerouteRequest(a) => ScmpMessageView::TracerouteRequest(a),
+            Self::TracerouteReply(aes) => ScmpMessageView::TracerouteReply(aes),
+            Self::Unknown(scmp_unknowan_message_view) => {
+                ScmpMessageView::Unknown(scmp_unknowan_message_view)
+            }
+        }
+    }
+}
+
+/// An extension trait for SCMP messages, providing common functionality for all message types.
+pub trait ScmpMessageExt {
+    /// Returns a reference view over this message.
+    fn to_ref(&self) -> ScmpMessageView<'_>;
+
+    /// Returns `true` if this message is an SCMP error message.
+    fn is_error(&self) -> bool {
+        matches!(
+            self.to_ref(),
+            ScmpMessageView::DestinationUnreachable(_)
+                | ScmpMessageView::PacketTooBig(_)
+                | ScmpMessageView::ParameterProblem(_)
+                | ScmpMessageView::ExternalInterfaceDown(_)
+                | ScmpMessageView::InternalConnectivityDown(_)
+        )
+    }
+
+    /// Returns `true` if this message is an SCMP informational message.
+    fn is_informational(&self) -> bool {
+        matches!(
+            self.to_ref(),
+            ScmpMessageView::EchoRequest(_)
+                | ScmpMessageView::EchoReply(_)
+                | ScmpMessageView::TracerouteRequest(_)
+                | ScmpMessageView::TracerouteReply(_)
+        )
+    }
 }
 
 /// A view over an SCMP DestinationUnreachable message.
@@ -337,6 +388,16 @@ impl ScmpDestinationUnreachableMessageView {
         &mut self.0[range]
     }
 }
+impl Debug for ScmpDestinationUnreachableMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpDestinationUnreachableMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("reserved", &self.reserved())
+            .finish()
+    }
+}
 
 /// A view over an SCMP PacketTooBig message.
 #[repr(transparent)]
@@ -383,6 +444,18 @@ impl ScmpPacketTooBigMessageView {
             .offending_packet_rng()
             .aligned_byte_range();
         &mut self.0[range]
+    }
+}
+
+impl Debug for ScmpPacketTooBigMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpPacketTooBigMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("reserved", &self.reserved())
+            .field("mtu", &self.mtu())
+            .finish()
     }
 }
 
@@ -444,6 +517,18 @@ impl ScmpParameterProblemMessageView {
     }
 }
 
+impl Debug for ScmpParameterProblemMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpParameterProblemMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("reserved", &self.reserved())
+            .field("pointer", &self.pointer())
+            .finish()
+    }
+}
+
 /// A view over an SCMP ExternalInterfaceDown message.
 #[repr(transparent)]
 pub struct ScmpExternalInterfaceDownMessageView([u8]);
@@ -502,6 +587,18 @@ impl ScmpExternalInterfaceDownMessageView {
             .offending_packet_rng()
             .aligned_byte_range();
         &mut self.0[range]
+    }
+}
+
+impl Debug for ScmpExternalInterfaceDownMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpExternalInterfaceDownMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("isd_asn", &self.isd_asn())
+            .field("interface_id", &self.interface_id())
+            .finish()
     }
 }
 
@@ -572,6 +669,19 @@ impl ScmpInternalConnectivityDownMessageView {
     }
 }
 
+impl Debug for ScmpInternalConnectivityDownMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpInternalConnectivityDownMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("isd_asn", &self.isd_asn())
+            .field("ingress_interface_id", &self.ingress_interface_id())
+            .field("egress_interface_id", &self.egress_interface_id())
+            .finish()
+    }
+}
+
 /// A view over an SCMP EchoRequest message.
 #[repr(transparent)]
 pub struct ScmpEchoRequestMessageView([u8]);
@@ -625,6 +735,18 @@ impl ScmpEchoRequestMessageView {
     }
 }
 
+impl Debug for ScmpEchoRequestMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpEchoRequestMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("identifier", &self.identifier())
+            .field("sequence_number", &self.sequence_number())
+            .finish()
+    }
+}
+
 /// A view over an SCMP EchoReply message.
 #[repr(transparent)]
 pub struct ScmpEchoReplyMessageView([u8]);
@@ -671,6 +793,18 @@ impl ScmpEchoReplyMessageView {
             .data_rng()
             .aligned_byte_range();
         &mut self.0[range]
+    }
+}
+
+impl Debug for ScmpEchoReplyMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpEchoReplyMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("identifier", &self.identifier())
+            .field("sequence_number", &self.sequence_number())
+            .finish()
     }
 }
 
@@ -726,6 +860,20 @@ impl ScmpTracerouteRequestMessageView {
     );
 }
 
+impl Debug for ScmpTracerouteRequestMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpTracerouteRequestMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("identifier", &self.identifier())
+            .field("sequence_number", &self.sequence_number())
+            .field("isd_asn", &self.isd_asn())
+            .field("interface_id", &self.interface_id())
+            .finish()
+    }
+}
+
 /// A view over an SCMP TracerouteReply message.
 #[repr(transparent)]
 pub struct ScmpTracerouteReplyMessageView([u8]);
@@ -775,6 +923,20 @@ impl ScmpTracerouteReplyMessageView {
     );
 }
 
+impl Debug for ScmpTracerouteReplyMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpTracerouteReplyMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .field("identifier", &self.identifier())
+            .field("sequence_number", &self.sequence_number())
+            .field("isd_asn", &self.isd_asn())
+            .field("interface_id", &self.interface_id())
+            .finish()
+    }
+}
+
 /// A view over an SCMP UnknownMessage message.
 #[repr(transparent)]
 pub struct ScmpUnknownMessageView([u8]);
@@ -810,5 +972,15 @@ impl ScmpUnknownMessageView {
             .message_specific_data_rng()
             .aligned_byte_range();
         &mut self.0[range]
+    }
+}
+
+impl Debug for ScmpUnknownMessageView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScmpUnknownMessageView")
+            .field("message_type", &self.message_type())
+            .field("code", &self.code())
+            .field("checksum", &self.checksum())
+            .finish()
     }
 }

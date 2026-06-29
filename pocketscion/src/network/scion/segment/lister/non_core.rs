@@ -37,8 +37,8 @@ impl SegmentRegistry {
     ) -> anyhow::Result<ListSegmentsOutput<'a>> {
         let core_store = self.core_segments();
 
-        let src_is_core = core_store.is_known_as(src_as.into());
-        let dst_is_core = core_store.is_known_as(dst_as.into());
+        let src_is_core = core_store.is_known_as(src_as);
+        let dst_is_core = core_store.is_known_as(dst_as);
 
         let src = QueryTarget::new(src_as, src_is_core).context("query source is invalid")?;
         let dst = QueryTarget::new(dst_as, dst_is_core).context("query destination is invalid")?;
@@ -58,12 +58,12 @@ impl SegmentRegistry {
             Query::Core(Scope::Wildcard(isd), dst) => {
                 let isd_cores = core_store
                     .iter_known_ases()
-                    .filter(|&ias| ias.isd() == isd.into())
+                    .filter(|&ias| ias.isd() == isd)
                     .copied();
 
                 let mut res = ListSegmentsOutput::empty();
                 for core in isd_cores {
-                    res.extend(forward_request(self, core.into(), core.into(), dst.ias())?);
+                    res.extend(forward_request(self, core, core, dst.ias())?);
                 }
 
                 Ok(res)
@@ -73,12 +73,12 @@ impl SegmentRegistry {
             Query::Down(Scope::Wildcard(src), dst) => {
                 let isd_cores = core_store
                     .iter_known_ases()
-                    .filter(|&ias| ias.isd() == src.into())
+                    .filter(|&ias| ias.isd() == src)
                     .copied();
 
                 let mut res = ListSegmentsOutput::empty();
                 for core in isd_cores {
-                    res.extend(forward_request(self, core.into(), core.into(), dst)?);
+                    res.extend(forward_request(self, core, core, dst)?);
                 }
 
                 Ok(res)
@@ -89,12 +89,12 @@ impl SegmentRegistry {
             Query::Up(Scope::Wildcard(isd)) => {
                 let isd_core_ases = core_store
                     .iter_known_ases()
-                    .filter(|&ias| ias.isd() == isd.into())
+                    .filter(|&ias| ias.isd() == isd)
                     .copied();
 
                 let mut res = ListSegmentsOutput::empty();
                 for core in isd_core_ases {
-                    res.extend(forward_request(self, core.into(), core.into(), local)?.inverted());
+                    res.extend(forward_request(self, core, core, local)?.inverted());
                 }
 
                 Ok(res)

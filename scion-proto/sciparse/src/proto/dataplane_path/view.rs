@@ -17,6 +17,7 @@
 use crate::{
     core::{macros::impl_from, view::View},
     dataplane_path::{
+        model::DpPath,
         onehop::view::OneHopPathView,
         standard::view::StandardPathView,
         types::{PathReverseError, PathType},
@@ -192,7 +193,7 @@ pub trait ScionDpPathViewExt {
     fn as_ref(&self) -> ScionDpPathViewRef<'_>;
 
     /// Clones the path data into an owned view.
-    fn to_owned(&self) -> ScionDpPathView {
+    fn to_owned_view(&self) -> ScionDpPathView {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
                 ScionDpPathView::Standard(standard_path_view.to_boxed())
@@ -207,6 +208,16 @@ pub trait ScionDpPathViewExt {
                 }
             }
             ScionDpPathViewRef::Empty => ScionDpPathView::Empty,
+        }
+    }
+
+    /// Returns the raw bytes of the path data as a slice.
+    fn as_slice(&self) -> &[u8] {
+        match self.as_ref() {
+            ScionDpPathViewRef::Standard(standard_path_view) => standard_path_view.as_slice(),
+            ScionDpPathViewRef::OneHop(one_hop_path_view) => one_hop_path_view.as_slice(),
+            ScionDpPathViewRef::Unsupported { data, .. } => data,
+            ScionDpPathViewRef::Empty => &[],
         }
     }
 
@@ -250,6 +261,11 @@ pub trait ScionDpPathViewExt {
             ScionDpPathViewRef::Empty => None,
             ScionDpPathViewRef::Unsupported { .. } => None,
         }
+    }
+
+    /// Converts the view into a `DpPath` model.
+    fn to_model(&self) -> DpPath {
+        DpPath::from_view(&self.as_ref())
     }
 }
 
