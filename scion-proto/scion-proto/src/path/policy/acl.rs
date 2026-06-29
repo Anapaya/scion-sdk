@@ -173,6 +173,39 @@ impl PathPolicy for AclPolicy {
     }
 }
 
+impl From<sciparse::path::policy::acl::AclPolicy> for AclPolicy {
+    fn from(other: sciparse::path::policy::acl::AclPolicy) -> Self {
+        let entries = other
+            .entries
+            .into_iter()
+            .map(|e| {
+                AclEntry {
+                    operator: match e.operator {
+                        sciparse::path::policy::acl::AclEntryOperator::Allow => {
+                            AclEntryOperator::Allow
+                        }
+                        sciparse::path::policy::acl::AclEntryOperator::Deny => {
+                            AclEntryOperator::Deny
+                        }
+                    },
+                    hop_predicate: HopPredicate {
+                        isd: e.hop_predicate.isd.into(),
+                        asn: e.hop_predicate.asn.map(Into::into),
+                        interfaces: e.hop_predicate.interfaces.into(),
+                    },
+                }
+            })
+            .collect();
+
+        let default = match other.default {
+            sciparse::path::policy::acl::AclEntryOperator::Allow => AclEntryOperator::Allow,
+            sciparse::path::policy::acl::AclEntryOperator::Deny => AclEntryOperator::Deny,
+        };
+
+        Self { entries, default }
+    }
+}
+
 /// Access control list entry
 ///
 /// Will either allow or deny a segment if any of its hop matches the predicate

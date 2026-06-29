@@ -16,7 +16,11 @@
 //!
 //! See [`View`](crate::core::view) for more information about views in general.
 
-use std::{fmt::Debug, mem::transmute, ops::Range};
+use std::{
+    fmt::{Debug, Display},
+    mem::transmute,
+    ops::Range,
+};
 
 use crate::{
     core::{
@@ -516,6 +520,50 @@ impl Debug for StandardPathView {
     }
 }
 
+impl Display for StandardPathView {
+    /// Formats the path in a human-readable format, including the current info and hop field
+    /// indices, segment lengths, and the contents of each segment.
+    ///
+    /// Example:
+    /// `[std] ci:0 ch:0 seg: c[0,1; 1,2; 3,0], r[0,1; 1,0]`
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[std] ci:{} ch:{} segs:",
+            self.curr_info_field_idx(),
+            self.curr_hop_field_idx(),
+        )?;
+
+        for (info, hops) in self.segments() {
+            let const_dir = match info.flags().contains(InfoFieldFlags::CONS_DIR) {
+                true => "",
+                false => "r",
+            };
+
+            write!(f, " {}[", const_dir)?;
+
+            let Some((last, head)) = hops.split_last() else {
+                write!(f, "]")?;
+                continue;
+            };
+
+            for hop in head {
+                let ingress = hop.ingress_interface(info);
+                let egress = hop.egress_interface(info);
+                write!(f, "{},{}; ", ingress, egress)?;
+            }
+
+            let last_ingress = last.ingress_interface(info);
+            let last_egress = last.egress_interface(info);
+            write!(f, "{},{}", last_ingress, last_egress)?;
+
+            write!(f, "]")?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Iterator over the segments of a standard path, where each segment is represented as a tuple of
 /// an info field and a slice of hop fields.
 pub struct SegmentIterator<'a> {
@@ -884,10 +932,19 @@ impl HopMacInputSource for HopFieldView {
 #[cfg(test)]
 mod test {
     mod standard_path_view {
-        use crate::dataplane_path::standard::view::StandardPathView;
+        use tinyvec::{array_vec, tiny_vec};
+
+        use crate::{
+            core::{encode::WireEncode, view::View},
+            dataplane_path::standard::{
+                model::{HopField, InfoField, Segment, StandardPath},
+                types::{HopFieldFlags, HopFieldMac, InfoFieldFlags},
+                view::StandardPathView,
+            },
+        };
 
         #[test]
-        fn test() {
+        fn should_correclty_determine_segment_position() {
             let tests = [
                 (0, [1, 0, 0], Some((0, true, true))),
                 (1, [1, 0, 0], None),
@@ -917,6 +974,52 @@ mod test {
                     test_idx, hop_idx, seg_lens
                 );
             }
+        }
+
+        #[test]
+        fn std_path_should_correctly_display() {
+            let mac = HopFieldMac::zero();
+            let flags = HopFieldFlags::empty();
+
+            let std = StandardPath {
+                current_info_field: 1,
+                current_hop_field: 2,
+                segments: array_vec!([_;3] =>
+                    Segment {
+                        info_field: InfoField {
+                            flags: InfoFieldFlags::empty(),
+                            segment_id: 1,
+                            timestamp: 2,
+                        },
+                        hop_fields: tiny_vec![
+                            [_; 12] =>
+                            HopField { flags, expiration_units: 1, cons_ingress: 1, cons_egress: 0, mac },
+                            HopField { flags, expiration_units: 1, cons_ingress: 0, cons_egress: 2, mac }
+                        ]
+                    },
+                     Segment {
+                        info_field: InfoField {
+                            flags: InfoFieldFlags::CONS_DIR,
+                            segment_id: 2,
+                            timestamp: 3,
+                        },
+                        hop_fields: tiny_vec![
+                            [_; 12] =>
+                            HopField { flags, expiration_units: 1, cons_ingress: 0, cons_egress: 3, mac },
+                            HopField { flags, expiration_units: 1, cons_ingress: 5, cons_egress: 8, mac },
+                            HopField { flags, expiration_units: 1, cons_ingress: 2, cons_egress: 0, mac }
+                        ]
+                    }
+                ),
+            };
+
+            let data = std.encode_to_vec().unwrap();
+            let (v, _) = StandardPathView::from_slice(&data).unwrap();
+            let std_path_fmt = format!("{}", v);
+            assert_eq!(
+                std_path_fmt,
+                "[std] ci:1 ch:2 segs: r[0,1; 2,0] [0,3; 5,8; 2,0]"
+            );
         }
     }
 }

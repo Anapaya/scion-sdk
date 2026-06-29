@@ -18,7 +18,7 @@
 //! They contain the encoded dataplane path and optional metadata about the path, such as expiration
 //! time, MTU, and interfaces used by the path.
 
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, fmt::Display, net::SocketAddr};
 
 use prost_types::Timestamp;
 use scion_protobuf::daemon::v1 as rpc;
@@ -557,5 +557,107 @@ impl ScionPath {
             epic_auths: rpc_path.epic_auths,
             discovery_information: HashMap::default(), // TODO: add support for discovery info
         }
+    }
+}
+// formating
+impl ScionPath {
+    /// Formats the interfaces of the path for human consumption
+    ///
+    /// Example: `"1-ff00:0:111 2>2 1-ff00:0:110 5>10 1-ff00:0:200"`
+    ///
+    /// If no interface metadata is available, the dataplane path is used to format the interfaces
+    /// instead.
+    pub fn format_interfaces(&self, writer: &mut dyn std::fmt::Write) -> std::fmt::Result {
+        match self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.interfaces.as_ref())
+        {
+            Some(interfaces) => {
+                if interfaces.is_empty() {
+                    write!(writer, "<empty interfaces>")?;
+                    return Ok(());
+                }
+
+                if interfaces.len() != 1 && interfaces.len() % 2 != 0 {
+                    // This is not a valid path, but we handle it anyway.
+                    write!(writer, "<invalid path> ")?;
+                }
+
+                // first interface
+                let first = &interfaces[0]; // Safety: we know there is at least one interface
+                write!(writer, "{} {}", first.interface.isd_asn, first.interface.id)?;
+
+                if interfaces.len() <= 1 {
+                    // in case there is only one interface we are done
+                    return Ok(());
+                }
+
+                write!(writer, ">")?;
+
+                let mut had_final = false;
+                // following interfaces
+                for chunk in interfaces[1..interfaces.len()].chunks(2) {
+                    match chunk {
+                        [trav_in, trav_out] => {
+                            match trav_in.interface.isd_asn == trav_out.interface.isd_asn {
+                                true => {
+                                    write!(
+                                        writer,
+                                        "{} {} {}>",
+                                        trav_in.interface.id,
+                                        trav_in.interface.isd_asn,
+                                        trav_out.interface.id
+                                    )?
+                                }
+                                false => {
+                                    write!(
+                                        writer,
+                                        "{} <invalid hop> ({}/{}) {}>",
+                                        trav_in.interface.id,
+                                        trav_in.interface.isd_asn,
+                                        trav_out.interface.isd_asn,
+                                        trav_out.interface.id
+                                    )?;
+                                }
+                            }
+                        }
+                        [final_if] => {
+                            write!(
+                                writer,
+                                "{} {}",
+                                final_if.interface.id, final_if.interface.isd_asn
+                            )?;
+                            had_final = true;
+                        }
+                        _ => {}
+                    }
+                }
+
+                if !had_final {
+                    writer.write_str(" missing final hop")?;
+                }
+
+                Ok(())
+            }
+            None => {
+                write!(writer, "{}", self.dp_path)
+            }
+        }
+    }
+}
+impl Display for ScionPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "src: {} dst: {} next_hop: {} fp: {} path: ",
+            self.src_ia,
+            self.dst_ia,
+            self.next_hop
+                .map_or("none".to_string(), |addr| addr.to_string()),
+            self._fingerprint,
+        )?;
+
+        self.format_interfaces(f)
     }
 }

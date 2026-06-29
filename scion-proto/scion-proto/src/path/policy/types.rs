@@ -256,6 +256,22 @@ impl Display for InterfacesPredicate {
         }
     }
 }
+impl From<sciparse::path::policy::types::InterfacesPredicate> for InterfacesPredicate {
+    fn from(value: sciparse::path::policy::types::InterfacesPredicate) -> Self {
+        match value {
+            sciparse::path::policy::types::InterfacesPredicate::Any => Self::Any,
+            sciparse::path::policy::types::InterfacesPredicate::Either(any) => {
+                Self::Either(InterfacePredicate(any.into_inner()))
+            }
+            sciparse::path::policy::types::InterfacesPredicate::Both { ingress, egress } => {
+                Self::Both {
+                    ingress: InterfacePredicate(ingress.into_inner()),
+                    egress: InterfacePredicate(egress.into_inner()),
+                }
+            }
+        }
+    }
+}
 
 /// Path Hop used to match against a Path Policy
 #[derive(Debug, Clone, PartialEq, Eq)]

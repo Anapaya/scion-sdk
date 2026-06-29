@@ -805,7 +805,7 @@ impl SegmentHopField {
             expiration_units: self.expiration_units,
             cons_ingress: self.cons_ingress,
             cons_egress: self.cons_egress,
-            mac: self.mac.clone(),
+            mac: self.mac,
         }
     }
 }

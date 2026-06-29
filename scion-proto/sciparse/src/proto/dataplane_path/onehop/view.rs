@@ -14,7 +14,10 @@
 
 //! View for one-hop paths between neighboring border routers in SCION.
 
-use std::{fmt::Debug, mem::transmute};
+use std::{
+    fmt::{Debug, Display},
+    mem::transmute,
+};
 
 use crate::{
     core::view::{View, ViewConversionError},
@@ -161,7 +164,6 @@ impl OneHopPathView {
         base + exp_time_to_duration(min_exp).as_secs() as u32
     }
 }
-
 impl Debug for OneHopPathView {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OneHopPathView")
@@ -170,6 +172,43 @@ impl Debug for OneHopPathView {
             .finish()
     }
 }
+impl Display for OneHopPathView {
+    /// Displays the one-hop path in a human-readable format.
+    ///
+    /// Example output:
+    ///
+    /// ```text
+    /// [onehop] cons_dir: true  hops: [1,2; 3,4]
+    /// ```
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cons_dir = self.info_field().flags().cons_dir();
+        let [hop1, hop2] = self.hop_fields();
+
+        match cons_dir {
+            true => {
+                write!(
+                    f,
+                    "[onehop] cons_dir: {cons_dir}  hops: [{},{}; {},{}]",
+                    hop1.cons_ingress(),
+                    hop1.cons_egress(),
+                    hop2.cons_ingress(),
+                    hop2.cons_egress()
+                )
+            }
+            false => {
+                write!(
+                    f,
+                    "[onehop] cons_dir: {cons_dir}  hops: [{},{}: {},{}]",
+                    hop2.cons_egress(),
+                    hop2.cons_ingress(),
+                    hop1.cons_egress(),
+                    hop1.cons_ingress(),
+                )
+            }
+        }
+    }
+}
+
 // Note: can't use gen_view_impl! as self is a fixed size array
 impl View for OneHopPathView {
     fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {

@@ -14,6 +14,8 @@
 
 //! SCION dataplane path views
 
+use std::fmt::Display;
+
 use crate::{
     core::{macros::impl_from, view::View},
     dataplane_path::{
@@ -55,6 +57,11 @@ impl<'a> From<&'a StandardPathView> for ScionDpPathViewRef<'a> {
 impl<'a> From<&'a OneHopPathView> for ScionDpPathViewRef<'a> {
     fn from(value: &'a OneHopPathView) -> Self {
         ScionDpPathViewRef::OneHop(value)
+    }
+}
+impl Display for ScionDpPathViewRef<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.display(f)
     }
 }
 
@@ -122,6 +129,11 @@ impl<'a> From<&'a mut OneHopPathView> for ScionDpPathViewRef<'a> {
         ScionDpPathViewRef::OneHop(value)
     }
 }
+impl Display for ScionDpPathViewRefMut<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.display(f)
+    }
+}
 
 /// Owned view over different path types
 #[derive(Debug, Clone)]
@@ -185,6 +197,11 @@ impl_from!(Box<StandardPathView>, ScionDpPathView, |v| {
 impl_from!(OneHopPathView, ScionDpPathView, |v| {
     ScionDpPathView::OneHop(v)
 });
+impl Display for ScionDpPathView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.display(f)
+    }
+}
 
 /// Helper trait for working with [`ScionDpPathView`] and its references, providing common
 /// functionality across different path types.
@@ -266,6 +283,23 @@ pub trait ScionDpPathViewExt {
     /// Converts the view into a `DpPath` model.
     fn to_model(&self) -> DpPath {
         DpPath::from_view(&self.as_ref())
+    }
+
+    /// Displays the path view in a human-readable format.
+    fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.as_ref() {
+            ScionDpPathViewRef::Standard(standard_path_view) => write!(f, "{}", standard_path_view),
+            ScionDpPathViewRef::OneHop(one_hop_path_view) => write!(f, "{}", one_hop_path_view),
+            ScionDpPathViewRef::Unsupported { path_type, .. } => {
+                write!(f, "[unsupported] {:?}", path_type)
+            }
+            ScionDpPathViewRef::Empty => write!(f, "[empty]"),
+        }
+    }
+}
+impl<T: ScionDpPathViewExt> ScionDpPathViewExt for &T {
+    fn as_ref(&self) -> ScionDpPathViewRef<'_> {
+        (*self).as_ref()
     }
 }
 
