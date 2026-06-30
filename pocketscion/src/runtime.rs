@@ -52,6 +52,7 @@ use crate::{
         authorization_server,
         control_service::{ControlService, segment_lookup::SegmentListingCache},
         daemon::PsDaemonService,
+        echo_responder::PsEchoResponder,
         endhost_api::PsEndhostApi,
         endhost_api_discovery::EndhostApiDiscoveryService,
         endhost_segment_lister::StateEndhostSegmentLister,
@@ -95,8 +96,8 @@ impl PocketScionRuntime {
 
         Self::validate_state(&state)?;
 
+        Self::start_echo_responder(&state)?;
         Self::start_endhost_apis(&mut join_set, &state, &io_config).await?;
-
         let snap_authz_map =
             Self::start_snap_control_planes(&mut join_set, &state, &io_config).await?;
         Self::start_snap_data_planes(
@@ -608,6 +609,26 @@ impl PocketScionRuntime {
             join_set.spawn(async move {
                 authorization_server::api::start(token, auth_server, listener).await
             });
+        }
+        Ok(())
+    }
+
+    /// Starts a SCMP echo responder for all ASes in the system if one is configured in the system
+    /// state.
+    fn start_echo_responder(pstate: &PocketScionState) -> anyhow::Result<()> {
+        let mut guard = pstate.write();
+
+        if let Some(listen_net) = guard.global_scmp_echo_responder {
+            let echo_responder = Arc::new(PsEchoResponder::new(pstate.clone()));
+
+            for isd_as in guard.topology.as_map.keys().cloned().collect::<Vec<_>>() {
+                guard
+                    .sim_receivers
+                    .add_receiver(isd_as, listen_net, echo_responder.clone())
+                    .with_context(|| {
+                        format!("Failed to add ping responder for ISD-AS {isd_as} on {listen_net}")
+                    })?;
+            }
         }
         Ok(())
     }

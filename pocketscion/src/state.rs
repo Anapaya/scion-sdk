@@ -24,6 +24,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use dhsd::DhsdSecret;
+use ipnet::IpNet;
 use pem::Pem;
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
 use sciparse::{address::ip_addr::ScionIpAddr, identifier::isd_asn::IsdAsn};
@@ -91,6 +92,8 @@ pub struct PocketScionStateInner {
     /// These handlers can be used to define custom behavior for specific ASes in the network
     /// simulation.
     pub extern_as_handlers: ExternalAsRegistry,
+    /// A global echo responder for all ASes in the system, with the given listen address.
+    pub global_scmp_echo_responder: Option<IpNet>,
 
     // Component States
     // -------------------------------------------------
@@ -144,6 +147,7 @@ impl PocketScionStateInner {
             ignore_macs: false,
             segment_listing_cache: None,
             cert_dir: CertificateTempDir::new().expect("Failed to create temporary directory"),
+            global_scmp_echo_responder: None,
         }
     }
 

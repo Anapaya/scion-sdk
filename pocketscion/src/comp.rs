@@ -27,6 +27,7 @@
 pub mod authorization_server;
 pub mod control_service;
 pub mod daemon;
+pub mod echo_responder;
 pub mod endhost_api;
 pub mod endhost_api_discovery;
 pub mod endhost_segment_lister;
