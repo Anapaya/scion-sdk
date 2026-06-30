@@ -219,7 +219,6 @@ use std::{
 
 use anyhow::Context as _;
 use bytes::Bytes;
-use endhost_api_client::client::EndhostApiClient;
 use futures::future::BoxFuture;
 use quic::{AddressTranslator, Endpoint, ScionAsyncUdpSocket};
 use scion_proto::{
@@ -237,7 +236,7 @@ pub use self::builder::ScionStackBuilder;
 use crate::{
     path::{
         PathStrategy,
-        fetcher::{EndhostApiSegmentFetcher, PathFetcherImpl, traits::SegmentFetcher},
+        fetcher::{PathFetcherImpl, traits::SegmentFetcher},
         manager::{
             MultiPathManager, MultiPathManagerConfig,
             traits::{PathWaitError, PathWaitTimeoutError},
@@ -259,7 +258,7 @@ use crate::{
 /// transport.
 pub struct ScionStack {
     endhost_api: Option<Url>,
-    client: Arc<dyn EndhostApiClient>,
+    default_segment_fetcher: Arc<dyn SegmentFetcher>,
     underlay: Arc<dyn DynUnderlayStack>,
     scmp_error_receivers: Subscribers<dyn ScmpErrorReceiver>,
     send_error_receivers: Subscribers<dyn SendErrorReceiver>,
@@ -268,8 +267,7 @@ pub struct ScionStack {
 impl fmt::Debug for ScionStack {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ScionStack")
-            .field("client", &"Arc<ConnectRpcClient>")
-            .field("underlay", &"Arc<dyn DynUnderlayStack>")
+            .field("endhost_api", &self.endhost_api)
             .finish()
     }
 }
@@ -277,12 +275,12 @@ impl fmt::Debug for ScionStack {
 impl ScionStack {
     pub(crate) fn new(
         endhost_api: Option<Url>,
-        client: Arc<dyn EndhostApiClient>,
+        default_segment_fetcher: Arc<dyn SegmentFetcher>,
         underlay: Arc<dyn DynUnderlayStack>,
     ) -> Self {
         Self {
             endhost_api,
-            client,
+            default_segment_fetcher,
             underlay,
             scmp_error_receivers: Subscribers::new(),
             send_error_receivers: Subscribers::new(),
@@ -328,12 +326,10 @@ impl ScionStack {
             ))],
         );
 
-        if !socket_config.disable_endhost_api_segment_fetcher {
-            let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
-                Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
+        if !socket_config.disable_default_segment_fetcher {
             socket_config
                 .segment_fetchers
-                .push(("Endhost API".into(), connect_rpc_fetcher));
+                .push(("Endhost API".into(), self.default_segment_fetcher.clone()));
         }
         let fetcher = PathFetcherImpl::new(
             socket_config.segment_fetchers,
@@ -540,10 +536,8 @@ impl ScionStack {
 
         let pather = {
             let mut segment_fetchers = socket_config.segment_fetchers;
-            if !socket_config.disable_endhost_api_segment_fetcher {
-                let connect_rpc_fetcher: Box<dyn SegmentFetcher> =
-                    Box::new(EndhostApiSegmentFetcher::new(self.client.clone()));
-                segment_fetchers.push(("Endhost API".into(), connect_rpc_fetcher));
+            if !socket_config.disable_default_segment_fetcher {
+                segment_fetchers.push(("Endhost API".into(), self.default_segment_fetcher.clone()));
             }
             let fetcher =
                 PathFetcherImpl::new(segment_fetchers, socket_config.segment_fetcher_timeout);
@@ -604,10 +598,7 @@ impl ScionStack {
     /// Creates a path manager with default configuration.
     pub fn create_path_manager(&self) -> MultiPathManager<PathFetcherImpl> {
         let fetcher = PathFetcherImpl::new(
-            vec![(
-                "Endhost API".into(),
-                Box::new(EndhostApiSegmentFetcher::new(self.client.clone())),
-            )],
+            vec![("Endhost API".into(), self.default_segment_fetcher.clone())],
             DEFAULT_SEGMENT_FETCHER_TIMEOUT,
         );
         let mut strategy = PathStrategy::default();
@@ -628,9 +619,9 @@ pub const DEFAULT_SEGMENT_FETCHER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Configuration for a path aware socket.
 pub struct SocketConfig {
-    pub(crate) segment_fetchers: Vec<(String, Box<dyn SegmentFetcher>)>,
+    pub(crate) segment_fetchers: Vec<(String, Arc<dyn SegmentFetcher>)>,
     pub(crate) segment_fetcher_timeout: Duration,
-    pub(crate) disable_endhost_api_segment_fetcher: bool,
+    pub(crate) disable_default_segment_fetcher: bool,
     pub(crate) path_strategy: PathStrategy,
     pub(crate) connect_timeout: Duration,
 }
@@ -647,7 +638,7 @@ impl SocketConfig {
         Self {
             segment_fetchers: Vec::new(),
             segment_fetcher_timeout: DEFAULT_SEGMENT_FETCHER_TIMEOUT,
-            disable_endhost_api_segment_fetcher: false,
+            disable_default_segment_fetcher: false,
             path_strategy: Default::default(),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
@@ -689,16 +680,16 @@ impl SocketConfig {
 
     /// Add an additional segment fetcher.
     ///
-    /// By default, only path segments retrieved via the endhost API are used. Adding additional
-    /// segment fetchers enables to build paths from different segment sources.
-    pub fn with_segment_fetcher(mut self, name: String, fetcher: Box<dyn SegmentFetcher>) -> Self {
+    /// By default, only path segments retrieved via the default segment fetcher are used. Adding
+    /// additional segment fetchers enables to build paths from different segment sources.
+    pub fn with_segment_fetcher(mut self, name: String, fetcher: Arc<dyn SegmentFetcher>) -> Self {
         self.segment_fetchers.push((name, fetcher));
         self
     }
 
-    /// Disable fetching path segments from the endhost API.
-    pub fn disable_endhost_api_segment_fetcher(mut self) -> Self {
-        self.disable_endhost_api_segment_fetcher = true;
+    /// Disable fetching path segments from the default segment fetcher.
+    pub fn disable_default_segment_fetcher(mut self) -> Self {
+        self.disable_default_segment_fetcher = true;
         self
     }
 

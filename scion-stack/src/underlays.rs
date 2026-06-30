@@ -34,7 +34,7 @@ use crate::{
     },
     underlays::{
         discovery::{UnderlayDiscovery, UnderlayInfo},
-        udp::{LocalIpResolver, UdpAsyncUdpUnderlaySocket, UdpUnderlaySocket},
+        udp::{OutboundIpResolver, UdpAsyncUdpUnderlaySocket, UdpUnderlaySocket},
     },
 };
 
@@ -55,10 +55,8 @@ pub struct SnapSocketConfig {
 pub struct UnderlayStack {
     preferred_underlay: PreferredUnderlay,
     underlay_discovery: Arc<dyn UnderlayDiscovery>,
-    /// Resolver for the local IP address for UDP underlay sockets.
-    local_ip_resolver: Arc<dyn LocalIpResolver>,
-    /// The winning endhost API URL used to determine the local IP address.
-    api_url: Url,
+    /// Resolver for the outbound IP address for UDP underlay sockets.
+    outbound_ip_resolver: Arc<dyn OutboundIpResolver>,
     snap_socket_config: SnapSocketConfig,
     snap_tunnel_manager: Option<SnapTunEndpoint>,
     pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
@@ -69,8 +67,7 @@ impl UnderlayStack {
     pub fn new(
         preferred_underlay: PreferredUnderlay,
         underlay_discovery: Arc<dyn UnderlayDiscovery>,
-        local_ip_resolver: Arc<dyn LocalIpResolver>,
-        api_url: Url,
+        outbound_ip_resolver: Arc<dyn OutboundIpResolver>,
         static_identity: StaticSecret,
         default_snap_socket_config: SnapSocketConfig,
     ) -> Self {
@@ -81,8 +78,7 @@ impl UnderlayStack {
         Self {
             preferred_underlay,
             underlay_discovery,
-            local_ip_resolver,
-            api_url,
+            outbound_ip_resolver,
             snap_socket_config: default_snap_socket_config,
             snap_tunnel_manager,
             pool: PacketBufPool::new(64),
@@ -145,7 +141,7 @@ impl UnderlayStack {
                     .socket_addrs(|| None)
                     .ok()
                     .and_then(|addrs| addrs.first().cloned())
-                    && let Some(ip) = source_ip_towards(cp_addr).await
+                    && let Some(ip) = outbound_ip_towards(cp_addr).await
                 {
                     Ok(net::SocketAddr::new(ip, 0))
                 } else {
@@ -212,8 +208,8 @@ impl UnderlayStack {
             }
             None => {
                 let local_address = *self
-                    .local_ip_resolver
-                    .local_ips(&self.api_url)
+                    .outbound_ip_resolver
+                    .outbound_ips()
                     .await
                     .first()
                     .ok_or(ScionSocketBindError::InvalidBindAddress(
@@ -445,8 +441,8 @@ where
     Ok(())
 }
 
-/// Returns the local source IP address that can reach the given destination address.
-pub(crate) async fn source_ip_towards(dst: net::SocketAddr) -> Option<net::IpAddr> {
+/// Returns the outbound IP address that can reach the given destination address.
+pub(crate) async fn outbound_ip_towards(dst: net::SocketAddr) -> Option<net::IpAddr> {
     let bind_addr = match dst.ip() {
         net::IpAddr::V4(_) => net::Ipv4Addr::UNSPECIFIED.into(),
         net::IpAddr::V6(_) => net::Ipv6Addr::UNSPECIFIED.into(),

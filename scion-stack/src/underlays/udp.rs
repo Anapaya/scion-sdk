@@ -38,54 +38,60 @@ use crate::{
         AsyncUdpUnderlaySocket, ScionSocketSendError, UnderlaySocket, scmp_handler::ScmpHandler,
         udp_polling::UdpPollHelper,
     },
-    underlays::{discovery::UnderlayDiscovery, source_ip_towards},
+    underlays::{discovery::UnderlayDiscovery, outbound_ip_towards},
 };
 
 const UDP_DATAGRAM_BUFFER_SIZE: usize = 65535;
 
-/// Local IP resolver.
+/// A trait for resolving the local IP addresses for outbound connections.
 #[async_trait::async_trait]
-pub trait LocalIpResolver: Send + Sync {
-    /// Returns the local IP addresses of the host that can be used to reach the URL.
-    async fn local_ips(&self, url: &url::Url) -> Vec<net::IpAddr>;
+pub trait OutboundIpResolver: Send + Sync {
+    /// Returns the local IP addresses of the host that can be used to reach the network.
+    async fn outbound_ips(&self) -> Vec<net::IpAddr>;
 }
 
 #[async_trait::async_trait]
-impl LocalIpResolver for Vec<net::IpAddr> {
-    async fn local_ips(&self, _url: &url::Url) -> Vec<net::IpAddr> {
+impl OutboundIpResolver for Vec<net::IpAddr> {
+    async fn outbound_ips(&self) -> Vec<net::IpAddr> {
         self.clone()
     }
 }
 
-/// A local IP resolver that resolves the local IP address that can be used to reach a target API
-/// address.
+/// An outbound IP resolver that resolves the local IP address that can be used to reach a target
+/// API address.
 ///
 /// DNS overrides in `host_overrides` take precedence over the OS resolver. This allows
 /// the resolver to be used in environments where the OS resolver is not aware of custom
 /// hostname-to-IP mappings (e.g. when `ConnectParameters::hosts` is set).
-pub struct TargetAddrLocalIpResolver {
+pub struct TargetAddrOutboundIpResolver {
+    url: url::Url,
     host_overrides: Vec<(String, net::IpAddr)>,
 }
 
-impl TargetAddrLocalIpResolver {
-    /// Create a local IP resolver with a set of hostname-to-IP overrides.
+impl TargetAddrOutboundIpResolver {
+    /// Create an outbound IP resolver for the given target `url` with a set of hostname-to-IP
+    /// overrides.
     ///
-    /// When resolving an API URL, entries in `host_overrides` are checked before
-    /// the OS resolver. Pass an empty slice when no overrides are needed.
-    pub fn new(host_overrides: Vec<(String, net::IpAddr)>) -> Self {
-        Self { host_overrides }
+    /// When resolving the outbound IP towards `url`, entries in `host_overrides` are checked before
+    /// the OS resolver. Pass an empty vec when no overrides are needed.
+    pub fn new(url: url::Url, host_overrides: Vec<(String, net::IpAddr)>) -> Self {
+        Self {
+            url,
+            host_overrides,
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl LocalIpResolver for TargetAddrLocalIpResolver {
-    /// Returns the local IP address that can reach the endhost API at `url`.
+impl OutboundIpResolver for TargetAddrOutboundIpResolver {
+    /// Returns the local IP addresses that can reach the target URL.
     ///
     /// Resolution order:
     /// 1. `host_overrides` map
     /// 2. Literal IP in the URL
     /// 3. OS DNS resolver
-    async fn local_ips(&self, url: &url::Url) -> Vec<net::IpAddr> {
+    async fn outbound_ips(&self) -> Vec<net::IpAddr> {
+        let url = &self.url;
         let host = match url.host_str() {
             Some(h) => h,
             None => return vec![],
@@ -110,7 +116,7 @@ impl LocalIpResolver for TargetAddrLocalIpResolver {
             }
         };
 
-        match source_ip_towards(target).await {
+        match outbound_ip_towards(target).await {
             Some(ip) => vec![ip],
             None => vec![],
         }

@@ -25,11 +25,12 @@ use scion_sdk_utils::backoff::ExponentialBackoff;
 use url::Url;
 use x25519_dalek::StaticSecret;
 
-pub use crate::underlays::udp::{LocalIpResolver, TargetAddrLocalIpResolver};
+pub use crate::underlays::udp::{OutboundIpResolver, TargetAddrOutboundIpResolver};
 use crate::{
     ea_source::{
         EndhostApiSource, EndhostApiSourceError, StaticEndhostApiDiscovery, StaticEndhostApis,
     },
+    path::fetcher::EndhostApiSegmentFetcher,
     scionstack::ScionStack,
     underlays::{SnapSocketConfig, UnderlayStack, discovery::PeriodicUnderlayDiscovery},
 };
@@ -38,6 +39,9 @@ const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_se
 const DEFAULT_ENDHOST_API_DISCOVERY_MAX_GROUPS: usize = 5;
 const DEFAULT_ENDHOST_API_DISCOVERY_APIS_PER_GROUP: usize = 2;
 const DEFAULT_ENDHOST_API_DISCOVERY_PER_GROUP_DELAY: Duration = Duration::from_millis(500);
+
+/// Factory that builds the UDP underlay's outbound IP resolver from the selected endhost API URL.
+type OutboundIpResolverFactory = Box<dyn FnOnce(Url) -> Arc<dyn OutboundIpResolver> + Send>;
 
 /// Builder for creating a [ScionStack].
 ///
@@ -67,7 +71,6 @@ pub struct ScionStackBuilder {
     endhost_api_discovery: EndhostApiDiscoveryConfig,
     snap: SnapUnderlayConfig,
     udp: UdpUnderlayConfig,
-    local_ip_resolver: Option<Arc<dyn LocalIpResolver>>,
 }
 
 impl ScionStackBuilder {
@@ -85,7 +88,6 @@ impl ScionStackBuilder {
             endhost_api_discovery: EndhostApiDiscoveryConfig::default(),
             snap: SnapUnderlayConfig::default(),
             udp: UdpUnderlayConfig::default(),
-            local_ip_resolver: None,
         }
     }
 
@@ -204,16 +206,6 @@ impl ScionStackBuilder {
         self
     }
 
-    /// Set a custom local IP resolver for the UDP underlay.
-    ///
-    /// By default, [TargetAddrLocalIpResolver] is used, which resolves the endhost API hostname via
-    /// OS DNS. Use this method when the hostname is only resolvable through a custom DNS override
-    /// that is invisible to the OS resolver, or to provide a fully custom resolution strategy.
-    pub fn with_local_ip_resolver(mut self, resolver: impl LocalIpResolver + 'static) -> Self {
-        self.local_ip_resolver = Some(Arc::new(resolver));
-        self
-    }
-
     /// Build the SCION stack.
     ///
     /// # Returns
@@ -229,7 +221,6 @@ impl ScionStackBuilder {
             endhost_api_discovery,
             snap,
             udp,
-            local_ip_resolver,
         } = self;
 
         // Race a random sample of APIs from each of the first N groups,
@@ -308,24 +299,16 @@ impl ScionStackBuilder {
             })?;
         tracing::info!(url=%api_url, "Selected endhost API");
 
-        // Resolve the local IP addresses for the UDP underlay sockets.
-        // We assume that the interface used to reach the endhost API is the same as
+        // Resolve the outbound IP addresses for the UDP underlay sockets.
+        // By default we assume that the interface used to reach the endhost API is the same as
         // the interface used to reach the data planes.
-        let local_ip_resolver: Arc<dyn LocalIpResolver> = match udp.local_ips {
-            Some(ips) => Arc::new(ips),
-            None => {
-                match local_ip_resolver {
-                    Some(resolver) => resolver,
-                    None => Arc::new(TargetAddrLocalIpResolver::new(vec![])),
-                }
-            }
-        };
+        let outbound_ip_resolver: Arc<dyn OutboundIpResolver> =
+            (udp.outbound_ip_resolver_factory)(api_url.clone());
 
         let underlay_stack = UnderlayStack::new(
             preferred_underlay,
             Arc::new(underlay_discovery),
-            local_ip_resolver,
-            api_url.clone(),
+            outbound_ip_resolver,
             snap.static_identity.unwrap_or_else(StaticSecret::random),
             SnapSocketConfig {
                 crpc_client: snap.crpc_client.or(crpc_client),
@@ -335,7 +318,7 @@ impl ScionStackBuilder {
 
         Ok(ScionStack::new(
             Some(api_url),
-            endhost_api_client,
+            Arc::new(EndhostApiSegmentFetcher::new(endhost_api_client)),
             Arc::new(underlay_stack),
         ))
     }
@@ -514,14 +497,16 @@ impl SnapUnderlayConfigBuilder {
 /// UDP underlay configuration.
 pub struct UdpUnderlayConfig {
     udp_next_hop_resolver_fetch_interval: Duration,
-    local_ips: Option<Vec<net::IpAddr>>,
+    outbound_ip_resolver_factory: OutboundIpResolverFactory,
 }
 
 impl Default for UdpUnderlayConfig {
     fn default() -> Self {
         Self {
             udp_next_hop_resolver_fetch_interval: DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL,
-            local_ips: None,
+            outbound_ip_resolver_factory: Box::new(move |url| {
+                Arc::new(TargetAddrOutboundIpResolver::new(url, vec![]))
+            }),
         }
     }
 }
@@ -537,10 +522,52 @@ impl UdpUnderlayConfig {
 pub struct UdpUnderlayConfigBuilder(UdpUnderlayConfig);
 
 impl UdpUnderlayConfigBuilder {
-    /// Set the local IP addresses to use for the UDP underlay.
+    /// Set the outbound IP addresses to use for the UDP underlay.
+    ///
     /// If not set, the UDP underlay will use the local IP that can reach the endhost API.
-    pub fn with_local_ips(mut self, local_ips: Vec<net::IpAddr>) -> Self {
-        self.0.local_ips = Some(local_ips);
+    /// This is a convenience wrapper around [Self::with_outbound_ip_resolver] for a fixed set of
+    /// addresses.
+    pub fn with_outbound_ips(mut self, outbound_ips: Vec<net::IpAddr>) -> Self {
+        self.0.outbound_ip_resolver_factory =
+            Box::new(move |_url| Arc::new(outbound_ips) as Arc<dyn OutboundIpResolver>);
+        self
+    }
+
+    /// Set a custom outbound IP resolver for the UDP underlay.
+    ///
+    /// Use this method when outbound IP resolution does not depend on the selected endhost API URL.
+    /// If the resolver needs the endhost API URL, use [Self::with_outbound_ip_resolver_factory]
+    /// instead.
+    ///
+    /// By default, [TargetAddrOutboundIpResolver] is used, which resolves the endhost API hostname
+    /// via OS DNS.
+    pub fn with_outbound_ip_resolver(
+        mut self,
+        resolver: impl OutboundIpResolver + 'static,
+    ) -> Self {
+        let resolver = Arc::new(resolver) as Arc<dyn OutboundIpResolver>;
+        self.0.outbound_ip_resolver_factory = Box::new(move |_url| resolver.clone());
+        self
+    }
+
+    /// Set a factory that builds the UDP underlay's outbound IP resolver from the selected endhost
+    /// API URL.
+    ///
+    /// The winning endhost API URL is only known once the stack connects during
+    /// [ScionStackBuilder::build], so resolvers that depend on it must be constructed via this
+    /// factory. The factory is invoked once with the selected URL.
+    ///
+    /// Use this when the hostname is only resolvable through a custom DNS override that is
+    /// invisible to the OS resolver, or to provide a fully custom URL-aware resolution
+    /// strategy. If the resolver does not need the URL, use [Self::with_outbound_ip_resolver]
+    /// instead.
+    pub fn with_outbound_ip_resolver_factory<F, R>(mut self, factory: F) -> Self
+    where
+        F: FnOnce(Url) -> R + Send + 'static,
+        R: OutboundIpResolver + 'static,
+    {
+        self.0.outbound_ip_resolver_factory =
+            Box::new(move |url| Arc::new(factory(url)) as Arc<dyn OutboundIpResolver>);
         self
     }
 

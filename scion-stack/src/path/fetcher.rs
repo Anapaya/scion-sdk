@@ -92,7 +92,7 @@ pub mod traits {
 
 /// Path fetcher.
 pub struct PathFetcherImpl {
-    segment_fetchers: Vec<(String, Box<dyn SegmentFetcher>)>,
+    segment_fetchers: Vec<(String, Arc<dyn SegmentFetcher>)>,
     // Timeout for each segment fetcher to avoid waiting indefinitely for slow or unresponsive
     // fetchers.
     timeout: std::time::Duration,
@@ -101,7 +101,7 @@ pub struct PathFetcherImpl {
 impl PathFetcherImpl {
     /// Creates a new path fetcher.
     pub fn new(
-        segment_fetchers: Vec<(String, Box<dyn SegmentFetcher>)>,
+        segment_fetchers: Vec<(String, Arc<dyn SegmentFetcher>)>,
         timeout: std::time::Duration,
     ) -> Self {
         Self {
