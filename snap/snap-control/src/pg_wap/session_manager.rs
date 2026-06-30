@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-//! Session manager for the Pathguard WAP API, responsible for managing client authentication and
+//! Session manager for the PathGuard WAP API, responsible for managing client authentication and
 //! TCP sessions.
 
 use std::{

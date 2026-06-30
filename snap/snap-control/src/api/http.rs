@@ -51,7 +51,7 @@ pub mod model {
         // the targets etc.
     }
 
-    /// Pathguard WAP session manager.
+    /// PathGuard WAP session manager.
     pub trait PgWapSessionManager: Send + Sync {
         /// Create a new session for the given client IP address.
         fn new_session(&self, client_ip: IpAddr) -> Result<Session, anyhow::Error>;
