@@ -634,32 +634,14 @@ mod tests {
         use super::*;
 
         #[test_log::test]
-        fn should_handle_ingress_scmp_requests_on_first_hop() {
-            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
-                .using_info_timestamp(0)
-                .up()
-                .add_hop_with_alerts(0, true, 1, false)
-                .add_hop(2, 0)
-                .build(1);
-
-            helper::SpecTestCtx::new(test_ctx).next_hop_should_succeed(Some(
-                AsRoutingAction::Local(LocalAsRoutingAction::IngressSCMPHandleRequest {
-                    interface_id: 0,
-                }),
-            ));
-        }
-
-        #[test_log::test]
-        fn should_handle_ingress_scmp_requests() {
+        fn should_ignore_scmp_request_on_first_hop_egress() {
             let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
             let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
             let test_ctx = TestPathBuilder::new(src_address, dst_address)
                 .using_info_timestamp(0)
                 .up()
                 .add_hop(0, 1)
-                .add_hop_with_alerts(2, true, 0, false)
+                .add_hop_with_alerts(2, false, 0, true)
                 .build(1);
 
             helper::SpecTestCtx::new(test_ctx)
@@ -667,29 +649,7 @@ mod tests {
                     egress_interface_id: 1,
                 }))
                 .next_hop_should_succeed(Some(AsRoutingAction::Local(
-                    LocalAsRoutingAction::IngressSCMPHandleRequest { interface_id: 2 },
-                )));
-        }
-
-        #[test_log::test]
-        fn should_handle_egress_scmp_requests() {
-            let src_address = ScionAddr::from_str("1-1,2.2.2.2").unwrap();
-            let dst_address = ScionAddr::from_str("1-3,4.4.4.4").unwrap();
-
-            let test_ctx = TestPathBuilder::new(src_address, dst_address)
-                .using_info_timestamp(0)
-                .up()
-                .add_hop(0, 1)
-                .add_hop_with_alerts(2, false, 3, true)
-                .add_hop(4, 5)
-                .build(1);
-
-            helper::SpecTestCtx::new(test_ctx)
-                .next_hop_should_succeed(Some(AsRoutingAction::ForwardNextHop {
-                    egress_interface_id: 1,
-                }))
-                .next_hop_should_succeed(Some(AsRoutingAction::Local(
-                    LocalAsRoutingAction::EgressSCMPHandleRequest { interface_id: 3 },
+                    LocalAsRoutingAction::ForwardLocal,
                 )));
         }
 

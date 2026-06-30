@@ -140,7 +140,14 @@ impl StdRoutingLogic {
         };
 
         // Handle SCMP alert at ingress
-        if advance.scmp_alert {
+        // Only SCMP alerts, where the hop interface matches the interface the packet was
+        // received on, are handled by the router.
+        // See 2.4.2.4. Hop Field in [rfc](https://datatracker.ietf.org/doc/draft-dekater-scion-dataplane/15/)
+
+        if advance.scmp_alert
+            && ingress_interface_id != 0
+            && advance.ingress_interface == ingress_interface_id
+        {
             return Ok(IngressNextAction::Complete(
                 LocalAsRoutingAction::IngressSCMPHandleRequest {
                     interface_id: ingress_interface_id,
@@ -200,7 +207,13 @@ impl StdRoutingLogic {
         };
 
         // Handle SCMP alert at egress
-        if advance.scmp_alert {
+        // Only SCMP alerts, where the hop interface matches the interface the packet was
+        // received on, are handled by the router.
+        // See 2.4.2.4. Hop Field in [rfc](https://datatracker.ietf.org/doc/draft-dekater-scion-dataplane/15/)
+        if advance.scmp_alert
+            && advance.egress_interface != 0
+            && advance.egress_interface == egress_if_id
+        {
             return Ok(AsRoutingAction::Local(
                 LocalAsRoutingAction::EgressSCMPHandleRequest {
                     interface_id: advance.egress_interface,

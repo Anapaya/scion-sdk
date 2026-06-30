@@ -235,21 +235,31 @@ impl LocalNetworkSimulation<'_> {
                 .map(Into::into)
             }
             LocalAsRoutingAction::IngressSCMPHandleRequest { interface_id } => {
-                if interface_id != 0 {
-                    debug_assert_eq!(
-                        self.local_if_id, interface_id,
-                        "This should always be the interface of the router"
+                if self.local_if_id != interface_id {
+                    tracing::warn!(
+                        local_if = self.local_if_id,
+                        hop_if = interface_id,
+                        "Ingress Hop interface does not match the interface of the router for SCMP requests, ignoring request"
                     );
+
+                    return Ok(None);
                 }
+
                 self.handle_scmp(false, packet)
                     .context("error handling SCMP request")?
                     .map(Into::into)
             }
             LocalAsRoutingAction::EgressSCMPHandleRequest { interface_id } => {
-                debug_assert_eq!(
-                    self.local_if_id, interface_id,
-                    "This should always be the interface of the router"
-                );
+                if self.local_if_id != interface_id {
+                    tracing::warn!(
+                        local_if = self.local_if_id,
+                        hop_if = interface_id,
+                        "Egress Hop interface does not match the interface of the router for SCMP requests, ignoring request"
+                    );
+
+                    return Ok(None);
+                }
+
                 self.handle_scmp(true, packet)
                     .context("error handling SCMP request")?
                     .map(Into::into)
