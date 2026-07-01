@@ -29,7 +29,6 @@ use std::{
 use futures::{StreamExt, stream::FuturesUnordered};
 use prometheus::IntGauge;
 use ring::hmac::Key as HmacKey;
-use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use sciparse::address::socket_addr::ScionSocketAddr;
 use squiche::{ConnectionId, RecvInfo};
 use thiserror::Error;
@@ -767,22 +766,6 @@ pub struct Metrics {
 
     /// The number of currently registered connections.
     pub routed_source_cids_gauge: IntGauge,
-}
-
-impl Metrics {
-    /// Creates a new [`Metrics`] instance and registers the contained metrics with `registry`.
-    pub fn new(registry: MetricsRegistry) -> Self {
-        Metrics {
-            establishing_connections_gauge: registry.int_gauge(
-                "pg_gateway_establishing_connections",
-                "Number of QUIC connections currently being established.",
-            ),
-            routed_source_cids_gauge: registry.int_gauge(
-                "pg_gateway_routed_source_cids",
-                "Number of currently established (routed) QUIC connections.",
-            ),
-        }
-    }
 }
 
 /// An error that occurred while processing an incoming packet.

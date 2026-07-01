@@ -18,7 +18,6 @@ http = { workspace = true }
 http-body = { workspace = true }
 prometheus = { workspace = true }
 ring = { workspace = true }
-scion-sdk-observability = { workspace = true }
 squiche = { workspace = true }
 sciparse = { workspace = true }
 thiserror = { workspace = true }
