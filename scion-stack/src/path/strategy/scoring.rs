@@ -61,7 +61,7 @@ impl PathScoring for PathLengthScorer {
             scion_proto::path::DataPlanePath::Standard(encoded_standard_path) => {
                 encoded_standard_path
                     .segments()
-                    .map(|seg| seg.hop_fields().len() - 2)
+                    .map(|seg| seg.hop_fields().len().saturating_sub(2))
                     .sum()
             }
             scion_proto::path::DataPlanePath::Unsupported { .. } => {
