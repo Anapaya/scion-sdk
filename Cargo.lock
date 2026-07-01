@@ -4760,6 +4760,7 @@ dependencies = [
  "chrono",
  "etherparse",
  "http",
+ "http-body",
  "httparse",
  "ipnet",
  "ntest",

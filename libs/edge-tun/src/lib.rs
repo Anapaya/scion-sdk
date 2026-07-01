@@ -16,21 +16,23 @@
 //!
 //! This crate provides the building blocks for establishing secure IP tunnels between
 //! an edge application server and its clients. Tunnels are transported over QUIC
-//! connections (see [`server`] / [`client`]) or next-generation control/data plane
-//! components (see [`ng`]).
+//! connections (see [`server`] / [`client`]) or the control/data plane components
+//! (see [`control`] / [`data`]).
 
 /// Address allocation traits and types for edge-tun servers.
 pub mod address_allocation;
 /// QUIC-based edge-tun client implementation.
 pub mod client;
+/// Edge-tun control plane API.
+pub mod control;
+/// Edge-tun data plane implementation.
+pub mod data;
 /// Packet fragmentation and reassembly for edge-tun tunnels.
 pub mod fragmenting;
 /// IP packet validation utilities.
 pub mod ip;
 /// Prometheus metrics for edge-tun connections.
 pub mod metrics;
-/// Next-generation edge-tun control plane API.
-pub mod ng;
 /// Protobuf definitions
 pub mod proto;
 /// Wire-format request and response types for the edge-tun control protocol.
@@ -39,3 +41,5 @@ pub mod requests;
 pub mod server;
 /// Test utilities for building synthetic IP packets.
 pub mod test_util;
+/// High-level edge-tun client tunnel orchestration.
+pub mod tunnel;

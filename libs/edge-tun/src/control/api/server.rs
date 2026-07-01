@@ -12,28 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Server-side Connect-RPC API for the edge-tun ng control plane.
+//! Server-side Connect-RPC API for the edge-tun control plane.
 //!
-//! The [`EdgeTunControlPlaneCrpcApi`] listens for incoming QUIC/HTTP3 connections
-//! on a SCION socket and routes Connect-RPC requests to an [`EdgeTunControlPlane`]
-//! implementation.
+//! [`EdgeTunControlPlaneCrpcApi`] drives a [`QuicScionServerEndpoint`] running an
+//! [`Http3Server`] whose [`HttpService`] routes Connect-RPC requests to an
+//! [`EdgeTunControlPlane`] implementation.
 
-use std::{net::IpAddr, sync::Arc};
+use std::{convert::Infallible, future::poll_fn, net::IpAddr, pin::Pin, sync::Arc, task::Poll};
 
 use ana_gotatun::x25519;
+use bytes::Bytes;
+use http::{Request, Response};
+use http_body::{Body, Frame};
 use ipnet::IpNet;
+use prometheus::IntGauge;
 use prost::Message;
 use scion_sdk_quic_scion::{
-    h3::deprecated::server::{H3ResponseSender, H3Server, H3ServerConnection},
-    quic::deprecated::server::QuicServer,
+    h3::server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
+    quic::{
+        connection::ConnectionHandle,
+        server_endpoint::{Metrics, QuicScionEndpointDriver, QuicScionServerEndpoint},
+    },
+    reexport::squiche,
+    socket::GenericScionUdpSocket,
 };
 use scion_sdk_scion_connect_rpc::error::{CrpcError, CrpcErrorCode};
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing;
 
 use crate::{
-    ng::control::EdgeTunControlPlane,
+    control::EdgeTunControlPlane,
     proto::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
         GetDataPlaneConfigurationResponse, GetRouteAdvertisementRequest,
@@ -85,109 +93,62 @@ pub(crate) mod deprecated_paths {
     pub const DEPR_REQUEST_ROUTES: &str = "/anapaya.edgetun.v1/request_routes";
 }
 
-/// The edge-tun control plane Connect-RPC API server.
+/// The [`HttpService`] that routes Connect-RPC requests to an
+/// [`EdgeTunControlPlane`] implementation.
 ///
-/// This struct listens for incoming QUIC/HTTP3 connections on a SCION socket
-/// and dispatches Connect-RPC requests to the provided [`EdgeTunControlPlane`]
-/// implementation.
-///
-/// # Example
-///
-/// ```no_run
-/// use std::sync::Arc;
-/// use scion_sdk_edge_tun::ng::control::{api::server::EdgeTunControlPlaneCrpcApi, EdgeTunControlPlane};
-/// use tokio_util::sync::CancellationToken;
-///
-/// # async fn example<C: EdgeTunControlPlane + 'static>(quic_server: scion_sdk_quic_scion::quic::deprecated::server::QuicServer, control_plane: Arc<C>) {
-/// let api = Arc::new(EdgeTunControlPlaneCrpcApi::new(quic_server, control_plane));
-/// let token = CancellationToken::new();
-/// api.start_listening(token).await;
-/// # }
-/// ```
-pub struct EdgeTunControlPlaneCrpcApi<C> {
-    h3_server: Mutex<H3Server>,
+/// One instance is shared (via [`Http3ServerConfig`]) across every connection
+/// served by the endpoint.
+struct EdgeTunControlService<C> {
     control_plane: Arc<C>,
 }
 
-impl<C: EdgeTunControlPlane + 'static> EdgeTunControlPlaneCrpcApi<C> {
-    /// Creates a new [`EdgeTunControlPlaneCrpcApi`].
-    ///
-    /// # Arguments
-    /// * `quic_server` - A configured QUIC server that will accept incoming connections. The caller
-    ///   is responsible for setting up TLS certificates in the QUIC config.
-    /// * `control_plane` - The control plane implementation to dispatch requests to.
-    pub fn new(quic_server: QuicServer, control_plane: Arc<C>) -> Self {
-        Self {
-            h3_server: Mutex::new(H3Server::new(quic_server)),
-            control_plane,
-        }
-    }
+impl<C: EdgeTunControlPlane + 'static> HttpService for EdgeTunControlService<C> {
+    type Body = H3RequestBody;
+    type ResponseBody = FullBody;
 
-    /// Starts listening for incoming Connect-RPC requests.
-    ///
-    /// This method runs until the provided `cancellation_token` is cancelled or
-    /// the underlying QUIC server stops accepting connections.
-    pub async fn start_listening(&self, cancellation_token: CancellationToken) {
-        let mut h3_server = self.h3_server.lock().await;
+    async fn call(&self, req: Request<H3RequestBody>) -> Response<FullBody> {
+        let path = req.uri().path().to_owned();
 
-        loop {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => {
-                    tracing::info!("EdgeTunControlPlaneCrpcApi: cancellation requested, shutting down");
-                    break;
-                }
-                conn_opt = h3_server.accept() => {
-                    match conn_opt {
-                        Some(conn) => {
-                            let control_plane = self.control_plane.clone();
-                            tokio::spawn(async move {
-                                handle_connection(conn, control_plane).await;
-                            });
-                        }
-                        None => {
-                            tracing::warn!("EdgeTunControlPlaneCrpcApi: H3 server stopped accepting connections");
-                            break;
-                        }
-                    }
-                }
+        let result = match read_request_body(req.into_body()).await {
+            Ok(body) => dispatch(&path, &body, &*self.control_plane),
+            Err(err) => Err(err),
+        };
+
+        let (status, body) = match result {
+            Ok(body) => (http::StatusCode::OK, body),
+            Err(err) => {
+                let code = http_status_from_crpc_code(err.code);
+                let body = serde_json::to_vec(&err).unwrap_or_default();
+                (code, body)
             }
-        }
+        };
+
+        Response::builder()
+            .status(status)
+            .body(FullBody::new(body))
+            .expect("response is always well-formed")
     }
 }
 
-/// Handles a single H3 connection by dispatching all requests until the connection closes.
-async fn handle_connection<C: EdgeTunControlPlane + 'static>(
-    mut conn: H3ServerConnection,
-    control_plane: Arc<C>,
-) {
-    while let Some((req, responder)) = conn.handle_request().await {
-        let cp = control_plane.clone();
-        tokio::spawn(async move {
-            handle_request(req, responder, &*cp).await;
-        });
-    }
-}
-
-/// Handles a single Connect-RPC request by routing it to the appropriate handler.
-async fn handle_request<C: EdgeTunControlPlane>(
-    req: scion_sdk_quic_scion::h3::deprecated::request::H3Request,
-    mut responder: H3ResponseSender,
+/// Routes a single Connect-RPC request (already buffered) to the appropriate
+/// handler based on its `path`.
+fn dispatch<C: EdgeTunControlPlane>(
+    path: &str,
+    body: &[u8],
     control_plane: &C,
-) {
-    let path = req.headers.path.as_str();
-
-    let result = match path {
+) -> Result<Vec<u8>, CrpcError> {
+    match path {
         deprecated_paths::DEPR_DATA_PLANE_CONFIGURATION | PATH_DATA_PLANE_CONFIGURATION => {
-            handle_get_data_plane_configuration(&req, control_plane)
+            handle_get_data_plane_configuration(body, control_plane)
         }
         deprecated_paths::DEPR_REGISTER_IDENTITY | PATH_REGISTER_IDENTITY => {
-            handle_register_edge_tun_identity(&req, control_plane)
+            handle_register_edge_tun_identity(body, control_plane)
         }
         deprecated_paths::DEPR_ASSIGN_ADDRESSES | PATH_ASSIGN_ADDRESSES => {
-            handle_address_assign(&req, control_plane)
+            handle_address_assign(body, control_plane)
         }
         deprecated_paths::DEPR_REQUEST_ROUTES | PATH_REQUEST_ROUTES => {
-            handle_get_route_advertisement(&req, control_plane)
+            handle_get_route_advertisement(body, control_plane)
         }
         _ => {
             tracing::warn!(path, "EdgeTunControlPlaneCrpcApi: unknown path");
@@ -196,30 +157,165 @@ async fn handle_request<C: EdgeTunControlPlane>(
                 format!("unknown path: {path}"),
             ))
         }
-    };
+    }
+}
 
-    let (status, body) = match result {
-        Ok(body) => (http::StatusCode::OK, body),
-        Err(err) => {
-            let code = http_status_from_crpc_code(err.code);
-            let body = serde_json::to_vec(&err).unwrap_or_default();
-            (code, body)
+/// Maximum size, in bytes, of a request body accepted by [`read_request_body`].
+///
+/// Requests whose body exceeds this limit are rejected rather than buffered, to
+/// bound the server's per-request memory usage.
+const MAX_REQUEST_BODY_SIZE: usize = 1024 * 1024; // 1 MiB
+
+/// Reads an HTTP/3 request body to completion, concatenating its data frames.
+///
+/// The body is rejected with [`CrpcErrorCode::ResourceExhausted`] once the
+/// accumulated size would exceed [`MAX_REQUEST_BODY_SIZE`].
+async fn read_request_body(mut body: H3RequestBody) -> Result<Vec<u8>, CrpcError> {
+    let mut collected = Vec::new();
+    while let Some(frame) = poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
+        let frame = frame.map_err(|e| {
+            CrpcError::new(
+                CrpcErrorCode::Internal,
+                format!("failed to read request body: {e}"),
+            )
+        })?;
+        // Trailing header sections carry no body bytes and are ignored.
+        if let Ok(data) = frame.into_data() {
+            if collected.len() + data.len() > MAX_REQUEST_BODY_SIZE {
+                return Err(CrpcError::new(
+                    CrpcErrorCode::ResourceExhausted,
+                    format!("request body exceeds maximum size of {MAX_REQUEST_BODY_SIZE} bytes"),
+                ));
+            }
+            collected.extend_from_slice(&data);
         }
-    };
+    }
+    Ok(collected)
+}
 
-    if let Err(e) = responder
-        .send_response(status, &http::HeaderMap::new(), &body)
-        .await
-    {
-        tracing::error!(?e, "EdgeTunControlPlaneCrpcApi: failed to send response");
+/// The edge-tun control plane Connect-RPC API server.
+///
+/// This drives a [`QuicScionServerEndpoint`] running an [`Http3Server`] on a
+/// SCION socket and dispatches Connect-RPC requests to the provided
+/// [`EdgeTunControlPlane`] implementation.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+///
+/// use scion_sdk_edge_tun::control::{
+///     EdgeTunControlPlane, api::server::EdgeTunControlPlaneCrpcApi,
+/// };
+/// use scion_sdk_quic_scion::socket::GenericScionUdpSocket;
+/// use tokio_util::sync::CancellationToken;
+///
+/// # async fn example<C: EdgeTunControlPlane + 'static>(
+/// #     rnd_seed: [u8; 32],
+/// #     socket: Arc<dyn GenericScionUdpSocket>,
+/// #     config: scion_sdk_quic_scion::reexport::squiche::Config,
+/// #     control_plane: Arc<C>,
+/// # ) {
+/// let api = EdgeTunControlPlaneCrpcApi::new(rnd_seed, socket, config, control_plane);
+/// let token = CancellationToken::new();
+/// api.start_listening(token).await;
+/// # }
+/// ```
+pub struct EdgeTunControlPlaneCrpcApi<C: EdgeTunControlPlane + 'static> {
+    endpoint: QuicScionServerEndpoint<ConnectionHandle<Http3Server<EdgeTunControlService<C>>>>,
+    socket: Arc<dyn GenericScionUdpSocket>,
+    service: EdgeTunControlService<C>,
+}
+
+impl<C: EdgeTunControlPlane + 'static> EdgeTunControlPlaneCrpcApi<C> {
+    /// Creates a new [`EdgeTunControlPlaneCrpcApi`].
+    ///
+    /// # Arguments
+    /// * `rnd_seed` - Seed for the endpoint's connection-ID and address-validation-token
+    ///   generators. The caller is responsible for sourcing it from a cryptographically secure RNG;
+    ///   it is the single point at which randomness enters the server.
+    /// * `socket` - The SCION socket the control plane listens on.
+    /// * `config` - The QUIC server configuration. The caller is responsible for loading the TLS
+    ///   certificate chain and private key into it.
+    /// * `control_plane` - The control plane implementation to dispatch requests to.
+    pub fn new(
+        rnd_seed: [u8; 32],
+        socket: Arc<dyn GenericScionUdpSocket>,
+        config: squiche::Config,
+        control_plane: Arc<C>,
+    ) -> Self {
+        Self::with_metrics(
+            rnd_seed,
+            socket,
+            config,
+            control_plane,
+            unregistered_metrics(),
+        )
+    }
+
+    /// Like [`Self::new`], but lets the caller provide the endpoint [`Metrics`]
+    /// (for example to register them with a prometheus registry).
+    pub fn with_metrics(
+        rnd_seed: [u8; 32],
+        socket: Arc<dyn GenericScionUdpSocket>,
+        config: squiche::Config,
+        control_plane: Arc<C>,
+        metrics: Metrics,
+    ) -> Self {
+        let local_addr = socket.local_addr();
+
+        let endpoint = QuicScionServerEndpoint::new(rnd_seed, config, local_addr, metrics);
+
+        Self {
+            endpoint,
+            socket,
+            service: EdgeTunControlService { control_plane },
+        }
+    }
+
+    /// Starts listening for incoming Connect-RPC requests.
+    ///
+    /// This runs until the provided `cancellation_token` is cancelled or a fatal
+    /// socket error occurs.
+    pub async fn start_listening(self, cancellation_token: CancellationToken) {
+        let driver = QuicScionEndpointDriver::with_config(
+            self.endpoint,
+            self.socket,
+            // Requests are served by the endpoint's internal HTTP/3 dispatch, so
+            // the per-connection handle is not needed here.
+            |_handle: ConnectionHandle<Http3Server<EdgeTunControlService<C>>>| {},
+            Http3ServerConfig::new(self.service),
+        );
+
+        if let Err(e) = driver.run(cancellation_token).await {
+            tracing::error!(?e, "EdgeTunControlPlaneCrpcApi: endpoint driver stopped");
+        }
+    }
+}
+
+/// Constructs a standalone (unregistered) set of endpoint [`Metrics`].
+///
+/// Used when the caller does not provide its own metrics; the gauges are not
+/// registered with any prometheus registry.
+fn unregistered_metrics() -> Metrics {
+    Metrics {
+        establishing_connections_gauge: IntGauge::new(
+            "edgetun_ng_control_establishing_connections",
+            "Number of ng control plane connections currently being established.",
+        )
+        .expect("gauge name is valid"),
+        routed_source_cids_gauge: IntGauge::new(
+            "edgetun_ng_control_registered_connections",
+            "Number of currently registered ng control plane connections.",
+        )
+        .expect("gauge name is valid"),
     }
 }
 
 fn handle_get_data_plane_configuration<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
+    body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let body = req.body.as_deref().unwrap_or_default();
     let _request = GetDataPlaneConfigurationRequest::decode(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
@@ -238,10 +334,9 @@ fn handle_get_data_plane_configuration<C: EdgeTunControlPlane>(
 }
 
 fn handle_register_edge_tun_identity<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
+    body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let body = req.body.as_deref().unwrap_or_default();
     let request = RegisterEdgeTunIdentityRequest::decode(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
@@ -275,10 +370,9 @@ fn extract_x25519_public_key(bytes: &[u8]) -> Result<x25519::PublicKey, CrpcErro
 }
 
 fn handle_address_assign<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
+    body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let body = req.body.as_deref().unwrap_or_default();
     let request = AddressAssignRequest::decode(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
@@ -313,10 +407,9 @@ fn handle_address_assign<C: EdgeTunControlPlane>(
 }
 
 fn handle_get_route_advertisement<C: EdgeTunControlPlane>(
-    req: &scion_sdk_quic_scion::h3::deprecated::request::H3Request,
+    body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let body = req.body.as_deref().unwrap_or_default();
     let request = GetRouteAdvertisementRequest::decode(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
@@ -339,6 +432,31 @@ fn handle_get_route_advertisement<C: EdgeTunControlPlane>(
     };
 
     Ok(response.encode_to_vec())
+}
+
+/// A minimal HTTP/3 response body that yields its bytes in a single data frame.
+pub struct FullBody(Option<Bytes>);
+
+impl FullBody {
+    fn new(data: Vec<u8>) -> Self {
+        if data.is_empty() {
+            Self(None)
+        } else {
+            Self(Some(Bytes::from(data)))
+        }
+    }
+}
+
+impl Body for FullBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Poll::Ready(self.0.take().map(|bytes| Ok(Frame::data(bytes))))
+    }
 }
 
 /// Converts a PSK byte vector to an `Option<[u8; 32]>`.

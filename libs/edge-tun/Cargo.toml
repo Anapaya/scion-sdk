@@ -23,6 +23,7 @@ chacha20 = { workspace = true }
 chrono = { workspace = true }
 etherparse = { workspace = true }
 http = { workspace = true }
+http-body = { workspace = true }
 httparse = { workspace = true }
 ipnet = { workspace = true }
 prometheus = { workspace = true }

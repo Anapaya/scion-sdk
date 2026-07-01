@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Next-generation edge-tun control plane API.
+//! Edge-tun control plane API.
 //!
-//! This module contains the control plane API for the next-generation edge-tun,
+//! This module contains the control plane API for the edge-tun,
 //! including the trait definition, the server-side API implementation, and a
 //! Connect-RPC client.
 
@@ -39,7 +39,7 @@ pub struct EdgeTunDataPlaneConfig {
 /// The methods on this trait are called by [`EdgeTunControlPlaneCrpcApi`] when
 /// the corresponding Connect-RPC endpoint is invoked.
 ///
-/// [`EdgeTunControlPlaneCrpcApi`]: crate::ng::control::api::server::EdgeTunControlPlaneCrpcApi
+/// [`EdgeTunControlPlaneCrpcApi`]: crate::control::api::server::EdgeTunControlPlaneCrpcApi
 pub trait EdgeTunControlPlane: Send + Sync {
     /// Returns the data plane configuration when the client calls
     /// `/anapaya.edgetun.v1/data_plane_configuration`.

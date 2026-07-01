@@ -28,18 +28,16 @@ use sciparse::address::socket_addr::ScionSocketAddr;
 use tracing::instrument;
 
 use crate::{
-    fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
-    ng::{
-        control::{
-            EdgeTunDataPlaneConfig,
-            api::client::{EdgeTunClientError, EdgeTunControlPlaneClient},
-        },
-        data::{
-            client::{EdgeTunClient, EdgeTunClientRecvError, EdgeTunClientSendError},
-            client_state::EdgeTunClientConfig,
-            common::EdgePacketBufPool,
-        },
+    control::{
+        EdgeTunDataPlaneConfig,
+        api::client::{EdgeTunClientError, EdgeTunControlPlaneClient},
     },
+    data::{
+        client::{EdgeTunClient, EdgeTunClientRecvError, EdgeTunClientSendError},
+        client_state::EdgeTunClientConfig,
+        common::EdgePacketBufPool,
+    },
+    fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
 };
 
 const DEFAULT_RECEIVE_QUEUE_CAPACITY: usize = 256;

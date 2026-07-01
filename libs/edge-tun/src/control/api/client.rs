@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Connect-RPC client for the edge-tun ng control plane API.
+//! Connect-RPC client for the edge-tun control plane API.
 //!
 //! The [`EdgeTunControlPlaneClient`] makes calls to the edge-tun control plane
 //! over HTTP/3 + QUIC via SCION transport.
@@ -30,7 +30,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::{
-    ng::control::{
+    control::{
         EdgeTunDataPlaneConfig,
         api::server::{
             ASSIGN_ADDRESSES, DATA_PLANE_CONFIGURATION, REGISTER_IDENTITY, REQUEST_ROUTES,
@@ -59,7 +59,7 @@ pub enum EdgeTunClientError {
     InvalidResponse(String),
 }
 
-/// Connect-RPC client for the edge-tun ng control plane API.
+/// Connect-RPC client for the edge-tun control plane API.
 ///
 /// This client wraps any [`ConnectRpcClient`] implementation (e.g. the SCION-transport
 /// backed [`scion_sdk_scion_connect_rpc::client::CrpcClient`]) and exposes typed

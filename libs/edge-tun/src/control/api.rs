@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Connect-RPC API layer for the edge-tun ng control plane.
+//! Connect-RPC API layer for the edge-tun control plane.
 
 pub mod client;
 pub mod server;

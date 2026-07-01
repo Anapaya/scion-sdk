@@ -26,7 +26,7 @@ use std::{
 use ana_gotatun::x25519;
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use scion_sdk_edge_tun::{
-    ng::control::{
+    control::{
         EdgeTunControlPlane, EdgeTunDataPlaneConfig,
         api::{client::EdgeTunControlPlaneClient, server::EdgeTunControlPlaneCrpcApi},
     },
@@ -36,7 +36,7 @@ use scion_sdk_edge_tun::{
     },
 };
 use scion_sdk_quic_scion::{
-    quic::{config::QuicConfig, deprecated::server::QuicServer},
+    quic::config::QuicConfig,
     socket::{BoxedSocketError, GenericScionUdpSocket},
 };
 use scion_sdk_scion_connect_rpc::{
@@ -231,13 +231,12 @@ fn start_server(
     control_plane: impl EdgeTunControlPlane + 'static,
 ) -> (CancellationToken, NamedTempFile, NamedTempFile) {
     let (server_config, cert_file, key_file) = make_server_quic_config();
-    let quic_server =
-        QuicServer::new(Arc::new(server_socket), server_config).expect("QuicServer::new");
-
-    let api = Arc::new(EdgeTunControlPlaneCrpcApi::new(
-        quic_server,
+    let api = EdgeTunControlPlaneCrpcApi::new(
+        [0u8; 32],
+        Arc::new(server_socket),
+        server_config,
         Arc::new(control_plane),
-    ));
+    );
 
     let token = CancellationToken::new();
     let token_clone = token.clone();

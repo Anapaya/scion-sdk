@@ -13,7 +13,7 @@
 // limitations under the License.
 //! # Wireguard-inspired Edgetun Tunnel server
 //!
-//! The [crate::ng::data::server::EdgeTunServerState] manages the tunnel state for
+//! The [crate::data::server::EdgeTunServerState] manages the tunnel state for
 //! multiple clients. On the _inbound_ path, it decapsulates and verifies
 //! WireGuard-Frames, containing fragments of tunneled packets, reassembles the
 //! fragments, checks provided policies and dispatches the packets.
@@ -37,13 +37,13 @@ use rand::{Rng, SeedableRng};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 
 use crate::{
+    data::common::{
+        AsIpAddr, EdgePacketBufPool, fragment_and_dispatch, handle_incoming_and_drain_queue,
+        pool_allocate_packet_with_payload,
+    },
     fragmenting::{
         Defragmenter, Fragmenter,
         metrics::{DefragmentMetrics, FragmentMetrics},
-    },
-    ng::data::common::{
-        AsIpAddr, EdgePacketBufPool, fragment_and_dispatch, handle_incoming_and_drain_queue,
-        pool_allocate_packet_with_payload,
     },
 };
 
@@ -633,12 +633,12 @@ mod tests {
     use scion_sdk_observability::metrics::registry::MetricsRegistry;
 
     use crate::{
-        fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
-        ng::data::{
+        data::{
             client_state::{EdgeTunClientConfig, EdgeTunClientState},
             common::{AsIpAddr, EdgePacketBufPool},
             server::{EdgeTunAuthz, EdgeTunServerState, InboundTrafficPolicy, LocalIdx},
         },
+        fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
     };
 
     impl AsIpAddr for IpAddr {

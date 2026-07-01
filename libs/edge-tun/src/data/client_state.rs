@@ -25,13 +25,13 @@ use ana_gotatun::{
 };
 
 use crate::{
+    data::common::{
+        AsIpAddr, EdgePacketBufPool, fragment_and_dispatch, handle_incoming_and_drain_queue,
+        pool_allocate_packet_with_payload,
+    },
     fragmenting::{
         Defragmenter, Fragmenter,
         metrics::{DefragmentMetrics, FragmentMetrics},
-    },
-    ng::data::common::{
-        AsIpAddr, EdgePacketBufPool, fragment_and_dispatch, handle_incoming_and_drain_queue,
-        pool_allocate_packet_with_payload,
     },
 };
 
@@ -211,11 +211,11 @@ mod tests {
     use scion_sdk_observability::metrics::registry::MetricsRegistry;
 
     use crate::{
-        fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
-        ng::data::{
+        data::{
             client_state::{EdgeTunClientConfig, EdgeTunClientState},
             common::{AsIpAddr, EdgePacketBufPool, handle_incoming_and_drain_queue},
         },
+        fragmenting::metrics::{DefragmentMetrics, FragmentMetrics},
     };
 
     // ## Helpers
