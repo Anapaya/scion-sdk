@@ -108,10 +108,11 @@ impl BeaconingService {
 
                 let segment_registry = &state_guard.segment_registry;
                 let topology = &state_guard.topology;
-                let mut state = cs
-                    .app_state
-                    .control_service_state(cs.isd_asn)
-                    .expect("Control Service state must exist for own ISD-AS");
+                let mut state = state_guard
+                    .control_service_states
+                    .get(&cs.isd_asn)
+                    .expect("Control Service state must exist for own ISD-AS")
+                    .clone();
 
                 Self::tick_beaconing_state(&mut state, now, segment_registry, topology)
                     .expect("ticking beaconing state should not fail")
@@ -144,9 +145,15 @@ impl BeaconingService {
                                 );
 
                                 cs.app_state
-                                    .control_service_state(cs.isd_asn)
-                                    .expect("Control Service state must exist for own ISD-AS")
-                                    .mark_send_result(&our_interface, false, SystemTime::now());
+                                    .mutate_control_service_state(cs.isd_asn, |state| {
+                                        state.mark_send_result(
+                                            &our_interface,
+                                            false,
+                                            SystemTime::now(),
+                                        );
+                                        Ok(())
+                                    })
+                                    .expect("Control Service state must exist for own ISD-AS");
 
                                 continue;
                             }
@@ -161,11 +168,19 @@ impl BeaconingService {
                         );
 
                         let crpc_client = {
-                            let dst_cert_chain: Vec<StoreCertificateDer> = {
-                                let state_guard = cs.app_state.read();
-                                let Some(certs) =
-                                    state_guard.topology.trust_store.ca_certs(&dst_as.isd())
-                                else {
+                            let ca_certs = {
+                                let guard = cs.app_state.read();
+                                guard.topology.trust_store.ca_certs(&dst_as.isd()).cloned()
+                            };
+
+                            let dst_cert_chain: Vec<StoreCertificateDer> = match ca_certs {
+                                Some(chain) => {
+                                    chain
+                                        .into_values()
+                                        .flat_map(|ca| vec![ca.root.cert, ca.intermediary.cert])
+                                        .collect()
+                                }
+                                None => {
                                     tracing::warn!(
                                         interface = %our_interface,
                                         peer_as = %dst_as,
@@ -173,19 +188,18 @@ impl BeaconingService {
                                     );
 
                                     cs.app_state
-                                        .control_service_state(cs.isd_asn)
-                                        .expect("Control Service state must exist for own ISD-AS")
-                                        .mark_send_result(&our_interface, false, SystemTime::now());
+                                        .mutate_control_service_state(cs.isd_asn, |state| {
+                                            state.mark_send_result(
+                                                &our_interface,
+                                                false,
+                                                SystemTime::now(),
+                                            );
+                                            Ok(())
+                                        })
+                                        .expect("Control Service state must exist for own ISD-AS");
 
                                     continue;
-                                };
-
-                                certs
-                                    .values()
-                                    .flat_map(|ca| {
-                                        vec![ca.root.cert.clone(), ca.intermediary.cert.clone()]
-                                    })
-                                    .collect()
+                                }
                             };
 
                             match ControlServiceCrpcClient::connect(
@@ -209,9 +223,15 @@ impl BeaconingService {
                                     );
 
                                     cs.app_state
-                                        .control_service_state(cs.isd_asn)
-                                        .expect("Control Service state must exist for own ISD-AS")
-                                        .mark_send_result(&our_interface, false, SystemTime::now());
+                                        .mutate_control_service_state(cs.isd_asn, |state| {
+                                            state.mark_send_result(
+                                                &our_interface,
+                                                false,
+                                                SystemTime::now(),
+                                            );
+                                            Ok(())
+                                        })
+                                        .expect("Control Service state must exist for own ISD-AS");
 
                                     continue;
                                 }

@@ -432,12 +432,6 @@ impl PocketScionState {
             .collect()
     }
 
-    /// Gets the Control Service state for the given ISD-AS, if it exists.
-    pub fn control_service_state(&self, isd_asn: IsdAsn) -> Option<ControlServiceState> {
-        let state = self.read();
-        state.control_service_states.get(&isd_asn).cloned()
-    }
-
     /// Mutates the Control Service state for the given ISD-AS, returning an error if no state for
     /// the
     fn mutate_control_service_state<F>(&self, isd_asn: IsdAsn, f: F) -> anyhow::Result<()>
