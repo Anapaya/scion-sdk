@@ -149,13 +149,20 @@ impl NetSimStack {
 
 impl Receiver for NetSimStackInner {
     fn receive_packet(&self, packet: &ScionPacketView) {
+        let _span = tracing::info_span!(
+            "SimStack",
+            r#as = %self.local_as,
+            addr = ?self.bind_addr,
+        )
+        .entered();
+
         // Check IP addr
         let dest_addr = packet.header().dst_host_addr().ok().and_then(|a| a.ip());
         if dest_addr != Some(self.bind_addr) {
             tracing::warn!(
                 packet_destination = ?dest_addr,
                 local_address = ?self.bind_addr,
-                "Received packet with destination address that does not match socket's bind address, dropping packet"
+                "received packet with incorrect dst address, dropped packet"
             );
             return;
         }
@@ -173,7 +180,7 @@ impl Receiver for NetSimStackInner {
                     Err(e) => {
                         tracing::warn!(
                             error = ?e,
-                            "Raw socket receiver is full, dropping packet for this receiver"
+                            "raw rx queue full, dropped packet"
                         );
                     }
                 }
@@ -188,7 +195,7 @@ impl Receiver for NetSimStackInner {
                 Err(e) => {
                     tracing::warn!(
                         error = ?e,
-                        "Failed to parse received packet as SCION UDP, not forwarding to UDP receivers"
+                        "received malformed UDP packet, dropped packet"
                     );
                     return;
                 }
@@ -199,7 +206,7 @@ impl Receiver for NetSimStackInner {
                 if !forwarded_once {
                     tracing::warn!(
                         port = pkt.udp().dst_port(),
-                        "Received UDP packet for port that has no receiver, and no raw receivers to forward to, dropping packet"
+                        "received packet on unbound udp port, dropped packet"
                     );
                 }
                 return;
@@ -211,7 +218,7 @@ impl Receiver for NetSimStackInner {
                     tracing::warn!(
                         error = ?e,
                         port = pkt.udp().dst_port(),
-                        "UDP socket receiver is full, dropping packet for this receiver"
+                        "UDP rx queue full, dropped packet"
                     );
                 }
             }

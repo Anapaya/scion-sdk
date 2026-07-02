@@ -39,6 +39,7 @@ hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.5.2" }
 anapaya-aa-protobuf = { path = "anapaya-aa/anapaya-aa-protobuf", version = "0.5.2" }
 
 scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.5.2" }
+scion-sdk-scion-h3-axum = { path = "libs/scion-h3-axum", version = "0.5.2" }
 # scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
 scion-sdk-observability = { path = "libs/observability", version = "0.5.2" }
 scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.5.2" }

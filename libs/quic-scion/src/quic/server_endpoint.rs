@@ -768,6 +768,24 @@ pub struct Metrics {
     pub routed_source_cids_gauge: IntGauge,
 }
 
+impl Metrics {
+    /// Creates a new [`Metrics`] instance disconnected from any Prometheus registry.
+    pub fn new_without_registry() -> Self {
+        Self {
+            establishing_connections_gauge: IntGauge::new(
+                "quic_scion_establishing_connections",
+                "The number of connections that are currently being established.",
+            )
+            .unwrap(),
+            routed_source_cids_gauge: IntGauge::new(
+                "quic_scion_routed_source_cids",
+                "The number of currently registered connections.",
+            )
+            .unwrap(),
+        }
+    }
+}
+
 /// An error that occurred while processing an incoming packet.
 #[derive(Debug, Error)]
 pub enum PacketProcessError {

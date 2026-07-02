@@ -24,6 +24,7 @@ use std::{
 use anyhow::{Context, bail};
 use scion_protobuf::control_plane::v1::{ServiceResolutionRequest, ServiceResolutionResponse};
 use scion_sdk_quic_scion::quic::config::QuicConfig;
+use scion_sdk_scion_h3_axum::ScionH3AxumServer;
 use sciparse::{
     address::{host_addr::ServiceAddr, socket_addr::ScionSocketAddr},
     dataplane_path::{
@@ -35,6 +36,7 @@ use sciparse::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::{task, time::timeout};
+use tokio_util::sync::CancellationToken;
 use utoipa::ToSchema;
 
 use crate::{
@@ -44,10 +46,7 @@ use crate::{
     },
     network::scion::{routing::ScionNetworkTime, topology::ScionGlobalInterfaceId},
     state::PocketScionState,
-    util::{
-        cert_tmp_dir::CertificateTempDir, crpc::server::AxumH3Server,
-        path_providers::MirroringPathProvider,
-    },
+    util::{cert_tmp_dir::CertificateTempDir, path_providers::MirroringPathProvider},
 };
 
 mod crpc;
@@ -83,6 +82,7 @@ impl ControlService {
         isd_asn: IsdAsn,
         app_state: PocketScionState,
         host_socket_listener: Option<tokio::net::TcpListener>,
+        cancel_token: CancellationToken,
     ) -> anyhow::Result<Arc<ControlService>> {
         let self_state;
         let cert_tmp_dir;
@@ -154,7 +154,14 @@ impl ControlService {
 
         task::spawn(async move {
             tracing::info!(%isd_asn, %addr, "Control service listening");
-            match AxumH3Server::serve(Arc::new(sock), app, quiche_conf).await {
+            match ScionH3AxumServer::serve_with_graceful_shutdown(
+                Arc::new(sock),
+                app,
+                quiche_conf,
+                cancel_token,
+            )
+            .await
+            {
                 Ok(_) => tracing::info!("Control service stopped gracefully"),
                 Err(e) => tracing::error!("Control service stopped with error: {:?}", e),
             }

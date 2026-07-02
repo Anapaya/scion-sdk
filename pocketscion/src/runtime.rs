@@ -112,7 +112,7 @@ impl PocketScionRuntime {
 
         Self::start_endhost_discovery_apis(&state, &io_config).await?;
         Self::start_external_ases(&state, &io_config).await?;
-        Self::start_control_services(&state, &io_config).await?;
+        Self::start_control_services(&state, &io_config, &cancel_token).await?;
         Self::start_daemon_services(&state, &io_config).await?;
         Self::start_router_sockets(&mut join_set, &state, &io_config).await?;
         Self::start_network_forwarders(&mut join_set, &state, &io_config).await?;
@@ -446,6 +446,7 @@ impl PocketScionRuntime {
     async fn start_control_services(
         pstate: &PocketScionState,
         io_config: &IoConfig,
+        cancel_token: &CancellationToken,
     ) -> anyhow::Result<()> {
         for (isd_as, cs_state) in pstate.control_services() {
             let host_socket_listener = match cs_state.host_socket_enabled() {
@@ -465,7 +466,7 @@ impl PocketScionRuntime {
             };
 
             let pstate = pstate.clone();
-            ControlService::start(isd_as, pstate, host_socket_listener)
+            ControlService::start(isd_as, pstate, host_socket_listener, cancel_token.clone())
                 .with_context(|| format!("Failed to start Control Service for ISD-AS {isd_as}"))?;
         }
 

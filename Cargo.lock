@@ -3697,7 +3697,6 @@ dependencies = [
  "axum",
  "axum-server",
  "base64 0.22.1",
- "bytes",
  "chrono",
  "derive_more",
  "dhsd",
@@ -3725,6 +3724,7 @@ dependencies = [
  "scion-sdk-observability",
  "scion-sdk-quic-scion",
  "scion-sdk-scion-connect-rpc",
+ "scion-sdk-scion-h3-axum",
  "scion-sdk-token-validator",
  "scion-sdk-trc",
  "scion-sdk-utils",
@@ -4871,6 +4871,16 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "scion-sdk-scion-h3-axum"
+version = "0.5.2"
+dependencies = [
+ "axum",
+ "scion-sdk-quic-scion",
+ "tokio-util",
+ "tower",
 ]
 
 [[package]]
