@@ -59,6 +59,79 @@ pub enum UnderlayInfo {
     Udp(Vec<ScionRouter>),
 }
 
+/// A single SCION router entry used to build a [StaticUnderlayDiscovery].
+#[derive(Clone, Debug)]
+pub struct StaticUdpRouter {
+    /// The ISD-AS the router belongs to.
+    pub isd_as: IsdAsn,
+    /// The internal interface socket address of the SCION router (the UDP next hop).
+    pub internal_interface: net::SocketAddr,
+    /// The SCION interface IDs reachable via this router.
+    pub interfaces: Vec<u16>,
+}
+
+/// Implementation of the [UnderlayDiscovery] trait backed by a static, in-memory topology.
+///
+/// Unlike [PeriodicUnderlayDiscovery], this does not contact an endhost API and runs no background
+/// task. It is intended for fully-local UDP stacks where the topology (SCION routers and the
+/// interfaces they serve) is known up front, e.g. from configuration.
+pub struct StaticUnderlayDiscovery {
+    underlays: Vec<(IsdAsn, UnderlayInfo)>,
+    udp_underlay_next_hops: HashMap<PathInterface, net::SocketAddr>,
+}
+
+impl StaticUnderlayDiscovery {
+    /// Creates a new static underlay discovery from the given SCION routers.
+    ///
+    /// Routers are grouped by ISD-AS into a single [UnderlayInfo::Udp] entry per ISD-AS, and a
+    /// direct next-hop lookup is built mapping each served [PathInterface] to the router's internal
+    /// interface.
+    pub fn new(routers: impl IntoIterator<Item = StaticUdpRouter>) -> Self {
+        let mut grouped: HashMap<IsdAsn, Vec<ScionRouter>> = HashMap::new();
+        let mut udp_underlay_next_hops = HashMap::new();
+        for router in routers {
+            for interface_id in router.interfaces.iter() {
+                udp_underlay_next_hops.insert(
+                    PathInterface::new(router.isd_as, *interface_id),
+                    router.internal_interface,
+                );
+            }
+            grouped.entry(router.isd_as).or_default().push(ScionRouter {
+                internal_interface: router.internal_interface,
+                interfaces: router.interfaces,
+            });
+        }
+
+        let underlays = grouped
+            .into_iter()
+            .map(|(isd_as, routers)| (isd_as, UnderlayInfo::Udp(routers)))
+            .collect();
+
+        Self {
+            underlays,
+            udp_underlay_next_hops,
+        }
+    }
+}
+
+impl UnderlayDiscovery for StaticUnderlayDiscovery {
+    fn underlays(&self, isd_as: IsdAsn) -> Vec<(IsdAsn, UnderlayInfo)> {
+        self.underlays
+            .iter()
+            .filter(|(ia, _)| isd_as.matches(*ia))
+            .map(|(ia, info)| (*ia, info.clone()))
+            .collect()
+    }
+
+    fn isd_ases(&self) -> HashSet<IsdAsn> {
+        HashSet::from_iter(self.underlays.iter().map(|(ia, _)| *ia))
+    }
+
+    fn resolve_udp_underlay_next_hop(&self, interface: PathInterface) -> Option<net::SocketAddr> {
+        self.udp_underlay_next_hops.get(&interface).cloned()
+    }
+}
+
 struct PeriodicUnderlayDiscoveryInner {
     pub underlays: ArcSwap<Vec<(IsdAsn, UnderlayInfo)>>,
     /// Map of underlay next hops to make the lookup faster.
@@ -203,4 +276,86 @@ async fn discover_underlays(
         }
     }
     Ok((underlays, udp_underlay_next_hops))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    fn isd_as(s: &str) -> IsdAsn {
+        IsdAsn::from_str(s).unwrap()
+    }
+
+    fn sock(s: &str) -> net::SocketAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn static_discovery_resolves_configured_next_hops() {
+        let ia = isd_as("1-ff00:0:110");
+        let router = sock("127.0.0.1:30041");
+        let discovery = StaticUnderlayDiscovery::new([StaticUdpRouter {
+            isd_as: ia,
+            internal_interface: router,
+            interfaces: vec![1, 2],
+        }]);
+
+        assert_eq!(
+            discovery.resolve_udp_underlay_next_hop(PathInterface::new(ia, 1)),
+            Some(router)
+        );
+        assert_eq!(
+            discovery.resolve_udp_underlay_next_hop(PathInterface::new(ia, 2)),
+            Some(router)
+        );
+    }
+
+    #[test]
+    fn static_discovery_unknown_interface_has_no_next_hop() {
+        let ia = isd_as("1-ff00:0:110");
+        let discovery = StaticUnderlayDiscovery::new([StaticUdpRouter {
+            isd_as: ia,
+            internal_interface: sock("127.0.0.1:30041"),
+            interfaces: vec![1],
+        }]);
+
+        assert_eq!(
+            discovery.resolve_udp_underlay_next_hop(PathInterface::new(ia, 99)),
+            None
+        );
+        assert_eq!(
+            discovery.resolve_udp_underlay_next_hop(PathInterface::new(isd_as("1-ff00:0:111"), 1)),
+            None
+        );
+    }
+
+    #[test]
+    fn static_discovery_reports_known_isd_ases_and_udp_underlays() {
+        let ia1 = isd_as("1-ff00:0:110");
+        let ia2 = isd_as("1-ff00:0:111");
+        let discovery = StaticUnderlayDiscovery::new([
+            StaticUdpRouter {
+                isd_as: ia1,
+                internal_interface: sock("127.0.0.1:30041"),
+                interfaces: vec![1],
+            },
+            StaticUdpRouter {
+                isd_as: ia2,
+                internal_interface: sock("127.0.0.2:30041"),
+                interfaces: vec![5],
+            },
+        ]);
+
+        let isd_ases = discovery.isd_ases();
+        assert_eq!(isd_ases.len(), 2);
+        assert!(isd_ases.contains(&ia1));
+        assert!(isd_ases.contains(&ia2));
+
+        let underlays = discovery.underlays(ia1);
+        assert_eq!(underlays.len(), 1);
+        assert_eq!(underlays[0].0, ia1);
+        assert!(matches!(underlays[0].1, UnderlayInfo::Udp(_)));
+    }
 }

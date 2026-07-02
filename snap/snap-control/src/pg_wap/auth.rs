@@ -13,7 +13,7 @@
 // limitations under the License.
 //! PathGuard WAP authentication service.
 
-use std::net::IpAddr;
+use std::{net::IpAddr, time::Instant};
 
 /// Information about an authenticated IP address.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -22,9 +22,9 @@ pub struct AuthInfo {
     pub ip: IpAddr,
     /// The time until which the authentication is valid. After this time, the client needs to
     /// reauthenticate.
-    pub valid_until: chrono::DateTime<chrono::Utc>,
-    // More fields may be added here, e.g. information about the subscription, restrictions to
-    // the targets etc.
+    pub valid_until: Instant,
+    /// The target domains a client is allowed to connect to.
+    pub targets: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,8 +37,12 @@ impl AuthService {
         Self { auth_duration }
     }
 
-    pub fn authenticate(&self, now: chrono::DateTime<chrono::Utc>, ip: IpAddr) -> AuthInfo {
+    pub fn authenticate(&self, now: Instant, ip: IpAddr, targets: &[&str]) -> AuthInfo {
         let valid_until = now + self.auth_duration;
-        AuthInfo { ip, valid_until }
+        AuthInfo {
+            ip,
+            targets: targets.iter().map(|s| s.to_string()).collect(),
+            valid_until,
+        }
     }
 }

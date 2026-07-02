@@ -47,14 +47,18 @@ pub mod model {
         /// The time until which the authentication is valid. After this time, the client needs to
         /// reauthenticate.
         pub valid_until: chrono::DateTime<chrono::Utc>,
-        // More fields may be added here, e.g. information about the subscription, restrictions to
-        // the targets etc.
+        /// The target domains a client is allowed to connect to.
+        pub target_domains: Vec<String>,
     }
 
     /// PathGuard WAP session manager.
     pub trait PgWapSessionManager: Send + Sync {
         /// Create a new session for the given client IP address.
-        fn new_session(&self, client_ip: IpAddr) -> Result<Session, anyhow::Error>;
+        fn new_session(
+            &self,
+            client_ip: IpAddr,
+            target_domains: &[&str],
+        ) -> Result<Session, anyhow::Error>;
     }
 }
 

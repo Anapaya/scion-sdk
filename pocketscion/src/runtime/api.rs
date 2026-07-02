@@ -30,7 +30,7 @@ use crate::{
     io_config::IoConfig,
     network::scion::{routing::ScionNetworkTime, segment::lister::types::ListPathSegments},
     runtime::PocketScionRuntime,
-    state::PocketScionStateInner,
+    state::{PocketScionState, PocketScionStateInner},
 };
 
 // General
@@ -41,6 +41,15 @@ impl PocketScionRuntime {
     /// the system after the snapshot was taken.
     pub fn state_snapshot(&self) -> PocketScionStateInner {
         self.state.read().clone()
+    }
+
+    /// Returns a handle to the shared system state.
+    ///
+    /// Unlike [Self::state_snapshot], this returns the live, shared [PocketScionState] (a cheap
+    /// clone of the underlying handle), e.g. for constructing a
+    /// [StateEndhostSegmentLister](crate::comp::endhost_segment_lister::StateEndhostSegmentLister).
+    pub fn state(&self) -> PocketScionState {
+        self.state.clone()
     }
 
     /// Returns a copy of the system's IO configuration.

@@ -36,11 +36,19 @@ mod pg_wap {
 
     use axum::{
         Json,
-        extract::{ConnectInfo, State},
+        extract::{ConnectInfo, State, rejection::JsonRejection},
     };
     use chrono::DateTime;
 
     use crate::api::http::model::PgWapSessionManager;
+
+    /// New session request.
+    #[derive(serde::Deserialize, utoipa::ToSchema)]
+    pub struct NewSessionRequest {
+        /// The target domains the client wants to be authenticated for.
+        #[schema(example = json!(["example.com"]), min_length = 1)]
+        target_domains: Vec<String>,
+    }
 
     /// New session response.
     #[derive(serde::Serialize, utoipa::ToSchema)]
@@ -50,6 +58,8 @@ mod pg_wap {
         ap_id: String,
         data_plane_port: u16,
         until: DateTime<chrono::Utc>,
+        /// The target domains the client is authenticated for.
+        target_domains: Vec<String>,
     }
 
     /// Authenticate the client IP to allow creating new sessions.
@@ -63,6 +73,7 @@ mod pg_wap {
     #[utoipa::path(
         post,
         path = "/sessions", // Appended to the root: /pg-wap/api/v1/sessions
+        request_body = NewSessionRequest,
         responses(
             (status = 200, description = "HTTP request processed successfully", body = SessionResponse),
             (status = 400, description = "Invalid HTTP request"),
@@ -74,14 +85,29 @@ mod pg_wap {
     pub async fn new_session(
         State(pg_wap_session_manager): State<Arc<dyn PgWapSessionManager>>,
         ip: ConnectInfo<SocketAddr>,
+        // `Json` must be the last extractor as it consumes the request body.
+        request: Result<Json<NewSessionRequest>, JsonRejection>,
     ) -> Result<Json<SessionResponse>, axum::http::StatusCode> {
-        match pg_wap_session_manager.new_session(ip.ip()) {
+        let Json(request) = request.map_err(|err| {
+            tracing::debug!(?err, "Invalid new session request body");
+            axum::http::StatusCode::BAD_REQUEST
+        })?;
+
+        let target_domains: Vec<&str> = request.target_domains.iter().map(String::as_str).collect();
+
+        if target_domains.is_empty() {
+            tracing::debug!("Invalid new session request: target domains empty");
+            return Err(axum::http::StatusCode::BAD_REQUEST);
+        }
+
+        match pg_wap_session_manager.new_session(ip.ip(), &target_domains) {
             Ok(session) => {
                 Ok(Json(SessionResponse {
                     client_ip: session.ip,
                     ap_id: session.ap_id.to_string(),
                     data_plane_port: session.data_plane_port,
                     until: session.valid_until,
+                    target_domains: session.target_domains,
                 }))
             }
             Err(err) => {

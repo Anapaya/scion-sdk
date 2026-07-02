@@ -48,3 +48,20 @@ pub trait SegmentsDiscovery: Send + Sync {
         page_token: String,
     ) -> Result<SegmentsPage, SegmentsError>;
 }
+
+/// Allow sharing a single [SegmentsDiscovery] instance behind an [`Arc`](std::sync::Arc), e.g.
+/// between the control plane router and other consumers.
+#[async_trait::async_trait]
+impl<T: SegmentsDiscovery + ?Sized> SegmentsDiscovery for std::sync::Arc<T> {
+    async fn list_segments(
+        &self,
+        src: IsdAsn,
+        dst: IsdAsn,
+        page_size: i32,
+        page_token: String,
+    ) -> Result<SegmentsPage, SegmentsError> {
+        (**self)
+            .list_segments(src, dst, page_size, page_token)
+            .await
+    }
+}

@@ -30,9 +30,12 @@ use crate::{
     ea_source::{
         EndhostApiSource, EndhostApiSourceError, StaticEndhostApiDiscovery, StaticEndhostApis,
     },
-    path::fetcher::EndhostApiSegmentFetcher,
+    path::fetcher::{EndhostApiSegmentFetcher, traits::SegmentFetcher},
     scionstack::ScionStack,
-    underlays::{SnapSocketConfig, UnderlayStack, discovery::PeriodicUnderlayDiscovery},
+    underlays::{
+        SnapSocketConfig, UnderlayStack,
+        discovery::{PeriodicUnderlayDiscovery, UnderlayDiscovery},
+    },
 };
 
 const DEFAULT_UDP_NEXT_HOP_RESOLVER_FETCH_INTERVAL: Duration = Duration::from_secs(600);
@@ -321,6 +324,39 @@ impl ScionStackBuilder {
             Arc::new(EndhostApiSegmentFetcher::new(endhost_api_client)),
             Arc::new(underlay_stack),
         ))
+    }
+
+    /// Build a UDP-underlay SCION stack without endhost API.
+    ///
+    /// Unlike [Self::build], this performs no endhost-API discovery and contacts no endhost API at
+    /// runtime. The caller supplies everything the stack would otherwise obtain from an endhost
+    /// API:
+    ///
+    /// * `underlay_discovery` — the underlay topology, only UDP underlay is supported.
+    /// * `outbound_ip_resolver` — the outbound IP resolver.
+    /// * `default_segment_fetcher` — the path-segment source registered as the stack's default
+    ///   [`SegmentFetcher`]. It is consulted by every socket unless that socket opts out via
+    ///   [`crate::scionstack::SocketConfig::disable_default_segment_fetcher`].
+    ///
+    /// The resulting stack uses the UDP underlay only (no SNAP) and a freshly generated static
+    /// identity.
+    pub fn build_static_udp_underlay(
+        underlay_discovery: Arc<dyn UnderlayDiscovery>,
+        outbound_ip_resolver: Arc<dyn OutboundIpResolver>,
+        default_segment_fetcher: Arc<dyn SegmentFetcher>,
+    ) -> ScionStack {
+        let underlay_stack = UnderlayStack::new(
+            PreferredUnderlay::Udp,
+            underlay_discovery,
+            outbound_ip_resolver,
+            StaticSecret::random(),
+            SnapSocketConfig {
+                crpc_client: None,
+                snap_token_source: None,
+            },
+        );
+
+        ScionStack::new(None, default_segment_fetcher, Arc::new(underlay_stack))
     }
 }
 
