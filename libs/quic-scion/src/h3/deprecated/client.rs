@@ -173,6 +173,7 @@ impl H3Client {
             self.remote,
             self.socket.clone(),
             config,
+            self.config.handshake_timeout,
         )
         .await?;
 

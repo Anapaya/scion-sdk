@@ -4863,13 +4863,20 @@ name = "scion-sdk-scion-connect-rpc"
 version = "0.5.2"
 dependencies = [
  "async-trait",
+ "futures",
  "http",
+ "ntest",
  "prost",
+ "rcgen",
  "scion-sdk-quic-scion",
  "sciparse",
  "serde",
  "serde_json",
+ "squiche",
+ "tempfile",
+ "test-log",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "url",
 ]

@@ -10,6 +10,7 @@ keywords = ["HTTP3", "QUIC", "RPC"]
 
 [dependencies]
 async-trait = { workspace = true }
+futures = { workspace = true }
 http = { workspace = true }
 prost = { workspace = true }
 scion-sdk-quic-scion = { workspace = true }
@@ -17,8 +18,16 @@ sciparse = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+
+[dev-dependencies]
+ntest = { workspace = true }
+rcgen = { workspace = true }
+squiche = { workspace = true }
+tempfile = { workspace = true }
+test-log = { workspace = true, features = ["trace"] }
 
 [lints]
 workspace = true

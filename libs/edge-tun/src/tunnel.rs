@@ -19,10 +19,8 @@ use bytes::Bytes;
 use ipnet::IpNet;
 use rand::TryRng;
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
-use scion_sdk_quic_scion::{
-    h3::deprecated::client::H3ConnectionError, socket::GenericScionUdpSocket,
-};
-use scion_sdk_scion_connect_rpc::client::CrpcClient;
+use scion_sdk_quic_scion::socket::GenericScionUdpSocket;
+use scion_sdk_scion_connect_rpc::client::{CrpcClient, CrpcClientError, RemoteEndpoint};
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tracing::instrument;
@@ -185,7 +183,7 @@ pub enum EdgeTunnelError {
     ControlAuthToken(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// Failed to establish the control plane connection.
     #[error("control plane connection failed")]
-    ControlConnect(#[source] H3ConnectionError),
+    ControlConnect(#[source] CrpcClientError),
     /// A control plane RPC call failed.
     #[error("control plane RPC failed")]
     ControlRpc(#[from] EdgeTunClientError),
@@ -339,23 +337,17 @@ impl EdgeTunnel {
         control_client_quic_config: Option<scion_sdk_quic_scion::quic::config::QuicConfig>,
         auth_token: Option<String>,
     ) -> Result<EdgeTunControlPlaneClient<CrpcClient>, EdgeTunnelError> {
+        let remote_endpoint = RemoteEndpoint::new(control_address, control_socket.clone());
         let crpc_client = if let Some(quic_config) = control_client_quic_config {
-            CrpcClient::with_quic_config(
-                control_address,
-                control_socket,
+            CrpcClient::with_config(
+                remote_endpoint,
                 control_server_name,
                 auth_token,
                 quic_config,
             )
             .await
         } else {
-            CrpcClient::new(
-                control_address,
-                control_socket,
-                control_server_name,
-                auth_token,
-            )
-            .await
+            CrpcClient::new(remote_endpoint, control_server_name, auth_token).await
         }
         .map_err(EdgeTunnelError::ControlConnect)?;
 

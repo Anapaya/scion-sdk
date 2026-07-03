@@ -41,7 +41,7 @@ use scion_sdk_quic_scion::{
 };
 use scion_sdk_scion_connect_rpc::{
     Method,
-    client::{ConnectRpcClient, CrpcClient},
+    client::{ConnectRpcClient, CrpcClient, RemoteEndpoint},
 };
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tempfile::NamedTempFile;
@@ -253,9 +253,8 @@ async fn make_client(
     server_addr: ScionSocketIpAddr,
 ) -> EdgeTunControlPlaneClient<CrpcClient> {
     let config = QuicConfig::builder().verify_peer(false).build();
-    let crpc_client = CrpcClient::with_quic_config(
-        server_addr,
-        Arc::new(client_socket),
+    let crpc_client = CrpcClient::with_config(
+        RemoteEndpoint::new(server_addr, Arc::new(client_socket)),
         Some("localhost".to_string()),
         None,
         config,
@@ -271,9 +270,8 @@ async fn make_raw_client(
     server_addr: ScionSocketIpAddr,
 ) -> CrpcClient {
     let config = QuicConfig::builder().verify_peer(false).build();
-    CrpcClient::with_quic_config(
-        server_addr,
-        Arc::new(client_socket),
+    CrpcClient::with_config(
+        RemoteEndpoint::new(server_addr, Arc::new(client_socket)),
         Some("localhost".to_string()),
         None,
         config,

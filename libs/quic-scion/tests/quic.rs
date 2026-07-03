@@ -78,6 +78,7 @@ async fn quic_ping_pong() {
         server_addr,
         Arc::new(client_socket),
         client_config.to_quiche_config().unwrap(),
+        client_config.handshake_timeout,
     )
     .await
     .expect("client connect");

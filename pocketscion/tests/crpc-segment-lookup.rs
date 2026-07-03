@@ -31,7 +31,7 @@ use pocketscion::{
 };
 use scion_protobuf::control_plane::v1::{SegmentsRequest, SegmentsResponse};
 use scion_sdk_quic_scion::quic::config::QuicConfig;
-use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
+use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient, RemoteEndpoint};
 use sciparse::{
     address::ip_socket_addr::ScionSocketIpAddr, dataplane_path::model::DpPath,
     identifier::isd_asn::IsdAsn,
@@ -88,9 +88,11 @@ async fn control_service_crpc_lookup() -> anyhow::Result<()> {
     ns_socket.path_provider.set_path(DpPath::Empty);
     let remote = cs_addr;
 
-    let client = CrpcClient::with_quic_config(
-        ScionSocketIpAddr::new(ia2, remote.ip(), remote.port()),
-        Arc::new(ns_socket),
+    let client = CrpcClient::with_config(
+        RemoteEndpoint::new(
+            ScionSocketIpAddr::new(ia2, remote.ip(), remote.port()),
+            Arc::new(ns_socket),
+        ),
         None,
         None,
         quic_config,

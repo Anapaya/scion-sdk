@@ -55,6 +55,9 @@ pub enum QuicConnectionError {
     /// QUIC connection error.
     #[error("QUIC connection error: {0}")]
     ConnectError(#[from] squiche::Error),
+    /// The QUIC handshake did not complete within the configured timeout.
+    #[error("QUIC handshake timed out")]
+    HandshakeTimeout,
 }
 
 impl QuicConnection {
@@ -64,6 +67,7 @@ impl QuicConnection {
         remote: ScionSocketIpAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         mut quiche_config: squiche::Config,
+        handshake_timeout: Duration,
     ) -> Result<Self, QuicConnectionError> {
         let scid = generate_connection_id().map_err(QuicConnectionError::ConnectionIdError)?;
 
@@ -91,8 +95,20 @@ impl QuicConnection {
         .await;
         tokio::spawn(driver.run());
 
-        while !conn.lock().await.is_established() {
-            tokio::task::yield_now().await;
+        // Wait for the handshake to complete, bounded by the handshake timeout so an unreachable
+        // remote fails fast instead of blocking forever.
+        let established = tokio::time::timeout(handshake_timeout, async {
+            while !conn.lock().await.is_established() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+
+        if established.is_err() {
+            // Close the connection so the driver task observes the close and exits, freeing the
+            // shared socket for other connections (e.g. when failing over to another remote).
+            let _ = conn.lock().await.close(false, 0x0, b"handshake timeout");
+            return Err(QuicConnectionError::HandshakeTimeout);
         }
 
         tracing::debug!(?remote, "QUIC connection established");

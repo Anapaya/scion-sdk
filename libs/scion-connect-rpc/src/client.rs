@@ -21,13 +21,14 @@ use std::{borrow::Cow, sync::Arc};
 use scion_sdk_quic_scion::{
     h3::deprecated::{
         client::{H3Client, H3ConnectionError},
-        request::H3Request,
+        request::{H3Request, H3Response},
     },
     quic::config::QuicConfig,
     socket::GenericScionUdpSocket,
 };
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use url::Url;
 
 use crate::error::CrpcError;
@@ -73,65 +74,223 @@ pub trait ConnectRpcClient {
         Res: prost::Message + Default;
 }
 
+/// Remote endpoint for a Connect-RPC client, consisting of a SCION socket address and a socket for
+/// the underlying transport.
+// XXX(bunert): if the underlying H3 client supports multiple connections per socket, we could rely
+// on a single socket for multiple remotes and remove this.
+#[derive(Clone)]
+pub struct RemoteEndpoint {
+    remote: ScionSocketIpAddr,
+    socket: Arc<dyn GenericScionUdpSocket>,
+}
+
+impl RemoteEndpoint {
+    /// Creates a new remote endpoint with the given SCION socket address and socket.
+    pub fn new(remote: ScionSocketIpAddr, socket: Arc<dyn GenericScionUdpSocket>) -> Self {
+        Self { remote, socket }
+    }
+}
+
 /// A Connect-RPC client using HTTP/3 over QUIC with SCION transport.
 ///
 /// This client provides a high-level interface for making Connect-RPC requests
 /// over HTTP/3, using QUIC as the transport protocol and SCION for networking.
+///
+/// When multiple remotes are configured, the client races a connection attempt against all of
+/// them in parallel and keeps the first one that succeeds as the active client. If the active
+/// client later becomes unreachable, the next request transparently re-races the remotes.
 #[derive(Clone)]
 pub struct CrpcClient {
-    h3_client: H3Client,
+    /// Remotes to connect to, each with its own socket.
+    remotes: Vec<RemoteEndpoint>,
+    server_name: Option<String>,
+    config: QuicConfig,
     authorization_token: Option<String>,
+    /// The currently working client paired with a generation counter, shared across clones. The
+    /// generation is bumped on every successful (re-)connection so concurrent requests can detect
+    /// that another task has already reconnected and avoid racing the remotes redundantly.
+    current: Arc<Mutex<(Option<H3Client>, u64)>>,
+}
+
+/// HTTP/3 connection error.
+#[derive(Debug, Error)]
+pub enum CrpcClientError {
+    /// Underlying HTTP/3 connection error.
+    #[error(transparent)]
+    H3Error(#[from] H3ConnectionError),
+    /// No remotes were provided to connect to.
+    #[error("no remotes provided")]
+    NoRemotes,
 }
 
 impl CrpcClient {
-    /// Create a new Connect-RPC client with the given configuration and UDP SCION socket.
+    /// Create a new Connect-RPC client for the given SCION remote endpoint.
     ///
     /// # Arguments
-    /// * `remote` - The remote SCION socket address of the server.
-    /// * `socket` - The SCION UDP socket to use for sending/receiving packets
+    /// * `remote` - The remote SCION endpoint.
     /// * `server_name` - Optional server name for TLS SNI (also used as :authority header)
     /// * `authorization_token` - Optional authorization token for authentication
     ///
     /// # Returns
     /// A new client instance that is ready to connect.
     pub async fn new(
-        remote: ScionSocketIpAddr,
-        socket: Arc<dyn GenericScionUdpSocket>,
+        remote: RemoteEndpoint,
         server_name: Option<String>,
         authorization_token: Option<String>,
-    ) -> Result<Self, H3ConnectionError> {
-        let h3_client = H3Client::new(remote, socket, server_name).await?;
-
-        Ok(Self {
-            h3_client,
+    ) -> Result<Self, CrpcClientError> {
+        Self::with_remotes_and_config(
+            vec![remote],
+            server_name,
             authorization_token,
-        })
+            QuicConfig::default(),
+        )
+        .await
     }
 
-    /// Create a new Connect-RPC client with the given configuration and UDP SCION socket.
+    /// Create a new Connect-RPC client with the given QUIC configuration and SCION remote endpoint.
     ///
     /// # Arguments
-    /// * `remote` - The remote SCION socket address of the server.
-    /// * `socket` - The SCION UDP socket to use for sending/receiving packets
+    /// * `remote` - The remote SCION endpoint.
     /// * `server_name` - Optional server name for TLS SNI (also used as :authority header)
     /// * `authorization_token` - Optional authorization token for authentication
     /// * `config` - Custom QUIC configuration for the client
     ///
     /// # Returns
     /// A new client instance that is ready to connect.
-    pub async fn with_quic_config(
-        remote: ScionSocketIpAddr,
-        socket: Arc<dyn GenericScionUdpSocket>,
+    pub async fn with_config(
+        remote: RemoteEndpoint,
         server_name: Option<String>,
         authorization_token: Option<String>,
         config: QuicConfig,
-    ) -> Result<Self, H3ConnectionError> {
-        let h3_client = H3Client::with_config(remote, socket, server_name, config).await?;
+    ) -> Result<Self, CrpcClientError> {
+        Self::with_remotes_and_config(vec![remote], server_name, authorization_token, config).await
+    }
 
-        Ok(Self {
-            h3_client,
+    /// Create a new Connect-RPC client that races a connection across multiple remotes.
+    ///
+    /// A connection attempt is raced against all remotes in parallel and the first one that
+    /// succeeds becomes the active client. If the active client later becomes unreachable, the next
+    /// request transparently re-races the remotes.
+    ///
+    /// # Arguments
+    /// * `remotes` - The remote SCION endpoints.
+    /// * `server_name` - Optional server name for TLS SNI (also used as :authority header)
+    /// * `authorization_token` - Optional authorization token for authentication
+    /// * `config` - Custom QUIC configuration for the client
+    ///
+    /// # Returns
+    /// A new client instance that is ready to connect. Returns an error if none of the remotes is
+    /// reachable.
+    pub async fn with_remotes_and_config(
+        remotes: Vec<RemoteEndpoint>,
+        server_name: Option<String>,
+        authorization_token: Option<String>,
+        config: QuicConfig,
+    ) -> Result<Self, CrpcClientError> {
+        if remotes.is_empty() {
+            return Err(CrpcClientError::NoRemotes);
+        }
+
+        let client = Self {
+            remotes,
+            server_name,
+            config,
             authorization_token,
+            current: Arc::new(Mutex::new((None, 0))),
+        };
+
+        // Race a connection against all remotes so construction validates connectivity (and fails
+        // if no remote is reachable).
+        let established = client.race_connect().await?;
+        *client.current.lock().await = (Some(established), 0);
+
+        Ok(client)
+    }
+
+    /// Sends an HTTP/3 request, racing across the configured remotes on (re-)connection.
+    ///
+    /// The currently active client is used directly when available. If it fails (or none is yet
+    /// established), a connection is raced against all remotes and the first to succeed becomes the
+    /// new active client.
+    async fn request(&self, request: H3Request) -> Result<H3Response, RequestError> {
+        // Reuse active client.
+        let (client, generation) = {
+            let guard = self.current.lock().await;
+            (guard.0.clone(), guard.1)
+        };
+
+        if let Some(client) = client {
+            // We only try to fail over to a different client(remote) if the h3 request fails, we
+            // don't check the h3 response as this is not seen as a failure.
+            //
+            // XXX(bunert): We could check for a `resource_exhausted` error code where failover
+            // makes sense but that's omitted for now.
+            match client.request(request.clone()).await {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    tracing::debug!(?err, "active client failed, re-racing remotes");
+                }
+            }
+        }
+
+        // Re-establish a working client by racing all remotes.
+        let client = self.reconnect(generation).await.map_err(|err| {
+            RequestError::ConnectionError {
+                context: Cow::Borrowed("connecting to remote"),
+                source: Box::new(err),
+            }
+        })?;
+
+        client.request(request).await.map_err(|err| {
+            RequestError::ConnectionError {
+                context: Cow::Borrowed("sending Connect-RPC request"),
+                source: Box::new(err),
+            }
         })
+    }
+
+    /// Re-establishes the active client by racing all remotes, caching and returning the winner.
+    ///
+    /// Reconnection is deduplicated via the generation counter: if another task already reconnected
+    /// since the caller observed `seen_generation`, that fresh client is returned without racing
+    /// again. The `current` lock is held across the race so only one reconnection happens at a
+    /// time.
+    async fn reconnect(&self, seen_generation: u64) -> Result<H3Client, H3ConnectionError> {
+        let mut guard = self.current.lock().await;
+
+        // Another task reconnected while we waited for the lock; reuse its result.
+        if guard.1 != seen_generation
+            && let Some(client) = &guard.0
+        {
+            return Ok(client.clone());
+        }
+
+        let client = self.race_connect().await?;
+        // Update the active client and bump the generation counter.
+        *guard = (Some(client.clone()), guard.1.wrapping_add(1));
+        Ok(client)
+    }
+
+    /// Races a connection attempt against all configured remotes, returning the first to succeed.
+    async fn race_connect(&self) -> Result<H3Client, H3ConnectionError> {
+        let attempts = self.remotes.iter().map(|endpoint| {
+            let remote = endpoint.remote;
+            let socket = endpoint.socket.clone();
+            let server_name = self.server_name.clone();
+            let config = self.config.clone();
+            Box::pin(async move {
+                H3Client::with_config(remote, socket, server_name, config)
+                    .await
+                    .inspect_err(|err| {
+                        tracing::debug!(?remote, ?err, "failed to connect to remote");
+                    })
+            })
+        });
+
+        // Return the first successful connection or the last error if all fail.
+        futures::future::select_ok(attempts)
+            .await
+            .map(|(client, _remaining)| client)
     }
 }
 
@@ -166,16 +325,8 @@ impl ConnectRpcClient for CrpcClient {
         }
         let request = request.build();
 
-        // Send the request and await the response
-        let response = match self.h3_client.request(request).await {
-            Ok(response) => response,
-            Err(err) => {
-                return Err(RequestError::ConnectionError {
-                    context: Cow::Borrowed("sending Connect-RPC request"),
-                    source: Box::new(err),
-                });
-            }
-        };
+        // Send the request and await the response, failing over across remotes if needed.
+        let response = self.request(request).await?;
 
         if !response.is_success() {
             // Try to parse the body as a CrpcError, otherwise create a generic one.
