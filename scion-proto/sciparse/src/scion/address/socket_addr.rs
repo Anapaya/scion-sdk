@@ -228,6 +228,16 @@ impl ScionSocketAddr {
         }
     }
 
+    /// Returns a [ScionSocketIpAddr] if the SCION Socket Address is an IPv4 or IPv6 address.
+    /// Returns None if it is a Service Address.
+    pub const fn to_scion_sock_ip_addr(&self) -> Option<ScionSocketIpAddr> {
+        match self {
+            ScionSocketAddr::V4(addr) => Some(ScionSocketIpAddr::V4(*addr)),
+            ScionSocketAddr::V6(addr) => Some(ScionSocketIpAddr::V6(*addr)),
+            ScionSocketAddr::Svc(_) => None,
+        }
+    }
+
     /// Returns true if the SCION Socket Address is an IP address (IPv4 or IPv6)
     pub const fn is_ip(&self) -> bool {
         matches!(self, ScionSocketAddr::V4(_) | ScionSocketAddr::V6(_))

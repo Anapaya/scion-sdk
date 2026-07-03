@@ -9,11 +9,11 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 
 [dependencies]
-async-trait = { workspace = true }
 hsd-api-protobuf = { workspace = true }
-scion-proto = { workspace = true }
+async-trait = { workspace = true }
 scion-sdk-scion-connect-rpc = { workspace = true }
 scion-stack = { workspace = true }
+sciparse = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

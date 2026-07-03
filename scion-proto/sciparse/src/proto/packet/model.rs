@@ -20,7 +20,7 @@ use crate::{
     address::{addr::ScionAddr, host_addr::UnknownAddressTypeError, socket_addr::ScionSocketAddr},
     core::{
         convert::{TryFromModel, TryFromView},
-        encode::{EncodeError, InvalidStructureError, WireEncode},
+        encode::{InvalidStructureError, WireEncode},
         macros::impl_from,
         model::Model,
         view::{View, ViewConversionError},
@@ -189,6 +189,16 @@ impl ScionRawPacket {
             _ => Ok(ClassifiedPacket::Other(self.to_owned())),
         }
     }
+
+    /// Attempts to convert this raw packet into a SCMP packet by parsing the payload as a SCMP
+    pub fn try_into_scmp(self) -> Result<ScionScmpPacket, ViewConversionError> {
+        ScionScmpPacket::try_from_raw(self)
+    }
+
+    /// Attempts to convert this raw packet into a UDP packet by parsing the payload as a UDP
+    pub fn try_into_udp(self) -> Result<ScionUdpPacket, ViewConversionError> {
+        ScionUdpPacket::try_from_raw(self)
+    }
 }
 impl Debug for ScionRawPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -298,10 +308,13 @@ impl ScionScmpPacket {
     /// Attempts to construct a `ScionScmpPacket` from a `ScionRawPacket` by parsing the payload as
     /// a SCMP message.
     ///
-    /// Ignores the `next_header` field of the packet header.
-    ///
-    /// Returns an error if the payload cannot be parsed as a valid SCMP message.
+    /// Returns an error if the payload cannot be parsed as a valid SCMP message or if the
+    /// `next_header` field is not set to the appropriate value for SCMP.
     pub fn try_from_raw(packet: ScionRawPacket) -> Result<Self, ViewConversionError> {
+        if packet.header.common.next_header != ProtocolNumber::Scmp {
+            return Err(ViewConversionError::Other("next header not SCMP"));
+        }
+
         let payload = packet.payload;
         let (scmp_message, _rest) = ScmpMessage::from_slice(&payload)?;
         Ok(Self {
@@ -381,10 +394,13 @@ impl ScionUdpPacket {
     /// Attempts to construct a `ScionUdpPacket` from a `ScionRawPacket` by parsing the payload as
     /// a UDP datagram. Bytes past the end of the UDP datagram are truncated.
     ///
-    /// Ignores the `next_header` field of the packet header.
-    ///
-    /// Returns an error if the payload cannot be parsed as a valid UDP datagram.
+    /// Returns an error if the payload cannot be parsed as a valid UDP datagram or if the
+    /// `next_header` field is not set to the appropriate value for UDP.
     pub fn try_from_raw(packet: ScionRawPacket) -> Result<Self, ViewConversionError> {
+        if packet.header.common.next_header != ProtocolNumber::Udp {
+            return Err(ViewConversionError::Other("next header not UDP"));
+        }
+
         let payload = packet.payload;
         let (udp_datagram, _rest) = UdpDatagram::from_slice(&payload)?;
         Ok(Self {
@@ -426,17 +442,6 @@ impl TryFrom<ScionRawPacket> for ScionUdpPacket {
 }
 
 impl ScionUdpPacket {
-    /// Encodes this packet into a Boxed `ScionUdpPacketView`
-    ///
-    /// Returns an error if encoding fails, which can occur if the packet structure is invalid.
-    pub fn encode_to_udp_view(&self) -> Result<Box<ScionUdpPacketView>, EncodeError> {
-        let encoded = self.encode_to_vec()?;
-        let view = ScionUdpPacketView::from_boxed(encoded.into())
-            .expect("All encodeable packets should be valid views");
-
-        Ok(view)
-    }
-
     /// Returns the source SCION socket address of the packet.
     ///
     /// If a unknown address type is encountered in the source host address, an error is returned.

@@ -24,8 +24,8 @@ use pocketscion::{
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
 };
-use scion_proto::address::IsdAsn;
 use scion_stack::scionstack::ScionStackBuilder;
+use sciparse::identifier::isd_asn::IsdAsn;
 use snap_tokens::v0::dummy_snap_token;
 use url::Url;
 
@@ -60,12 +60,12 @@ async fn should_send_receive_with_topology() -> anyhow::Result<()> {
 
     //
     // Setup snaps
-    let server_snap_id = state.add_snap(server_ia.into())?;
-    let client_snap_id = state.add_snap(client_ia.into())?;
+    let server_snap_id = state.add_snap(server_ia)?;
+    let client_snap_id = state.add_snap(client_ia)?;
 
     // Setup endhost APIs
-    let _server_eh = state.add_endhost_api(vec![server_ia.into()]);
-    let _client_eh = state.add_endhost_api(vec![client_ia.into()]);
+    let _server_eh = state.add_endhost_api(vec![server_ia]);
+    let _client_eh = state.add_endhost_api(vec![client_ia]);
 
     //
     // Start PocketScion

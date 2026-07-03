@@ -93,7 +93,6 @@ impl<T> ScionPacketView<T> {
         Ok(ScionAddr::new(self.header().dst_ia(), host))
     }
 }
-
 /// A view over a raw SCION packet (payload protocol unspecified).
 pub type ScionRawPacketView = ScionPacketView<Raw>;
 impl View for ScionRawPacketView {
@@ -205,45 +204,77 @@ impl ScionRawPacketView {
 
     /// Tries to interpret this packet as a SCION/UDP packet.
     ///
-    /// Checks that the payload is large enough for a UDP header but does not verify the
-    /// `next_header` field.
+    /// Checks that the payload is large enough for a UDP header and that the expected next header
+    /// is set.
     pub fn try_into_udp(&self) -> Result<&ScionUdpPacketView, ViewConversionError> {
+        if self.header().next_header() != ProtocolNumber::Udp {
+            return Err(ViewConversionError::Other("next header not UDP"));
+        }
+
         ScionUdpPacketView::try_from_raw(self)
     }
 
-    /// Converts this packet view into a mutable UDP packet view. This only checks that the payload
-    /// is large enough for a UDP header but does not check the packets NextHeader field.
+    /// Converts this packet view into a mutable UDP packet view.
+    ///
+    /// Checks that the payload is large enough for a UDP header and that the expected next header
+    /// is set.
     pub fn try_into_udp_mut(&mut self) -> Result<&mut ScionUdpPacketView, ViewConversionError> {
+        if self.header().next_header() != ProtocolNumber::Udp {
+            return Err(ViewConversionError::Other("next header not UDP"));
+        }
+
         ScionUdpPacketView::try_from_raw_mut(self)
     }
 
-    /// Converts this packet view into a UDP packet view. This only checks that the payload is
-    /// large enough for a UDP header but does not check the packets NextHeader field.
+    /// Converts this packet view into a UDP packet view.
+    ///
+    /// Checks that the payload is large enough for a UDP header and that the expected next header
+    /// is set.
     pub fn try_into_udp_owned(
         self: Box<Self>,
     ) -> Result<Box<ScionUdpPacketView>, ViewConversionError> {
+        if self.header().next_header() != ProtocolNumber::Udp {
+            return Err(ViewConversionError::Other("next header not UDP"));
+        }
+
         ScionUdpPacketView::try_from_raw_owned(self)
     }
 
     /// Tries to interpret this packet as a SCION/SCMP packet.
     ///
-    /// Checks that the payload is large enough for a SCMP header but does not verify the
-    /// `next_header` field.
+    /// Checks that the payload is large enough for a SCMP header and that the expected next header
+    /// is set.
     pub fn try_into_scmp(&self) -> Result<&ScionScmpPacketView, ViewConversionError> {
+        if self.header().next_header() != ProtocolNumber::Scmp {
+            return Err(ViewConversionError::Other("next header not SCMP"));
+        }
+
         ScionScmpPacketView::try_from_raw(self)
     }
 
-    /// Converts this packet view into a mutable SCMP packet view. This only checks that the payload
-    /// is large enough for a SCMP header but does not check the packets NextHeader field.
+    /// Converts this packet view into a mutable SCMP packet view.
+    ///
+    /// Checks that the payload is large enough for a SCMP header and that the expected next header
+    /// is set.
     pub fn try_into_scmp_mut(&mut self) -> Result<&mut ScionScmpPacketView, ViewConversionError> {
+        if self.header().next_header() != ProtocolNumber::Scmp {
+            return Err(ViewConversionError::Other("next header not SCMP"));
+        }
+
         ScionScmpPacketView::try_from_raw_mut(self)
     }
 
-    /// Converts this packet view into a SCMP packet view. This only checks that the payload is
-    /// large enough for a SCMP header but does not check the packets NextHeader field.
+    /// Converts this packet view into a SCMP packet view.
+    ///
+    /// Checks that the payload is large enough for a SCMP header and that the expected next header
+    /// is set.
     pub fn try_into_scmp_owned(
         self: Box<Self>,
     ) -> Result<Box<ScionScmpPacketView>, ViewConversionError> {
+        if self.header().next_header() != ProtocolNumber::Scmp {
+            return Err(ViewConversionError::Other("next header not SCMP"));
+        }
+
         ScionScmpPacketView::try_from_raw_owned(self)
     }
 }
@@ -304,19 +335,31 @@ impl Debug for ScionUdpPacketView {
     }
 }
 impl ScionUdpPacketView {
-    /// Converts a raw SCION packet into a UDP packet view. This only checks that the payload is
-    /// large enough for a UDP header but does not check the packets NextHeader field.
+    /// Converts a raw SCION packet into a UDP packet view.
+    ///
+    /// Checks that the payload is large enough for a UDP header and that the expected next header
+    /// is set.
     pub fn try_from_raw(raw: &ScionRawPacketView) -> Result<&Self, ViewConversionError> {
+        if raw.header().next_header() != ProtocolNumber::Udp {
+            return Err(ViewConversionError::Other("next header not UDP"));
+        }
+
         // There won't be any trailing bytes, so we can just use from_slice.
         let (view, _) = ScionUdpPacketView::from_slice(raw.as_slice())?;
         Ok(view)
     }
 
-    /// Converts a raw SCION packet into a UDP packet view. This only checks that the payload is
-    /// large enough for a UDP header but does not check the packets NextHeader field.
+    /// Converts a raw SCION packet into a UDP packet view.
+    ///
+    /// Checks that the payload is large enough for a UDP header and that the expected next header
+    /// is set.
     pub fn try_from_raw_mut(
         raw: &mut ScionRawPacketView,
     ) -> Result<&mut Self, ViewConversionError> {
+        if raw.header().next_header() != ProtocolNumber::Udp {
+            return Err(ViewConversionError::Other("next header not UDP"));
+        }
+
         // There won't be any trailing bytes, so we can just use from_mut_slice.
         let (view, _) = {
             // SAFETY: ScionUdpPacketView does not offer safe functions to change the size of the
@@ -326,11 +369,17 @@ impl ScionUdpPacketView {
         Ok(view)
     }
 
-    /// Converts a raw SCION packet into a UDP packet view. This only checks that the payload is
-    /// large enough for a UDP header but does not check the packets NextHeader field.
+    /// Converts a raw SCION packet into a UDP packet view.
+    ///
+    /// Checks that the payload is large enough for a UDP header and that the expected next header
+    /// is set.
     pub fn try_from_raw_owned(
         raw: Box<ScionRawPacketView>,
     ) -> Result<Box<Self>, ViewConversionError> {
+        if raw.header().next_header() != ProtocolNumber::Udp {
+            return Err(ViewConversionError::Other("next header not UDP"));
+        }
+
         ScionUdpPacketView::from_boxed(raw.as_slice_boxed())
     }
 

@@ -62,8 +62,11 @@ use std::{
 };
 
 use scc::HashIndex;
-use scion_proto::{address::IsdAsn, packet::ByEndpoint, path::Path, scmp::ScmpErrorMessage};
 use scion_sdk_utils::backoff::BackoffConfig;
+use sciparse::{
+    dataplane_path::view::ScionDpPathViewRef, identifier::isd_asn::IsdAsn, path::ScionPath,
+    payload::scmp::model::ScmpErrorMessage,
+};
 use tokio::sync::broadcast::{self};
 
 use crate::{
@@ -210,7 +213,7 @@ impl<F: PathFetcher> MultiPathManager<F> {
     /// If no active path is set, returns None.
     ///
     /// If the src-dst pair is not yet managed, starts managing it.
-    pub fn try_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime) -> Option<Path> {
+    pub fn try_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime) -> Option<ScionPath> {
         let try_path = self
             .0
             .managed_paths
@@ -223,7 +226,13 @@ impl<F: PathFetcher> MultiPathManager<F> {
             Some(active) => {
                 // XXX(ake): Since the Paths are actively managed, they should never be expired
                 // here.
-                let expired = active.is_expired(now.into()).unwrap_or(true);
+                let timestamp = now
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as u32;
+
+                let expired = active.is_expired(timestamp).unwrap_or(false);
+
                 debug_assert!(!expired, "Returned expired path from try_get_path");
 
                 Some(active)
@@ -247,12 +256,15 @@ impl<F: PathFetcher> MultiPathManager<F> {
         src: IsdAsn,
         dst: IsdAsn,
         now: SystemTime,
-    ) -> Result<Path, Arc<PathFetchError>> {
+    ) -> Result<ScionPath, Arc<PathFetchError>> {
+        if src.is_wildcard() || dst.is_wildcard() {
+            return Err(Arc::new(PathFetchError::InternalError(
+                "Wildcard src or dst is not supported".into(),
+            )));
+        }
+
         if src == dst {
-            return Ok(Path::empty(ByEndpoint {
-                source: src,
-                destination: dst,
-            }));
+            return Ok(ScionPath::local(src).expect("Checked for wildcard above"));
         }
 
         let try_path = self
@@ -293,9 +305,14 @@ impl<F: PathFetcher> MultiPathManager<F> {
         };
 
         if let Ok(active) = &res {
+            let timestamp = now
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as u32;
+
             // XXX(ake): Since the Paths are actively managed, they should never be expired
             // here.
-            let expired = active.is_expired(now.into()).unwrap_or(true);
+            let expired = active.is_expired(timestamp).unwrap_or(false);
             debug_assert!(!expired, "Returned expired path from get_path");
         }
 
@@ -356,8 +373,8 @@ impl<F: PathFetcher> MultiPathManager<F> {
     }
 
     /// report error
-    pub fn report_path_issue(&self, timestamp: SystemTime, issue: IssueKind, path: Option<&Path>) {
-        let Some(applies_to) = issue.target_type(path) else {
+    pub fn report_path_issue(&self, timestamp: SystemTime, issue: IssueKind) {
+        let Some(applies_to) = issue.target_type() else {
             // Not a path issue we care about
             return;
         };
@@ -384,23 +401,15 @@ impl<F: PathFetcher> MultiPathManager<F> {
 }
 
 impl<F: PathFetcher> ScmpErrorReceiver for MultiPathManager<F> {
-    fn report_scmp_error(&self, scmp_error: ScmpErrorMessage, path: &Path) {
-        self.report_path_issue(
-            SystemTime::now(),
-            IssueKind::Scmp { error: scmp_error },
-            Some(path),
-        );
+    fn report_scmp_error(&self, scmp_error: ScmpErrorMessage, _path: ScionDpPathViewRef) {
+        self.report_path_issue(SystemTime::now(), IssueKind::Scmp { error: scmp_error });
     }
 }
 
 impl<F: PathFetcher> SendErrorReceiver for MultiPathManager<F> {
     fn report_send_error(&self, error: &ScionSocketSendError) {
         if let Some(send_error) = SendError::from_socket_send_error(error) {
-            self.report_path_issue(
-                SystemTime::now(),
-                IssueKind::Socket { err: send_error },
-                None,
-            );
+            self.report_path_issue(SystemTime::now(), IssueKind::Socket { err: send_error });
         }
     }
 }
@@ -411,7 +420,7 @@ impl<F: PathFetcher> SyncPathManager for MultiPathManager<F> {
         _src: IsdAsn,
         _dst: IsdAsn,
         _now: chrono::DateTime<chrono::Utc>,
-        _path: Path<bytes::Bytes>,
+        _path: ScionPath,
     ) {
         // No-op
         // Based on discussions we do not support externally registered paths in the PathManager
@@ -423,7 +432,7 @@ impl<F: PathFetcher> SyncPathManager for MultiPathManager<F> {
         src: IsdAsn,
         dst: IsdAsn,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> std::io::Result<Option<Path<bytes::Bytes>>> {
+    ) -> std::io::Result<Option<ScionPath>> {
         Ok(self.try_path(src, dst, now.into()))
     }
 }
@@ -434,7 +443,7 @@ impl<F: PathFetcher> PathManager for MultiPathManager<F> {
         src: IsdAsn,
         dst: IsdAsn,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> impl crate::types::ResFut<'_, Path<bytes::Bytes>, PathWaitError> {
+    ) -> impl crate::types::ResFut<'_, ScionPath, PathWaitError> {
         async move {
             match self.path(src, dst, now.into()).await {
                 Ok(path) => Ok(path),
@@ -560,7 +569,10 @@ impl PathIssueManager {
     pub fn apply_cached_issues(&self, entry: &mut PathManagerPath, now: SystemTime) -> bool {
         let mut applied = false;
         for issue in self.cache.values() {
-            if issue.target.matches_path(&entry.path, &entry.fingerprint) {
+            if issue
+                .target
+                .matches_path(&entry.path, &entry.scion_path().fingerprint())
+            {
                 entry.reliability.update(issue.decayed_penalty(now), now);
                 applied = true;
             }
@@ -731,7 +743,7 @@ mod tests {
 
     mod issue_handling {
         use scc::HashIndex;
-        use scion_proto::address::{Asn, Isd};
+        use sciparse::identifier::{asn::Asn, isd::Isd};
 
         use super::*;
         use crate::path::{
@@ -752,13 +764,13 @@ mod tests {
 
             // Get the first path to create an issue for
             let first_path = &path_set.internal.cached_paths[0];
-            let first_fp = first_path.fingerprint;
+            let first_fp = first_path.scion_path().fingerprint();
 
             // Create an issue targeting the first hop of the first path
             let issue = IssueKind::Socket {
                 err: SendError::FirstHopUnreachable {
-                    isd_asn: first_path.path.source(),
-                    interface_id: first_path.path.first_hop_egress_interface().unwrap().id,
+                    isd_asn: first_path.path.src_ia(),
+                    interface_id: first_path.path.first_egress_interface().unwrap().id,
                     address: None,
                     msg: "test".into(),
                 },
@@ -766,7 +778,7 @@ mod tests {
 
             let penalty = Score::new_clamped(-0.3);
             let marker = IssueMarker {
-                target: issue.target_type(Some(&first_path.path)).unwrap(),
+                target: issue.target_type().unwrap(),
                 timestamp: BASE_TIME,
                 penalty,
             };
@@ -787,7 +799,7 @@ mod tests {
                 .internal
                 .cached_paths
                 .iter()
-                .find(|e| e.fingerprint == first_fp)
+                .find(|e| e.scion_path().fingerprint() == first_fp)
                 .expect("Path should still exist");
 
             let updated_score = updated_path.reliability.score(BASE_TIME).value();
@@ -1089,7 +1101,7 @@ mod tests {
                 .internal
                 .cached_paths
                 .iter_mut()
-                .find(|e| e.fingerprint == active_fp)
+                .find(|e| e.scion_path().fingerprint() == active_fp)
                 .unwrap()
                 .reliability = reliability;
 
@@ -1154,20 +1166,21 @@ mod tests {
             time::{Duration, SystemTime},
         };
 
-        use scion_proto::{
-            address::{Asn, EndhostAddr, Isd, IsdAsn},
-            path::{Path, test_builder::TestPathBuilder},
+        use sciparse::{
+            address::ip_addr::ScionIpAddr,
+            identifier::{asn::Asn, isd::Isd},
+            util::test_builder::TestPathBuilder,
         };
         use tokio::sync::Notify;
 
         use super::*;
         use crate::path::manager::{MultiPathManagerInner, PathIssueManager, pathset::PathSet};
 
-        pub const SRC_ADDR: EndhostAddr = EndhostAddr::new(
+        pub const SRC_ADDR: ScionIpAddr = ScionIpAddr::new(
             IsdAsn::new(Isd(1), Asn(1)),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         );
-        pub const DST_ADDR: EndhostAddr = EndhostAddr::new(
+        pub const DST_ADDR: ScionIpAddr = ScionIpAddr::new(
             IsdAsn::new(Isd(2), Asn(1)),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
         );
@@ -1175,12 +1188,11 @@ mod tests {
         pub const DEFAULT_EXP_UNITS: u8 = 100;
         pub const BASE_TIME: SystemTime = SystemTime::UNIX_EPOCH;
 
-        pub fn dummy_path(hop_count: u16, timestamp: u32, exp_units: u8, seed: u32) -> Path {
-            let mut builder: TestPathBuilder =
-                TestPathBuilder::new(SRC_ADDR.into(), DST_ADDR.into())
-                    .using_info_timestamp(timestamp)
-                    .with_hop_expiry(exp_units)
-                    .up();
+        pub fn dummy_path(hop_count: u16, timestamp: u32, exp_units: u8, seed: u32) -> ScionPath {
+            let mut builder = TestPathBuilder::new(SRC_ADDR.into(), DST_ADDR.into())
+                .using_info_timestamp(timestamp)
+                .with_hop_expiry(exp_units)
+                .up();
 
             builder = builder.add_hop(0, 1);
 
@@ -1224,7 +1236,7 @@ mod tests {
             path_seed: u32,
             timestamp: SystemTime,
             exp_units: u8,
-        ) -> Result<Vec<Path>, String> {
+        ) -> Result<Vec<ScionPath>, String> {
             let mut paths = Vec::new();
             for resp_id in 0..path_count {
                 paths.push(dummy_path(
@@ -1242,13 +1254,13 @@ mod tests {
         }
 
         pub struct MockFetcher {
-            next_response: Result<Vec<Path>, String>,
+            next_response: Result<Vec<ScionPath>, String>,
             pub received_requests: usize,
             pub wait_till_notify: bool,
             pub notify_to_resolve: Arc<Notify>,
         }
         impl MockFetcher {
-            pub fn new(response: Result<Vec<Path>, String>) -> Arc<Mutex<Self>> {
+            pub fn new(response: Result<Vec<ScionPath>, String>) -> Arc<Mutex<Self>> {
                 Arc::new(Mutex::new(Self {
                     next_response: response,
                     received_requests: 0,
@@ -1257,7 +1269,7 @@ mod tests {
                 }))
             }
 
-            pub fn set_response(&mut self, response: Result<Vec<Path>, String>) {
+            pub fn set_response(&mut self, response: Result<Vec<ScionPath>, String>) {
                 self.next_response = response;
             }
 
@@ -1275,7 +1287,7 @@ mod tests {
                 &self,
                 _src: IsdAsn,
                 _dst: IsdAsn,
-            ) -> Result<Vec<Path>, PathFetchError> {
+            ) -> Result<Vec<ScionPath>, PathFetchError> {
                 let response;
                 // Wait for notification if needed
                 let notify = {

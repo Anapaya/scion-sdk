@@ -31,10 +31,13 @@ use crate::{
         view::{ScionDpPathView, ScionDpPathViewExt, ScionDpPathViewExtMut},
     },
     identifier::isd_asn::IsdAsn,
-    path::metadata::{
-        geo::GeoCoordinates,
-        link::{LinkMeta, LinkType},
-        path_interface::PathInterface,
+    path::{
+        fingerprint::data_plane::DpPathFingerprint,
+        metadata::{
+            geo::GeoCoordinates,
+            link::{LinkMeta, LinkType},
+            path_interface::PathInterface,
+        },
     },
     rpc::FromRpcError,
 };
@@ -49,7 +52,7 @@ pub mod policy;
 /// This contains a [ScionDpPathView], which is the encoded dataplane path as returned by the
 /// SCION daemon, and optional metadata about the path, such as expiration time, MTU, and interfaces
 /// used by the path
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScionPath {
     /// The ISD-AS of the path's source.
     src_ia: IsdAsn,
@@ -82,11 +85,7 @@ impl ScionPath {
         metadata: Option<metadata::PathMetadata>,
         next_hop: Option<SocketAddr>,
     ) -> Self {
-        let dp_fingerprint = fingerprint::data_plane::DpPathFingerprint::from_dp_path(
-            dp_path.as_ref(),
-            src_ia,
-            dst_ia,
-        );
+        let dp_fingerprint = DpPathFingerprint::from_dp_path(dp_path.as_ref(), src_ia, dst_ia);
 
         let expiration = dp_path.expiration();
 
@@ -179,6 +178,9 @@ impl ScionPath {
     /// Attempts to reverse the path by reversing the dataplane path and swapping the source and
     /// destination ISD-AS.
     ///
+    /// If EPIC authentication information is present in the path metadata, it will be lost, as it
+    /// is not possible to derive the reverse secret.
+    ///
     /// If the dataplane path type does not support reversal, returns an error.
     pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
         self.dp_path.try_reverse()?;
@@ -188,17 +190,10 @@ impl ScionPath {
         self.next_hop = None;
 
         if let Some(metadata) = self.metadata.as_mut() {
-            if let Some(interfaces) = metadata.interfaces.as_mut() {
-                interfaces.reverse();
-            }
+            metadata.reverse();
 
-            if let Some(notes) = metadata.notes.as_mut() {
-                notes.reverse();
-            }
-
-            let cp_fingerprint =
+            self._cp_fingerprint =
                 fingerprint::control_plane::PathFingerprint::from_scion_path(self).ok();
-            self._cp_fingerprint = cp_fingerprint;
         }
 
         self._fingerprint = fingerprint::data_plane::DpPathFingerprint::from_dp_path(
@@ -208,6 +203,32 @@ impl ScionPath {
         );
 
         Ok(())
+    }
+
+    /// Attempts to reverse the path by reversing the dataplane path and swapping the source and
+    /// destination ISD-AS.
+    ///
+    /// If EPIC authentication information is present in the path metadata, it will be lost, as it
+    /// is not possible to derive the reverse secret.
+    ///
+    /// If the dataplane path type does not support reversal, returns an error.
+    #[allow(clippy::result_large_err)]
+    pub fn into_reversed(mut self) -> Result<Self, (Self, PathReverseError)> {
+        match self.try_reverse() {
+            Ok(()) => Ok(self),
+            Err(e) => Err((self, e)),
+        }
+    }
+
+    /// Returns true if the path is expired.
+    ///
+    /// First checks the expiration time from the dataplane path, if available. If not, checks the
+    /// expiration time from the control plane metadata.
+    ///
+    /// If neither is available, the function returns None
+    pub fn is_expired(&self, timestamp: u32) -> Option<bool> {
+        let expiration = self.expiration()?;
+        Some(timestamp >= expiration)
     }
 }
 // accessors

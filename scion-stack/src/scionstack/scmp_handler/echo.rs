@@ -14,9 +14,16 @@
 //! Default SCMP echo handler.
 
 use anyhow::Context as _;
-use scion_proto::{
-    packet::{ByEndpoint, ScionPacketRaw, ScionPacketScmp},
-    scmp::{ScmpEchoReply, ScmpMessage},
+use sciparse::{
+    dataplane_path::view::ScionDpPathViewExt,
+    packet::{
+        model::{ScionRawPacket, ScionScmpPacket},
+        view::ScionRawPacketView,
+    },
+    payload::scmp::{
+        model::{ScmpEchoReply, ScmpMessage},
+        view::ScmpMessageView,
+    },
 };
 
 use super::ScmpHandler;
@@ -37,53 +44,53 @@ impl DefaultEchoHandler {
         Self
     }
 
-    fn try_echo_reply(&self, p_raw: ScionPacketRaw) -> anyhow::Result<Option<ScionPacketScmp>> {
-        let p: ScionPacketScmp = p_raw.try_into().context("Failed to decode packet")?;
-        let reply_msg = match p.message {
-            ScmpMessage::EchoRequest(r) => {
+    fn try_echo_reply(
+        &self,
+        p_raw: &ScionRawPacketView,
+    ) -> anyhow::Result<Option<ScionScmpPacket>> {
+        let p = p_raw
+            .try_into_scmp()
+            .context("Packet is not a valid SCMP packet")?;
+
+        let reply_msg = match p.scmp().message() {
+            ScmpMessageView::EchoRequest(r) => {
                 tracing::debug!("Echo request received, sending echo reply");
-                ScmpMessage::EchoReply(ScmpEchoReply::new(r.identifier, r.sequence_number, r.data))
+                ScmpMessage::EchoReply(ScmpEchoReply::new(
+                    r.identifier(),
+                    r.sequence_number(),
+                    r.data().to_vec(),
+                ))
             }
             _ => return Ok(None),
         };
         let reply_path = p
-            .headers
-            .reversed_path(None)
-            .context("Failed to reverse SCMP echo path")?
-            .data_plane_path;
+            .header()
+            .path()
+            .to_model()
+            .into_reversed()
+            .map_err(|(_, e)| anyhow::anyhow!("Failed to reverse path: {e:?}"))?;
 
         let src = p
-            .headers
-            .address
-            .source()
+            .src_scion_addr()
             .context("Failed to decode source address")?;
 
         let dst = p
-            .headers
-            .address
-            .destination()
+            .dst_scion_addr()
             .context("Failed to decode destination address")?;
 
-        let reply = ScionPacketScmp::new(
-            ByEndpoint {
-                source: dst,
-                destination: src,
-            },
-            reply_path,
-            reply_msg,
-        )
-        .context("Failed to encode reply")?;
+        let reply = ScionScmpPacket::new(dst, src, reply_path, reply_msg);
+
         Ok(Some(reply))
     }
 }
 
 impl ScmpHandler for DefaultEchoHandler {
-    fn handle(&self, p_raw: ScionPacketRaw) -> Option<ScionPacketRaw> {
+    fn handle(&self, p_raw: &ScionRawPacketView) -> Option<ScionRawPacket> {
         match self.try_echo_reply(p_raw) {
             Ok(Some(reply)) => {
                 tracing::debug!(
-                    src = ?reply.headers.address.source(),
-                    dst = ?reply.headers.address.destination(),
+                    src = ?reply.src_scion_addr(),
+                    dst = ?reply.dst_scion_addr(),
                     "Sending echo reply"
                 );
                 Some(reply.into())
@@ -99,18 +106,19 @@ impl ScmpHandler for DefaultEchoHandler {
 
 #[cfg(test)]
 mod default_echo_handler_tests {
-    use bytes::Bytes;
-    use scion_proto::{
-        address::{Asn, EndhostAddr, Isd, IsdAsn},
-        path::test_builder::{TestPathBuilder, TestPathContext},
-        scmp::{ScmpEchoReply, ScmpEchoRequest, ScmpMessage},
+    use sciparse::{
+        address::ip_addr::ScionIpAddr,
+        core::model::Model,
+        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+        payload::scmp::model::ScmpEchoRequest,
+        util::test_builder::{TestPathBuilder, TestPathContext},
     };
 
     use super::*;
 
     fn test_context() -> TestPathContext {
-        let src = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(10)), [192, 0, 2, 1].into());
-        let dst = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(20)), [198, 51, 100, 1].into());
+        let src = ScionIpAddr::new(IsdAsn::new(Isd(1), Asn(10)), [192, 0, 2, 1].into());
+        let dst = ScionIpAddr::new(IsdAsn::new(Isd(1), Asn(20)), [198, 51, 100, 1].into());
         TestPathBuilder::new(src.into(), dst.into())
             .using_info_timestamp(42)
             .up()
@@ -124,27 +132,29 @@ mod default_echo_handler_tests {
         let ctx = test_context();
         let expected_src = ctx.dst_address;
         let expected_dst = ctx.src_address;
-        let request = ctx.scion_packet_scmp(ScmpMessage::EchoRequest(ScmpEchoRequest::new(
-            7,
-            9,
-            Bytes::from_static(b"payload"),
-        )));
+        let request = ctx
+            .scion_packet_scmp(ScmpEchoRequest::new(7, 9, b"payload".to_vec()).into())
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("should encode");
 
         let handler = DefaultEchoHandler::new();
-        let reply = handler.handle(request.into());
+        let reply = handler.handle(&request);
         assert!(reply.is_some());
         let reply = reply.unwrap();
-        let reply: ScionPacketScmp = reply.try_into().expect("valid SCMP packet in returning");
-        match reply.message {
+        let reply = reply
+            .try_into_scmp()
+            .expect("valid SCMP packet in returning");
+        match &reply.payload {
             ScmpMessage::EchoReply(r) => {
-                assert_eq!(r.get_identifier(), 7);
-                assert_eq!(r.get_sequence_number(), 9);
-                assert_eq!(r.data, Bytes::from_static(b"payload"));
+                assert_eq!(r.identifier, 7);
+                assert_eq!(r.sequence_number, 9);
+                assert_eq!(r.data, b"payload");
             }
             other => panic!("unexpected reply message: {other:?}"),
         }
-        assert_eq!(reply.headers.address.source().unwrap(), expected_src);
-        assert_eq!(reply.headers.address.destination().unwrap(), expected_dst);
+        assert_eq!(reply.src_scion_addr().unwrap(), expected_src);
+        assert_eq!(reply.dst_scion_addr().unwrap(), expected_dst);
     }
 
     #[test]
@@ -152,13 +162,13 @@ mod default_echo_handler_tests {
         let ctx = test_context();
         let handler = DefaultEchoHandler::new();
 
-        let non_echo = ctx.scion_packet_scmp(ScmpMessage::EchoReply(ScmpEchoReply::new(
-            1,
-            2,
-            Bytes::from_static(b"resp"),
-        )));
+        let non_echo = ctx
+            .scion_packet_scmp(ScmpEchoReply::new(1, 2, b"resp".to_vec()).into())
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("should encode");
 
-        let reply = handler.handle(non_echo.into());
+        let reply = handler.handle(&non_echo);
         assert!(reply.is_none());
     }
 
@@ -167,8 +177,11 @@ mod default_echo_handler_tests {
         let ctx = test_context();
         let handler = DefaultEchoHandler::new();
 
-        let wrong_protocol = ctx.scion_packet_raw(b"not scmp");
-        let reply = handler.handle(wrong_protocol);
+        let wrong_protocol = ctx
+            .scion_packet_raw(b"not scmp")
+            .encode_to_owned_view()
+            .expect("should encode");
+        let reply = handler.handle(&wrong_protocol);
         assert!(reply.is_none());
     }
 }

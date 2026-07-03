@@ -16,6 +16,7 @@ use std::fmt::Debug;
 
 use crate::{
     core::{
+        convert::ToModel,
         macros::impl_from_ref,
         view::{
             View, ViewConversionError,
@@ -36,6 +37,7 @@ use crate::{
                 ScmpMessageLayout, ScmpPacketTooBigLayout, ScmpParameterProblemLayout,
                 ScmpTracerouteReplyLayout, ScmpTracerouteRequestLayout, ScmpUnknownMessageLayout,
             },
+            model::ScmpMessage,
             types::{ScmpDestinationUnreachableCode, ScmpMessageType, ScmpParameterProblemCode},
         },
         udp::view::UdpDatagramView,
@@ -331,6 +333,22 @@ pub trait ScmpMessageExt {
                 | ScmpMessageView::TracerouteRequest(_)
                 | ScmpMessageView::TracerouteReply(_)
         )
+    }
+
+    /// Parses a model from the provided view.
+    fn to_model(&self) -> ScmpMessage {
+        match self.to_ref() {
+            ScmpMessageView::DestinationUnreachable(m) => m.to_model().into(),
+            ScmpMessageView::PacketTooBig(m) => m.to_model().into(),
+            ScmpMessageView::ParameterProblem(m) => m.to_model().into(),
+            ScmpMessageView::ExternalInterfaceDown(m) => m.to_model().into(),
+            ScmpMessageView::InternalConnectivityDown(m) => m.to_model().into(),
+            ScmpMessageView::EchoRequest(m) => m.to_model().into(),
+            ScmpMessageView::EchoReply(m) => m.to_model().into(),
+            ScmpMessageView::TracerouteRequest(m) => m.to_model().into(),
+            ScmpMessageView::TracerouteReply(m) => m.to_model().into(),
+            ScmpMessageView::Unknown(m) => m.to_model().into(),
+        }
     }
 }
 

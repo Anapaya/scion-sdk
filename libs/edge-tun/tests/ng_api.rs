@@ -43,7 +43,7 @@ use scion_sdk_scion_connect_rpc::{
     Method,
     client::{ConnectRpcClient, CrpcClient},
 };
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tempfile::NamedTempFile;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -52,23 +52,23 @@ use tokio_util::sync::CancellationToken;
 
 struct MockDatagram {
     data: Vec<u8>,
-    src: ScionSocketAddr,
-    dst: ScionSocketAddr,
+    src: ScionSocketIpAddr,
+    dst: ScionSocketIpAddr,
 }
 
 /// Simple in-memory mock SCION UDP socket backed by async channels.
 struct MockScionSocket {
     recv_channel: Mutex<mpsc::Receiver<MockDatagram>>,
     send_channel: mpsc::Sender<MockDatagram>,
-    local_addr: ScionSocketAddr,
+    local_addr: ScionSocketIpAddr,
 }
 
 impl MockScionSocket {
     /// Creates a pair of connected mock sockets.
     fn pair(
         queue_size: usize,
-        addr_a: ScionSocketAddr,
-        addr_b: ScionSocketAddr,
+        addr_a: ScionSocketIpAddr,
+        addr_b: ScionSocketIpAddr,
     ) -> (MockScionSocket, MockScionSocket) {
         let (a_to_b_tx, a_to_b_rx) = mpsc::channel(queue_size);
         let (b_to_a_tx, b_to_a_rx) = mpsc::channel(queue_size);
@@ -92,7 +92,7 @@ impl GenericScionUdpSocket for MockScionSocket {
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: ScionSocketAddr,
+        destination: ScionSocketIpAddr,
     ) -> Result<(), BoxedSocketError> {
         let datagram = MockDatagram {
             data: payload.to_vec(),
@@ -108,7 +108,7 @@ impl GenericScionUdpSocket for MockScionSocket {
     async fn recv_from(
         &self,
         buf: &mut [u8],
-    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
+    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError> {
         loop {
             let datagram = self.recv_channel.lock().await.recv().await.ok_or_else(|| {
                 Box::new(io::Error::new(
@@ -127,7 +127,7 @@ impl GenericScionUdpSocket for MockScionSocket {
         }
     }
 
-    fn local_addr(&self) -> ScionSocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         self.local_addr
     }
 }
@@ -137,10 +137,10 @@ impl GenericScionUdpSocket for MockScionSocket {
 /// Creates a socket pair for in-memory testing.
 fn make_socket_pair() -> (MockScionSocket, MockScionSocket) {
     let ia1 = "1-1".parse().unwrap();
-    let client_addr = ScionSocketAddr::new(ia1, Ipv4Addr::new(10, 0, 0, 1).into(), 0);
+    let client_addr = ScionSocketIpAddr::new(ia1, Ipv4Addr::new(10, 0, 0, 1).into(), 0);
 
     let ia2 = "1-2".parse().unwrap();
-    let server_addr = ScionSocketAddr::new(ia2, Ipv4Addr::new(10, 0, 0, 2).into(), 0);
+    let server_addr = ScionSocketIpAddr::new(ia2, Ipv4Addr::new(10, 0, 0, 2).into(), 0);
     MockScionSocket::pair(1024, client_addr, server_addr)
 }
 
@@ -182,8 +182,8 @@ fn make_server_quic_config() -> (squiche::Config, NamedTempFile, NamedTempFile) 
 // ─── Fake control plane ─────────────────────────────────────────────────────────
 
 struct FakeControlPlane {
-    control_plane_addr: ScionSocketAddr,
-    data_plane_addr: ScionSocketAddr,
+    control_plane_addr: ScionSocketIpAddr,
+    data_plane_addr: ScionSocketIpAddr,
     responder_key: x25519::PublicKey,
     assigned_addr: Option<IpAddr>,
     routes: Vec<IpNet>,
@@ -220,9 +220,9 @@ impl EdgeTunControlPlane for FakeControlPlane {
 
 // ─── Setup helpers ──────────────────────────────────────────────────────────────
 
-fn make_scion_addr(ia: &str, ip: impl Into<std::net::IpAddr>) -> ScionSocketAddr {
+fn make_scion_addr(ia: &str, ip: impl Into<std::net::IpAddr>) -> ScionSocketIpAddr {
     let ip: std::net::IpAddr = ip.into();
-    ScionSocketAddr::new(ia.parse().unwrap(), ip.into(), 1234)
+    ScionSocketIpAddr::new(ia.parse().unwrap(), ip, 1234)
 }
 
 /// Starts the API server and returns a cancellation token to stop it.
@@ -250,7 +250,7 @@ fn start_server(
 /// Creates a client connected to the given server address.
 async fn make_client(
     client_socket: MockScionSocket,
-    server_addr: ScionSocketAddr,
+    server_addr: ScionSocketIpAddr,
 ) -> EdgeTunControlPlaneClient<CrpcClient> {
     let config = QuicConfig::builder().verify_peer(false).build();
     let crpc_client = CrpcClient::with_quic_config(
@@ -268,7 +268,7 @@ async fn make_client(
 /// Creates a raw CrpcClient (for tests needing direct proto access).
 async fn make_raw_client(
     client_socket: MockScionSocket,
-    server_addr: ScionSocketAddr,
+    server_addr: ScionSocketIpAddr,
 ) -> CrpcClient {
     let config = QuicConfig::builder().verify_peer(false).build();
     CrpcClient::with_quic_config(

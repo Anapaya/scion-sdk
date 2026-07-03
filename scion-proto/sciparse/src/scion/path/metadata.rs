@@ -57,6 +57,24 @@ impl PathMetadata {
             notes: None,
         }
     }
+
+    /// Reverses the Path Metadata
+    ///
+    /// This looses the EPIC authentication information, as it is not possible to derive the reverse
+    /// secret.
+    pub fn reverse(&mut self) {
+        if let Some(interfaces) = &mut self.interfaces {
+            interfaces.reverse();
+        }
+
+        // XXX(ake): since epic auth is about the last two hops in the path, I assume there is no
+        // way to derive the reverse secret?
+        self.epic_auth = None;
+
+        if let Some(notes) = &mut self.notes {
+            notes.reverse();
+        }
+    }
 }
 
 /// Metadata about an interface used in a path.
@@ -268,7 +286,7 @@ pub mod link {
     use crate::core::macros::impl_from;
 
     /// Metadata about a link used in a path
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum LinkMeta {
         /// The route to the next hop is internal to the AS
         Ingress {

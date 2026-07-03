@@ -28,11 +28,13 @@ pub trait UnderlayDiscovery: Send + Sync {
 }
 
 /// Path segment error.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SegmentsError {
     /// Invalid argument.
+    #[error("invalid argument: {0}")]
     InvalidArgument(Cow<'static, str>),
     /// Internal error.
+    #[error("internal error: {0}")]
     InternalError(Cow<'static, str>),
 }
 

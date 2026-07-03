@@ -16,6 +16,7 @@
 
 use crate::{
     core::{
+        convert::{FromView, ToModel},
         encode::InvalidStructureError,
         layout::Layout as _,
         view::{View, ViewConversionError},
@@ -586,14 +587,17 @@ error_message!(
         pub code: ScmpDestinationUnreachableCode,
     }
 );
-impl ScmpDestinationUnreachable {
-    /// Create a new SCMP DestinationUnreachable message from a view.
-    pub fn from_view(view: &ScmpDestinationUnreachableMessageView) -> Self {
+impl FromView for ScmpDestinationUnreachable {
+    type ViewType = ScmpDestinationUnreachableMessageView;
+    fn from_view(view: &ScmpDestinationUnreachableMessageView) -> Self {
         Self {
             code: view.code(),
             offending_packet: view.offending_packet().to_vec(),
         }
     }
+}
+impl ToModel for ScmpDestinationUnreachableMessageView {
+    type ModelType = ScmpDestinationUnreachable;
 }
 impl PayloadEncode for ScmpDestinationUnreachable {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
@@ -657,14 +661,17 @@ error_message!(
         pub mtu: u16,
     }
 );
-impl ScmpPacketTooBig {
-    /// Create a new SCMP PacketTooBig message from a view.
-    pub fn from_view(view: &ScmpPacketTooBigMessageView) -> Self {
+impl FromView for ScmpPacketTooBig {
+    type ViewType = ScmpPacketTooBigMessageView;
+    fn from_view(view: &ScmpPacketTooBigMessageView) -> Self {
         Self {
             mtu: view.mtu(),
             offending_packet: view.offending_packet().to_vec(),
         }
     }
+}
+impl ToModel for ScmpPacketTooBigMessageView {
+    type ModelType = ScmpPacketTooBig;
 }
 impl PayloadEncode for ScmpPacketTooBig {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
@@ -734,15 +741,18 @@ error_message!(
         pub pointer: u16,
     }
 );
-impl ScmpParameterProblem {
-    /// Create a new SCMP ParameterProblem message from a view.
-    pub fn from_view(view: &ScmpParameterProblemMessageView) -> Self {
+impl FromView for ScmpParameterProblem {
+    type ViewType = ScmpParameterProblemMessageView;
+    fn from_view(view: &ScmpParameterProblemMessageView) -> Self {
         Self {
             code: view.code(),
             pointer: view.pointer(),
             offending_packet: view.offending_packet().to_vec(),
         }
     }
+}
+impl ToModel for ScmpParameterProblemMessageView {
+    type ModelType = ScmpParameterProblem;
 }
 impl PayloadEncode for ScmpParameterProblem {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
@@ -809,15 +819,18 @@ error_message!(
         pub interface_id: u16,
     }
 );
-impl ScmpExternalInterfaceDown {
-    /// Create a new SCMP ExternalInterfaceDown message from a view.
-    pub fn from_view(view: &ScmpExternalInterfaceDownMessageView) -> Self {
+impl FromView for ScmpExternalInterfaceDown {
+    type ViewType = ScmpExternalInterfaceDownMessageView;
+    fn from_view(view: &ScmpExternalInterfaceDownMessageView) -> Self {
         Self {
             isd_asn: view.isd_asn(),
             interface_id: view.interface_id() as u16,
             offending_packet: view.offending_packet().to_vec(),
         }
     }
+}
+impl ToModel for ScmpExternalInterfaceDownMessageView {
+    type ModelType = ScmpExternalInterfaceDown;
 }
 impl PayloadEncode for ScmpExternalInterfaceDown {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
@@ -886,9 +899,9 @@ error_message!(
         pub egress_interface_id: u16,
     }
 );
-impl ScmpInternalConnectivityDown {
-    /// Create a new SCMP InternalConnectivityDown message from a view.
-    pub fn from_view(view: &ScmpInternalConnectivityDownMessageView) -> Self {
+impl FromView for ScmpInternalConnectivityDown {
+    type ViewType = ScmpInternalConnectivityDownMessageView;
+    fn from_view(view: &ScmpInternalConnectivityDownMessageView) -> Self {
         Self {
             isd_asn: view.isd_asn(),
             ingress_interface_id: view.ingress_interface_id() as u16,
@@ -896,6 +909,9 @@ impl ScmpInternalConnectivityDown {
             offending_packet: view.offending_packet().to_vec(),
         }
     }
+}
+impl ToModel for ScmpInternalConnectivityDownMessageView {
+    type ModelType = ScmpInternalConnectivityDown;
 }
 impl PayloadEncode for ScmpInternalConnectivityDown {
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
@@ -1015,15 +1031,18 @@ informational_message!(
         pub data: Vec<u8>,
     }
 );
-impl ScmpEchoRequest {
-    /// Create a new SCMP EchoRequest message from a view.
-    pub fn from_view(view: &ScmpEchoRequestMessageView) -> Self {
+impl FromView for ScmpEchoRequest {
+    type ViewType = ScmpEchoRequestMessageView;
+    fn from_view(view: &ScmpEchoRequestMessageView) -> Self {
         Self {
             identifier: view.identifier(),
             sequence_number: view.sequence_number(),
             data: view.data().to_vec(),
         }
     }
+}
+impl ToModel for ScmpEchoRequestMessageView {
+    type ModelType = ScmpEchoRequest;
 }
 impl PayloadEncode for ScmpEchoRequest {
     /// Returns the required size of the SCMP EchoRequest message.
@@ -1079,15 +1098,18 @@ informational_message!(
         pub data: Vec<u8>,
     }
 );
-impl ScmpEchoReply {
-    /// Create a new SCMP EchoReply message from a view.
-    pub fn from_view(view: &ScmpEchoReplyMessageView) -> Self {
+impl FromView for ScmpEchoReply {
+    type ViewType = ScmpEchoReplyMessageView;
+    fn from_view(view: &ScmpEchoReplyMessageView) -> Self {
         Self {
             identifier: view.identifier(),
             sequence_number: view.sequence_number(),
             data: view.data().to_vec(),
         }
     }
+}
+impl ToModel for ScmpEchoReplyMessageView {
+    type ModelType = ScmpEchoReply;
 }
 impl PayloadEncode for ScmpEchoReply {
     /// Returns the required size of the SCMP EchoReply message.
@@ -1136,14 +1158,17 @@ informational_message!(
     /// Request to an on-path router to support traceroute functionality.
     TracerouteRequest => pub struct ScmpTracerouteRequest {}
 );
-impl ScmpTracerouteRequest {
-    /// Create a new SCMP TracerouteRequest message from a view.
-    pub fn from_view(view: &ScmpTracerouteRequestMessageView) -> Self {
+impl FromView for ScmpTracerouteRequest {
+    type ViewType = ScmpTracerouteRequestMessageView;
+    fn from_view(view: &ScmpTracerouteRequestMessageView) -> Self {
         Self {
             identifier: view.identifier(),
             sequence_number: view.sequence_number(),
         }
     }
+}
+impl ToModel for ScmpTracerouteRequestMessageView {
+    type ModelType = ScmpTracerouteRequest;
 }
 impl PayloadEncode for ScmpTracerouteRequest {
     /// Returns the required size of the SCMP TracerouteRequest message.
@@ -1199,9 +1224,9 @@ informational_message!(
         pub interface_id: u16,
     }
 );
-impl ScmpTracerouteReply {
-    /// Create a new SCMP TracerouteReply message from a view.
-    pub fn from_view(view: &ScmpTracerouteReplyMessageView) -> Self {
+impl FromView for ScmpTracerouteReply {
+    type ViewType = ScmpTracerouteReplyMessageView;
+    fn from_view(view: &ScmpTracerouteReplyMessageView) -> Self {
         Self {
             identifier: view.identifier(),
             sequence_number: view.sequence_number(),
@@ -1209,6 +1234,9 @@ impl ScmpTracerouteReply {
             interface_id: view.interface_id() as u16,
         }
     }
+}
+impl ToModel for ScmpTracerouteReplyMessageView {
+    type ModelType = ScmpTracerouteReply;
 }
 impl PayloadEncode for ScmpTracerouteReply {
     /// Returns the required size of the SCMP TracerouteReply message.
@@ -1273,15 +1301,21 @@ impl ScmpMessageUnknown {
             message_specific_data: payload,
         }
     }
+}
+impl FromView for ScmpMessageUnknown {
+    type ViewType = ScmpUnknownMessageView;
 
     /// Create a new unknown SCMP message from a view.
-    pub fn from_view(view: &ScmpUnknownMessageView) -> Self {
+    fn from_view(view: &ScmpUnknownMessageView) -> Self {
         Self {
             message_type: view.message_type(),
             code: view.code(),
             message_specific_data: view.message_specific_data().to_vec(),
         }
     }
+}
+impl ToModel for ScmpUnknownMessageView {
+    type ModelType = ScmpMessageUnknown;
 }
 impl PayloadEncode for ScmpMessageUnknown {
     /// Returns the required size of the SCMP Unknown message.

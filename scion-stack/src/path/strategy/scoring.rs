@@ -23,6 +23,8 @@
 
 use std::{collections::BTreeMap, fmt::Display, sync::Arc, time::SystemTime};
 
+use sciparse::dataplane_path::view::ScionDpPathView;
+
 use crate::path::types::{PathManagerPath, Score};
 
 /// Trait for scoring paths based on specific metrics.
@@ -56,17 +58,13 @@ impl PathScoring for PathLengthScorer {
     }
 
     fn score(&self, path: &PathManagerPath, _now: SystemTime) -> Score {
-        let length = match &path.path.data_plane_path {
-            scion_proto::path::DataPlanePath::EmptyPath => 0,
-            scion_proto::path::DataPlanePath::Standard(encoded_standard_path) => {
-                encoded_standard_path
-                    .segments()
-                    .map(|seg| seg.hop_fields().len() - 2)
-                    .sum()
+        let length: u8 = match path.path.dp_path() {
+            ScionDpPathView::Empty => 0,
+            ScionDpPathView::Standard(encoded_standard_path) => {
+                encoded_standard_path.hop_field_count()
             }
-            scion_proto::path::DataPlanePath::Unsupported { .. } => {
-                HOP_COUNT_FOR_MIN_SCORE as usize
-            }
+            ScionDpPathView::OneHop(_) => 0,
+            ScionDpPathView::Unsupported { .. } => HOP_COUNT_FOR_MIN_SCORE as u8,
         };
 
         const MAX_SCORE: f32 = 1.0;
@@ -204,24 +202,26 @@ mod tests {
         net::{IpAddr, Ipv4Addr},
     };
 
-    use scion_proto::{
-        address::{Asn, EndhostAddr, Isd, IsdAsn},
-        path::{Path, test_builder::TestPathBuilder},
+    use sciparse::{
+        address::ip_addr::ScionIpAddr,
+        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+        path::ScionPath,
+        util::test_builder::TestPathBuilder,
     };
 
     use super::*;
     use crate::path::types::PathManagerPath;
 
-    pub const SRC_ADDR: EndhostAddr = EndhostAddr::new(
+    pub const SRC_ADDR: ScionIpAddr = ScionIpAddr::new(
         IsdAsn::new(Isd(1), Asn(1)),
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
     );
-    pub const DST_ADDR: EndhostAddr = EndhostAddr::new(
+    pub const DST_ADDR: ScionIpAddr = ScionIpAddr::new(
         IsdAsn::new(Isd(2), Asn(1)),
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
     );
 
-    pub fn path(hop_count: u16, timestamp: u32, exp_units: u8, asn_seed: u32) -> Path {
+    pub fn path(hop_count: u16, timestamp: u32, exp_units: u8, asn_seed: u32) -> ScionPath {
         let mut builder = TestPathBuilder::new(SRC_ADDR.into(), DST_ADDR.into())
             .using_info_timestamp(timestamp)
             .with_hop_expiry(exp_units)

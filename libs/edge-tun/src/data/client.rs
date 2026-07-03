@@ -27,7 +27,7 @@ use ana_gotatun::{
 };
 use bytes::{Bytes, BytesMut};
 use scion_sdk_quic_scion::socket::{BoxedSocketError, GenericScionUdpSocket};
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::{select, task::JoinHandle, time::Interval};
 use zerocopy::IntoBytes as _;
 
@@ -67,7 +67,7 @@ impl SendErrorTolerantSocket {
     }
 
     /// Logs `err` at most once per [`SEND_ERROR_LOG_INTERVAL`].
-    fn log_send_error_throttled(&self, err: &BoxedSocketError, destination: ScionSocketAddr) {
+    fn log_send_error_throttled(&self, err: &BoxedSocketError, destination: ScionSocketIpAddr) {
         let now = Instant::now();
         let mut last = self.last_logged_error.lock().expect("lock poisoned");
         let should_log =
@@ -89,7 +89,7 @@ impl GenericScionUdpSocket for SendErrorTolerantSocket {
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: ScionSocketAddr,
+        destination: ScionSocketIpAddr,
     ) -> Result<(), BoxedSocketError> {
         if let Err(e) = self.inner.send_to(payload, destination).await {
             self.log_send_error_throttled(&e, destination);
@@ -102,11 +102,11 @@ impl GenericScionUdpSocket for SendErrorTolerantSocket {
     async fn recv_from(
         &self,
         buf: &mut [u8],
-    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
+    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError> {
         self.inner.recv_from(buf).await
     }
 
-    fn local_addr(&self) -> ScionSocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         self.inner.local_addr()
     }
 }
@@ -132,9 +132,9 @@ pub enum ClientDriverError {
 }
 
 struct ClientDriver {
-    state: Arc<Mutex<EdgeTunClientState<ScionSocketAddr>>>,
+    state: Arc<Mutex<EdgeTunClientState<ScionSocketIpAddr>>>,
     socket: Arc<dyn GenericScionUdpSocket>,
-    dataplane_address: ScionSocketAddr,
+    dataplane_address: ScionSocketIpAddr,
     update_timers_interval: Interval,
     packet_sender: async_channel::Sender<BytesMut>,
     pool: EdgePacketBufPool,
@@ -142,9 +142,9 @@ struct ClientDriver {
 
 impl ClientDriver {
     fn new(
-        state: Arc<Mutex<EdgeTunClientState<ScionSocketAddr>>>,
+        state: Arc<Mutex<EdgeTunClientState<ScionSocketIpAddr>>>,
         socket: Arc<dyn GenericScionUdpSocket>,
-        dataplane_address: ScionSocketAddr,
+        dataplane_address: ScionSocketIpAddr,
         packet_sender: async_channel::Sender<BytesMut>,
         pool: EdgePacketBufPool,
     ) -> Self {
@@ -278,9 +278,9 @@ pub enum EdgeTunClientRecvError {
 ///
 /// Dropping the client aborts the driver task.
 pub struct EdgeTunClient {
-    state: Arc<Mutex<EdgeTunClientState<ScionSocketAddr>>>,
+    state: Arc<Mutex<EdgeTunClientState<ScionSocketIpAddr>>>,
     socket: Arc<dyn GenericScionUdpSocket>,
-    dataplane_address: ScionSocketAddr,
+    dataplane_address: ScionSocketIpAddr,
     receive_queue: async_channel::Receiver<BytesMut>,
     driver_task: JoinHandle<ClientDriverError>,
 }
@@ -300,7 +300,7 @@ impl EdgeTunClient {
     pub fn new(
         config: EdgeTunClientConfig,
         socket: Arc<dyn GenericScionUdpSocket>,
-        dataplane_address: ScionSocketAddr,
+        dataplane_address: ScionSocketIpAddr,
         receive_queue_capacity: usize,
         pool: EdgePacketBufPool,
         fragmenter_metrics: FragmentMetrics,
@@ -365,7 +365,7 @@ impl EdgeTunClient {
     }
 
     /// The data plane address the client is connected to.
-    pub fn dataplane_address(&self) -> ScionSocketAddr {
+    pub fn dataplane_address(&self) -> ScionSocketIpAddr {
         self.dataplane_address
     }
 }

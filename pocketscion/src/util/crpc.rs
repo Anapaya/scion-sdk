@@ -22,7 +22,7 @@ pub mod client {
     use anyhow::{Context, bail};
     use scion_sdk_quic_scion::quic::config::QuicConfig;
     use scion_sdk_scion_connect_rpc::client::CrpcClient;
-    use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
+    use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn};
 
     use crate::{
         comp::sim_network_stack::{NetSimPathProvider, NetSimStack},
@@ -70,7 +70,7 @@ pub mod client {
             let socket = Arc::new(socket);
 
             let client_fut = CrpcClient::with_quic_config(
-                ScionSocketAddr::new(dst_ia, dst_addr.ip().into(), dst_addr.port()),
+                ScionSocketIpAddr::new(dst_ia, dst_addr.ip(), dst_addr.port()),
                 socket,
                 None, // XXX: Peer validation is disabled
                 None,

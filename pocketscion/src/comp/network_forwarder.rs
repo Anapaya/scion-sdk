@@ -424,7 +424,9 @@ mod tests {
 
     use chrono::Utc;
     use sciparse::{
-        address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
+        address::{
+            addr::ScionAddr, ip_socket_addr::ScionSocketIpAddr, socket_addr::ScionSocketAddr,
+        },
         core::{convert::TryFromView, encode::WireEncode},
         dataplane_path::model::DpPath,
         identifier::isd_asn::IsdAsn,
@@ -485,9 +487,9 @@ mod tests {
         let sender_socket = sender_stack.bind_udp(0).expect("bind sim udp");
 
         let payload = b"hello-from-sim".to_vec();
-        let dst = ScionSocketAddr::new(local_as, forwarder_ip.into(), 4242);
+        let dst = ScionSocketIpAddr::new(local_as, forwarder_ip, 4242);
         sender_socket
-            .try_send(dst, DpPath::Empty, payload, ScionNetworkTime::now())
+            .try_send(dst.into(), DpPath::Empty, payload, ScionNetworkTime::now())
             .expect("send sim packet");
 
         let mut buf = [0u8; 2048];

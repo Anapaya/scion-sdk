@@ -20,12 +20,14 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use scion_proto::{
-    address::{HostAddr, IsdAsn},
-    packet::ScionPacketRaw,
-    path::{DataPlanePathFingerprint, Path},
-    scmp::{DestinationUnreachableCode, ScmpErrorMessage},
-    wire_encoding::WireDecode,
+use sciparse::{
+    address::host_addr::ScionHostAddr,
+    core::view::View,
+    dataplane_path::view::ScionDpPathViewExt,
+    identifier::isd_asn::IsdAsn,
+    packet::view::ScionRawPacketView,
+    path::{ScionPath, fingerprint::data_plane::DpPathFingerprint},
+    payload::scmp::{model::ScmpErrorMessage, types::ScmpDestinationUnreachableCode},
 };
 
 use crate::{
@@ -62,7 +64,7 @@ impl IssueMarker {
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 pub enum IssueMarkerTarget {
     FullPath {
-        fingerprint: DataPlanePathFingerprint,
+        fingerprint: DpPathFingerprint,
     },
     Interface {
         isd_asn: IsdAsn,
@@ -83,7 +85,7 @@ pub enum IssueMarkerTarget {
     DestinationNetwork {
         isd_asn: IsdAsn,
         ingress_interface: u16,
-        dst_host: HostAddr,
+        dst_host: ScionHostAddr,
     },
 }
 
@@ -93,7 +95,7 @@ impl IssueMarkerTarget {
     /// If the path does not contain metadata, hop based targets cannot be matched.
     ///
     /// If it's possible to optimize path matching, use `matches_path_checked` instead.
-    pub fn matches_path(&self, path: &Path, fingerprint: &DataPlanePathFingerprint) -> bool {
+    pub fn matches_path(&self, path: &ScionPath, fingerprint: &DpPathFingerprint) -> bool {
         self.matches_path_checked(path, fingerprint, |_, _| true)
     }
 
@@ -105,12 +107,12 @@ impl IssueMarkerTarget {
     /// If the path does not contain metadata, hop based targets cannot be matched.
     pub fn matches_path_checked<F>(
         &self,
-        path: &Path,
-        fingerprint: &DataPlanePathFingerprint,
+        path: &ScionPath,
+        fingerprint: &DpPathFingerprint,
         might_include_check: F,
     ) -> bool
     where
-        F: Fn(&IssueMarkerTarget, &Path) -> bool,
+        F: Fn(&IssueMarkerTarget, &ScionPath) -> bool,
     {
         match self {
             // Check per fingerprint
@@ -122,7 +124,7 @@ impl IssueMarkerTarget {
                 isd_asn,
                 egress_interface,
             } => {
-                path.first_hop_egress_interface()
+                path.first_egress_interface()
                     .is_some_and(|intf| intf.isd_asn == *isd_asn && intf.id == *egress_interface)
             }
             // Just need to check last interface
@@ -135,7 +137,7 @@ impl IssueMarkerTarget {
                 isd_asn,
                 ingress_interface,
             } => {
-                path.last_hop_ingress_interface()
+                path.last_ingress_interface()
                     .is_some_and(|intf| intf.isd_asn == *isd_asn && intf.id == *ingress_interface)
             }
             // Check all interfaces for matching ingress/egress pair
@@ -150,7 +152,7 @@ impl IssueMarkerTarget {
                 }
 
                 let interfaces = match path
-                    .metadata
+                    .metadata()
                     .as_ref()
                     .and_then(|meta| meta.interfaces.as_ref())
                 {
@@ -159,14 +161,14 @@ impl IssueMarkerTarget {
                 };
 
                 // We start in the source AS, so first interface is always source egress
-                if path.source() == *isd_asn {
+                if path.src_ia() == *isd_asn {
                     return match ingress_filter {
                         Some(_) => false, /* we are in src, but an ingress filter is set, */
                         // cannot match
                         None => {
                             interfaces
                                 .first()
-                                .is_some_and(|iface| &iface.id == egress_filter)
+                                .is_some_and(|iface| &iface.interface.id == egress_filter)
                         }
                     };
                 }
@@ -175,13 +177,13 @@ impl IssueMarkerTarget {
 
                 // Check every ingress interface if it's in the target AS
                 while let Some(interface) = iter.nth(1) {
-                    if interface.isd_asn != *isd_asn {
+                    if interface.interface.isd_asn != *isd_asn {
                         continue;
                     }
 
                     // Check ingress filter
                     if let Some(ingress) = ingress_filter
-                        && interface.id != *ingress
+                        && interface.interface.id != *ingress
                     {
                         return false;
                     }
@@ -189,7 +191,7 @@ impl IssueMarkerTarget {
                     // Next interface is egress
                     return iter
                         .next()
-                        .is_some_and(|egress| &egress.id == egress_filter);
+                        .is_some_and(|egress| &egress.interface.id == egress_filter);
                 }
 
                 false
@@ -238,7 +240,7 @@ pub enum IssueKind {
 impl Display for IssueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IssueKind::Scmp { error } => write!(f, "SCMP Error: {}", error),
+            IssueKind::Scmp { error } => write!(f, "SCMP Error: {:?}", error),
             IssueKind::Icmp { .. } => write!(f, "ICMP Error"),
             IssueKind::Socket { err } => write!(f, "Socket Error: {:?}", err),
         }
@@ -260,19 +262,14 @@ impl IssueKind {
     }
 
     /// Returns the target type the issue applies to, if any.
-    pub fn target_type(&self, path: Option<&Path>) -> Option<IssueMarkerTarget> {
+    pub fn target_type(&self) -> Option<IssueMarkerTarget> {
         match self {
             IssueKind::Scmp { error } => {
-                if path.is_none() {
-                    debug_assert!(false, "Path must be provided on SCMP errors");
-                    return None;
-                };
-
                 match error {
                     ScmpErrorMessage::DestinationUnreachable(scmp_destination_unreachable) => {
                         // XXX(ake): Destination Unreachable depend on the destination host,
                         // thus they can't be applied globally
-                        use scion_proto::scmp::DestinationUnreachableCode::*;
+                        use sciparse::payload::scmp::types::ScmpDestinationUnreachableCode::*;
                         match scmp_destination_unreachable.code {
                             NoRouteToDestination
                             | AddressUnreachable
@@ -280,52 +277,43 @@ impl IssueKind {
                             | CommunicationAdministrativelyDenied
                             | SourceAddressFailedIngressEgressPolicy
                             | RejectRouteToDestination => {
-                                let mut offending =
-                                    scmp_destination_unreachable.get_offending_packet();
-                                let pkt = ScionPacketRaw::decode(&mut offending).ok()?;
-                                let dst = pkt.headers.path().last_hop_ingress_interface()?;
-                                let dst_host = pkt.headers.address.destination()?.host();
+                                let offending = scmp_destination_unreachable.get_offending_packet();
+                                let (pkt, _rest) =
+                                    ScionRawPacketView::from_slice(offending).ok()?;
+                                let dst = pkt.header().path().last_ingress_interface()?;
+                                let dst_host =
+                                    pkt.header().dst_host_addr().ok()?.scion_host_addr().ok()?;
 
                                 Some(IssueMarkerTarget::DestinationNetwork {
-                                    isd_asn: dst.isd_asn,
-                                    ingress_interface: dst.id,
+                                    isd_asn: pkt.header().dst_ia(),
+                                    ingress_interface: dst,
                                     dst_host,
                                 })
                             }
                             // Filter out unspecific
-                            Unassigned(_) | PortUnreachable | _ => None,
+                            Unassigned(_) | PortUnreachable => None,
                         }
                     }
                     ScmpErrorMessage::ExternalInterfaceDown(msg) => {
                         Some(IssueMarkerTarget::Interface {
                             isd_asn: msg.isd_asn,
                             ingress_filter: None,
-                            // TODO: docs on field say something about the value being encoded
-                            // in the LSB of this field. Figure out what was done there and how
-                            // to decode it.
-                            egress_filter: msg.interface_id as u16,
+                            egress_filter: msg.interface_id,
                         })
                     }
                     ScmpErrorMessage::InternalConnectivityDown(msg) => {
                         Some(IssueMarkerTarget::Interface {
                             isd_asn: msg.isd_asn,
-                            ingress_filter: Some(msg.ingress_interface_id as u16),
-                            egress_filter: msg.egress_interface_id as u16,
+                            ingress_filter: Some(msg.ingress_interface_id),
+                            egress_filter: msg.egress_interface_id,
                         })
                     }
-
-                    ScmpErrorMessage::Unknown(_) => None,
                     ScmpErrorMessage::PacketTooBig(_) => None,
                     ScmpErrorMessage::ParameterProblem(_) => None,
                 }
             }
             IssueKind::Icmp { .. } => None,
             IssueKind::Socket { err } => {
-                if path.is_none() {
-                    debug_assert!(false, "Path must be provided on Socket errors");
-                    return None;
-                };
-
                 match err {
                     SendError::FirstHopUnreachable {
                         isd_asn,
@@ -360,18 +348,18 @@ impl IssueKind {
                         // XXX(ake): Destination Errors are not handled in the Path Manager
                         match err.code {
                             // Can't forward packet to dst ip
-                            DestinationUnreachableCode::NoRouteToDestination
-                            | DestinationUnreachableCode::AddressUnreachable => -0.8,
+                            ScmpDestinationUnreachableCode::NoRouteToDestination
+                            | ScmpDestinationUnreachableCode::AddressUnreachable => -0.8,
                             // Admin denied might be policy, treated as severe
-                            DestinationUnreachableCode::CommunicationAdministrativelyDenied => -0.9,
+                            ScmpDestinationUnreachableCode::CommunicationAdministrativelyDenied => {
+                                -0.9
+                            }
 
                             // Unreachable Port is beyond routing
-                            DestinationUnreachableCode::PortUnreachable => 0.0,
+                            ScmpDestinationUnreachableCode::PortUnreachable => 0.0,
                             _ => -0.5,
                         }
                     }
-                    // Unspecific
-                    ScmpErrorMessage::Unknown(_) => -0.2,
                     // Irrelevant
                     ScmpErrorMessage::PacketTooBig(_) | ScmpErrorMessage::ParameterProblem(_) => {
                         0.0

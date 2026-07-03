@@ -55,21 +55,26 @@ impl<'a> ClassifiedPacketView<'a> {
     /// [`ClassifiedPacketView::Other`] variant, and when the destination host address cannot be
     /// parsed.
     pub fn dst_socket_addr(&self) -> Option<ScionSocketAddr> {
-        let (packet, dst_port): (&ScionRawPacketView, u16) = match self {
-            ClassifiedPacketView::Udp(udp) => ((*udp).into(), udp.udp().dst_port()),
-            ClassifiedPacketView::Scmp(scmp) => ((*scmp).into(), scmp.scmp().dst_port()?),
-            ClassifiedPacketView::Other(_) => return None,
-        };
+        let dst_port = self.dst_port()?;
+        let scion_addr = self.into_raw().dst_scion_addr().ok()?;
 
-        let isd_asn: IsdAsn = packet.header().dst_ia();
-        let host = packet
-            .header()
-            .dst_host_addr()
-            .ok()?
-            .scion_host_addr()
-            .ok()?;
+        Some(ScionSocketAddr::new(
+            scion_addr.isd_asn(),
+            scion_addr.host(),
+            dst_port,
+        ))
+    }
 
-        Some(ScionSocketAddr::new(isd_asn, host, dst_port))
+    /// Returns the destination port if it could be deduced from the packet.
+    ///
+    /// Returns `None` if the packet is neither a UDP nor a SCMP packet, or if the SCMP packet does
+    /// not contain a port.
+    pub fn dst_port(&self) -> Option<u16> {
+        match self {
+            ClassifiedPacketView::Udp(udp) => Some(udp.udp().dst_port()),
+            ClassifiedPacketView::Scmp(scmp) => scmp.scmp().dst_port(),
+            ClassifiedPacketView::Other(_) => None,
+        }
     }
 
     /// Returns `true` if the classified packet is a UDP packet.
@@ -85,6 +90,15 @@ impl<'a> ClassifiedPacketView<'a> {
     /// Returns `true` if the classified packet is neither a UDP nor a SCMP packet.
     pub fn is_other(&self) -> bool {
         matches!(self, ClassifiedPacketView::Other(_))
+    }
+
+    /// Returns a reference to the underlying raw packet view.
+    pub fn into_raw(&self) -> &'a ScionRawPacketView {
+        match self {
+            ClassifiedPacketView::Udp(udp) => udp.into_raw(),
+            ClassifiedPacketView::Scmp(scmp) => scmp.into_raw(),
+            ClassifiedPacketView::Other(other) => other,
+        }
     }
 }
 

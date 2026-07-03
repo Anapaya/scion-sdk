@@ -103,6 +103,17 @@ impl ScionAddr {
             ScionAddr::Svc(_) => None,
         }
     }
+
+    /// Attempts to convert to a [ScionIpAddr]
+    ///
+    /// Returns Err(Self) if the contained Addr is not an IP
+    pub const fn try_into_scion_ip_addr(self) -> Result<ScionIpAddr, Self> {
+        match self {
+            Self::V4(a) => Ok(ScionIpAddr::V4(a)),
+            Self::V6(a) => Ok(ScionIpAddr::V6(a)),
+            Self::Svc(_) => Err(self),
+        }
+    }
 }
 impl FromStr for ScionAddr {
     type Err = AddressParseError;

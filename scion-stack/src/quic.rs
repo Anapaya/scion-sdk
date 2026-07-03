@@ -16,6 +16,7 @@
 use std::future::Future;
 
 use bytes::Bytes;
+use sciparse::address::{ip_addr::ScionIpAddr, ip_socket_addr::ScionSocketIpAddr};
 
 /// Abstract over different types of Quinn-connections that differ only in the
 /// type of address that is used for the local and remote address.
@@ -59,15 +60,15 @@ pub trait QuinnConn: Clone + Send + Sync {
 pub struct ScionQuinnConn {
     pub(crate) inner: anapaya_quinn::Connection,
     /// The local SCION address of the connection.
-    pub(crate) local_addr: Option<scion_proto::address::ScionAddr>,
+    pub(crate) local_addr: Option<ScionIpAddr>,
     /// The remote SCION socket address of the connection.
-    pub(crate) remote_addr: scion_proto::address::SocketAddr,
+    pub(crate) remote_addr: ScionSocketIpAddr,
 }
 
 impl QuinnConn for ScionQuinnConn {
-    type AddrType = scion_proto::address::ScionAddr;
+    type AddrType = ScionIpAddr;
 
-    type SockAddrType = scion_proto::address::SocketAddr;
+    type SockAddrType = ScionSocketIpAddr;
 
     fn open_bi(&self) -> anapaya_quinn::OpenBi<'_> {
         self.inner.open_bi()

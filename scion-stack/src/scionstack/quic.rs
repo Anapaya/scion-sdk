@@ -16,7 +16,7 @@
 use std::{
     collections::HashMap,
     fmt::{self, Debug},
-    hash::{BuildHasher, Hash as _, Hasher as _},
+    hash::BuildHasher,
     io::ErrorKind,
     net::{self, IpAddr, Ipv6Addr},
     pin::Pin,
@@ -29,9 +29,11 @@ use anapaya_quinn::{AsyncUdpSocket, udp::RecvMeta};
 use bytes::BufMut as _;
 use chrono::Utc;
 use foldhash::fast::FixedState;
-use scion_proto::{
-    address::SocketAddr,
-    packet::{ByEndpoint, ScionPacketUdp},
+use sciparse::{
+    address::{ip_addr::ScionIpAddr, ip_socket_addr::ScionSocketIpAddr},
+    core::model::Model,
+    dataplane_path::view::ScionDpPathViewExt,
+    packet::model::ScionUdpPacket,
 };
 
 use super::{AsyncUdpUnderlaySocket, udp_polling::UdpPoller};
@@ -46,7 +48,7 @@ const IO_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(3);
 /// A wrapper around a anapaya_quinn::Endpoint that translates between SCION and ip:port addresses.
 ///
 /// This is necessary because anapaya_quinn expects a std::net::SocketAddr, but SCION uses
-/// scion_proto::address::SocketAddr.
+/// ScionSocketIpAddr.
 ///
 /// Addresses are mapped by the provided ScionAsyncUdpSocket.
 pub struct Endpoint {
@@ -54,7 +56,7 @@ pub struct Endpoint {
     socket: Arc<ScionAsyncUdpSocket>,
     path_prefetcher: Arc<dyn PathPrefetcher + Send + Sync>,
     address_translator: Arc<AddressTranslator>,
-    local_scion_addr: scion_proto::address::SocketAddr,
+    local_scion_addr: ScionSocketIpAddr,
 }
 
 impl Endpoint {
@@ -63,7 +65,7 @@ impl Endpoint {
         config: anapaya_quinn::EndpointConfig,
         server_config: Option<anapaya_quinn::ServerConfig>,
         socket: Arc<ScionAsyncUdpSocket>,
-        local_scion_addr: scion_proto::address::SocketAddr,
+        local_scion_addr: ScionSocketIpAddr,
         runtime: Arc<dyn anapaya_quinn::Runtime>,
         pather: Arc<dyn PathPrefetcher + Send + Sync>,
         address_translator: Arc<AddressTranslator>,
@@ -85,12 +87,10 @@ impl Endpoint {
     /// Connect to the address.
     pub fn connect(
         &self,
-        addr: scion_proto::address::SocketAddr,
+        addr: ScionSocketIpAddr,
         server_name: &str,
     ) -> Result<anapaya_quinn::Connecting, anapaya_quinn::ConnectError> {
-        let mapped_addr = self
-            .address_translator
-            .register_scion_address(addr.scion_address());
+        let mapped_addr = self.address_translator.register_scion_address(addr.into());
         let local_addr = self
             .address_translator
             .lookup_scion_address(self.inner.local_addr().unwrap().ip())
@@ -106,27 +106,33 @@ impl Endpoint {
     /// Accepts a new incoming connection.
     pub async fn accept(&self) -> Result<Option<ScionQuinnConn>, anapaya_quinn::ConnectionError> {
         let incoming = self.inner.accept().await;
+
         if let Some(incoming) = incoming {
             let remote_socket_addr = incoming.remote_address();
             let local_scion_addr = incoming
                 .local_ip()
                 .and_then(|ip| self.address_translator.lookup_scion_address(ip));
+
+            let remote_scion_addr = self
+                .address_translator
+                .lookup_scion_address(remote_socket_addr.ip())
+                .or_else(|| {
+                    panic!(
+                        "no scion address mapped for ip, this should never happen: {}",
+                        remote_socket_addr.ip(),
+                    );
+                })
+                .unwrap();
+
             let conn = ScionQuinnConn {
                 inner: incoming.await?,
                 // XXX(uniquefine): For now the ScionAsyncUdpSocket does not have access to a
                 // packets destination address, so we cannot lookup the local SCION
                 // address.
                 local_addr: local_scion_addr,
-                remote_addr: scion_proto::address::SocketAddr::new(
-                    self.address_translator
-                        .lookup_scion_address(remote_socket_addr.ip())
-                        .or_else(|| {
-                            panic!(
-                                "no scion address mapped for ip, this should never happen: {}",
-                                remote_socket_addr.ip(),
-                            );
-                        })
-                        .unwrap(),
+                remote_addr: ScionSocketIpAddr::new(
+                    remote_scion_addr.isd_asn(),
+                    remote_scion_addr.ip(),
                     remote_socket_addr.port(),
                 ),
             };
@@ -152,7 +158,7 @@ impl Endpoint {
     }
 
     /// Returns the local SCION address of the endpoint.
-    pub fn local_scion_addr(&self) -> scion_proto::address::SocketAddr {
+    pub fn local_scion_addr(&self) -> ScionSocketIpAddr {
         self.local_scion_addr
     }
 
@@ -166,7 +172,7 @@ impl Endpoint {
 // TODO(uniquefine): Expiration or cleanup of translated addresses
 pub struct AddressTranslator {
     build_hasher: FixedState,
-    addr_map: Mutex<HashMap<std::net::Ipv6Addr, scion_proto::address::ScionAddr>>,
+    addr_map: Mutex<HashMap<std::net::Ipv6Addr, ScionIpAddr>>,
 }
 
 impl Debug for AddressTranslator {
@@ -194,18 +200,12 @@ impl AddressTranslator {
         }
     }
 
-    fn hash_scion_address(&self, addr: scion_proto::address::ScionAddr) -> std::net::Ipv6Addr {
-        let mut hasher = self.build_hasher.build_hasher();
-        hasher.write_u64(addr.isd_asn().to_u64());
-        addr.local_address().hash(&mut hasher);
-        Ipv6Addr::from(hasher.finish() as u128)
+    fn hash_scion_address(&self, addr: ScionIpAddr) -> std::net::Ipv6Addr {
+        Ipv6Addr::from(self.build_hasher.hash_one(addr) as u128)
     }
 
     /// Registers the SCION address and returns the corresponding IP address.
-    pub fn register_scion_address(
-        &self,
-        addr: scion_proto::address::ScionAddr,
-    ) -> std::net::IpAddr {
+    pub fn register_scion_address(&self, addr: ScionIpAddr) -> std::net::IpAddr {
         let ip = self.hash_scion_address(addr);
         let mut addr_map = self.addr_map.lock().unwrap();
         addr_map.entry(ip).or_insert(addr);
@@ -213,10 +213,7 @@ impl AddressTranslator {
     }
 
     /// Looks up the SCION address for the given IP address.
-    pub fn lookup_scion_address(
-        &self,
-        ip: std::net::IpAddr,
-    ) -> Option<scion_proto::address::ScionAddr> {
+    pub fn lookup_scion_address(&self, ip: std::net::IpAddr) -> Option<ScionIpAddr> {
         let ip = match ip {
             IpAddr::V6(ip) => ip,
             IpAddr::V4(_) => return None,
@@ -319,14 +316,17 @@ impl AsyncUdpSocket for ScionAsyncUdpSocket {
     }
 
     fn try_send(&self, transmit: &anapaya_quinn::udp::Transmit) -> std::io::Result<()> {
-        let buf = bytes::Bytes::copy_from_slice(transmit.contents);
-        let remote_scion_addr = SocketAddr::new(
-            self.address_translator
-                .lookup_scion_address(transmit.destination.ip())
-                .ok_or(std::io::Error::other(format!(
-                    "no scion address mapped for ip, this should never happen: {}",
-                    transmit.destination.ip(),
-                )))?,
+        let remote_addr = self
+            .address_translator
+            .lookup_scion_address(transmit.destination.ip())
+            .ok_or(std::io::Error::other(format!(
+                "no scion address mapped for ip, this should never happen: {}",
+                transmit.destination.ip(),
+            )))?;
+
+        let remote_scion_addr = ScionSocketIpAddr::new(
+            remote_addr.isd_asn(),
+            remote_addr.ip(),
             transmit.destination.port(),
         );
         let path = self.path_manager.try_cached_path(
@@ -340,17 +340,17 @@ impl AsyncUdpSocket for ScionAsyncUdpSocket {
             None => return Ok(()),
         };
 
-        let packet = ScionPacketUdp::new(
-            ByEndpoint {
-                source: self.socket.local_addr(),
-                destination: remote_scion_addr,
-            },
-            path.data_plane_path.to_bytes_path(),
-            buf,
+        let packet = ScionUdpPacket::new(
+            self.socket.local_addr().into(),
+            remote_scion_addr.into(),
+            path.dp_path().to_model(),
+            transmit.contents.to_vec(),
         )
+        .into_raw()
+        .encode_to_owned_view()
         .map_err(|_| std::io::Error::other("failed to encode packet"))?;
 
-        match self.socket.try_send(packet.into()) {
+        match self.socket.try_send(&packet) {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == ErrorKind::WouldBlock => Err(e),
             Err(e) => {
@@ -373,7 +373,7 @@ impl AsyncUdpSocket for ScionAsyncUdpSocket {
     ) -> std::task::Poll<std::io::Result<usize>> {
         match ready!(self.socket.poll_recv_from_with_path(cx)) {
             Ok((remote, bytes, path)) => {
-                match path.to_reversed() {
+                match path.clone().into_reversed() {
                     Ok(path) => {
                         // Register the path for later reuse
                         self.path_manager.register_path(
@@ -383,21 +383,21 @@ impl AsyncUdpSocket for ScionAsyncUdpSocket {
                             path,
                         );
                     }
-                    Err(e) => {
+                    Err((_, e)) => {
                         tracing::trace!("Failed to reverse path for registration: {}", e)
                     }
                 }
 
                 let remote_ip = self
                     .address_translator
-                    .register_scion_address(remote.scion_address());
+                    .register_scion_address(remote.scion_ip_addr());
 
                 meta[0] = RecvMeta {
                     addr: std::net::SocketAddr::new(remote_ip, remote.port()),
                     len: bytes.len(),
                     ecn: None,
                     stride: bytes.len(),
-                    dst_ip: self.socket.local_addr().local_address().map(|s| s.ip()),
+                    dst_ip: Some(self.socket.local_addr().ip()),
                 };
                 bufs[0].as_mut().put_slice(&bytes);
 
@@ -420,7 +420,7 @@ impl AsyncUdpSocket for ScionAsyncUdpSocket {
     fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
         Ok(std::net::SocketAddr::new(
             self.address_translator
-                .register_scion_address(self.socket.local_addr().scion_address()),
+                .register_scion_address(self.socket.local_addr().scion_ip_addr()),
             self.socket.local_addr().port(),
         ))
     }

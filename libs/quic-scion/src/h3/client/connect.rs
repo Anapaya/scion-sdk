@@ -34,7 +34,7 @@ mod ingress;
 use std::{sync::Arc, time::Duration};
 
 use ring::rand::{SecureRandom, SystemRandom};
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::sync::{Notify, oneshot};
 
 use crate::{
@@ -53,7 +53,7 @@ use crate::{
 /// reports the handle back, and then becomes the connection driver for the life
 /// of the connection.
 pub(crate) async fn connect(
-    remote: ScionSocketAddr,
+    remote: ScionSocketIpAddr,
     socket: Arc<dyn GenericScionUdpSocket>,
     server_name: Option<String>,
     mut quiche_config: squiche::Config,
@@ -125,17 +125,14 @@ pub(crate) async fn connect(
 /// Drives the QUIC handshake until the connection is established, returning the
 /// established `squiche::Connection`.
 async fn handshake(
-    remote: ScionSocketAddr,
+    remote: ScionSocketIpAddr,
     socket: &Arc<dyn GenericScionUdpSocket>,
     server_name: Option<&str>,
     config: &mut squiche::Config,
 ) -> Result<squiche::Connection, EstablishError> {
     let scid = generate_connection_id();
-    let local_addr = socket
-        .local_addr()
-        .socket_addr()
-        .ok_or(EstablishError::InvalidAddress)?;
-    let remote_addr = remote.socket_addr().ok_or(EstablishError::InvalidAddress)?;
+    let local_addr = socket.local_addr().socket_addr();
+    let remote_addr = remote.socket_addr();
 
     let mut conn = squiche::connect(server_name, &scid, local_addr, remote_addr, config)
         .map_err(EstablishError::Quic)?;
@@ -149,7 +146,7 @@ async fn handshake(
         loop {
             match conn.send(send_buf.as_mut()) {
                 Ok((n, info)) => {
-                    let to = ScionSocketAddr::from_std(remote.isd_asn(), info.to);
+                    let to = ScionSocketIpAddr::new(remote.isd_asn(), info.to.ip(), info.to.port());
                     socket
                         .send_to(&send_buf[..n], to)
                         .await
@@ -172,13 +169,12 @@ async fn handshake(
         tokio::select! {
             res = socket.recv_from(recv_buf.as_mut()) => {
                 let (len, from) = res.map_err(EstablishError::Io)?;
-                if let (Some(from), Some(to)) =
-                    (from.socket_addr(), socket.local_addr().socket_addr())
-                {
-                    let recv_info = squiche::RecvInfo { from, to };
-                    if let Err(err) = conn.recv(&mut recv_buf[..len], recv_info) {
-                        tracing::warn!(?err, "client handshake: error feeding inbound packet");
-                    }
+                let from = from.socket_addr();
+                let to = socket.local_addr().socket_addr();
+
+                let recv_info = squiche::RecvInfo { from, to };
+                if let Err(err) = conn.recv(&mut recv_buf[..len], recv_info) {
+                    tracing::warn!(?err, "client handshake: error feeding inbound packet");
                 }
             }
             _ = tokio::time::sleep(sleep) => {

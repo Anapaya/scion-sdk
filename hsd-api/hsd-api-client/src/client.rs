@@ -31,13 +31,13 @@
 //! ```
 
 use hsd_api_protobuf::hsd::segments::v1::{ListSegmentsRequest, ListSegmentsResponse};
-use scion_proto::{address::IsdAsn, path::convert::segment::InvalidSegmentError};
 use scion_sdk_scion_connect_rpc::{
     Method,
     client::{ConnectRpcClient, RequestError},
     url::Url,
 };
 use scion_stack::path::fetcher::traits::{SegmentFetchError, SegmentFetcher, Segments};
+use sciparse::{identifier::isd_asn::IsdAsn, rpc::FromRpcError, segment::Segments as SciSegment};
 use thiserror::Error;
 
 /// Anapaya hidden segment directory API namespace.
@@ -60,7 +60,7 @@ pub enum ListSegmentsError {
     RequestError(#[from] RequestError),
     /// Invalid segments received.
     #[error("invalid segments received: {0}")]
-    InvalidSegmentsError(#[from] InvalidSegmentError),
+    InvalidSegmentsError(#[from] FromRpcError),
 }
 
 /// Hidden Segment Directory (HSD) API client trait.
@@ -76,7 +76,7 @@ pub trait HsdApiClient: Send + Sync {
         &self,
         src: IsdAsn,
         dst: IsdAsn,
-    ) -> Result<scion_proto::path::Segments, ListSegmentsError>;
+    ) -> Result<SciSegment, ListSegmentsError>;
 }
 
 /// HSD API client.
@@ -117,7 +117,7 @@ where
         &self,
         src: IsdAsn,
         dst: IsdAsn,
-    ) -> Result<scion_proto::path::Segments, ListSegmentsError> {
+    ) -> Result<SciSegment, ListSegmentsError> {
         let url = self
             .base_url
             .join(&format!("{}.{}/", self.api_version, SEGMENT_SERVICE))

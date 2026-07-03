@@ -75,7 +75,7 @@ impl<VT: FromView> TryFromView for VT {
 /// Fallible conversion from a view to a model
 pub trait TryToModel: View {
     /// The type of model that can be converted from this view.
-    type ModelType: Model<ViewType = Self> + TryFromView<ViewType = Self>;
+    type ModelType: TryFromView<ViewType = Self>;
 
     /// Attempts to parse a model from the provided view, returning an error if the view is
     /// invalid.

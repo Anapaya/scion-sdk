@@ -23,8 +23,8 @@ use pocketscion::{
     network::scion::util::test_helper::test_topology, runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
 };
-use scion_proto::address::IsdAsn;
 use scion_stack::{ea_source::StaticEndhostApiDiscovery, scionstack::ScionStackBuilder};
+use sciparse::identifier::isd_asn::IsdAsn;
 use snap_tokens::v0::dummy_snap_token;
 use url::Url;
 
@@ -43,12 +43,12 @@ async fn should_successfully_connect_with_endhost_api_discovery() -> anyhow::Res
     state.set_topology(topo);
 
     // Setup snaps
-    state.add_snap(server_ia.into())?;
-    state.add_snap(client_ia.into())?;
+    state.add_snap(server_ia)?;
+    state.add_snap(client_ia)?;
 
     // Add Endhost APIs
-    state.add_endhost_api(vec![server_ia.into()]);
-    state.add_endhost_api(vec![client_ia.into()]);
+    state.add_endhost_api(vec![server_ia]);
+    state.add_endhost_api(vec![client_ia]);
 
     // Setup Discovery API
     let endhost_api_discovery_id = state.add_endhost_api_discovery_api();

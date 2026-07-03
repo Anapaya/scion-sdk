@@ -14,10 +14,9 @@
 //! Integration tests for error SCION stack error handling.
 
 use pocketscion::util::topologies::{IA132, UnderlayType, minimal::two_path_topology};
-use scion_proto::address::{ScionAddrSvc, ServiceAddr, SocketAddr};
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_stack::scionstack::{
-    InvalidBindAddressError, ScionSocketBindError, ScionStackBuilder, SnapConnectionError,
+    ScionSocketBindError, ScionStackBuilder, SnapConnectionError,
     builder::{AllEndhostApisFailed, ApiAttemptError, BuildScionStackError},
 };
 use snap_tokens::v0::dummy_snap_token;
@@ -79,36 +78,4 @@ async fn test_invalid_snap_token() {
         ),
         "expected Snap::DataPlaneDiscoveryError::CrpcError with Unauthenticated code for invalid token, got {result:?}"
     );
-}
-
-async fn test_bind_service_address_fails_impl(underlay: UnderlayType) {
-    let ps_handle = two_path_topology(underlay).await;
-
-    let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps_handle.endhost_api(IA132).unwrap())
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .unwrap();
-
-    let service_addr = SocketAddr::new(ScionAddrSvc::new(0.into(), ServiceAddr::CONTROL).into(), 0);
-
-    let result = stack.bind(Some(service_addr)).await;
-    let error = result.unwrap_err();
-    assert!(
-        matches!(error, ScionSocketBindError::InvalidBindAddress(InvalidBindAddressError::ServiceAddress(addr)) if addr == service_addr),
-        "expected InvalidBindAddress({service_addr:?}) when binding to service address, got {error:?}"
-    );
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn test_bind_service_address_fails_snap() {
-    test_bind_service_address_fails_impl(UnderlayType::Snap).await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn test_bind_service_address_fails_udp() {
-    test_bind_service_address_fails_impl(UnderlayType::Udp).await;
 }

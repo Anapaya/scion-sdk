@@ -121,13 +121,13 @@ async fn should_failover_on_link_error() {
     );
 
     let egress = path
-        .first_hop_egress_interface()
+        .first_egress_interface()
         .expect("path should have first hop egress interface");
 
     // Make direct link between ASes unavailable
     ps_handle
         .runtime
-        .set_link_state(egress.isd_asn.into(), egress.id, false)
+        .set_link_state(egress.isd_asn, egress.id, false)
         .unwrap();
 
     // Notify sender task to start sending packets to trigger failover

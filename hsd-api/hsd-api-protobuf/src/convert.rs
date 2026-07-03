@@ -13,12 +13,15 @@
 // limitations under the License.
 //! Conversions between HSD API protobuf types and HSD API models.
 
-use scion_proto::path::convert::segment::InvalidSegmentError;
+use sciparse::{
+    rpc::FromRpcError,
+    segment::{Segments, SignedPathSegment},
+};
 
 use crate::hsd::segments::v1::ListSegmentsResponse;
 
-impl From<scion_proto::path::segment::Segments> for ListSegmentsResponse {
-    fn from(segments: scion_proto::path::segment::Segments) -> Self {
+impl From<Segments> for ListSegmentsResponse {
+    fn from(segments: Segments) -> Self {
         Self {
             up_segments: segments.up_segments.into_iter().map(Into::into).collect(),
             down_segments: segments.down_segments.into_iter().map(Into::into).collect(),
@@ -27,15 +30,15 @@ impl From<scion_proto::path::segment::Segments> for ListSegmentsResponse {
     }
 }
 
-impl TryFrom<ListSegmentsResponse> for scion_proto::path::segment::Segments {
-    type Error = InvalidSegmentError;
+impl TryFrom<ListSegmentsResponse> for Segments {
+    type Error = FromRpcError;
     fn try_from(response: ListSegmentsResponse) -> Result<Self, Self::Error> {
         let convert = |segs: Vec<_>| {
             segs.into_iter()
-                .map(scion_proto::path::PathSegment::try_from)
+                .map(SignedPathSegment::try_from)
                 .collect::<Result<_, _>>()
         };
-        Ok(scion_proto::path::segment::Segments {
+        Ok(Segments {
             up_segments: convert(response.up_segments)?,
             down_segments: convert(response.down_segments)?,
             core_segments: convert(response.core_segments)?,

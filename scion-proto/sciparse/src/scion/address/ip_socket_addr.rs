@@ -79,7 +79,7 @@ impl ScionSocketIpAddr {
     }
 
     /// Create a SCION Socket Address from a standard Socket Address
-    pub const fn from_socket_addr(isd_asn: IsdAsn, addr: std::net::SocketAddr) -> Self {
+    pub const fn from_std(isd_asn: IsdAsn, addr: std::net::SocketAddr) -> Self {
         match addr {
             SocketAddr::V4(v4) => {
                 Self::V4(ScionSocketAddrV4 {
@@ -121,19 +121,14 @@ impl ScionSocketIpAddr {
         }
     }
 
-    /// Returns a [SocketAddr] from the SCION Socket Address if it is an IPv4 or IPv6 address.
-    /// Returns None if it is a Service Address.
-    pub const fn socket_addr(&self) -> Option<SocketAddr> {
+    /// Returns a [SocketAddr]
+    pub const fn socket_addr(&self) -> SocketAddr {
         match self {
             ScionSocketIpAddr::V4(addr) => {
-                Some(SocketAddr::V4(std::net::SocketAddrV4::new(
-                    addr.host, addr.port,
-                )))
+                SocketAddr::V4(std::net::SocketAddrV4::new(addr.host, addr.port))
             }
             ScionSocketIpAddr::V6(addr) => {
-                Some(SocketAddr::V6(std::net::SocketAddrV6::new(
-                    addr.host, addr.port, 0, 0,
-                )))
+                SocketAddr::V6(std::net::SocketAddrV6::new(addr.host, addr.port, 0, 0))
             }
         }
     }
@@ -181,6 +176,24 @@ impl ScionSocketIpAddr {
             }
             ScionSocketIpAddr::V6(addr) => {
                 ScionAddr::V6(crate::scion::address::addr::ScionAddrV6 {
+                    isd_asn: addr.isd_asn,
+                    host: addr.host,
+                })
+            }
+        }
+    }
+
+    /// Returns a [ScionIpAddr] from the SCION Socket Address
+    pub const fn scion_ip_addr(&self) -> ScionIpAddr {
+        match self {
+            ScionSocketIpAddr::V4(addr) => {
+                ScionIpAddr::V4(crate::scion::address::addr::ScionAddrV4 {
+                    isd_asn: addr.isd_asn,
+                    host: addr.host,
+                })
+            }
+            ScionSocketIpAddr::V6(addr) => {
+                ScionIpAddr::V6(crate::scion::address::addr::ScionAddrV6 {
                     isd_asn: addr.isd_asn,
                     host: addr.host,
                 })

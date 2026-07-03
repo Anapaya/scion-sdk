@@ -54,10 +54,8 @@ pub(crate) async fn run(
             }
         };
 
-        let (Some(from), Some(to)) = (from.socket_addr(), local_addr) else {
-            // A packet with an address we can't represent; ignore it.
-            continue;
-        };
+        let from = from.socket_addr();
+        let to = local_addr;
         let recv_info = squiche::RecvInfo { from, to };
 
         let mut conn = handle.lock();

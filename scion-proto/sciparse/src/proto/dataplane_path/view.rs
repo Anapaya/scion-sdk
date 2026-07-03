@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// View over a SCION dataplane path, which can be of different types (e.g., standard, one-hop).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScionDpPathViewRef<'a> {
     /// View over a standard SCION path
     Standard(&'a StandardPathView),
@@ -66,7 +66,7 @@ impl Display for ScionDpPathViewRef<'_> {
 }
 
 /// Mutable view over different path types
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ScionDpPathViewRefMut<'a> {
     /// Mutable view over a standard SCION path
     Standard(&'a mut StandardPathView),
@@ -136,7 +136,7 @@ impl Display for ScionDpPathViewRefMut<'_> {
 }
 
 /// Owned view over different path types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScionDpPathView {
     /// Owned view over a standard SCION path
     Standard(Box<StandardPathView>),
@@ -240,7 +240,8 @@ pub trait ScionDpPathViewExt {
 
     /// Returns the expiration time of the path in seconds since the UNIX epoch.
     ///
-    /// Returns none if the path does not have an expiration time (e.g., unsupported path types).
+    /// Returns `None` if the expiration time cannot be determined (e.g., for unsupported path
+    /// types).
     fn expiration(&self) -> Option<u32> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
@@ -252,28 +253,91 @@ pub trait ScionDpPathViewExt {
         }
     }
 
-    /// Returns the first egress interface of the path, if available.
+    /// Returns the normalized first egress interface of the path if available.
     fn first_egress_interface(&self) -> Option<u16> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
-                Some(standard_path_view.hop_fields().first()?.cons_egress())
+                let info_field = standard_path_view.info_fields().first()?;
+                let hop_field = standard_path_view.hop_fields().first()?;
+                Some(hop_field.egress_interface(info_field))
             }
             ScionDpPathViewRef::OneHop(one_hop_path_view) => {
-                Some(one_hop_path_view.hop_fields().first()?.cons_egress())
+                let info_field = one_hop_path_view.info_field();
+                let [hop_field, _] = one_hop_path_view.hop_fields();
+                Some(hop_field.egress_interface(info_field))
             }
             ScionDpPathViewRef::Empty => None,
             ScionDpPathViewRef::Unsupported { .. } => None,
         }
     }
 
-    /// Returns the last ingress interface of the path, if available.
+    /// Returns the normalized current egress interface of the path if available.
+    ///
+    /// If the path is a one-hop path, the current egress interface is the egress interface of the
+    /// first hop field.
+    fn current_egress_interface(&self) -> Option<u16> {
+        match self.as_ref() {
+            ScionDpPathViewRef::Standard(standard_path_view) => {
+                let info_field = standard_path_view.curr_info_field()?;
+                Some(
+                    standard_path_view
+                        .curr_hop_field()?
+                        .egress_interface(info_field),
+                )
+            }
+            ScionDpPathViewRef::OneHop(one_hop_path_view) => {
+                let info_field = one_hop_path_view.info_field();
+                let [hop_field, _] = one_hop_path_view.hop_fields();
+                Some(hop_field.egress_interface(info_field))
+            }
+            ScionDpPathViewRef::Empty => None,
+            ScionDpPathViewRef::Unsupported { .. } => None,
+        }
+    }
+
+    /// Returns the normalized last ingress interface of the path if available.
     fn last_ingress_interface(&self) -> Option<u16> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
-                Some(standard_path_view.hop_fields().last()?.cons_ingress())
+                let info_field = standard_path_view.info_fields().last()?;
+                Some(
+                    standard_path_view
+                        .hop_fields()
+                        .last()?
+                        .ingress_interface(info_field),
+                )
             }
             ScionDpPathViewRef::OneHop(one_hop_path_view) => {
-                Some(one_hop_path_view.hop_fields().last()?.cons_ingress())
+                Some(
+                    one_hop_path_view
+                        .hop_fields()
+                        .last()?
+                        .ingress_interface(one_hop_path_view.info_field()),
+                )
+            }
+            ScionDpPathViewRef::Empty => None,
+            ScionDpPathViewRef::Unsupported { .. } => None,
+        }
+    }
+
+    /// Returns the normalized current ingress interface of the path if available.
+    ///
+    /// If the path is a one-hop path, the current ingress interface is the ingress interface of the
+    /// last hop field.
+    fn current_ingress_interface(&self) -> Option<u16> {
+        match self.as_ref() {
+            ScionDpPathViewRef::Standard(standard_path_view) => {
+                let info_field = standard_path_view.curr_info_field()?;
+                Some(
+                    standard_path_view
+                        .curr_hop_field()?
+                        .ingress_interface(info_field),
+                )
+            }
+            ScionDpPathViewRef::OneHop(one_hop_path_view) => {
+                let info_field = one_hop_path_view.info_field();
+                let [_, hop_field] = one_hop_path_view.hop_fields();
+                Some(hop_field.ingress_interface(info_field))
             }
             ScionDpPathViewRef::Empty => None,
             ScionDpPathViewRef::Unsupported { .. } => None,
@@ -309,7 +373,7 @@ pub trait ScionDpPathViewExtMut: ScionDpPathViewExt {
     /// Returns a mutable view over the path data.
     fn as_mut(&mut self) -> ScionDpPathViewRefMut<'_>;
 
-    /// Attempts to reverse the path in place, if supported by the path type.
+    /// Attempts to reverse the path in place if supported by the path type.
     ///
     /// Returns an error if the path type does not support reversal.
     fn try_reverse(&mut self) -> Result<&mut Self, PathReverseError>
@@ -333,6 +397,19 @@ pub trait ScionDpPathViewExtMut: ScionDpPathViewExt {
                     "Cannot reverse unsupported path type",
                 ))
             }
+        }
+    }
+
+    /// Converts the path into a reversed view if supported by the path type.
+    ///
+    /// Returns an error if the path type does not support reversal.
+    fn into_reversed(mut self) -> Result<Self, (Self, PathReverseError)>
+    where
+        Self: Sized,
+    {
+        match self.try_reverse() {
+            Ok(_) => Ok(self),
+            Err(e) => Err((self, e)),
         }
     }
 }

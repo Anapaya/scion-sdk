@@ -63,21 +63,27 @@ pub fn exec_every_view_function(view: &mut ScionRawPacketView) {
     // everything we can on it to surface any out-of-bounds access.
 
     // Immutable UDP
-    if let Ok(udp_view) = view.try_into_udp() {
+    if let Ok((udp_view, _rest)) = ScionUdpPacketView::from_slice(view.as_slice()) {
         exec_udp_packet_view(udp_view);
     }
     // Immutable SCMP
-    if let Ok(scmp_view) = view.try_into_scmp() {
+    if let Ok((scmp_view, _rest)) = ScionScmpPacketView::from_slice(view.as_slice()) {
         exec_scmp_packet_view(scmp_view);
     }
 
     // Mutable UDP
-    if let Ok(udp_view_mut) = view.try_into_udp_mut() {
-        exec_udp_packet_view_mut(udp_view_mut);
+    unsafe {
+        if let Ok((udp_view_mut, _rest)) = ScionUdpPacketView::from_mut_slice(view.as_slice_mut()) {
+            exec_udp_packet_view_mut(udp_view_mut);
+        }
     }
+
     // Mutable SCMP
-    if let Ok(scmp_view_mut) = view.try_into_scmp_mut() {
-        exec_scmp_packet_view_mut(scmp_view_mut);
+    unsafe {
+        if let Ok((scmp_view_mut, _rest)) = ScionScmpPacketView::from_mut_slice(view.as_slice_mut())
+        {
+            exec_scmp_packet_view_mut(scmp_view_mut);
+        }
     }
 }
 

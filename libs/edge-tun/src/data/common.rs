@@ -20,7 +20,7 @@ use ana_gotatun::{
     noise::{Tunn, TunnResult},
     packet::{Packet, PacketBufPool, WgKind},
 };
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 
 use crate::fragmenting::{Fragmenter, FragmenterSendError};
 
@@ -38,9 +38,9 @@ pub trait AsIpAddr {
     fn ip(&self) -> Option<IpAddr>;
 }
 
-impl AsIpAddr for ScionSocketAddr {
+impl AsIpAddr for ScionSocketIpAddr {
     fn ip(&self) -> Option<IpAddr> {
-        ScionSocketAddr::ip(self)
+        Some(self.ip())
     }
 }
 

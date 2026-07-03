@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::Display;
+
 pub mod encode;
 pub mod scmp;
 pub mod udp;
@@ -44,6 +46,19 @@ impl ProtocolNumber {
     pub fn to_u8(&self) -> u8 {
         (*self).into()
     }
+
+    /// Returns a string representation of the protocol number.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProtocolNumber::Tcp => "TCP",
+            ProtocolNumber::Udp => "UDP",
+            ProtocolNumber::Hbh => "HBH",
+            ProtocolNumber::E2e => "E2E",
+            ProtocolNumber::Scmp => "SCMP",
+            ProtocolNumber::Bfd => "BFD",
+            ProtocolNumber::Other(_) => "Other",
+        }
+    }
 }
 impl From<u8> for ProtocolNumber {
     fn from(value: u8) -> Self {
@@ -69,6 +84,11 @@ impl From<ProtocolNumber> for u8 {
             ProtocolNumber::Bfd => 203,
             ProtocolNumber::Other(other) => other,
         }
+    }
+}
+impl Display for ProtocolNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 

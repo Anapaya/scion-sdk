@@ -20,7 +20,7 @@ use std::{
     time::Instant,
 };
 
-use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
+use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn};
 use squiche::{Connection, SendInfo};
 use tokio::sync::Notify;
 
@@ -81,7 +81,7 @@ impl<A: QuicScionApplication> QuicScionConnDriver<A> {
         let mut send_buf = Box::new([0u8; 65535]);
         let mut transmit_size = 0usize;
         let mut send_to =
-            ScionSocketAddr::from_std(IsdAsn::from_u64(0), "0.0.0.0:0".parse().unwrap());
+            ScionSocketIpAddr::new(IsdAsn::from_u64(0), "0.0.0.0".parse().unwrap(), 0);
 
         let start_time = Instant::now();
         let timeout = tokio::time::sleep_until(start_time.into());
@@ -338,16 +338,16 @@ pub struct IsdAsnPair {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScionSendInfo {
     /// The source of a packet to be sent.
-    pub from: ScionSocketAddr,
+    pub from: ScionSocketIpAddr,
     /// The destination of a packet to be sent.
-    pub to: ScionSocketAddr,
+    pub to: ScionSocketIpAddr,
     /// The instant at which a packet should be sent.
     pub at: Instant,
 }
 
 impl ScionSendInfo {
-    /// Builds a [`ScionSendInfo`] from a pair of [`ScionSocketAddr`]s.
-    pub fn new(from: ScionSocketAddr, to: ScionSocketAddr, at: Instant) -> Self {
+    /// Builds a [`ScionSendInfo`] from a pair of [`ScionSocketIpAddr`]s.
+    pub fn new(from: ScionSocketIpAddr, to: ScionSocketIpAddr, at: Instant) -> Self {
         Self { from, to, at }
     }
 
@@ -355,8 +355,8 @@ impl ScionSendInfo {
     /// connection's [`IsdAsnPair`].
     pub fn from_squiche(send_info: SendInfo, asn_pair: IsdAsnPair) -> Self {
         ScionSendInfo {
-            from: ScionSocketAddr::from_std(asn_pair.from, send_info.from),
-            to: ScionSocketAddr::from_std(asn_pair.to, send_info.to),
+            from: ScionSocketIpAddr::new(asn_pair.from, send_info.from.ip(), send_info.from.port()),
+            to: ScionSocketIpAddr::new(asn_pair.to, send_info.to.ip(), send_info.to.port()),
             at: send_info.at,
         }
     }

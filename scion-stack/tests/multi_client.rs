@@ -16,8 +16,8 @@
 
 use bytes::{Bytes, BytesMut};
 use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
-use scion_proto::address::SocketAddr;
 use scion_stack::scionstack::{ScionStackBuilder, UdpScionSocket};
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use snap_tokens::v0::{dummy_snap_token, seeded_dummy_snap_token};
 use test_log::test;
 use tokio_util::sync::CancellationToken;
@@ -87,9 +87,9 @@ async fn multi_client() {
                     let mut path_buffer = BytesMut::zeroed(1024);
                     let (received_len, sender_addr, path) = server_socket.recv_from_with_path(&mut rdata, &mut path_buffer).await.unwrap();
                     tracing::info!("Server received packet from {}", sender_addr);
-                    let reversed_path = path.to_reversed().unwrap();
+                    let reversed_path = path.into_reversed().unwrap();
                     rdata.resize(received_len, 0);
-                    server_socket.send_to_via(rdata.as_ref(), sender_addr, &reversed_path.to_slice_path()).await.unwrap();
+                    server_socket.send_to_via(rdata.as_ref(), sender_addr, &reversed_path).await.unwrap();
                 }
             } => {}
         }
@@ -107,7 +107,7 @@ async fn multi_client() {
 
 async fn recv_and_check(
     socket: &UdpScionSocket,
-    expected_sender_addr: SocketAddr,
+    expected_sender_addr: ScionSocketIpAddr,
     expected_payload: &[u8],
 ) {
     let mut rdata = BytesMut::zeroed(2048); // MAX_PAYLOAD_SIZE

@@ -20,10 +20,7 @@
 use std::sync::Arc;
 
 use endhost_api_client::client::EndhostApiClient;
-use scion_proto::{
-    address::IsdAsn,
-    path::{self, Path},
-};
+use sciparse::{identifier::isd_asn::IsdAsn, path::ScionPath};
 
 use crate::path::fetcher::traits::{
     PathFetchError, PathFetcher, SegmentFetchError, SegmentFetcher, Segments,
@@ -33,10 +30,7 @@ use crate::path::fetcher::traits::{
 pub mod traits {
     use std::borrow::Cow;
 
-    use scion_proto::{
-        address::IsdAsn,
-        path::{Path, PathSegment},
-    };
+    use sciparse::{identifier::isd_asn::IsdAsn, path::ScionPath, segment::SignedPathSegment};
 
     use crate::types::ResFut;
 
@@ -47,7 +41,7 @@ pub mod traits {
             &self,
             src: IsdAsn,
             dst: IsdAsn,
-        ) -> impl ResFut<'_, Vec<Path>, PathFetchError>;
+        ) -> impl ResFut<'_, Vec<ScionPath>, PathFetchError>;
     }
 
     /// Path fetch errors.
@@ -84,9 +78,9 @@ pub mod traits {
     #[derive(Debug)]
     pub struct Segments {
         /// Core segments.
-        pub core_segments: Vec<PathSegment>,
+        pub core_segments: Vec<SignedPathSegment>,
         /// Non-core segments.
-        pub non_core_segments: Vec<PathSegment>,
+        pub non_core_segments: Vec<SignedPathSegment>,
     }
 }
 
@@ -112,7 +106,11 @@ impl PathFetcherImpl {
 }
 
 impl PathFetcher for PathFetcherImpl {
-    async fn fetch_paths(&self, src: IsdAsn, dst: IsdAsn) -> Result<Vec<Path>, PathFetchError> {
+    async fn fetch_paths(
+        &self,
+        src: IsdAsn,
+        dst: IsdAsn,
+    ) -> Result<Vec<ScionPath>, PathFetchError> {
         let mut all_core_segments = Vec::new();
         let mut all_non_core_segments = Vec::new();
 
@@ -161,7 +159,8 @@ impl PathFetcher for PathFetcherImpl {
             }
         }
 
-        let paths = path::combinator::combine(src, dst, all_core_segments, all_non_core_segments);
+        let paths =
+            sciparse::path::combinator::combine(src, dst, all_core_segments, all_non_core_segments);
 
         for (fetcher_name, error) in errors.iter() {
             tracing::warn!(
@@ -206,7 +205,7 @@ impl SegmentFetcher for EndhostApiSegmentFetcher {
     ) -> Result<Segments, SegmentFetchError> {
         let resp = self
             .client
-            .list_segments(src.into(), dst.into(), 128, "".to_string())
+            .list_segments(src, dst, 128, "".to_string())
             .await?;
 
         tracing::trace!(
@@ -220,8 +219,8 @@ impl SegmentFetcher for EndhostApiSegmentFetcher {
 
         let (core_segments, non_core_segments) = resp.segments.split_parts();
         Ok(Segments {
-            core_segments: core_segments.into_iter().map(Into::into).collect(),
-            non_core_segments: non_core_segments.into_iter().map(Into::into).collect(),
+            core_segments: core_segments.into_iter().collect(),
+            non_core_segments: non_core_segments.into_iter().collect(),
         })
     }
 }

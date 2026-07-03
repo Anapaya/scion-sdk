@@ -48,7 +48,7 @@ use scion_sdk_quic_scion::{
     },
     socket::GenericScionUdpSocket,
 };
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{Mutex, oneshot},
@@ -61,16 +61,16 @@ use crate::common::{MockScionSocket, generate_server_config_with_idle_timeout, t
 // Config helpers
 // --------------------------------------------------------------------------
 
-fn client_addr() -> ScionSocketAddr {
-    ScionSocketAddr::new(
+fn client_addr() -> ScionSocketIpAddr {
+    ScionSocketIpAddr::new(
         "1-ff00:0:0".parse().unwrap(),
         Ipv4Addr::new(10, 1, 1, 1).into(),
         40001,
     )
 }
 
-fn server_addr() -> ScionSocketAddr {
-    ScionSocketAddr::new(
+fn server_addr() -> ScionSocketIpAddr {
+    ScionSocketIpAddr::new(
         "2-ff00:0:0".parse().unwrap(),
         Ipv4Addr::new(10, 2, 1, 1).into(),
         40002,

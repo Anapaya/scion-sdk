@@ -22,11 +22,11 @@ use std::{
 };
 
 use arc_swap::ArcSwapOption;
-use scion_proto::{
-    address::IsdAsn,
-    path::{DataPlanePathFingerprint, Path},
-};
 use scion_sdk_utils::backoff::ExponentialBackoff;
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    path::{ScionPath, fingerprint::data_plane::DpPathFingerprint},
+};
 use tokio::{
     select,
     sync::{
@@ -68,7 +68,7 @@ pub struct PathSet<F: PathFetcher> {
 /// Shared state of the managed path set.
 pub struct PathSetSharedState {
     /// Currently active path
-    pub active_path: ArcSwapOption<(Path, DataPlanePathFingerprint)>,
+    pub active_path: ArcSwapOption<(ScionPath, DpPathFingerprint)>,
     /// Fast path usage tracker
     pub was_used_in_idle_period: AtomicBool,
     /// Separate state for synchronization
@@ -481,19 +481,23 @@ impl<F: PathFetcher> PathSet<F> {
 
     /// Returns the earliest expiry time among the cached paths.
     fn earliest_expiry(&self) -> Option<SystemTime> {
-        self.internal
+        let min_timestamp = self
+            .internal
             .cached_paths
             .iter()
-            .filter_map(|entry| entry.path.expiry_time())
-            .min()
-            .map(SystemTime::from)
+            .filter_map(|entry| entry.path.expiration())
+            .min()?;
+
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(min_timestamp as u64);
+
+        Some(time)
     }
 
     /// Fetches paths from the fetcher and applies path selection filtering.
     async fn fetch_and_filter_paths(
         &self,
         manager: &MultiPathManager<F>,
-    ) -> Result<Vec<Path>, PathFetchError> {
+    ) -> Result<Vec<ScionPath>, PathFetchError> {
         let mut paths = manager.0.fetcher.fetch_paths(self.src, self.dst).await?;
 
         let before_filter_count = paths.len();
@@ -518,13 +522,13 @@ impl<F: PathFetcher> PathSet<F> {
     /// Possibly updates or removes the active path
     fn update_path_cache(
         &mut self,
-        fetched_paths: Vec<Path>,
+        fetched_paths: Vec<ScionPath>,
         now: SystemTime,
         manager: &MultiPathManager<F>,
     ) {
-        let mut fetched_paths: HashMap<DataPlanePathFingerprint, Path, RandomState> =
+        let mut fetched_paths: HashMap<DpPathFingerprint, ScionPath, RandomState> =
             HashMap::from_iter(fetched_paths.into_iter().map(|path| {
-                let fingerprint = path.data_plane_fingerprint();
+                let fingerprint = path.fingerprint();
                 (fingerprint, path)
             }));
 
@@ -533,7 +537,7 @@ impl<F: PathFetcher> PathSet<F> {
         // Update cached paths
         self.internal.cached_paths.retain_mut(|cached_path| {
             let mut keep = true;
-            let fp = cached_path.fingerprint;
+            let fp = cached_path.path.fingerprint();
 
             // Update existing path if it exists
             if let Some(matching_path) = fetched_paths.remove(&fp) {
@@ -603,11 +607,10 @@ impl<F: PathFetcher> PathSet<F> {
                 // candidates. Possibly we need to reduce the candidates
                 // before this in the future
                 fetched_paths
-                    .into_iter()
-                    .map(|(fp, path)| {
+                    .into_values()
+                    .map(|path| {
                         let mut entry = PathManagerPath {
                             path,
-                            fingerprint: fp,
                             reliability: ReliabilityScore::new_with_time(now),
                         };
                         issues_guard.apply_cached_issues(&mut entry, now);
@@ -723,11 +726,11 @@ impl<F: PathFetcher> PathSet<F> {
         let active_path = active_path_guard.as_ref();
 
         let active_fp = format_option(&active_path.map(|p| p.1));
-        let best_fp = format_option(&best_path.map(|p| p.fingerprint));
+        let best_fp = format_option(&best_path.map(|p| p.path.fingerprint()));
         tracing::trace!(?decision, %active_fp, %best_fp, "Active path update decision");
 
         // If best path is the active path, ignore it
-        if active_path.map(|p| p.1) == best_path.map(|p| p.fingerprint) {
+        if active_path.map(|p| p.1) == best_path.map(|p| p.path.fingerprint()) {
             // Best path is active path
             best_path = None;
         }
@@ -764,7 +767,7 @@ impl<F: PathFetcher> PathSet<F> {
 
                 self.shared.active_path.store(Some(Arc::new((
                     best_path.path.clone(),
-                    best_path.fingerprint,
+                    best_path.path.fingerprint(),
                 ))));
             }
         }
@@ -803,7 +806,7 @@ impl<F: PathFetcher> PathSet<F> {
         self.internal
             .cached_paths
             .iter()
-            .find(|e| e.fingerprint == active_path_fp)
+            .find(|e| e.path.fingerprint() == active_path_fp)
     }
 
     #[allow(dead_code)]
@@ -813,7 +816,7 @@ impl<F: PathFetcher> PathSet<F> {
         self.internal
             .cached_paths
             .iter_mut()
-            .find(|e| e.fingerprint == active_path_fp)
+            .find(|e| e.path.fingerprint() == active_path_fp)
     }
 }
 
@@ -865,11 +868,14 @@ impl<F: PathFetcher> PathSet<F> {
                 for entry in self.internal.cached_paths.iter_mut() {
                     // TODO: matches_path_checked can be used to optimize matching with e.g. a
                     // bloom filter
-                    if issue.target.matches_path(&entry.path, &entry.fingerprint) {
+                    if issue
+                        .target
+                        .matches_path(&entry.path, &entry.path.fingerprint())
+                    {
                         res.total_paths_affected += 1;
                         entry.reliability.update(issue.penalty, now);
 
-                        if Some(entry.fingerprint) == active_path_fp {
+                        if Some(entry.path.fingerprint()) == active_path_fp {
                             res.active_path_affected = true;
                         }
                     }
@@ -877,16 +883,15 @@ impl<F: PathFetcher> PathSet<F> {
             }
             // Only update the first matching path
             false => {
-                if let Some(entry) = self
-                    .internal
-                    .cached_paths
-                    .iter_mut()
-                    .find(|entry| issue.target.matches_path(&entry.path, &entry.fingerprint))
-                {
+                if let Some(entry) = self.internal.cached_paths.iter_mut().find(|entry| {
+                    issue
+                        .target
+                        .matches_path(&entry.path, &entry.path.fingerprint())
+                }) {
                     res.total_paths_affected += 1;
                     entry.reliability.update(issue.penalty, now);
 
-                    if Some(entry.fingerprint) == active_path_fp {
+                    if Some(entry.path.fingerprint()) == active_path_fp {
                         res.active_path_affected = true;
                     }
                 }
@@ -905,9 +910,7 @@ pub struct PathSetHandle {
 
 impl PathSetHandle {
     /// Tries to get the currently active path without awaiting ongoing updates.
-    pub fn try_active_path(
-        &self,
-    ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, DataPlanePathFingerprint)>>> {
+    pub fn try_active_path(&self) -> arc_swap::Guard<Option<Arc<(ScionPath, DpPathFingerprint)>>> {
         self.shared
             .was_used_in_idle_period
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -918,7 +921,7 @@ impl PathSetHandle {
     /// Gets the currently active path, awaiting ongoing updates if necessary.
     pub async fn active_path(
         &self,
-    ) -> arc_swap::Guard<Option<Arc<(scion_proto::path::Path, DataPlanePathFingerprint)>>> {
+    ) -> arc_swap::Guard<Option<Arc<(ScionPath, DpPathFingerprint)>>> {
         self.shared
             .was_used_in_idle_period
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -998,7 +1001,7 @@ impl Drop for PathSetTask {
 fn merge_new_paths_algo(
     existing_paths: &mut Vec<PathManagerPath>,
     new_paths: &mut Vec<PathManagerPath>,
-    active_fp: Option<DataPlanePathFingerprint>,
+    active_fp: Option<DpPathFingerprint>,
     target_path_count: usize,
     path_strategy: &PathStrategy,
     now: SystemTime,
@@ -1008,7 +1011,10 @@ fn merge_new_paths_algo(
     let mut kept_existing = 0;
 
     if let Some(fp) = active_fp {
-        if let Some(idx) = existing_paths.iter().position(|p| p.fingerprint == fp) {
+        if let Some(idx) = existing_paths
+            .iter()
+            .position(|p| p.path.fingerprint() == fp)
+        {
             existing_paths.swap(0, idx);
             kept_existing = 1;
         } else {
@@ -1061,11 +1067,9 @@ enum ExpiryState {
     Expired,
 }
 
-fn check_path_expiry(path: &Path, now: SystemTime, threshold: Duration) -> ExpiryState {
-    let expiry: SystemTime = path
-        .expiry_time()
-        .expect("Path should have expiry time")
-        .into();
+fn check_path_expiry(path: &ScionPath, now: SystemTime, threshold: Duration) -> ExpiryState {
+    let expiry = path.expiration().unwrap_or(0);
+    let expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(expiry as u64);
 
     match expiry.duration_since(now) {
         Err(_) => ExpiryState::Expired,
@@ -1130,7 +1134,7 @@ mod tests {
                         .internal
                         .cached_paths
                         .iter()
-                        .any(|p| p.fingerprint == active_fp),
+                        .any(|p| p.path.fingerprint() == active_fp),
                     "Active path should be in cached paths"
                 );
 
@@ -1164,7 +1168,12 @@ mod tests {
                 let active = handle.try_active_path().clone();
                 assert!(active.is_some());
                 let first_active_fp = active.as_ref().unwrap().1;
-                let first_active_expiry = active.as_ref().unwrap().0.expiry_time().unwrap();
+                let first_active_expiry = active
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .expiration()
+                    .expect("Active path should have expiry");
 
                 let next_refetch = path_set.internal.next_refetch;
 
@@ -1195,7 +1204,12 @@ mod tests {
                     first_active_fp, new_active_fp,
                     "Active path fingerprint should be the same after refetch"
                 );
-                let new_active_expiry = new_active_path.as_ref().unwrap().0.expiry_time().unwrap();
+                let new_active_expiry = new_active_path
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .expiration()
+                    .expect("Active path should have expiry");
                 assert_ne!(
                     first_active_expiry, new_active_expiry,
                     "Active path expiry should not be the same after refetch"
@@ -1331,7 +1345,9 @@ mod tests {
                 assert!(active_path.is_some());
 
                 // Check decisions
-                let expiry: SystemTime = path.expiry_time().unwrap().into();
+                let expiry = path.expiration().expect("Path should have expiry");
+                let expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(expiry as u64);
+
                 let near_expiry_time = expiry - cfg.min_expiry_threshold;
                 let not_near_expiry_time =
                     expiry - cfg.min_expiry_threshold - Duration::from_secs(1);
@@ -1379,7 +1395,7 @@ mod tests {
                     .internal
                     .cached_paths
                     .iter_mut()
-                    .find(|e| e.fingerprint == active_fp)
+                    .find(|e| e.path.fingerprint() == active_fp)
                     .expect("Active path should be in cache");
 
                 active_entry
@@ -1402,7 +1418,7 @@ mod tests {
                     "There should be a best path available to replace active path"
                 );
                 assert_ne!(
-                    best.unwrap().fingerprint,
+                    best.unwrap().path.fingerprint(),
                     active_fp,
                     "Best path should not be the active path"
                 );
@@ -1473,7 +1489,7 @@ mod tests {
                 let active_path_after = path_set.shared.active_path.load();
                 assert_eq!(
                     active_path_after.as_ref().unwrap().1,
-                    fake_better_path.fingerprint,
+                    fake_better_path.path.fingerprint(),
                     "Active path should be replaced with better path"
                 );
 
@@ -1488,7 +1504,7 @@ mod tests {
                 let active_path_after = path_set.shared.active_path.load();
                 assert_eq!(
                     active_path_after.as_ref().unwrap().1,
-                    fake_better_path.fingerprint,
+                    fake_better_path.path.fingerprint(),
                     "Active path should be replaced with better path"
                 );
             }
@@ -1933,7 +1949,6 @@ mod tests {
                     .map(|i| {
                         let path = dummy_path(i + 2, 0, 100, (fpr_base + i) as u32);
                         PathManagerPath {
-                            fingerprint: DataPlanePathFingerprint::new(&path),
                             path,
                             reliability: ReliabilityScore::new_with_time(BASE_TIME),
                         }
@@ -1952,21 +1967,21 @@ mod tests {
                     existing_paths
                         .iter()
                         .take(5)
-                        .map(|p| p.fingerprint)
+                        .map(|p| p.path.fingerprint())
                         .collect::<Vec<_>>(),
                 );
                 keep.extend(
                     new_paths
                         .iter()
                         .take(5)
-                        .map(|p| p.fingerprint)
+                        .map(|p| p.path.fingerprint())
                         .collect::<Vec<_>>(),
                 );
 
                 let mut strat = PathStrategy::default();
 
                 struct TestScorer {
-                    keep: Vec<DataPlanePathFingerprint>,
+                    keep: Vec<DpPathFingerprint>,
                 }
                 impl PathScoring for TestScorer {
                     fn metric_name(&self) -> &'static str {
@@ -1978,7 +1993,7 @@ mod tests {
                         path: &PathManagerPath,
                         _now: SystemTime,
                     ) -> crate::path::types::Score {
-                        if self.keep.contains(&path.fingerprint) {
+                        if self.keep.contains(&path.path.fingerprint()) {
                             Score::new_clamped(1.0)
                         } else {
                             Score::new_clamped(0.0)
@@ -2014,12 +2029,12 @@ mod tests {
                 let mut new_paths = make_path_vec(1, 10);
 
                 // Use path which would be removed without active path consideration
-                let active_fp = existing_paths[9].fingerprint;
+                let active_fp = existing_paths[9].path.fingerprint();
 
                 let mut strat = PathStrategy::default();
 
                 struct TestScorer {
-                    existing_fps: Vec<DataPlanePathFingerprint>,
+                    existing_fps: Vec<DpPathFingerprint>,
                 }
                 impl PathScoring for TestScorer {
                     fn metric_name(&self) -> &'static str {
@@ -2031,7 +2046,7 @@ mod tests {
                         path: &PathManagerPath,
                         _now: SystemTime,
                     ) -> crate::path::types::Score {
-                        if self.existing_fps.contains(&path.fingerprint) {
+                        if self.existing_fps.contains(&path.path.fingerprint()) {
                             Score::new_clamped(0.0)
                         } else {
                             Score::new_clamped(1.0)
@@ -2041,7 +2056,10 @@ mod tests {
                 // Add a ranking that ranks all new paths better than existing paths
                 strat.add_scoring(
                     TestScorer {
-                        existing_fps: existing_paths.iter().map(|e| e.fingerprint).collect(),
+                        existing_fps: existing_paths
+                            .iter()
+                            .map(|e| e.path.fingerprint())
+                            .collect(),
                     },
                     1.0,
                 );
@@ -2065,7 +2083,9 @@ mod tests {
                     "Should have taken 1 existing path (the active path)"
                 );
                 assert!(
-                    existing_paths.iter().any(|e| e.fingerprint == active_fp),
+                    existing_paths
+                        .iter()
+                        .any(|e| e.path.fingerprint() == active_fp),
                     "Active path should be kept in existing paths"
                 );
                 assert_eq!(kept_new, 9, "Should have taken 9 new paths");

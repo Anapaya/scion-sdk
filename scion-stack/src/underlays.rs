@@ -15,12 +15,12 @@
 
 use std::{net, sync::Arc};
 
-use ana_gotatun::packet::{Packet, PacketBufPool};
-use scion_proto::{
-    address::{Isd, IsdAsn, ScionAddr, SocketAddr},
-    wire_encoding::WireEncodeVec,
-};
+use ana_gotatun::packet::PacketBufPool;
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
+use sciparse::{
+    address::ip_socket_addr::ScionSocketIpAddr,
+    identifier::{isd::Isd, isd_asn::IsdAsn},
+};
 use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
@@ -116,7 +116,7 @@ impl UnderlayStack {
 
     async fn bind_snap_socket(
         &self,
-        requested_addr: Option<scion_proto::address::SocketAddr>,
+        requested_addr: Option<ScionSocketIpAddr>,
         isd_as: IsdAsn,
         cp_url: Url,
     ) -> Result<snap::SnapUnderlaySocket, ScionSocketBindError> {
@@ -130,12 +130,7 @@ impl UnderlayStack {
         };
 
         let local_addr = match requested_addr {
-            Some(addr) => {
-                addr.local_address()
-                    .ok_or(ScionSocketBindError::InvalidBindAddress(
-                        InvalidBindAddressError::ServiceAddress(addr),
-                    ))?
-            }
+            Some(addr) => addr.socket_addr(),
             None => {
                 if let Some(cp_addr) = cp_url
                     .socket_addrs(|| None)
@@ -152,7 +147,7 @@ impl UnderlayStack {
             }
         };
 
-        let bind_addr = SocketAddr::from_std(isd_as, local_addr);
+        let bind_addr = ScionSocketIpAddr::new(isd_as, local_addr.ip(), local_addr.port());
 
         let udp_socket = bind_udp_underlay_socket(local_addr)?;
 
@@ -169,21 +164,28 @@ impl UnderlayStack {
         .await?;
 
         let assigned_addr = socket.local_addr();
+
         // If the requested address is specified but does not match the assigned address, return an
         // error.
         if let Some(requested_addr) = requested_addr
-            // IsdAsn mismatch
-        && requested_addr.isd_asn().matches(assigned_addr.isd_asn())
-            // IP mismatch. Note, that both addresses will have ip addresses.
-        && let Some(requested_socket_addr) = requested_addr.local_address()
-        && let Some(assigned_socket_addr) = assigned_addr.local_address()
-        && ((!requested_socket_addr.ip().is_unspecified() && assigned_socket_addr.ip() != requested_socket_addr.ip())
-            // Port mismatch
+                // IsdAsn mismatch
+                && requested_addr.isd_asn().matches(assigned_addr.isd_asn())
+                // IP mismatch. Note, that both addresses will have ip addresses.
+                && let requested_socket_addr = requested_addr.socket_addr()
+                && let assigned_socket_addr = assigned_addr.socket_addr()
+                && ((!requested_socket_addr.ip().is_unspecified() && assigned_socket_addr.ip() != requested_socket_addr.ip())
+                // Port mismatch
                 || (requested_socket_addr.port() != 0 && assigned_socket_addr.port() != requested_socket_addr.port()))
         {
+            // IsdAsns must match
+
             return Err(crate::scionstack::ScionSocketBindError::InvalidBindAddress(
                 crate::scionstack::InvalidBindAddressError::AddressMismatch {
-                    assigned_addr: SocketAddr::from_std(bind_addr.isd_asn(), requested_socket_addr),
+                    assigned_addr: ScionSocketIpAddr::new(
+                        bind_addr.isd_asn(),
+                        requested_socket_addr.ip(),
+                        requested_socket_addr.port(),
+                    ),
                     bind_addr,
                 },
             ));
@@ -192,57 +194,56 @@ impl UnderlayStack {
         Ok(socket)
     }
 
+    /// Resolves the bind address for a UDP socket. If an override address is provided, it is used.
+    ///
+    /// Otherwise tries to determine which interface's ip address can reach the endhost api and uses
+    /// that as the bind address
     async fn resolve_udp_bind_addr(
         &self,
         isd_as: IsdAsn,
-        bind_addr: Option<SocketAddr>,
-    ) -> Result<SocketAddr, ScionSocketBindError> {
-        let bind_addr = match bind_addr {
-            Some(addr) => {
-                if addr.is_service() {
-                    return Err(ScionSocketBindError::InvalidBindAddress(
-                        InvalidBindAddressError::ServiceAddress(addr),
-                    ));
-                }
-                addr
-            }
-            None => {
-                let local_address = *self
-                    .outbound_ip_resolver
-                    .outbound_ips()
-                    .await
-                    .first()
-                    .ok_or(ScionSocketBindError::InvalidBindAddress(
-                        InvalidBindAddressError::NoLocalIpAddressFound,
-                    ))?;
-                SocketAddr::new(ScionAddr::new(isd_as, local_address.into()), 0)
-            }
-        };
-        Ok(bind_addr)
+        override_addr: Option<ScionSocketIpAddr>,
+    ) -> Result<ScionSocketIpAddr, ScionSocketBindError> {
+        if let Some(addr) = override_addr {
+            return Ok(addr);
+        }
+
+        // No override address provided, try to determine the local IP address that can reach the
+        // control plane.
+        let local_address = *self
+            .outbound_ip_resolver
+            .outbound_ips()
+            .await
+            .first()
+            .ok_or(ScionSocketBindError::InvalidBindAddress(
+                InvalidBindAddressError::NoLocalIpAddressFound,
+            ))?;
+
+        Ok(ScionSocketIpAddr::new(isd_as, local_address, 0))
     }
 
     async fn bind_udp_socket(
         &self,
         isd_as: IsdAsn,
-        bind_addr: Option<SocketAddr>,
-    ) -> Result<(SocketAddr, UdpSocket), ScionSocketBindError> {
+        bind_addr: Option<ScionSocketIpAddr>,
+    ) -> Result<(ScionSocketIpAddr, UdpSocket), ScionSocketBindError> {
+        //TODO: the bind address could be a wildcard, in which case it should be handled the same
+        // as a None? So this should probably be either disallowed, or the Option removed
         let bind_addr = self.resolve_udp_bind_addr(isd_as, bind_addr).await?;
-        let local_addr: net::SocketAddr =
-            bind_addr
-                .local_address()
-                .ok_or(ScionSocketBindError::InvalidBindAddress(
-                    InvalidBindAddressError::ServiceAddress(bind_addr),
-                ))?;
+        let local_addr: net::SocketAddr = bind_addr.socket_addr();
+
+        // Bind the udp socket
         let socket = bind_udp_underlay_socket(local_addr)?;
         let local_addr = socket.local_addr().map_err(|e| {
             ScionSocketBindError::Other(
                 anyhow::anyhow!("failed to get local address: {e}").into_boxed_dyn_error(),
             )
         })?;
-        let bind_addr = SocketAddr::new(
-            ScionAddr::new(bind_addr.isd_asn(), local_addr.ip().into()),
-            local_addr.port(),
-        );
+
+        // We use the extracted local address to avoid mismatches between the requested bind address
+        // and the actual bind address.
+        let bind_addr =
+            ScionSocketIpAddr::new(bind_addr.isd_asn(), local_addr.ip(), local_addr.port());
+
         Ok((bind_addr, socket))
     }
 }
@@ -251,7 +252,7 @@ impl DynUnderlayStack for UnderlayStack {
     fn bind_socket(
         &self,
         _kind: crate::scionstack::SocketKind,
-        bind_addr: Option<scion_proto::address::SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> futures::future::BoxFuture<
         '_,
         Result<Box<dyn crate::scionstack::UnderlaySocket>, crate::scionstack::ScionSocketBindError>,
@@ -288,7 +289,7 @@ impl DynUnderlayStack for UnderlayStack {
 
     fn bind_async_udp_socket(
         &self,
-        bind_addr: Option<scion_proto::address::SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
         scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> futures::future::BoxFuture<
         '_,
@@ -393,7 +394,7 @@ fn bind_udp_underlay_socket(
             std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::InvalidInput => {
                 ScionSocketBindError::InvalidBindAddress(
                     InvalidBindAddressError::CannotBindToRequestedAddress(
-                        SocketAddr::from_std(IsdAsn::WILDCARD, addr),
+                        ScionSocketIpAddr::new(IsdAsn::WILDCARD, addr.ip(), addr.port()),
                         format!("Failed to bind socket: {e:#}").into(),
                     ),
                 )
@@ -411,34 +412,6 @@ fn bind_udp_underlay_socket(
 
     tokio::net::UdpSocket::from_std(std::net::UdpSocket::from(socket))
         .map_err(|e| ScionSocketBindError::Other(Box::new(e)))
-}
-
-// XXX(dsd): This function exists to avoid unnecessary vec-allocations when
-// dealing with the scion-proto API.
-//
-// # Arguments
-// * `packet`: the packet to be serialized
-// * `temp_buf`: a temporary buffer that is used for internal packet assembly
-// * `target_buf`: the buffer that will contain the final result
-#[inline]
-pub(crate) fn wire_encode<W, const N: usize>(
-    packet: &W,
-    temp_buf: &mut Packet,
-    target_buf: &mut Packet,
-) -> Result<(), W::Error>
-where
-    W: WireEncodeVec<N>,
-{
-    temp_buf.truncate(0);
-    let parts = packet.encode_with(temp_buf.buf_mut())?;
-
-    let mut n = 0;
-    parts.iter().for_each(|x| {
-        target_buf.as_mut()[n..(n + x.len())].copy_from_slice(x);
-        n += x.len();
-    });
-    target_buf.truncate(n);
-    Ok(())
 }
 
 /// Returns the outbound IP address that can reach the given destination address.

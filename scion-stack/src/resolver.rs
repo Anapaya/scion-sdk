@@ -16,7 +16,7 @@
 pub mod txt;
 
 use async_trait::async_trait;
-use scion_proto::address::ScionAddr;
+use sciparse::address::ip_addr::ScionIpAddr;
 use thiserror::Error;
 
 /// DNS resolver trait for SCION address discovery.
@@ -36,7 +36,7 @@ pub trait ScionDnsResolver: Send + Sync {
     /// Implementations SHOULD return only valid addresses and log warnings for
     /// invalid TXT entries. Errors are reserved for lookup failures or when no
     /// valid addresses can be produced.
-    async fn resolve(&self, domain: &str) -> Result<Vec<ScionAddr>, ResolveError>;
+    async fn resolve(&self, domain: &str) -> Result<Vec<ScionIpAddr>, ResolveError>;
 }
 
 /// Errors returned by SCION DNS resolution.

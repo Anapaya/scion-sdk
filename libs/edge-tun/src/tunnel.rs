@@ -24,7 +24,7 @@ use scion_sdk_quic_scion::{
 };
 use scion_sdk_scion_connect_rpc::client::CrpcClient;
 use scion_sdk_utils::backoff::ExponentialBackoff;
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tracing::instrument;
 
 use crate::{
@@ -221,7 +221,7 @@ pub struct EdgeTunnel {
     announced_routes: Vec<IpNet>,
     // Fields needed for identity re-registration in main_loop.
     static_public: PublicKey,
-    control_address: ScionSocketAddr,
+    control_address: ScionSocketIpAddr,
     control_server_name: Option<String>,
     control_client_quic_config: Option<scion_sdk_quic_scion::quic::config::QuicConfig>,
     control_socket: Arc<dyn GenericScionUdpSocket>,
@@ -237,7 +237,7 @@ impl EdgeTunnel {
     /// asynchronously when data is sent; this method does **not** wait for it to complete.
     #[instrument(name = "edge_tunnel::connect", skip_all)]
     pub async fn connect(
-        control_address: ScionSocketAddr,
+        control_address: ScionSocketIpAddr,
         control_socket: Arc<dyn GenericScionUdpSocket>,
         data_socket: Arc<dyn GenericScionUdpSocket>,
         pool: EdgePacketBufPool,
@@ -333,7 +333,7 @@ impl EdgeTunnel {
     }
 
     async fn create_control_plane_client(
-        control_address: ScionSocketAddr,
+        control_address: ScionSocketIpAddr,
         control_socket: Arc<dyn GenericScionUdpSocket>,
         control_server_name: Option<String>,
         control_client_quic_config: Option<scion_sdk_quic_scion::quic::config::QuicConfig>,

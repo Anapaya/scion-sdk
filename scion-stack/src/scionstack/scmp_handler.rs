@@ -15,20 +15,24 @@
 
 #[cfg(test)]
 use mockall::automock;
-use scion_proto::{packet::ScionPacketRaw, path::Path, scmp::ScmpErrorMessage};
 
 pub mod echo;
 pub mod error;
 
 pub use echo::DefaultEchoHandler;
 pub use error::ScmpErrorHandler;
+use sciparse::{
+    dataplane_path::view::ScionDpPathViewRef,
+    packet::{model::ScionRawPacket, view::ScionRawPacketView},
+    payload::scmp::model::ScmpErrorMessage,
+};
 
 /// Trait for SCMP handlers that can process incoming raw SCION packets and optionally return a
 /// reply packet.
 /// Sending of the reply is best effort (try_send).
 pub trait ScmpHandler: Send + Sync {
     /// Handles an incoming SCMP packet and returns a reply packet if applicable.
-    fn handle(&self, pkt: ScionPacketRaw) -> Option<ScionPacketRaw>;
+    fn handle(&self, pkt: &ScionRawPacketView) -> Option<ScionRawPacket>;
 }
 
 /// Trait for reporting path issues.
@@ -40,7 +44,7 @@ pub trait ScmpErrorReceiver: Send + Sync {
     ///
     /// * `scmp_error` - The SCMP error to report.
     /// * `path` - The path that the SCMP error was received on (not reversed).
-    fn report_scmp_error(&self, scmp_error: ScmpErrorMessage, path: &Path);
+    fn report_scmp_error<'a>(&self, scmp_error: ScmpErrorMessage, path: ScionDpPathViewRef<'a>);
 }
 
 // Note: `mockall` will generate `MockScmpErrorReceiver` for tests in this module.

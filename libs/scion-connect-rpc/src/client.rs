@@ -26,7 +26,7 @@ use scion_sdk_quic_scion::{
     quic::config::QuicConfig,
     socket::GenericScionUdpSocket,
 };
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use thiserror::Error;
 use url::Url;
 
@@ -95,7 +95,7 @@ impl CrpcClient {
     /// # Returns
     /// A new client instance that is ready to connect.
     pub async fn new(
-        remote: ScionSocketAddr,
+        remote: ScionSocketIpAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
         authorization_token: Option<String>,
@@ -120,7 +120,7 @@ impl CrpcClient {
     /// # Returns
     /// A new client instance that is ready to connect.
     pub async fn with_quic_config(
-        remote: ScionSocketAddr,
+        remote: ScionSocketIpAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
         authorization_token: Option<String>,

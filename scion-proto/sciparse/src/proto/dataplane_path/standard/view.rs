@@ -46,6 +46,7 @@ use crate::{
 
 /// A view over a standard SCION path, including meta header and data
 #[repr(transparent)]
+#[derive(PartialEq, Eq)]
 pub struct StandardPathView([u8]);
 gen_view_impl!(StandardPathView, StdPathLayout);
 
@@ -326,6 +327,17 @@ impl StandardPathView {
         }
     }
 
+    /// Attempts to return the egress interface of the next hop field.
+    ///
+    /// Returns `None` if the current hop or info field index is out of bounds.
+    #[inline]
+    pub fn curr_egress_interface(&self) -> Option<u16> {
+        let curr_hop = self.curr_hop_field()?;
+        let curr_info = self.curr_info_field()?;
+
+        Some(curr_hop.egress_interface(curr_info))
+    }
+
     /// Reverses the path in-place
     ///
     /// This function preserves the current logical position in the path.
@@ -421,7 +433,6 @@ impl StandardPathView {
         Ok(())
     }
 }
-
 // Utility
 impl StandardPathView {
     /// Returns a iterator over the segments of the path, where each segment is represented as a

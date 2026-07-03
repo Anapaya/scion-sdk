@@ -34,8 +34,8 @@ use hickory_server::{
     proto::rr::LowerName,
     store::in_memory::InMemoryAuthority,
 };
-use scion_proto::address::ScionAddr;
 use scion_stack::resolver::{ScionDnsResolver, txt::ScionTxtDnsResolver};
+use sciparse::address::ip_addr::ScionIpAddr;
 use tokio::net::UdpSocket;
 
 #[tokio::test]
@@ -57,9 +57,9 @@ async fn resolves_txt_records_from_local_server() {
     zone.upsert_mut(soa_record, serial);
 
     let scion_addr_ipv4 =
-        ScionAddr::from_str("19-ff00:0:110,192.0.2.1").expect("invalid scion addr");
+        ScionIpAddr::from_str("19-ff00:0:110,192.0.2.1").expect("invalid scion addr");
     let scion_addr_ipv6 =
-        ScionAddr::from_str("19-ff00:0:110,2001:db8::1").expect("invalid scion addr");
+        ScionIpAddr::from_str("19-ff00:0:110,2001:db8::1").expect("invalid scion addr");
     let txt_record = Record::from_rdata(
         origin.clone(),
         60,

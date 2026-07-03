@@ -1660,6 +1660,7 @@ dependencies = [
  "async-trait",
  "sciparse",
  "serde",
+ "thiserror 2.0.18",
  "url",
 ]
 
@@ -2412,9 +2413,9 @@ version = "0.5.2"
 dependencies = [
  "async-trait",
  "hsd-api-protobuf",
- "scion-proto",
  "scion-sdk-scion-connect-rpc",
  "scion-stack",
+ "sciparse",
  "thiserror 2.0.18",
 ]
 
@@ -2423,8 +2424,8 @@ name = "hsd-api-protobuf"
 version = "0.5.2"
 dependencies = [
  "prost",
- "scion-proto",
  "scion-protobuf",
+ "sciparse",
 ]
 
 [[package]]
@@ -4953,7 +4954,6 @@ dependencies = [
  "reqwest",
  "rustls",
  "scc",
- "scion-proto",
  "scion-sdk-quic-scion",
  "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-token-validator",

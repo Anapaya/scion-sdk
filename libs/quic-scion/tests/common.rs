@@ -35,7 +35,7 @@ use scion_sdk_quic_scion::{
     },
     socket::{BoxedSocketError, GenericScionUdpSocket},
 };
-use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
+use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn};
 use tempfile::NamedTempFile;
 use tokio::{
     net::UdpSocket,
@@ -54,10 +54,10 @@ use tokio_util::sync::CancellationToken;
 /// Setup a client and server socket in two different ASes in the pocket SCION topology.
 pub fn setup_sockets() -> (MockScionSocket, MockScionSocket) {
     let ia132 = "1-32".parse().unwrap();
-    let client_addr = ScionSocketAddr::new(ia132, Ipv4Addr::new(10, 1, 1, 0).into(), 0);
+    let client_addr = ScionSocketIpAddr::new(ia132, Ipv4Addr::new(10, 1, 1, 0).into(), 0);
 
     let ia212 = "2-12".parse().unwrap();
-    let server_addr = ScionSocketAddr::new(ia212, Ipv4Addr::new(10, 2, 1, 0).into(), 0);
+    let server_addr = ScionSocketIpAddr::new(ia212, Ipv4Addr::new(10, 2, 1, 0).into(), 0);
 
     MockScionSocket::pair(1024, client_addr, server_addr)
 }
@@ -120,23 +120,23 @@ fn build_server_config(quic_config: QuicConfig) -> (squiche::Config, NamedTempFi
 
 struct MockDatagram {
     data: Vec<u8>,
-    src: ScionSocketAddr,
-    dst: ScionSocketAddr,
+    src: ScionSocketIpAddr,
+    dst: ScionSocketIpAddr,
 }
 
 /// Simple in-memory mock implementation of a [`GenericScionUdpSocket`].
 pub struct MockScionSocket {
     recv_channel: Mutex<mpsc::Receiver<MockDatagram>>,
     send_channel: mpsc::Sender<MockDatagram>,
-    local_addr: ScionSocketAddr,
+    local_addr: ScionSocketIpAddr,
 }
 
 impl MockScionSocket {
     /// Creates a pair of connected `MockScionSocket`s
     pub fn pair(
         queue_size: usize,
-        sockaddr_a: ScionSocketAddr,
-        sockaddr_b: ScionSocketAddr,
+        sockaddr_a: ScionSocketIpAddr,
+        sockaddr_b: ScionSocketIpAddr,
     ) -> (MockScionSocket, MockScionSocket) {
         let (a_to_b_tx, a_to_b_rx) = mpsc::channel(queue_size);
         let (b_to_a_tx, b_to_a_rx) = mpsc::channel(queue_size);
@@ -163,7 +163,7 @@ impl GenericScionUdpSocket for MockScionSocket {
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: ScionSocketAddr,
+        destination: ScionSocketIpAddr,
     ) -> Result<(), BoxedSocketError> {
         let datagram = MockDatagram {
             data: payload.to_vec(),
@@ -182,7 +182,7 @@ impl GenericScionUdpSocket for MockScionSocket {
     async fn recv_from(
         &self,
         buf: &mut [u8],
-    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
+    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError> {
         loop {
             let datagram = self.recv_channel.lock().await.recv().await.ok_or_else(|| {
                 Box::new(io::Error::new(
@@ -210,7 +210,7 @@ impl GenericScionUdpSocket for MockScionSocket {
     }
 
     /// Returns the local socket address of this socket.
-    fn local_addr(&self) -> ScionSocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         self.local_addr
     }
 }
@@ -244,7 +244,7 @@ pub trait TrafficGate: Send + Sync {
     /// For example, a `TrafficGate` that simply passess through all traffic
     /// simply return `1` for all input. Conversely, a `TrafficGate` that drops
     /// everything simply returns `0` for all inputs.
-    fn manipulate(&self, dir: Direction, peer: ScionSocketAddr, packet: &mut [u8]) -> usize;
+    fn manipulate(&self, dir: Direction, peer: ScionSocketIpAddr, packet: &mut [u8]) -> usize;
 }
 
 /// Pass all gate has no effect on a communication channel.
@@ -252,7 +252,7 @@ pub trait TrafficGate: Send + Sync {
 pub struct PassAll;
 
 impl TrafficGate for PassAll {
-    fn manipulate(&self, _dir: Direction, _peer: ScionSocketAddr, _packet: &mut [u8]) -> usize {
+    fn manipulate(&self, _dir: Direction, _peer: ScionSocketIpAddr, _packet: &mut [u8]) -> usize {
         1
     }
 }
@@ -265,7 +265,7 @@ pub struct LossyGate {
 }
 
 impl TrafficGate for LossyGate {
-    fn manipulate(&self, _dir: Direction, _peer: ScionSocketAddr, _packet: &mut [u8]) -> usize {
+    fn manipulate(&self, _dir: Direction, _peer: ScionSocketIpAddr, _packet: &mut [u8]) -> usize {
         let r_value = self.rng_state.lock().unwrap().next_u32() as f64;
         let p = r_value / u32::MAX as f64;
         if p > self.drop_rate {
@@ -310,15 +310,12 @@ impl IncomingPerPeerLimitGate {
 }
 
 impl TrafficGate for IncomingPerPeerLimitGate {
-    fn manipulate(&self, dir: Direction, peer: ScionSocketAddr, _packet: &mut [u8]) -> usize {
+    fn manipulate(&self, dir: Direction, peer: ScionSocketIpAddr, _packet: &mut [u8]) -> usize {
         if dir == Direction::Outgoing {
             return 1;
         }
 
-        let Some(key) = peer.socket_addr() else {
-            // Can't identify the peer; let the packet through.
-            return 1;
-        };
+        let key = peer.socket_addr();
 
         let mut state = self.state.lock().unwrap();
         if !state.peers.contains_key(&key) {
@@ -389,15 +386,12 @@ pub fn encode_packet_budget(budget: u64) -> [u8; 8] {
 }
 
 impl TrafficGate for ConfiguredPerPeerLimitGate {
-    fn manipulate(&self, dir: Direction, peer: ScionSocketAddr, packet: &mut [u8]) -> usize {
+    fn manipulate(&self, dir: Direction, peer: ScionSocketIpAddr, packet: &mut [u8]) -> usize {
         if dir == Direction::Outgoing {
             return 1;
         }
 
-        let Some(key) = peer.socket_addr() else {
-            // Can't identify the peer; let the packet through.
-            return 1;
-        };
+        let key = peer.socket_addr();
 
         let mut state = self.state.lock().unwrap();
         match state.get_mut(&key) {
@@ -437,7 +431,7 @@ impl TrafficGate for ConfiguredPerPeerLimitGate {
 /// ISD-ASN `0`.
 pub struct GatedTestScionSocket<F> {
     socket: UdpSocket,
-    incoming_queue: Mutex<VecDeque<(Vec<u8>, ScionSocketAddr)>>,
+    incoming_queue: Mutex<VecDeque<(Vec<u8>, ScionSocketIpAddr)>>,
     gate: F,
 }
 
@@ -468,9 +462,9 @@ where
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: ScionSocketAddr,
+        destination: ScionSocketIpAddr,
     ) -> Result<(), BoxedSocketError> {
-        let dest_addr: SocketAddr = destination.socket_addr().unwrap();
+        let dest_addr: SocketAddr = destination.socket_addr();
 
         let mut buf = payload.to_vec();
         let n = self
@@ -490,7 +484,7 @@ where
     async fn recv_from(
         &self,
         buf: &mut [u8],
-    ) -> Result<(usize, ScionSocketAddr), BoxedSocketError> {
+    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError> {
         let mut q = self.incoming_queue.lock().await;
         let mut tmp_buf = [0u8; 65536];
         {
@@ -508,7 +502,7 @@ where
                 Ok((n, from)) => (tmp_buf[..n].to_vec(), from),
                 Err(e) => return Err(Box::new(e) as BoxedSocketError),
             };
-            let from = ScionSocketAddr::from_std(IsdAsn::from(0), from);
+            let from = ScionSocketIpAddr::new(IsdAsn::from(0), from.ip(), from.port());
             let reps = self
                 .gate
                 .manipulate(Direction::Incoming, from, p.as_mut_slice());
@@ -524,9 +518,9 @@ where
         }
     }
 
-    fn local_addr(&self) -> ScionSocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         let sockaddr = self.socket.local_addr().unwrap();
-        ScionSocketAddr::from_std(IsdAsn::from(0), sockaddr)
+        ScionSocketIpAddr::new(IsdAsn::from(0), sockaddr.ip(), sockaddr.port())
     }
 }
 
@@ -567,7 +561,7 @@ pub struct TestServer {
     /// the connection target for a client (e.g. a `tokio-quiche` client).
     pub local_addr: SocketAddr,
     /// The SCION socket address of the server (ISD-ASN `0`).
-    pub scion_addr: ScionSocketAddr,
+    pub scion_addr: ScionSocketIpAddr,
     /// A clone of the endpoint metrics. The gauges share state with the running
     /// endpoint, so up-to-date values can be read directly.
     pub metrics: Metrics,

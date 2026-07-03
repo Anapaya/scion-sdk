@@ -16,7 +16,7 @@
 
 use std::{cmp::Ordering, sync::Arc, time::SystemTime};
 
-use scion_proto::path::Path;
+use sciparse::path::ScionPath;
 
 use crate::path::{
     policy::PathPolicy,
@@ -85,12 +85,12 @@ impl PathStrategy {
     /// Returns true if the given path is accepted by all policies.
     ///
     /// If no policies are added, all paths are accepted.
-    pub fn predicate(&self, path: &Path) -> bool {
+    pub fn predicate(&self, path: &ScionPath) -> bool {
         self.policies.iter().all(|policy| policy.predicate(path))
     }
 
     /// Filters the given paths based on all policies, removing paths that are not accepted.
-    pub fn filter_inplace<'path: 'iter, 'iter>(&self, paths: &mut Vec<Path>) {
+    pub fn filter_inplace<'path: 'iter, 'iter>(&self, paths: &mut Vec<ScionPath>) {
         paths.retain(|p| self.predicate(p));
     }
 }

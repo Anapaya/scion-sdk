@@ -17,7 +17,7 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use ring::rand::SystemRandom;
-use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
+use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn};
 use squiche::ConnectionId;
 use thiserror::Error;
 use tokio::{
@@ -112,8 +112,6 @@ struct ConnectionManager {
 
 #[derive(Debug, Error)]
 enum PacketProcessError {
-    #[error("failed to parse local/remote address")]
-    InvalidAddress,
     #[error("expected initial packet: {0:?}")]
     ExpectedInitialPacket(ConnectionId<'static>),
     #[error("missing token in initial packet")]
@@ -178,7 +176,7 @@ impl ConnectionManager {
     async fn process_pkt(
         &mut self,
         pkt: &mut [u8],
-        from: ScionSocketAddr,
+        from: ScionSocketIpAddr,
         out: &mut [u8],
     ) -> Result<usize, PacketProcessError> {
         // Parse QUIC header
@@ -186,11 +184,8 @@ impl ConnectionManager {
             .map_err(PacketProcessError::InvalidHeader)?;
         tracing::trace!(?hdr.dcid, ?from, "Received QUIC packet");
 
-        let (remote_addr, local_addr) =
-            match (from.socket_addr(), self.socket.local_addr().socket_addr()) {
-                (Some(from), Some(to)) => (from, to),
-                _ => return Err(PacketProcessError::InvalidAddress),
-            };
+        let local_addr = self.socket.local_addr().socket_addr();
+        let remote_addr = from.socket_addr();
 
         let recv_info = squiche::RecvInfo {
             from: remote_addr,
@@ -455,7 +450,7 @@ impl SendDriver {
 
         // Bookkeeping variables for the next packet to send.
         let mut send_size = 0;
-        let mut target_address = "127.0.0.1:0".parse().unwrap();
+        let mut target_address: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
 
         // Option to store the pending send future. This ensures cancel safety in the select! loop.
         //
@@ -477,7 +472,11 @@ impl SendDriver {
 
             // Prepare the send future if there is data to send and no pending send.
             if pending_send.is_none() && send_size > 0 {
-                let dst = ScionSocketAddr::from_std(self.remote_isd_as, target_address);
+                let dst = ScionSocketIpAddr::new(
+                    self.remote_isd_as,
+                    target_address.ip(),
+                    target_address.port(),
+                );
 
                 // We need to move the send buffer into the future, once the future completes,
                 // return the original buffer so that it can be reused for the next send.

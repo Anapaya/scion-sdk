@@ -46,7 +46,7 @@ mod stream;
 
 use std::sync::Arc;
 
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::sync::Mutex;
 
 use self::{app::Http3ClientApp, connect::connect};
@@ -67,7 +67,7 @@ use crate::{
 /// first-use is serialized so at most one connection is established. In-flight
 /// requests on a connection that breaks are faulted (not retried or migrated).
 pub struct Http3Client {
-    remote: ScionSocketAddr,
+    remote: ScionSocketIpAddr,
     socket: Arc<dyn GenericScionUdpSocket>,
     server_name: Option<String>,
     config: QuicConfig,
@@ -81,7 +81,7 @@ impl Http3Client {
     ///
     /// No connection is established until the first request.
     pub fn new(
-        remote: ScionSocketAddr,
+        remote: ScionSocketIpAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
     ) -> Self {
@@ -90,7 +90,7 @@ impl Http3Client {
 
     /// Like [`Http3Client::new`], but with a custom [`QuicConfig`].
     pub fn with_config(
-        remote: ScionSocketAddr,
+        remote: ScionSocketIpAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         server_name: Option<String>,
         config: QuicConfig,

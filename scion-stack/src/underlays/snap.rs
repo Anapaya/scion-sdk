@@ -20,29 +20,26 @@ use std::{
 };
 
 use ana_gotatun::packet::PacketBufPool;
-use anyhow::Context as _;
-use bytes::Bytes;
-use scion_proto::{
-    address::SocketAddr,
-    packet::{ByEndpoint, ScionPacketRaw, ScionPacketUdp},
-    path::Path,
-    scmp::SCMP_PROTOCOL_NUMBER,
-    wire_encoding::WireDecode as _,
-};
+use anyhow::{Context as _, anyhow};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
+use sciparse::{
+    address::ip_socket_addr::ScionSocketIpAddr,
+    core::{model::Model, view::View},
+    dataplane_path::view::ScionDpPathViewExt,
+    packet::view::ScionRawPacketView,
+    path::ScionPath,
+    payload::ProtocolNumber,
+};
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
 use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint, SnapTunnel};
 use tokio::{net::UdpSocket, task::JoinHandle};
 use url::Url;
 
-use crate::{
-    scionstack::{
-        AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError,
-        UnderlaySocket,
-        scmp_handler::ScmpHandler,
-        udp_polling::{UdpPollHelper, UdpPoller},
-    },
-    underlays::wire_encode,
+use crate::scionstack::{
+    AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError,
+    UnderlaySocket,
+    scmp_handler::ScmpHandler,
+    udp_polling::{UdpPollHelper, UdpPoller},
 };
 
 /// A handle to the background task that runs the SNAP underlay socket task.
@@ -58,14 +55,14 @@ impl Drop for SnapUnderlaySocketTaskHandle {
 #[derive(Clone)]
 pub(crate) struct SnapUnderlaySocket {
     pub inner: Arc<SnapTunnel>,
-    local_addr: SocketAddr,
+    local_addr: ScionSocketIpAddr,
     _task: Arc<SnapUnderlaySocketTaskHandle>,
     pub(crate) pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
 }
 
 impl SnapUnderlaySocket {
     pub async fn new(
-        bind_addr: SocketAddr,
+        bind_addr: ScionSocketIpAddr,
         snap_cp: Url,
         socket: UdpSocket,
         snaptunnel_manager: &'_ SnapTunEndpoint,
@@ -141,7 +138,10 @@ impl SnapUnderlaySocket {
             pool.clone(),
         ).await.map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
 
-        let local_addr = SocketAddr::from_std(bind_addr.isd_asn(), tunnel.local_addr());
+        let tunnel_addr = tunnel.local_addr();
+        let local_addr =
+            ScionSocketIpAddr::new(bind_addr.isd_asn(), tunnel_addr.ip(), tunnel_addr.port());
+
         Ok(Self {
             inner: Arc::new(tunnel),
             local_addr,
@@ -152,10 +152,20 @@ impl SnapUnderlaySocket {
 }
 
 impl UnderlaySocket for SnapUnderlaySocket {
-    fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError> {
-        let (mut tmp, mut buf) = (self.pool.get(), self.pool.get());
-        wire_encode(&packet, &mut tmp, &mut buf)
-            .map_err(|_| ScionSocketSendError::InvalidPacket("buffer too small".into()))?;
+    fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
+        // TODO: ana gotatun requires ownership of the buffer, so we need to copy the packet into a
+        // new buffer. Should be looked into if it's possible to avoid this copy.
+
+        let mut buf = self.pool.get();
+        let pkt = packet.as_slice();
+
+        let packet_size = pkt.len();
+        {
+            let write = buf.buf_mut();
+            write.resize(packet_size, 0);
+            buf[..packet_size].copy_from_slice(pkt);
+        }
+
         self.inner
             .try_send(buf)
             .map_err(ScionSocketSendError::IoError)
@@ -163,16 +173,21 @@ impl UnderlaySocket for SnapUnderlaySocket {
 
     fn send<'a>(
         &'a self,
-        packet: scion_proto::packet::ScionPacketRaw,
+        packet: &ScionRawPacketView,
     ) -> futures::future::BoxFuture<'a, Result<(), crate::scionstack::ScionSocketSendError>> {
-        let (mut tmp, mut buf) = (self.pool.get(), self.pool.get());
-        if wire_encode(&packet, &mut tmp, &mut buf).is_err() {
-            return Box::pin(async move {
-                Err(ScionSocketSendError::InvalidPacket(
-                    "buffer too small".into(),
-                ))
-            });
+        // TODO: ana gotatun requires ownership of the buffer, so we need to copy the packet into a
+        // new buffer. Should be looked into if it's possible to avoid this copy.
+
+        let mut buf = self.pool.get();
+        let pkt = packet.as_slice();
+        let packet_size = pkt.len();
+
+        {
+            let write = buf.buf_mut();
+            write.resize(packet_size, 0);
+            buf[..packet_size].copy_from_slice(pkt);
         }
+
         Box::pin(async move {
             self.inner
                 .send(buf)
@@ -183,7 +198,8 @@ impl UnderlaySocket for SnapUnderlaySocket {
 
     fn recv<'a>(
         &'a self,
-    ) -> futures::future::BoxFuture<'a, Result<ScionPacketRaw, ScionSocketReceiveError>> {
+    ) -> futures::future::BoxFuture<'a, Result<Box<ScionRawPacketView>, ScionSocketReceiveError>>
+    {
         Box::pin(async move {
             loop {
                 let raw = self
@@ -198,27 +214,34 @@ impl UnderlaySocket for SnapUnderlaySocket {
                             "SNAP tunnel closed",
                         ))
                     })?;
-                let packet = match ScionPacketRaw::decode(&mut raw.clone()) {
-                    Ok(packet) => packet,
+
+                let packet = match ScionRawPacketView::from_slice(&raw) {
+                    Ok((pkt, _rest)) => pkt,
                     Err(e) => {
                         tracing::debug!(error = %e, "Failed to decode SCION packet, skipping");
                         continue;
                     }
                 };
 
-                let dst = packet.headers.address.destination();
-                if let Some(dst) = dst
-                    && dst != self.local_addr.scion_address()
-                {
-                    tracing::debug!(destination = ?dst, assigned_addr = %self.local_addr.scion_address(), "Packet destination does not match assigned address, skipping");
+                let dst = match packet.dst_scion_addr() {
+                    Ok(dst) => dst,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "Received packet with invalid destination address, skipping");
+                        continue;
+                    }
+                };
+
+                if dst != self.local_addr.scion_addr() {
+                    tracing::debug!(destination = ?dst, assigned_addr = %self.local_addr.scion_addr(), "Packet destination does not match assigned address, skipping");
                     continue;
                 }
-                return Ok(packet);
+
+                return Ok(packet.to_boxed());
             }
         })
     }
 
-    fn local_addr(&self) -> SocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         self.local_addr
     }
 
@@ -249,12 +272,17 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
         }))
     }
 
-    fn try_send(&self, raw_packet: ScionPacketRaw) -> Result<(), std::io::Error> {
-        let (mut tmp, mut buf) = (self.socket.pool.get(), self.socket.pool.get());
-        if wire_encode(&raw_packet, &mut tmp, &mut buf).is_err() {
-            // This should never happen.
-            return Err(std::io::Error::other("buffer too small"));
+    fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), std::io::Error> {
+        let mut buf = self.socket.pool.get();
+        let pkt = packet.as_slice();
+        let packet_size = pkt.len();
+
+        {
+            let write = buf.buf_mut();
+            write.resize(packet_size, 0);
+            buf[..packet_size].copy_from_slice(pkt);
         }
+
         self.socket.inner.try_send(buf)?;
         Ok(())
     }
@@ -262,9 +290,9 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
     fn poll_recv_from_with_path(
         &self,
         cx: &mut Context,
-    ) -> Poll<std::io::Result<(SocketAddr, Bytes, Path)>> {
+    ) -> Poll<std::io::Result<(ScionSocketIpAddr, Box<[u8]>, ScionPath)>> {
         loop {
-            let Ok(mut raw) = ready!(self.socket.inner.poll_recv(cx)) else {
+            let Ok(raw) = ready!(self.socket.inner.poll_recv(cx)) else {
                 // XXX(uniquefine) this error handling is awkward. But this will only happen
                 // when the stack is dropped anyway.
                 return Poll::Ready(Err(io::Error::new(
@@ -273,8 +301,8 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
                 )));
             };
 
-            let packet = match ScionPacketRaw::decode(&mut raw) {
-                Ok(packet) => packet,
+            let packet = match ScionRawPacketView::from_slice(&raw) {
+                Ok((pkt, _rest)) => pkt,
                 Err(e) => {
                     tracing::debug!(error = %e, "Failed to decode SCION packet, skipping");
                     continue;
@@ -282,12 +310,23 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
             };
 
             // Handle SCMP packets.
-            if packet.headers.common.next_header == SCMP_PROTOCOL_NUMBER {
+            if packet.header().next_header() == ProtocolNumber::Scmp {
                 tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
                 for handler in &self.scmp_handlers {
-                    if let Some(reply) = handler.handle(packet.clone())
-                        && let Err(e) = self.try_send(reply)
-                    {
+                    // Check if the handler wants to send a reply and send it
+                    let Some(reply) = handler.handle(packet) else {
+                        continue;
+                    };
+
+                    let reply = match reply.encode_to_owned_view() {
+                        Ok(reply) => reply,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to encode SCMP reply");
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = self.try_send(&reply) {
                         tracing::warn!(error = %e, "failed to send SCMP reply");
                     }
                 }
@@ -296,39 +335,37 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
 
             let fallible = || {
                 let src = packet
-                    .headers
-                    .address
-                    .source()
-                    .context("reading source address")?;
+                    .src_scion_addr()
+                    .context("reading source address")?
+                    .try_into_scion_ip_addr()
+                    .map_err(|_| anyhow!("not a scion ip addr"))?;
+
                 let dst = packet
-                    .headers
-                    .address
-                    .destination()
+                    .dst_scion_addr()
                     .context("reading destination address")?;
 
                 // Drop packets that are not addressed to this socket.
-                if dst != self.socket.local_addr.scion_address() {
+                if dst != self.socket.local_addr.scion_addr() {
                     anyhow::bail!(
                         "Packet destination does not match assigned address, skipping (dst: {}, assigned: {})",
                         dst,
-                        self.socket.local_addr().scion_address()
+                        self.socket.local_addr.scion_addr()
                     );
                 }
 
-                let path = Path::new(
-                    packet.headers.path.clone(),
-                    ByEndpoint {
-                        source: src.isd_asn(),
-                        destination: dst.isd_asn(),
-                    },
+                let path = ScionPath::new(
+                    src.isd_asn(),
+                    dst.isd_asn(),
+                    packet.header().path().to_owned_view(),
+                    None,
                     None,
                 );
 
-                let packet: ScionPacketUdp = packet.try_into().context("parsing UDP packet")?;
+                let packet = packet.try_into_udp().context("parsing UDP packet")?;
 
                 anyhow::Ok((
-                    SocketAddr::new(src, packet.src_port()),
-                    packet.datagram.payload,
+                    ScionSocketIpAddr::new(src.isd_asn(), src.ip(), packet.udp().src_port()),
+                    packet.udp().payload().to_vec().into_boxed_slice(),
                     path,
                 ))
             };
@@ -343,7 +380,7 @@ impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
         }
     }
 
-    fn local_addr(&self) -> SocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         self.socket.local_addr()
     }
 

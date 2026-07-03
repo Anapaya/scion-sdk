@@ -13,9 +13,9 @@
 // limitations under the License.
 //! SCMP error handling implementation.
 
-use scion_proto::{
-    packet::{ScionPacketRaw, ScionPacketScmp},
-    scmp::ScmpErrorMessage,
+use sciparse::{
+    packet::{model::ScionRawPacket, view::ScionRawPacketView},
+    payload::scmp::view::ScmpMessageExt,
 };
 
 use super::ScmpHandler;
@@ -34,25 +34,31 @@ impl ScmpErrorHandler {
 }
 
 impl ScmpHandler for ScmpErrorHandler {
-    fn handle(&self, pkt: ScionPacketRaw) -> Option<ScionPacketRaw> {
-        let path = pkt.headers.path();
-        let scmp_pkg: ScionPacketScmp = if let Ok(scmp_pkg) = pkt.try_into() {
-            scmp_pkg
-        } else {
+    fn handle(&self, pkt: &ScionRawPacketView) -> Option<ScionRawPacket> {
+        let path = pkt.header().path();
+        let Ok(scmp_pkg) = pkt.try_into_scmp() else {
+            tracing::debug!("ignoring non SCMP packet");
             return None;
         };
 
-        let scmp_error: ScmpErrorMessage = match scmp_pkg.message.try_into() {
-            Ok(scmp_error) => scmp_error,
-            Err(_) => {
-                tracing::debug!("ignoring non error SCMP message");
-                return None;
-            }
-        };
+        if !scmp_pkg.scmp().message().is_error() {
+            tracing::debug!("ignoring non error SCMP message");
+            return None;
+        }
+
+        let scmp_error = scmp_pkg
+            .scmp()
+            .message()
+            .to_model()
+            .try_into_error_message()
+            .inspect_err(|e| {
+                debug_assert!(false, "scmp error was not an error: {e:?}");
+            })
+            .ok()?;
 
         tracing::debug!(err = ?scmp_error, "reporting SCMP error");
         self.receivers.for_each(|receiver| {
-            receiver.report_scmp_error(scmp_error.clone(), &path);
+            receiver.report_scmp_error(scmp_error.clone(), path);
         });
         None
     }
@@ -62,24 +68,23 @@ impl ScmpHandler for ScmpErrorHandler {
 mod scmp_error_handler_tests {
     use std::sync::Arc;
 
-    use bytes::Bytes;
-    use scion_proto::{
-        address::{Asn, EndhostAddr, Isd, IsdAsn},
-        path::{
-            Path,
-            test_builder::{TestPathBuilder, TestPathContext},
+    use sciparse::{
+        address::ip_addr::ScionIpAddr,
+        core::model::Model,
+        dataplane_path::view::{ScionDpPathViewExt, ScionDpPathViewRef},
+        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+        payload::scmp::{
+            model::{ScmpDestinationUnreachable, ScmpEchoReply, ScmpEchoRequest, ScmpErrorMessage},
+            types::ScmpDestinationUnreachableCode,
         },
-        scmp::{
-            DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpEchoReply, ScmpEchoRequest,
-            ScmpMessage,
-        },
+        util::test_builder::{TestPathBuilder, TestPathContext},
     };
 
     use super::*;
 
     fn test_context() -> TestPathContext {
-        let src = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(10)), [192, 0, 2, 1].into());
-        let dst = EndhostAddr::new(IsdAsn::new(Isd(1), Asn(20)), [198, 51, 100, 1].into());
+        let src = ScionIpAddr::new(IsdAsn::new(Isd(1), Asn(10)), [192, 0, 2, 1].into());
+        let dst = ScionIpAddr::new(IsdAsn::new(Isd(1), Asn(20)), [198, 51, 100, 1].into());
         TestPathBuilder::new(src.into(), dst.into())
             .using_info_timestamp(42)
             .up()
@@ -91,18 +96,26 @@ mod scmp_error_handler_tests {
     #[test]
     fn forwards_scmp_error_messages_to_receivers() {
         let ctx = test_context();
-        let scmp_msg = ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
-            DestinationUnreachableCode::AddressUnreachable,
-            Bytes::from_static(b"offending packet"),
-        ));
-        let packet = ctx.scion_packet_scmp(scmp_msg);
-        let expected_path = packet.headers.path();
+        let scmp_msg = ScmpDestinationUnreachable::new(
+            ScmpDestinationUnreachableCode::AddressUnreachable,
+            b"offending packet".to_vec(),
+        )
+        .into();
+
+        let packet = ctx
+            .scion_packet_scmp(scmp_msg)
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("should encode");
+
+        let expected_path = packet.header().path().to_owned_view();
 
         let mut mock_receiver = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver
             .expect_report_scmp_error()
-            .withf(move |error: &ScmpErrorMessage, p: &Path| {
-                matches!(error, ScmpErrorMessage::DestinationUnreachable(_)) && p == &expected_path
+            .withf(move |error: &ScmpErrorMessage, path: &ScionDpPathViewRef| {
+                matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
+                    && *path == expected_path.as_ref()
             })
             .times(1)
             .returning(|_, _| {});
@@ -112,7 +125,7 @@ mod scmp_error_handler_tests {
         subscribers.register(receiver_arc.clone());
 
         let handler = ScmpErrorHandler::new(subscribers);
-        let result = handler.handle(packet.into());
+        let result = handler.handle(&packet);
 
         assert!(result.is_none());
         drop(receiver_arc); // ensure mock lives until assertions complete
@@ -131,21 +144,21 @@ mod scmp_error_handler_tests {
         let handler = ScmpErrorHandler::new(subscribers);
 
         // Test with EchoRequest
-        let echo_request = ctx.scion_packet_scmp(ScmpMessage::EchoRequest(ScmpEchoRequest::new(
-            1,
-            2,
-            Bytes::from_static(b"data"),
-        )));
-        let result = handler.handle(echo_request.into());
+        let echo_request = ctx
+            .scion_packet_scmp(ScmpEchoRequest::new(1, 2, b"data".to_vec()).into())
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("should encode");
+        let result = handler.handle(&echo_request);
         assert!(result.is_none());
 
         // Test with EchoReply
-        let echo_reply = ctx.scion_packet_scmp(ScmpMessage::EchoReply(ScmpEchoReply::new(
-            1,
-            2,
-            Bytes::from_static(b"data"),
-        )));
-        let result = handler.handle(echo_reply.into());
+        let echo_reply = ctx
+            .scion_packet_scmp(ScmpEchoReply::new(1, 2, b"data".to_vec()).into())
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("should encode");
+        let result = handler.handle(&echo_reply);
         assert!(result.is_none());
         drop(receiver_arc);
     }
@@ -164,7 +177,11 @@ mod scmp_error_handler_tests {
 
         // Test with invalid packet data
         let invalid_packet = ctx.scion_packet_raw(b"not scmp");
-        let result = handler.handle(invalid_packet);
+        let result = handler.handle(
+            &invalid_packet
+                .encode_to_owned_view()
+                .expect("failed to encode packet"),
+        );
         assert!(result.is_none());
         drop(receiver_arc);
     }
@@ -172,21 +189,27 @@ mod scmp_error_handler_tests {
     #[test]
     fn handles_multiple_receivers() {
         let ctx = test_context();
-        let error_msg = ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
-            DestinationUnreachableCode::AddressUnreachable,
-            Bytes::from_static(b"offending packet"),
-        ));
-        let packet = ctx.scion_packet_scmp(error_msg);
-        let expected_path = packet.headers.path();
+        let error_msg = ScmpDestinationUnreachable::new(
+            ScmpDestinationUnreachableCode::AddressUnreachable,
+            b"offending packet".to_vec(),
+        )
+        .into();
+
+        let packet = ctx
+            .scion_packet_scmp(error_msg)
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("should encode");
+        let expected_path = packet.header().path().to_owned_view();
 
         let expected_path_clone1 = expected_path.clone();
         let expected_path_clone2 = expected_path.clone();
         let mut mock_receiver1 = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver1
             .expect_report_scmp_error()
-            .withf(move |error: &ScmpErrorMessage, p: &Path| {
+            .withf(move |error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
                 matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
-                    && p == &expected_path_clone1
+                    && p == &expected_path_clone1.as_ref()
             })
             .times(1)
             .returning(|_, _| {});
@@ -194,9 +217,9 @@ mod scmp_error_handler_tests {
         let mut mock_receiver2 = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver2
             .expect_report_scmp_error()
-            .withf(move |error: &ScmpErrorMessage, p: &Path| {
+            .withf(move |error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
                 matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
-                    && p == &expected_path_clone2
+                    && p == &expected_path_clone2.as_ref()
             })
             .times(1)
             .returning(|_, _| {});
@@ -208,7 +231,7 @@ mod scmp_error_handler_tests {
         subscribers.register(receiver2_arc.clone());
 
         let handler = ScmpErrorHandler::new(subscribers);
-        let result = handler.handle(packet.into());
+        let result = handler.handle(&packet);
 
         assert!(result.is_none());
         drop(receiver1_arc);
@@ -218,11 +241,17 @@ mod scmp_error_handler_tests {
     #[test]
     fn handles_weak_references() {
         let ctx = test_context();
-        let error_msg = ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable::new(
-            DestinationUnreachableCode::AddressUnreachable,
-            Bytes::from_static(b"offending packet"),
-        ));
-        let packet = ctx.scion_packet_scmp(error_msg);
+        let error_msg = ScmpDestinationUnreachable::new(
+            ScmpDestinationUnreachableCode::AddressUnreachable,
+            b"offending packet".to_vec(),
+        )
+        .into();
+
+        let packet = ctx
+            .scion_packet_scmp(error_msg)
+            .into_raw()
+            .encode_to_owned_view()
+            .expect("should encode");
 
         let mut mock_receiver = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
         // When the strong reference is dropped, the weak reference won't upgrade,
@@ -236,7 +265,7 @@ mod scmp_error_handler_tests {
         // The Arc was moved into register, so the weak reference should not upgrade
 
         let handler = ScmpErrorHandler::new(subscribers);
-        let result = handler.handle(packet.into());
+        let result = handler.handle(&packet);
 
         // Handler should return None even when weak references fail to upgrade
         assert!(result.is_none());

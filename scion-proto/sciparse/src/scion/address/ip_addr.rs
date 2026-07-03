@@ -138,6 +138,12 @@ impl_from!(ScionAddrV6, ScionIpAddr, |v| ScionIpAddr::V6(v));
 impl_from!(ScionSocketIpAddr, ScionIpAddr, |v| {
     ScionIpAddr::new(v.isd_asn(), v.ip())
 });
+impl TryFrom<ScionAddr> for ScionIpAddr {
+    type Error = ScionAddr;
+    fn try_from(value: ScionAddr) -> Result<Self, Self::Error> {
+        value.try_into_scion_ip_addr()
+    }
+}
 impl PartialSchema for ScionIpAddr {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         utoipa::openapi::ObjectBuilder::new()

@@ -23,8 +23,8 @@
 //! ### Creating a path-aware socket (recommended)
 //!
 //! ```
-//! use scion_proto::address::SocketAddr;
 //! use scion_stack::scionstack::{ScionStack, ScionStackBuilder};
+//! use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 //! use url::Url;
 //!
 //! # async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,7 +36,7 @@
 //! let socket = scion_stack.bind(None).await?;
 //!
 //! // Parse destination address
-//! let destination: SocketAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
+//! let destination: ScionSocketIpAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
 //!
 //! socket.send_to(b"hello", destination).await?;
 //! let mut buffer = [0u8; 1024];
@@ -50,8 +50,8 @@
 //! ### Creating a connected socket.
 //!
 //! ```
-//! use scion_proto::address::SocketAddr;
 //! use scion_stack::scionstack::{ScionStack, ScionStackBuilder};
+//! use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 //! use url::Url;
 //!
 //! # async fn connected_socket_example() -> Result<(), Box<dyn std::error::Error>> {
@@ -60,7 +60,7 @@
 //! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! // Parse destination address
-//! let destination: SocketAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
+//! let destination: ScionSocketIpAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
 //!
 //! let scion_stack = builder.build().await?;
 //! let connected_socket = scion_stack.connect(destination, None).await?;
@@ -76,8 +76,8 @@
 //! ### Creating a path-unaware socket
 //!
 //! ```
-//! use scion_proto::{address::SocketAddr, path::Path};
 //! use scion_stack::scionstack::{ScionStack, ScionStackBuilder};
+//! use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, path::ScionPath};
 //! use url::Url;
 //!
 //! # async fn basic_socket_example() -> Result<(), Box<dyn std::error::Error>> {
@@ -86,17 +86,15 @@
 //! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
 //!
 //! // Parse addresses
-//! let bind_addr: SocketAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
-//! let destination: SocketAddr = "1-ff00:0:111,[127.0.0.1]:9090".parse()?;
+//! let bind_addr: ScionSocketIpAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
+//! let destination: ScionSocketIpAddr = "1-ff00:0:111,[127.0.0.1]:9090".parse()?;
 //!
 //! // Create a local path for demonstration
-//! let path: scion_proto::path::Path<bytes::Bytes> = Path::local(bind_addr.isd_asn());
+//! let path = ScionPath::local(bind_addr.isd_asn()).expect("not a wildcard AS");
 //!
 //! let scion_stack = builder.build().await?;
 //! let socket = scion_stack.bind_path_unaware(Some(bind_addr)).await?;
-//! socket
-//!     .send_to_via(b"hello", destination, &path.to_slice_path())
-//!     .await?;
+//! socket.send_to_via(b"hello", destination, &path).await?;
 //! let mut buffer = [0u8; 1024];
 //! let (len, sender) = socket.recv_from(&mut buffer).await?;
 //! println!("Received: {:?} from {:?}", &buffer[..len], sender);
@@ -132,26 +130,19 @@
 //!
 //! use bytes::Bytes;
 //! use chrono::{DateTime, Utc};
-//! use scion_proto::{
-//!     address::{IsdAsn, SocketAddr},
-//!     path::Path,
-//! };
 //! use scion_stack::{
 //!     path::manager::traits::PathManager,
 //!     scionstack::{ScionStack, ScionStackBuilder, UdpScionSocket},
 //!     types::ResFut,
 //! };
+//! use sciparse::{
+//!     address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn, path::ScionPath,
+//! };
 //!
 //! struct MyCustomPathManager;
 //!
 //! impl scion_stack::path::manager::traits::SyncPathManager for MyCustomPathManager {
-//!     fn register_path(
-//!         &self,
-//!         _src: IsdAsn,
-//!         _dst: IsdAsn,
-//!         _now: DateTime<Utc>,
-//!         _path: Path<Bytes>,
-//!     ) {
+//!     fn register_path(&self, _src: IsdAsn, _dst: IsdAsn, _now: DateTime<Utc>, _path: ScionPath) {
 //!         // Optionally implement registration logic
 //!     }
 //!
@@ -160,7 +151,7 @@
 //!         _src: IsdAsn,
 //!         _dst: IsdAsn,
 //!         _now: DateTime<Utc>,
-//!     ) -> std::io::Result<Option<Path<Bytes>>> {
+//!     ) -> std::io::Result<Option<ScionPath>> {
 //!         todo!()
 //!     }
 //! }
@@ -171,9 +162,8 @@
 //!         src: IsdAsn,
 //!         _dst: IsdAsn,
 //!         _now: DateTime<Utc>,
-//!     ) -> impl ResFut<'_, Path<Bytes>, scion_stack::path::manager::traits::PathWaitError>
-//!     {
-//!         async move { Ok(Path::local(src)) }
+//!     ) -> impl ResFut<'_, ScionPath, scion_stack::path::manager::traits::PathWaitError> {
+//!         async move { Ok(ScionPath::local(src).expect("not a wildcard AS")) }
 //!     }
 //! }
 //!
@@ -185,8 +175,8 @@
 //!     .with_auth_token("SNAP token".to_string());
 //!
 //! // Parse addresses
-//! let bind_addr: SocketAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
-//! let destination: SocketAddr = "1-ff00:0:111,[127.0.0.1]:9090".parse()?;
+//! let bind_addr: ScionSocketIpAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
+//! let destination: ScionSocketIpAddr = "1-ff00:0:111,[127.0.0.1]:9090".parse()?;
 //!
 //! let scion_stack = builder.build().await?;
 //! let path_unaware_socket = scion_stack.bind_path_unaware(Some(bind_addr)).await?;
@@ -218,15 +208,15 @@ use std::{
 };
 
 use anyhow::Context as _;
-use bytes::Bytes;
 use futures::future::BoxFuture;
 use quic::{AddressTranslator, Endpoint, ScionAsyncUdpSocket};
-use scion_proto::{
-    address::{Isd, IsdAsn, SocketAddr},
-    packet::ScionPacketRaw,
-    path::Path,
-};
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
+use sciparse::{
+    address::ip_socket_addr::ScionSocketIpAddr,
+    identifier::{isd::Isd, isd_asn::IsdAsn},
+    packet::view::ScionRawPacketView,
+    path::ScionPath,
+};
 use snap_tun::client::ConnectSnapTunSocketError;
 pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
 use url::Url;
@@ -297,7 +287,7 @@ impl ScionStack {
     /// A path-aware SCION socket.
     pub async fn bind(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> Result<UdpScionSocket, ScionSocketBindError> {
         self.bind_with_config(bind_addr, SocketConfig::default())
             .await
@@ -314,7 +304,7 @@ impl ScionStack {
     /// A path-aware SCION socket.
     pub async fn bind_with_config(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
         mut socket_config: SocketConfig,
     ) -> Result<UdpScionSocket, ScionSocketBindError> {
         let socket = PathUnawareUdpScionSocket::new(
@@ -373,8 +363,8 @@ impl ScionStack {
     /// A connected path-aware SCION socket.
     pub async fn connect(
         &self,
-        remote_addr: SocketAddr,
-        bind_addr: Option<SocketAddr>,
+        remote_addr: ScionSocketIpAddr,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> Result<UdpScionSocket, ScionSocketConnectError> {
         let socket = self.bind(bind_addr).await?;
         socket.connect(remote_addr).await
@@ -392,8 +382,8 @@ impl ScionStack {
     /// A connected path-aware SCION socket.
     pub async fn connect_with_config(
         &self,
-        remote_addr: SocketAddr,
-        bind_addr: Option<SocketAddr>,
+        remote_addr: ScionSocketIpAddr,
+        bind_addr: Option<ScionSocketIpAddr>,
         socket_config: SocketConfig,
     ) -> Result<UdpScionSocket, ScionSocketConnectError> {
         let socket = self.bind_with_config(bind_addr, socket_config).await?;
@@ -410,7 +400,7 @@ impl ScionStack {
     /// A SCMP socket.
     pub async fn bind_scmp(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> Result<ScmpScionSocket, ScionSocketBindError> {
         let socket = self
             .underlay
@@ -432,7 +422,7 @@ impl ScionStack {
     /// A raw SCION socket.
     pub async fn bind_raw(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> Result<RawScionSocket, ScionSocketBindError> {
         let socket = self
             .underlay
@@ -454,7 +444,7 @@ impl ScionStack {
     /// A path-unaware SCION socket.
     pub async fn bind_path_unaware(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> Result<PathUnawareUdpScionSocket, ScionSocketBindError> {
         let socket = self
             .underlay
@@ -483,7 +473,7 @@ impl ScionStack {
     )]
     pub async fn quic_endpoint(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
         config: anapaya_quinn::EndpointConfig,
         server_config: Option<anapaya_quinn::ServerConfig>,
         runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
@@ -519,7 +509,7 @@ impl ScionStack {
     )]
     pub async fn quic_endpoint_with_config(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
         config: anapaya_quinn::EndpointConfig,
         server_config: Option<anapaya_quinn::ServerConfig>,
         runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
@@ -649,8 +639,8 @@ impl SocketConfig {
     /// Path policies can restrict the set of usable paths based on their characteristics.
     /// E.g. filtering out paths that go through certain ASes.
     ///
-    /// See [`HopPatternPolicy`](scion_proto::path::policy::hop_pattern::HopPatternPolicy) and
-    /// [`AclPolicy`](scion_proto::path::policy::acl::AclPolicy)
+    /// See [`HopPatternPolicy`](sciparse::path::policy::hop_pattern::HopPatternPolicy) and
+    /// [`AclPolicy`](sciparse::path::policy::acl::AclPolicy)
     pub fn with_path_policy(mut self, policy: impl PathPolicy) -> Self {
         self.path_strategy.add_policy(policy);
         self
@@ -729,12 +719,9 @@ pub enum ScionSocketBindError {
 /// Error related to the bind address of the socket.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum InvalidBindAddressError {
-    /// The provided bind address is a service address.
-    #[error("cannot bind to service addresses: {0}")]
-    ServiceAddress(SocketAddr),
     /// The requested bind address cannot be bound to.
     #[error("cannot bind to requested address: {0}")]
-    CannotBindToRequestedAddress(SocketAddr, Cow<'static, str>),
+    CannotBindToRequestedAddress(ScionSocketIpAddr, Cow<'static, str>),
     /// The assigned address does not match the requested address.
     /// This is likely due to NAT.
     #[error(
@@ -742,9 +729,9 @@ pub enum InvalidBindAddressError {
     )]
     AddressMismatch {
         /// The assigned address.
-        assigned_addr: SocketAddr,
+        assigned_addr: ScionSocketIpAddr,
         /// The requested bind address.
-        bind_addr: SocketAddr,
+        bind_addr: ScionSocketIpAddr,
     },
     /// Could not find any local IP address to bind to.
     #[error("could not find any local IP address to bind to")]
@@ -790,12 +777,12 @@ pub(crate) trait UnderlayStack: Send + Sync {
     fn bind_socket(
         &self,
         kind: SocketKind,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> BoxFuture<'_, Result<Self::Socket, ScionSocketBindError>>;
 
     fn bind_async_udp_socket(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
         scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> BoxFuture<'_, Result<Self::AsyncUdpSocket, ScionSocketBindError>>;
 
@@ -808,12 +795,12 @@ pub(crate) trait DynUnderlayStack: Send + Sync {
     fn bind_socket(
         &self,
         kind: SocketKind,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>>;
 
     fn bind_async_udp_socket(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
         scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> BoxFuture<'_, Result<Arc<dyn AsyncUdpUnderlaySocket>, ScionSocketBindError>>;
 
@@ -824,7 +811,7 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
     fn bind_socket(
         &self,
         kind: SocketKind,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
     ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>> {
         Box::pin(async move {
             let socket = self.bind_socket(kind, bind_addr).await?;
@@ -834,7 +821,7 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
 
     fn bind_async_udp_socket(
         &self,
-        bind_addr: Option<SocketAddr>,
+        bind_addr: Option<ScionSocketIpAddr>,
         scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> BoxFuture<'_, Result<Arc<dyn AsyncUdpUnderlaySocket>, ScionSocketBindError>> {
         Box::pin(async move {
@@ -922,18 +909,21 @@ pub(crate) trait UnderlaySocket: 'static + Send + Sync {
     /// to resolve the underlay next hop.
     fn send<'a>(
         &'a self,
-        packet: ScionPacketRaw,
+        packet: &'a ScionRawPacketView,
     ) -> BoxFuture<'a, Result<(), ScionSocketSendError>>;
 
     /// Try to send a raw packet immediately. Takes a ScionPacketRaw because it needs to read the
     /// path to resolve the underlay next hop.
-    fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError>;
+    fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError>;
 
     /// Receive a raw SCION packet.
-    fn recv<'a>(&'a self) -> BoxFuture<'a, Result<ScionPacketRaw, ScionSocketReceiveError>>;
-
+    // TODO: Currently this forces alloc per received packet. Since we now have the views, this
+    // should be changed to a zero-copy receive
+    fn recv<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, Result<Box<ScionRawPacketView>, ScionSocketReceiveError>>;
     /// Get the local socket address of this socket.
-    fn local_addr(&self) -> SocketAddr;
+    fn local_addr(&self) -> ScionSocketIpAddr;
 
     /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
     fn snap_data_plane(&self) -> Option<net::SocketAddr>;
@@ -947,16 +937,21 @@ pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
     /// left to the caller.
     /// This function should return std::io::ErrorKind::WouldBlock if the packet cannot be sent
     /// immediately.
-    fn try_send(&self, raw_packet: ScionPacketRaw) -> Result<(), std::io::Error>;
+    fn try_send(&self, raw_packet: &ScionRawPacketView) -> Result<(), std::io::Error>;
     /// Poll for receiving a SCION packet with sender and path.
     /// This function will only return valid UDP packets.
     /// SCMP packets will be handled internally.
+    ///
+    /// Returns a tuple of (src_addr, payload, path) on success.
+    // TODO: Currently this forces alloc per received packet. Since we now have the views, this
+    // should be changed to a zero-copy receive
+    #[allow(clippy::type_complexity)]
     fn poll_recv_from_with_path(
         &self,
         cx: &mut Context,
-    ) -> Poll<std::io::Result<(SocketAddr, Bytes, Path)>>;
+    ) -> Poll<std::io::Result<(ScionSocketIpAddr, Box<[u8]>, ScionPath)>>;
     /// Get the local socket address of this socket.
-    fn local_addr(&self) -> SocketAddr;
+    fn local_addr(&self) -> ScionSocketIpAddr;
     /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
     fn snap_data_plane(&self) -> Option<net::SocketAddr>;
 }

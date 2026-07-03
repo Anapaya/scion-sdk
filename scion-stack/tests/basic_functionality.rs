@@ -23,16 +23,29 @@ use chrono::Utc;
 use pocketscion::util::topologies::{
     IA132, IA212, PsSetup, UnderlayType, minimal::two_path_topology,
 };
-use scion_proto::{
-    address::{IsdAsn, ScionAddr, SocketAddr},
-    packet::{ByEndpoint, FlowId, ScionPacketRaw, ScionPacketScmp, ScionPacketUdp},
-    path::DataPlanePath,
-    scmp::{ScmpEchoReply, ScmpMessage},
-    wire_encoding::WireEncodeVec,
-};
 use scion_stack::{
     path::manager::traits::PathManager,
     scionstack::{ScionSocketBindError, ScionStackBuilder},
+};
+use sciparse::{
+    address::{
+        addr::ScionAddr, ip_addr::ScionIpAddr, ip_socket_addr::ScionSocketIpAddr,
+        socket_addr::ScionSocketAddr,
+    },
+    core::{model::Model, view::View},
+    dataplane_path::{model::DpPath, view::ScionDpPathViewExt},
+    identifier::isd_asn::IsdAsn,
+    packet::{
+        model::{ScionRawPacket, ScionScmpPacket, ScionUdpPacket},
+        view::ScionRawPacketView,
+    },
+    payload::{
+        ProtocolNumber,
+        scmp::{
+            model::{ScmpEchoReply, ScmpMessage},
+            view::ScmpMessageView,
+        },
+    },
 };
 use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
@@ -159,8 +172,8 @@ async fn test_bind_two_sockets_send_receive_impl(ps: PsSetup) {
             sender_socket
                 .send_to(test_data.as_ref(), receiver_addr)
                 .await
-                .unwrap_or_else(|_| {
-                    panic!("error sending from {sender_addr:?} to {receiver_addr:?}")
+                .unwrap_or_else(|e| {
+                    panic!("error sending from {sender_addr:?} to {receiver_addr:?}: {e:?}");
                 });
         },
     );
@@ -174,9 +187,9 @@ async fn test_bind_with_specific_address_impl(ps: PsSetup) {
         .await
         .expect("build SCION stack");
 
-    let scion_addr = ScionAddr::new(
+    let scion_addr = ScionIpAddr::new(
         *stack.local_ases().first().unwrap(),
-        "127.0.0.1".parse::<IpAddr>().unwrap().into(),
+        "127.0.0.1".parse::<IpAddr>().unwrap(),
     );
     let port = {
         let bind_host = "127.0.0.1".parse().unwrap();
@@ -187,7 +200,7 @@ async fn test_bind_with_specific_address_impl(ps: PsSetup) {
         drop(sock);
         port
     };
-    let specific_addr = SocketAddr::new(scion_addr, port);
+    let specific_addr = ScionSocketIpAddr::new(scion_addr.isd_asn(), scion_addr.ip(), port);
     let socket = stack.bind(Some(specific_addr)).await.unwrap();
 
     assert_eq!(socket.local_addr(), specific_addr);
@@ -255,7 +268,7 @@ async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
     let receiver_addr = receiver.local_addr();
     let path_manager = sender_stack.create_path_manager();
 
-    let echo_data = Bytes::from_static(b"ping test data");
+    let echo_data = b"ping test data".to_vec();
     let sequence = 1u16;
 
     // Create an SCMP echo request
@@ -267,19 +280,15 @@ async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
         )
         .await
         .unwrap();
-    let echo_request = ScionPacketScmp::new(
-        ByEndpoint {
-            source: sender.local_addr().scion_address(),
-            destination: receiver_addr.scion_address(),
-        },
-        path.data_plane_path,
-        ScmpMessage::EchoReply(ScmpEchoReply::new(
-            receiver_addr.port(),
-            sequence,
-            echo_data.clone(),
-        )),
+
+    let echo_request = ScionScmpPacket::new(
+        sender.local_addr().scion_addr(),
+        receiver_addr.scion_addr(),
+        path.dp_path().to_model(),
+        ScmpEchoReply::new(receiver_addr.port(), sequence, echo_data.clone()).into(),
     )
-    .unwrap();
+    .encode_to_owned_view()
+    .expect("should encode");
 
     tracing::info!(src = %sender.local_addr(), dst = %receiver_addr, "Sending echo reply");
 
@@ -288,15 +297,15 @@ async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
             // The test SCMP handler should receive the echo request
             match within_duration!(MS_100, receiver.recv_from()) {
                 Ok((scmp_msg, src_addr)) => {
-                    match scmp_msg {
-                        ScmpMessage::EchoReply(rep) => {
-                            assert_eq!(rep.identifier, receiver_addr.port());
-                            assert_eq!(rep.sequence_number, sequence);
-                            assert_eq!(rep.data, echo_data);
+                    match scmp_msg.message() {
+                        ScmpMessageView::EchoReply(rep) => {
+                            assert_eq!(rep.identifier(), receiver_addr.port());
+                            assert_eq!(rep.sequence_number(), sequence);
+                            assert_eq!(rep.data(), echo_data);
                         }
                         _ => panic!("Expected echo reply, got: {:?}", scmp_msg),
                     }
-                    assert_eq!(src_addr, sender.local_addr().scion_address());
+                    assert_eq!(src_addr, sender.local_addr().scion_addr());
                 }
                 Err(e) => {
                     panic!("Error receiving echo reply: {e:?}");
@@ -304,7 +313,7 @@ async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
             }
         },
         async {
-            within_duration!(MS_100, sender.send(echo_request.into()))
+            within_duration!(MS_100, sender.send(echo_request.into_raw()))
                 .expect("error sending echo reply");
         },
     );
@@ -343,7 +352,7 @@ async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
     let receiver_addr = receiver.local_addr();
     let path_manager = sender_stack.create_path_manager();
 
-    let echo_data = Bytes::from_static(b"ping test data");
+    let echo_data = b"ping test data".to_vec();
     let sequence = 1u16;
 
     // Create an SCMP echo reply
@@ -355,19 +364,18 @@ async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
         )
         .await
         .unwrap();
-    let echo_reply = ScionPacketScmp::new(
-        ByEndpoint {
-            source: sender.local_addr().scion_address(),
-            destination: receiver_addr.scion_address(),
-        },
-        path.data_plane_path,
+    let echo_reply = ScionScmpPacket::new(
+        sender.local_addr().scion_addr(),
+        receiver_addr.scion_addr(),
+        path.dp_path().to_model(),
         ScmpMessage::EchoReply(ScmpEchoReply::new(
             receiver_addr.port(),
             sequence,
             echo_data.clone(),
         )),
     )
-    .unwrap();
+    .encode_to_owned_view()
+    .expect("should encode");
 
     tracing::info!(src = %sender.local_addr(), dst = %receiver_addr, "Sending echo reply");
 
@@ -376,14 +384,14 @@ async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
             // The Raw socket should receive the echo request
             match within_duration!(MS_100, receiver.recv()) {
                 Ok(raw) => {
-                    let scmp_pkt: ScionPacketScmp = raw.try_into().expect("invalid scmp packet");
-                    match scmp_pkt.message {
-                        ScmpMessage::EchoReply(rep) => {
-                            assert_eq!(rep.identifier, receiver_addr.port());
-                            assert_eq!(rep.sequence_number, sequence);
-                            assert_eq!(rep.data, echo_data);
+                    let scmp_pkt = raw.try_into_scmp().expect("invalid scmp packet");
+                    match scmp_pkt.scmp().message() {
+                        ScmpMessageView::EchoReply(rep) => {
+                            assert_eq!(rep.identifier(), receiver_addr.port());
+                            assert_eq!(rep.sequence_number(), sequence);
+                            assert_eq!(rep.data(), echo_data);
                         }
-                        _ => panic!("Expected echo reply, got: {:?}", scmp_pkt.message),
+                        msg => panic!("Expected echo reply, got: {:?}", msg),
                     }
                 }
                 Err(e) => {
@@ -392,7 +400,7 @@ async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
             }
         },
         async {
-            within_duration!(MS_100, sender.send(echo_reply.into()))
+            within_duration!(MS_100, sender.send(echo_reply.into_raw()))
                 .expect("error sending echo reply");
         },
     );
@@ -414,33 +422,29 @@ async fn test_scmp_with_port_is_received_raw_snap_impl() {
 fn create_unknown_next_header_packet(
     source: ScionAddr,
     destination: ScionAddr,
-    payload: Bytes,
-) -> ScionPacketRaw {
-    ScionPacketRaw::new(
-        ByEndpoint {
-            source,
-            destination,
-        },
-        DataPlanePath::EmptyPath,
+    payload: Vec<u8>,
+) -> ScionRawPacket {
+    ScionRawPacket::new(
+        source,
+        destination,
+        sciparse::dataplane_path::model::DpPath::Empty,
+        ProtocolNumber::Other(67),
         payload,
-        67, // Unknown next_header value
-        FlowId::default(),
     )
-    .expect("Failed to create raw SCION packet with unknown next_header")
 }
 
 /// Sends a raw SCION packet directly to a SCION socket via tokio::UdpSocket.
 async fn send_raw_packet_directly(
-    packet: ScionPacketRaw,
-    target_socket_addr: SocketAddr,
+    packet: ScionRawPacket,
+    target_socket_addr: ScionSocketIpAddr,
 ) -> Result<(), std::io::Error> {
-    let target_addr = target_socket_addr
-        .local_address()
-        .expect("Target socket must have a local address");
-
+    let target_addr = target_socket_addr.socket_addr();
     let sender_socket = UdpSocket::bind("127.0.0.1:0").await?;
-    let packet_bytes = packet.encode_to_bytes_vec().concat();
-    sender_socket.send_to(&packet_bytes, target_addr).await?;
+    let packet_bytes = packet.encode_to_owned_view().expect("failed to encode");
+
+    sender_socket
+        .send_to(packet_bytes.as_slice(), target_addr)
+        .await?;
     Ok(())
 }
 
@@ -457,10 +461,10 @@ async fn test_udp_socket_ignores_unknown_next_header_impl() {
     let receiver_socket = stack.bind(None).await.unwrap();
     let receiver_addr = receiver_socket.local_addr();
 
-    let test_payload = Bytes::from_static(b"unknown next_header test");
+    let test_payload = b"unknown next_header test".to_vec();
     let packet = create_unknown_next_header_packet(
-        receiver_addr.scion_address(),
-        receiver_addr.scion_address(),
+        receiver_addr.scion_addr(),
+        receiver_addr.scion_addr(),
         test_payload,
     );
 
@@ -495,10 +499,10 @@ async fn test_scmp_socket_ignores_unknown_next_header_impl() {
     let receiver_socket = stack.bind_scmp(None).await.unwrap();
     let receiver_addr = receiver_socket.local_addr();
 
-    let test_payload = Bytes::from_static(b"unknown next_header test");
+    let test_payload = b"unknown next_header test".to_vec();
     let packet = create_unknown_next_header_packet(
-        receiver_addr.scion_address(),
-        receiver_addr.scion_address(),
+        receiver_addr.scion_addr(),
+        receiver_addr.scion_addr(),
         test_payload,
     );
 
@@ -529,10 +533,10 @@ async fn test_raw_socket_receives_unknown_next_header_impl() {
     let receiver_socket = stack.bind_raw(None).await.unwrap();
     let receiver_addr = receiver_socket.local_addr();
 
-    let test_payload = Bytes::from_static(b"unknown next_header test");
+    let test_payload = b"unknown next_header test".to_vec();
     let packet = create_unknown_next_header_packet(
-        receiver_addr.scion_address(),
-        receiver_addr.scion_address(),
+        receiver_addr.scion_addr(),
+        receiver_addr.scion_addr(),
         test_payload.clone(),
     );
 
@@ -542,11 +546,13 @@ async fn test_raw_socket_receives_unknown_next_header_impl() {
             match within_duration!(MS_100, receiver_socket.recv()) {
                 Ok(raw) => {
                     assert_eq!(
-                        raw.payload, test_payload,
+                        raw.payload(),
+                        test_payload,
                         "RAW socket should receive the packet with unknown next_header"
                     );
                     assert_eq!(
-                        raw.headers.common.next_header, 67,
+                        raw.header().next_header(),
+                        ProtocolNumber::Other(67),
                         "Received packet should have next_header=67"
                     );
                 }
@@ -614,23 +620,14 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     info!("Sender raw socket: {sender_addr:?}");
     info!("Receiver UDP socket: {receiver_addr:?}");
 
-    let receiver_ip = receiver_addr
-        .local_address()
-        .expect("receiver must have local address")
-        .ip();
+    let receiver_ip = receiver_addr.ip();
 
     // Helper to create a UDP-over-SCION packet as ScionPacketRaw.
-    let local_packet = |dst: SocketAddr, payload: &[u8]| -> ScionPacketRaw {
-        ScionPacketUdp::new(
-            ByEndpoint {
-                source: sender_addr,
-                destination: dst,
-            },
-            DataPlanePath::EmptyPath,
-            Bytes::copy_from_slice(payload),
-        )
-        .expect("create UDP packet")
-        .into()
+    let local_packet = |dst: ScionSocketAddr, payload: &[u8]| -> Box<ScionRawPacketView> {
+        ScionUdpPacket::new(sender_addr.into(), dst, DpPath::Empty, payload.to_vec())
+            .encode_to_owned_view()
+            .expect("should encode")
+            .into()
     };
 
     let mut recv_buf = [0u8; 1024];
@@ -638,12 +635,9 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     // Test 1: Correct ISD-AS → should be received.
     {
         let payload = b"correct IA";
-        let dst = SocketAddr::new(
-            ScionAddr::new(IA132.into(), receiver_ip.into()),
-            receiver_addr.port(),
-        );
+        let dst = ScionSocketAddr::new(IA132, receiver_ip.into(), receiver_addr.port());
         let pkt = local_packet(dst, payload);
-        sender_raw.send(pkt).await.unwrap();
+        sender_raw.send(&pkt).await.unwrap();
         let (len, src) = within_duration!(MS_100, receiver_udp.recv_from(&mut recv_buf)).unwrap();
         assert_eq!(
             &recv_buf[..len],
@@ -656,12 +650,9 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     // Test 2: ISD-AS 0-0 (wildcard/unset) → should be dropped.
     {
         let payload = b"wildcard IA";
-        let dst = SocketAddr::new(
-            ScionAddr::new(IsdAsn::WILDCARD, receiver_ip.into()),
-            receiver_addr.port(),
-        );
+        let dst = ScionSocketAddr::new(IsdAsn::WILDCARD, receiver_ip.into(), receiver_addr.port());
         let pkt = local_packet(dst, payload);
-        let result = sender_raw.send(pkt).await;
+        let result = sender_raw.send(&pkt).await;
         assert!(
             result.is_err(),
             "sending packet with wildcard ISD-AS should fail",
@@ -671,12 +662,9 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     // Test 3: Wrong destination IP → should be dropped.
     {
         let wrong_ip: IpAddr = "127.0.0.2".parse().unwrap();
-        let dst = SocketAddr::new(
-            ScionAddr::new(IA132.into(), wrong_ip.into()),
-            receiver_addr.port(),
-        );
+        let dst = ScionSocketAddr::new(IA132, wrong_ip.into(), receiver_addr.port());
         let pkt = local_packet(dst, b"wrong ip");
-        sender_raw.send(pkt).await.unwrap();
+        sender_raw.send(&pkt).await.unwrap();
         let result = tokio::time::timeout(
             Duration::from_millis(100),
             receiver_udp.recv_from(&mut recv_buf),
@@ -691,9 +679,13 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     // Test 4: Wrong destination port → should be dropped.
     {
         let wrong_port = receiver_addr.port().wrapping_add(1);
-        let dst = SocketAddr::new(receiver_addr.scion_address(), wrong_port);
+        let dst = ScionSocketAddr::new(
+            receiver_addr.isd_asn(),
+            receiver_addr.host().into(),
+            wrong_port,
+        );
         let pkt = local_packet(dst, b"wrong port");
-        sender_raw.send(pkt).await.unwrap();
+        sender_raw.send(&pkt).await.unwrap();
         let result = tokio::time::timeout(
             Duration::from_millis(100),
             receiver_udp.recv_from(&mut recv_buf),

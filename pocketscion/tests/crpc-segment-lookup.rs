@@ -33,7 +33,7 @@ use scion_protobuf::control_plane::v1::{SegmentsRequest, SegmentsResponse};
 use scion_sdk_quic_scion::quic::config::QuicConfig;
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
 use sciparse::{
-    address::socket_addr::ScionSocketAddr, dataplane_path::model::DpPath,
+    address::ip_socket_addr::ScionSocketIpAddr, dataplane_path::model::DpPath,
     identifier::isd_asn::IsdAsn,
 };
 
@@ -89,7 +89,7 @@ async fn control_service_crpc_lookup() -> anyhow::Result<()> {
     let remote = cs_addr;
 
     let client = CrpcClient::with_quic_config(
-        ScionSocketAddr::new(ia2, remote.ip().into(), remote.port()),
+        ScionSocketIpAddr::new(ia2, remote.ip(), remote.port()),
         Arc::new(ns_socket),
         None,
         None,

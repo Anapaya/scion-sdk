@@ -22,16 +22,16 @@ use std::net::IpAddr;
 
 use ana_gotatun::x25519;
 use ipnet::IpNet;
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 
 pub mod api;
 
 /// Configuration for the edge-tun data plane.
 pub struct EdgeTunDataPlaneConfig {
     /// SCION socket address of the control plane (for further control requests).
-    pub control_plane_scion_sockaddr: ScionSocketAddr,
+    pub control_plane_scion_sockaddr: ScionSocketIpAddr,
     /// SCION socket address of the data plane.
-    pub data_plane_scion_sockaddr: ScionSocketAddr,
+    pub data_plane_scion_sockaddr: ScionSocketIpAddr,
 }
 
 /// Trait implemented by the edge-tun server to handle control plane requests.

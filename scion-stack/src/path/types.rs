@@ -16,7 +16,7 @@
 
 use std::time::SystemTime;
 
-use scion_proto::path::{DataPlanePathFingerprint, Path};
+use sciparse::path::ScionPath;
 
 use crate::path::manager::reliability::ReliabilityScore;
 
@@ -24,33 +24,28 @@ use crate::path::manager::reliability::ReliabilityScore;
 #[derive(Debug)]
 pub struct PathManagerPath {
     /// The underlying SCION path.
-    pub path: Path,
-    /// The fingerprint of the path.
-    pub fingerprint: DataPlanePathFingerprint,
+    pub path: ScionPath,
     /// The reliability score of the path.
     pub reliability: ReliabilityScore,
 }
 
 impl PathManagerPath {
     /// Wrap a scion path with metadata
-    pub fn new(path: Path) -> Self {
-        let fingerprint = path.data_plane_fingerprint();
-
+    pub fn new(path: ScionPath) -> Self {
         Self {
             path,
-            fingerprint,
             reliability: ReliabilityScore::new_with_time(SystemTime::now()),
         }
     }
 
     /// Get the underlying scion path
-    pub fn scion_path(&self) -> &Path {
+    pub fn scion_path(&self) -> &ScionPath {
         &self.path
     }
 }
 
-impl From<&Path> for PathManagerPath {
-    fn from(path: &Path) -> Self {
+impl From<&ScionPath> for PathManagerPath {
+    fn from(path: &ScionPath) -> Self {
         Self::new(path.clone())
     }
 }

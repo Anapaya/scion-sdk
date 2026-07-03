@@ -11,7 +11,7 @@ keywords = ["SCION", "networking"]
 [dependencies]
 # Local Dependencies
 scion-protobuf = { workspace = true }
-scion-proto = { workspace = true }
+sciparse = { workspace = true }
 
 # Global Dependencies
 prost = { workspace = true }

@@ -19,17 +19,16 @@ use std::{
     task::{Poll, ready},
 };
 
-use anyhow::Context;
-use bytes::BytesMut;
+use anyhow::{Context, anyhow};
 use futures::future::BoxFuture;
-use scion_proto::{
-    address::{IsdAsn, SocketAddr},
-    packet::{
-        ByEndpoint, PacketClassification, ScionPacketRaw, ScionPacketUdp, classify_scion_packet,
-    },
-    path::{DataPlanePath, Path, PathInterface},
-    scmp::SCMP_PROTOCOL_NUMBER,
-    wire_encoding::{WireDecode as _, WireEncodeVec as _},
+use sciparse::{
+    address::ip_socket_addr::ScionSocketIpAddr,
+    core::{model::Model, view::View},
+    dataplane_path::view::ScionDpPathViewExt,
+    identifier::isd_asn::IsdAsn,
+    packet::view::{ScionPacketView, ScionRawPacketView},
+    path::{ScionPath, metadata::path_interface::PathInterface},
+    payload::ProtocolNumber,
 };
 use tokio::{io::ReadBuf, net::UdpSocket};
 
@@ -126,14 +125,14 @@ impl OutboundIpResolver for TargetAddrOutboundIpResolver {
 /// A UDP underlay socket.
 pub struct UdpUnderlaySocket {
     pub(crate) socket: UdpSocket,
-    pub(crate) bind_addr: SocketAddr,
+    pub(crate) bind_addr: ScionSocketIpAddr,
     pub(crate) underlay_discovery: Arc<dyn UnderlayDiscovery>,
 }
 
 impl UdpUnderlaySocket {
     pub(crate) fn new(
         socket: UdpSocket,
-        bind_addr: SocketAddr,
+        bind_addr: ScionSocketIpAddr,
         underlay_discovery: Arc<dyn UnderlayDiscovery>,
     ) -> Self {
         Self {
@@ -146,60 +145,56 @@ impl UdpUnderlaySocket {
     /// Dispatch a packet to the local AS network.
     fn resolve_local_dispatch_addr(
         &self,
-        packet: &ScionPacketRaw,
+        packet: &ScionPacketView,
     ) -> Result<net::SocketAddr, ScionSocketSendError> {
         let dst_addr = packet
-            .headers
-            .address
-            .destination()
+            .header()
+            .dst_host_addr()
+            .map_err(|e| {
+                crate::scionstack::ScionSocketSendError::InvalidPacket(
+                    format!("Packet for local dispatch had invalid destination address: {e}")
+                        .into(),
+                )
+            })?
+            .ip()
             .ok_or(crate::scionstack::ScionSocketSendError::InvalidPacket(
-                "Packet to local endhost has no destination address".into(),
-            ))?
-            .local_address()
-            .ok_or(crate::scionstack::ScionSocketSendError::InvalidPacket(
-                "Cannot forward packet to local service address".into(),
+                "Packet for local dispatch dst was not an IP address".into(),
             ))?;
-        let classification = classify_scion_packet(packet.clone()).map_err(|e| {
+
+        let classified = packet.classify().map_err(|e| {
             crate::scionstack::ScionSocketSendError::InvalidPacket(
-                format!("Cannot classify packet to local endhost: {e:#}").into(),
+                format!("Failed to classify packet for local dispatch: {e}").into(),
             )
         })?;
-        let dst_port = match classification {
-            PacketClassification::Udp(udp_packet) => udp_packet.dst_port(),
-            PacketClassification::ScmpWithDestination(port, _) => port,
-            PacketClassification::ScmpWithoutDestination(_) | PacketClassification::Other(_) => {
-                return Err(crate::scionstack::ScionSocketSendError::InvalidPacket(
-                    "Cannot deduce port for packet to local endhost".into(),
-                ));
-            }
-        };
+
+        let dst_port =
+            classified
+                .dst_port()
+                .ok_or(crate::scionstack::ScionSocketSendError::InvalidPacket(
+                    "Coulldn't determine destination port in packet for local dispatch".into(),
+                ))?;
+
         Ok(net::SocketAddr::new(dst_addr, dst_port))
     }
 
-    fn try_dispatch_local(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError> {
-        let dst_addr = self.resolve_local_dispatch_addr(&packet)?;
-        let packet_bytes = packet.encode_to_bytes_vec().concat();
+    fn try_dispatch_local(&self, packet: &ScionPacketView) -> Result<(), ScionSocketSendError> {
+        let dst_addr = self.resolve_local_dispatch_addr(packet)?;
         self.socket
-            .try_send_to(&packet_bytes, dst_addr)
-            .map_err(|e| {
-                Self::map_send_io_error(e, packet.headers.address.ia.source, 0, dst_addr)
-            })?;
+            .try_send_to(packet.as_slice(), dst_addr)
+            .map_err(|e| Self::map_send_io_error(e, packet.header().src_ia(), 0, dst_addr))?;
         Ok(())
     }
 
     /// Dispatch a packet to the local AS network.
     async fn dispatch_local(
         &self,
-        packet: ScionPacketRaw,
+        packet: &ScionPacketView,
     ) -> Result<(), crate::scionstack::ScionSocketSendError> {
-        let dst_addr = self.resolve_local_dispatch_addr(&packet)?;
-        let packet_bytes = packet.encode_to_bytes_vec().concat();
+        let dst_addr = self.resolve_local_dispatch_addr(packet)?;
         self.socket
-            .send_to(&packet_bytes, dst_addr)
+            .send_to(packet.as_slice(), dst_addr)
             .await
-            .map_err(|e| {
-                Self::map_send_io_error(e, packet.headers.address.ia.source, 0, dst_addr)
-            })?;
+            .map_err(|e| Self::map_send_io_error(e, packet.header().src_ia(), 0, dst_addr))?;
         Ok(())
     }
 
@@ -229,145 +224,133 @@ impl UdpUnderlaySocket {
 impl UnderlaySocket for UdpUnderlaySocket {
     fn send<'a>(
         &'a self,
-        packet: ScionPacketRaw,
+        packet: &'a ScionRawPacketView,
     ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
-        let source_ia = packet.headers.address.ia.source;
-        if packet.headers.address.ia.destination == source_ia {
-            return Box::pin(async move {
-                self.dispatch_local(packet).await?;
-                Ok(())
-            });
+        let source_ia = packet.header().src_ia();
+
+        // If packet is destined for the local AS, dispatch it locally.
+        if packet.header().dst_ia() == source_ia {
+            return Box::pin(self.dispatch_local(packet));
         }
 
-        // Extract the source IA and next hop from the packet.
-        let interface_id = if let DataPlanePath::Standard(standard_path) = &packet.headers.path
-            && let Some(interface_id) = standard_path.iter_interfaces().next()
-        {
-            interface_id
-        } else {
+        // Get the current egress interface from the path
+        let Some(egress_if) = packet.header().path().first_egress_interface() else {
             return Box::pin(async move {
                 Err(ScionSocketSendError::InvalidPacket(
-                    "Path does not contain first hop.".into(),
+                    "Can't determine egress interface for packet.".into(),
                 ))
             });
         };
 
+        // Lookup the address of the egress router by the source IA and egress interface.
         let next_hop = match self
             .underlay_discovery
             .resolve_udp_underlay_next_hop(PathInterface {
                 isd_asn: source_ia,
-                id: interface_id.get(),
-            })
-            .ok_or(ScionSocketSendError::UnderlayNextHopUnreachable {
-                isd_as: source_ia,
-                interface_id: interface_id.get(),
-                address: None,
-                msg: "next hop not found".to_string(),
+                id: egress_if,
             }) {
-            Ok(next_hop) => next_hop,
-            Err(e) => {
-                return Box::pin(async move { Err(e) });
+            Some(next_hop) => next_hop,
+            None => {
+                return Box::pin(async move {
+                    Err(ScionSocketSendError::UnderlayNextHopUnreachable {
+                        isd_as: source_ia,
+                        interface_id: egress_if,
+                        address: None,
+                        msg: "next hop not found".to_string(),
+                    })
+                });
             }
         };
 
-        let packet_bytes = packet.encode_to_bytes_vec().concat();
         Box::pin(async move {
             self.socket
-                .send_to(&packet_bytes, next_hop)
+                .send_to(packet.as_slice(), next_hop)
                 .await
-                .map_err(|e| {
-                    use std::io::ErrorKind::*;
-                    match e.kind() {
-                        HostUnreachable | NetworkUnreachable => {
-                            ScionSocketSendError::UnderlayNextHopUnreachable {
-                                isd_as: source_ia,
-                                interface_id: interface_id.get(),
-                                address: Some(next_hop),
-                                msg: e.to_string(),
-                            }
-                        }
-                        ConnectionAborted | ConnectionReset | BrokenPipe => {
-                            ScionSocketSendError::Closed
-                        }
-                        _ => ScionSocketSendError::IoError(e),
-                    }
-                })?;
+                .map_err(|e| Self::map_send_io_error(e, source_ia, egress_if, next_hop))?;
+
             Ok(())
         })
     }
 
     /// Try to send a raw packet immediately. Takes a ScionPacketRaw because it needs to read the
     /// path to resolve the underlay next hop.
-    fn try_send(&self, packet: ScionPacketRaw) -> Result<(), ScionSocketSendError> {
-        let source_ia = packet.headers.address.ia.source;
-        if packet.headers.address.ia.destination == source_ia {
+    fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
+        let source_ia = packet.header().src_ia();
+
+        // If packet is destined for the local AS, dispatch it locally.
+        if packet.header().dst_ia() == source_ia {
             return self.try_dispatch_local(packet);
         }
 
-        // Extract the source IA and next hop from the packet.
-        let interface_id = if let DataPlanePath::Standard(standard_path) = &packet.headers.path
-            && let Some(interface_id) = standard_path.iter_interfaces().next()
-        {
-            interface_id
-        } else {
+        // Get the current egress interface from the path
+        let Some(egress_if) = packet.header().path().first_egress_interface() else {
             return Err(ScionSocketSendError::InvalidPacket(
-                "Path does not contain first hop.".into(),
+                "Can't determine egress interface for packet.".into(),
             ));
         };
 
+        // Lookup the address of the egress router by the source IA and egress interface.
         let next_hop = match self
             .underlay_discovery
             .resolve_udp_underlay_next_hop(PathInterface {
                 isd_asn: source_ia,
-                id: interface_id.get(),
-            })
-            .ok_or(ScionSocketSendError::UnderlayNextHopUnreachable {
-                isd_as: source_ia,
-                interface_id: interface_id.get(),
-                address: None,
-                msg: "next hop not found".to_string(),
+                id: egress_if,
             }) {
-            Ok(next_hop) => next_hop,
-            Err(e) => {
-                return Err(e);
+            Some(next_hop) => next_hop,
+            None => {
+                return Err(ScionSocketSendError::UnderlayNextHopUnreachable {
+                    isd_as: source_ia,
+                    interface_id: egress_if,
+                    address: None,
+                    msg: "next hop not found".to_string(),
+                });
             }
         };
 
         self.socket
-            .try_send_to(&packet.encode_to_bytes_vec().concat(), next_hop)
-            .map_err(|e| Self::map_send_io_error(e, source_ia, interface_id.get(), next_hop))?;
+            .try_send_to(packet.as_slice(), next_hop)
+            .map_err(|e| Self::map_send_io_error(e, source_ia, egress_if, next_hop))?;
+
         Ok(())
     }
 
     fn recv<'a>(
         &'a self,
-    ) -> BoxFuture<'a, Result<ScionPacketRaw, crate::scionstack::ScionSocketReceiveError>> {
+    ) -> BoxFuture<'a, Result<Box<ScionRawPacketView>, crate::scionstack::ScionSocketReceiveError>>
+    {
         Box::pin(async move {
             let mut buf = [0u8; UDP_DATAGRAM_BUFFER_SIZE];
             loop {
                 let (n, _) = self.socket.recv_from(&mut buf).await?;
-                let packet = match ScionPacketRaw::decode(&mut BytesMut::from(&buf[..n])) {
-                    Ok(packet) => packet,
+
+                let packet = match ScionRawPacketView::from_slice(&buf[..n]) {
+                    Ok((packet, _rest)) => packet,
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to decode SCION packet");
                         continue;
                     }
                 };
 
+                let dst = match packet.dst_scion_addr() {
+                    Ok(dst) => Some(dst),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to read destination address from packet");
+                        continue;
+                    }
+                };
+
                 // Drop packets that are not addressed to this socket.
-                let dst = packet.headers.address.destination();
-                if let Some(dst) = dst
-                    && dst != self.bind_addr.scion_address()
-                {
-                    tracing::debug!(destination = ?dst, assigned_addr = %self.bind_addr.scion_address(), "Packet destination does not match assigned address, skipping");
+                if dst != Some(self.bind_addr.scion_addr()) {
+                    tracing::debug!(destination = ?dst, assigned_addr = %self.bind_addr.scion_addr(), "Packet destination does not match assigned address, skipping");
                     continue;
                 }
-                return Ok(packet);
+
+                return Ok(packet.to_boxed());
             }
         })
     }
 
-    fn local_addr(&self) -> scion_proto::address::SocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         self.bind_addr
     }
 
@@ -378,7 +361,7 @@ impl UnderlaySocket for UdpUnderlaySocket {
 
 /// An async UDP underlay socket.
 pub struct UdpAsyncUdpUnderlaySocket {
-    local_addr: SocketAddr,
+    local_addr: ScionSocketIpAddr,
     discovery: Arc<dyn UnderlayDiscovery>,
     inner: UdpSocket,
     scmp_handlers: Vec<Box<dyn ScmpHandler>>,
@@ -386,7 +369,7 @@ pub struct UdpAsyncUdpUnderlaySocket {
 
 impl UdpAsyncUdpUnderlaySocket {
     pub(crate) fn new(
-        local_addr: SocketAddr,
+        local_addr: ScionSocketIpAddr,
         discovery: Arc<dyn UnderlayDiscovery>,
         inner: UdpSocket,
         scmp_handlers: Vec<Box<dyn ScmpHandler>>,
@@ -400,39 +383,36 @@ impl UdpAsyncUdpUnderlaySocket {
     }
 
     /// Dispatch a packet to the local AS network.
-    fn try_dispatch_local(&self, packet: ScionPacketRaw) -> io::Result<()> {
+    fn try_dispatch_local(&self, packet: &ScionRawPacketView) -> io::Result<()> {
         let dst_addr = packet
-            .headers
-            .address
-            .destination()
-            .ok_or(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Packet to local endhost has no destination address".to_string(),
-            ))?
-            .local_address()
+            .header()
+            .dst_host_addr()
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Packet contained invalid destination address: {e}"),
+                )
+            })?
+            .ip()
             .ok_or(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Cannot forward packet with service address".to_string(),
             ))?;
-        let classification = classify_scion_packet(packet.clone()).map_err(|e| {
+
+        let classification = packet.classify().map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("Cannot classify packet to local endhost: {e:#}"),
+                format!("Malformed packet: {e}"),
             )
         })?;
-        let dst_port = match classification {
-            PacketClassification::Udp(udp_packet) => udp_packet.dst_port(),
-            PacketClassification::ScmpWithDestination(port, _) => port,
-            PacketClassification::ScmpWithoutDestination(_) | PacketClassification::Other(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Cannot deduce port for packet to local endhost",
-                ));
-            }
-        };
-        let packet_bytes = packet.encode_to_bytes_vec().concat();
+
+        let dst_port = classification.dst_port().ok_or(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Cannot forward packet with unknown destination port".to_string(),
+        ))?;
+
         let dst_addr = net::SocketAddr::new(dst_addr, dst_port);
-        self.inner.try_send_to(&packet_bytes, dst_addr)?;
+        self.inner.try_send_to(packet.as_slice(), dst_addr)?;
         Ok(())
     }
 }
@@ -447,39 +427,39 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
         }))
     }
 
-    fn try_send(&self, packet: ScionPacketRaw) -> Result<(), std::io::Error> {
-        let source_ia = packet.headers.address.ia.source;
-        if packet.headers.address.ia.destination == source_ia {
+    fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), std::io::Error> {
+        let source_ia = packet.header().src_ia();
+
+        // If packet is destined for the local AS, dispatch it locally.
+        if packet.header().dst_ia() == source_ia {
             return self.try_dispatch_local(packet);
         }
 
-        // Extract the source IA and next hop from the packet.
-        let interface_id = if let DataPlanePath::Standard(standard_path) = &packet.headers.path
-            && let Some(interface_id) = standard_path.iter_interfaces().next()
-        {
-            interface_id
-        } else {
+        // Get the current egress interface from the path
+        let Some(egress_if) = packet.header().path().first_egress_interface() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Path does not contain first hop.".to_string(),
+                "can't determine egress interface for packet.",
             ));
         };
 
-        let next_hop = self
-            .discovery
-            .resolve_udp_underlay_next_hop(PathInterface {
-                isd_asn: source_ia,
-                id: interface_id.get(),
-            })
-            .ok_or(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "could not resolve next hop",
-            ))?;
+        // Lookup the address of the egress router by the source IA and egress interface.
+        let next_hop = match self.discovery.resolve_udp_underlay_next_hop(PathInterface {
+            isd_asn: source_ia,
+            id: egress_if,
+        }) {
+            Some(next_hop) => next_hop,
+            None => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "could not resolve next hop",
+                ));
+            }
+        };
 
-        let packet_bytes = packet.encode_to_bytes_vec().concat();
         // Ignore all errors except for WouldBlock. The sender should try to
         // retransmit.
-        match self.inner.try_send_to(&packet_bytes, next_hop) {
+        match self.inner.try_send_to(packet.as_slice(), next_hop) {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Err(e),
             Err(e) => {
@@ -493,26 +473,37 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
     fn poll_recv_from_with_path(
         &self,
         cx: &mut std::task::Context,
-    ) -> Poll<std::io::Result<(SocketAddr, bytes::Bytes, scion_proto::path::Path)>> {
+    ) -> Poll<std::io::Result<(ScionSocketIpAddr, Box<[u8]>, ScionPath)>> {
         loop {
             let mut raw_buf = [0u8; UDP_DATAGRAM_BUFFER_SIZE];
             let mut buf = ReadBuf::new(&mut raw_buf);
             let _ = ready!(self.inner.poll_recv_from(cx, &mut buf))?;
 
-            let packet = match ScionPacketRaw::decode(&mut BytesMut::from(buf.initialized())) {
-                Ok(packet) => packet,
+            let packet = match ScionRawPacketView::from_slice(buf.initialized()) {
+                Ok((packet, _rest)) => packet,
                 Err(e) => {
                     tracing::trace!(error = %e, "Received non SCION packet, dropping");
                     continue;
                 }
             };
             // Handle SCMP packets.
-            if packet.headers.common.next_header == SCMP_PROTOCOL_NUMBER {
+            if packet.header().next_header() == ProtocolNumber::Scmp {
                 tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
                 for handler in &self.scmp_handlers {
-                    if let Some(reply) = handler.handle(packet.clone())
-                        && let Err(e) = self.try_send(reply)
-                    {
+                    // Check if the handler wants to send a reply and send it
+                    let Some(reply) = handler.handle(packet) else {
+                        continue;
+                    };
+
+                    let reply = match reply.encode_to_owned_view() {
+                        Ok(reply) => reply,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to encode SCMP reply");
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = self.inner.try_send(reply.as_slice()) {
                         tracing::warn!(error = %e, "failed to send SCMP reply");
                     }
                 }
@@ -521,39 +512,37 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
 
             let fallible = || {
                 let src = packet
-                    .headers
-                    .address
-                    .source()
-                    .context("reading source address")?;
+                    .src_scion_addr()
+                    .context("reading source address")?
+                    .try_into_scion_ip_addr()
+                    .map_err(|_| anyhow!("src was not a scion ip addr"))?;
+
                 let dst = packet
-                    .headers
-                    .address
-                    .destination()
+                    .dst_scion_addr()
                     .context("reading destination address")?;
 
                 // Drop packets that are not addressed to this socket.
-                if dst != self.local_addr.scion_address() {
+                if dst != self.local_addr.scion_addr() {
                     anyhow::bail!(
                         "Packet destination does not match assigned address, skipping (dst: {}, assigned: {})",
                         dst,
-                        self.local_addr.scion_address()
+                        self.local_addr.scion_addr()
                     );
                 }
 
-                let path = Path::new(
-                    packet.headers.path.clone(),
-                    ByEndpoint {
-                        source: src.isd_asn(),
-                        destination: dst.isd_asn(),
-                    },
+                let path = ScionPath::new(
+                    src.isd_asn(),
+                    dst.isd_asn(),
+                    packet.header().path().to_owned_view(),
+                    None,
                     None,
                 );
 
-                let packet: ScionPacketUdp = packet.try_into().context("parsing UDP packet")?;
+                let packet = packet.try_into_udp().context("parsing UDP packet")?;
 
                 anyhow::Ok((
-                    SocketAddr::new(src, packet.src_port()),
-                    packet.datagram.payload,
+                    ScionSocketIpAddr::new(src.isd_asn(), src.ip(), packet.udp().src_port()),
+                    packet.udp().payload().to_vec().into_boxed_slice(),
                     path,
                 ))
             };
@@ -568,7 +557,7 @@ impl AsyncUdpUnderlaySocket for UdpAsyncUdpUnderlaySocket {
         }
     }
 
-    fn local_addr(&self) -> SocketAddr {
+    fn local_addr(&self) -> ScionSocketIpAddr {
         self.local_addr
     }
 

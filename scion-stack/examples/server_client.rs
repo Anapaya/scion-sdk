@@ -56,11 +56,11 @@ use pocketscion::{
     state::PocketScionState,
     util::addr_to_http_url,
 };
-use scion_proto::address::{IsdAsn, ScionAddr, SocketAddr};
 use scion_stack::{
     quic::{QuinnConn, ScionQuinnConn},
     scionstack::ScionStackBuilder,
 };
+use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn};
 use serde::{Deserialize, Serialize};
 use snap_tokens::v0::dummy_snap_token;
 use tokio::{select, time::interval, try_join};
@@ -127,7 +127,7 @@ async fn main() -> Result<(), anyhow::Error> {
         // Create SCION Network Access Points (SNAPs)
         for snap_config in &cfg.pocket_scion.scion_access_points {
             // Add a new SNAP to the system state
-            let snap_id = system_state.add_snap(snap_config.isd_as.into())?;
+            let snap_id = system_state.add_snap(snap_config.isd_as)?;
 
             // Then add an IO config to declare how this control plane can be reached
             io_config.set_snap_control_addr(snap_id, snap_config.control_api_addr);
@@ -169,8 +169,9 @@ async fn main() -> Result<(), anyhow::Error> {
         #[allow(deprecated)]
         let server_quick_endpoint: scion_stack::scionstack::quic::Endpoint = server_network_stack
             .quic_endpoint(
-                Some(SocketAddr::new(
-                    ScionAddr::new(IsdAsn::WILDCARD, Ipv4Addr::UNSPECIFIED.into()),
+                Some(ScionSocketIpAddr::new(
+                    IsdAsn::WILDCARD,
+                    Ipv4Addr::UNSPECIFIED.into(),
                     cfg.server.bind_port,
                 )),
                 EndpointConfig::default(),

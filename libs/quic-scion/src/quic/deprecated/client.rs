@@ -24,7 +24,7 @@ use ring::{
     error::Unspecified,
     rand::{SecureRandom, SystemRandom},
 };
-use sciparse::{address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn};
+use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -52,12 +52,6 @@ pub enum QuicConnectionError {
     /// Connection ID generation error.
     #[error("Failed to generate connection ID: {0}")]
     ConnectionIdError(Unspecified),
-    /// Invalid socket local address.
-    #[error("Invalid socket local address")]
-    InvalidSocketLocalAddress,
-    /// Invalid remote address.
-    #[error("Invalid remote address")]
-    InvalidRemoteAddress,
     /// QUIC connection error.
     #[error("QUIC connection error: {0}")]
     ConnectError(#[from] squiche::Error),
@@ -67,19 +61,14 @@ impl QuicConnection {
     /// Creates a new QUIC connection over SCION.
     pub async fn new(
         server_name: Option<String>,
-        remote: ScionSocketAddr,
+        remote: ScionSocketIpAddr,
         socket: Arc<dyn GenericScionUdpSocket>,
         mut quiche_config: squiche::Config,
     ) -> Result<Self, QuicConnectionError> {
         let scid = generate_connection_id().map_err(QuicConnectionError::ConnectionIdError)?;
 
-        let local_addr = socket
-            .local_addr()
-            .socket_addr()
-            .ok_or(QuicConnectionError::InvalidSocketLocalAddress)?;
-        let remote_addr = remote
-            .socket_addr()
-            .ok_or(QuicConnectionError::InvalidRemoteAddress)?;
+        let local_addr = socket.local_addr().socket_addr();
+        let remote_addr = remote.socket_addr();
 
         let quic_tx_notifier = Arc::new(tokio::sync::Notify::new());
 
@@ -251,7 +240,11 @@ impl QuicConnectionDriver {
 
             // Prepare the send future if there is data to send and no pending send.
             if pending_send.is_none() && send_size > 0 {
-                let dst = ScionSocketAddr::from_std(self.remote_isd_as, target_address);
+                let dst = ScionSocketIpAddr::new(
+                    self.remote_isd_as,
+                    target_address.ip(),
+                    target_address.port(),
+                );
                 let socket = self.socket.clone();
                 pending_send = Some(Box::pin(async move {
                     socket.send_to(&send_buffer[..send_size], dst).await
@@ -284,18 +277,19 @@ impl QuicConnectionDriver {
                     );
                     body.truncate(len);
 
-                    if let (Some(from), Some(to)) = (src.socket_addr(), self.socket.local_addr().socket_addr()) {
-                        let recv_info = squiche::RecvInfo { from, to };
-                        let mut conn = self.conn.lock().await;
-                        if let Err(err) = conn.recv(&mut body, recv_info) {
-                            tracing::warn!(
-                                ?err,
-                                "failed to dispatch packet from transport to QUIC connection"
-                            );
-                            return
-                        }
-                    } else {
-                        tracing::warn!(?src, "packet with invalid addresses ignored");
+
+                    let from = src.socket_addr();
+                    let to = self.socket.local_addr().socket_addr();
+
+
+                    let recv_info = squiche::RecvInfo { from, to };
+                    let mut conn = self.conn.lock().await;
+                    if let Err(err) = conn.recv(&mut body, recv_info) {
+                        tracing::warn!(
+                            ?err,
+                            "failed to dispatch packet from transport to QUIC connection"
+                        );
+                        return
                     }
                 }
 

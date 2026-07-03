@@ -29,7 +29,7 @@ use std::{
 use futures::{StreamExt, stream::FuturesUnordered};
 use prometheus::IntGauge;
 use ring::hmac::Key as HmacKey;
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use squiche::{ConnectionId, RecvInfo};
 use thiserror::Error;
 use tokio::{
@@ -95,7 +95,7 @@ const MAX_TOKEN_LEN: usize = squiche::MAX_CONN_ID_LEN + DIGEST_LEN;
 pub struct QuicScionServerEndpoint<T> {
     established: HashMap<ConnectionId<'static>, T>,
     establishing_set: EstablishingSet,
-    local_addr: ScionSocketAddr,
+    local_addr: ScionSocketIpAddr,
     cid_generator: CidGenerator,
     token_generator: TokenGenerator,
     // Scrub space for token generation. Avoids repeated allocations.
@@ -115,7 +115,7 @@ impl<T> QuicScionServerEndpoint<T> {
     pub fn new(
         rnd_seed: [u8; 32],
         config: squiche::Config,
-        local_addr: ScionSocketAddr,
+        local_addr: ScionSocketIpAddr,
         metrics: Metrics,
     ) -> Self {
         let key = HmacKey::new(HMAC_ALGO, &rnd_seed);
@@ -152,7 +152,7 @@ impl<T> QuicScionServerEndpoint<T> {
         &mut self,
         recv_buf: &mut [u8],
         send_buf: &mut [u8],
-        from: ScionSocketAddr,
+        from: ScionSocketIpAddr,
     ) -> RecvResult<'_, T> {
         // Parse QUIC Header
         let hdr = squiche::Header::from_slice(recv_buf, squiche::MAX_CONN_ID_LEN)
@@ -165,10 +165,8 @@ impl<T> QuicScionServerEndpoint<T> {
             return Ok(RecvOutcome::ConnEvent(e.into_mut()));
         }
 
-        let (remote_addr, local_addr) = match (from.socket_addr(), self.local_addr.socket_addr()) {
-            (Some(from), Some(to)) => (from, to),
-            _ => return Err(PacketProcessError::InvalidAddress),
-        };
+        let local_addr = self.local_addr.socket_addr();
+        let remote_addr = from.socket_addr();
 
         let res = self.establishing_set.update(&hdr.dcid, |c| {
             c.inner
@@ -477,9 +475,7 @@ where
         established_conn: F,
         config: A::Config,
     ) -> Self {
-        let Some(local_addr) = scion_udp_socket.local_addr().socket_addr() else {
-            panic!("local address is not an IPv4 or IPv6 address");
-        };
+        let local_addr = scion_udp_socket.local_addr().socket_addr();
 
         Self {
             quic_scion_endpoint,
@@ -535,7 +531,7 @@ where
     async fn handle_recv(
         &mut self,
         recv_size: usize,
-        recv_from: ScionSocketAddr,
+        recv_from: ScionSocketIpAddr,
     ) -> Result<(), BoxedSocketError> {
         match self.quic_scion_endpoint.recv(
             &mut self.recv_buf.as_mut()[..recv_size],
@@ -547,7 +543,10 @@ where
                     let mut conn = c.lock();
                     if let Err(err) = conn.inner.recv(
                         &mut self.recv_buf[..recv_size],
-                        Self::get_recv_info(self.local_addr, recv_from),
+                        RecvInfo {
+                            from: recv_from.socket_addr(),
+                            to: self.local_addr,
+                        },
                     ) {
                         let scid = conn.inner.source_id();
                         tracing::error!(?scid, ?err, "error receiving for connection")
@@ -627,21 +626,6 @@ where
             }
         }
         Ok(())
-    }
-
-    fn get_recv_info(local_addr: SocketAddr, from_addr: ScionSocketAddr) -> RecvInfo {
-        let from = if let Some(sa) = from_addr.socket_addr() {
-            sa
-        } else {
-            // Should the from address be anything other than an IPv4 or
-            // IPv6 address, we pin it down to the wildcard address.
-            "0.0.0.0:0".parse().unwrap()
-        };
-
-        RecvInfo {
-            from,
-            to: local_addr,
-        }
     }
 
     async fn handle_timeout(&mut self, now: Instant) -> Result<(), BoxedSocketError> {

@@ -21,9 +21,9 @@ use std::{
 
 use arc_swap::ArcSwap;
 use endhost_api_client::client::EndhostApiClient;
-use scion_proto::{address::IsdAsn, path::PathInterface};
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use scion_sdk_utils::backoff::ExponentialBackoff;
+use sciparse::{identifier::isd_asn::IsdAsn, path::metadata::path_interface::PathInterface};
 use tokio::task::JoinHandle;
 use url::Url;
 
@@ -236,7 +236,7 @@ async fn discover_underlays(
     ),
     CrpcClientError,
 > {
-    let res = api_client.list_underlays(IsdAsn::WILDCARD.into()).await?;
+    let res = api_client.list_underlays(IsdAsn::WILDCARD).await?;
     let mut udp_underlays = HashMap::new();
     for underlay in res.udp_underlay.into_iter() {
         let entry = udp_underlays.entry(underlay.isd_as).or_insert(vec![]);
@@ -253,7 +253,7 @@ async fn discover_underlays(
             for interface_id in router.interfaces.iter() {
                 udp_underlay_next_hops.insert(
                     PathInterface {
-                        isd_asn: (*isd_as).into(),
+                        isd_asn: (*isd_as),
                         id: *interface_id,
                     },
                     router.internal_interface,
@@ -265,14 +265,11 @@ async fn discover_underlays(
     // Create the underlays list.
     let mut underlays: Vec<(IsdAsn, UnderlayInfo)> = udp_underlays
         .into_iter()
-        .map(|(isd_as, routers)| (isd_as.into(), UnderlayInfo::Udp(routers)))
+        .map(|(isd_as, routers)| (isd_as, UnderlayInfo::Udp(routers)))
         .collect();
     for underlay in res.snap_underlay.iter() {
         for isd_as in underlay.isd_ases.iter() {
-            underlays.push((
-                (*isd_as).into(),
-                UnderlayInfo::Snap(underlay.address.clone()),
-            ));
+            underlays.push(((*isd_as), UnderlayInfo::Snap(underlay.address.clone())));
         }
     }
     Ok((underlays, udp_underlay_next_hops))

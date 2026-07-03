@@ -17,7 +17,6 @@
 use std::time::Duration;
 
 use anyhow::{Context, Ok};
-use bytes::Bytes;
 use chrono::Utc;
 use ntest::timeout;
 use pocketscion::{
@@ -26,12 +25,19 @@ use pocketscion::{
     state::PocketScionState,
     util::addr_to_http_url,
 };
-use scion_proto::{
-    address::{IsdAsn, SocketAddr},
-    packet::{ByEndpoint, ScionPacketUdp, classify_scion_packet},
-    scmp::{DestinationUnreachableCode, ScmpDestinationUnreachable, ScmpMessage, ScmpMessageBase},
-};
 use scion_stack::{path::manager::traits::PathManager as _, scionstack::ScionStackBuilder};
+use sciparse::{
+    address::socket_addr::ScionSocketAddr,
+    core::model::Model,
+    dataplane_path::view::ScionDpPathViewExt,
+    identifier::isd_asn::IsdAsn,
+    packet::model::ScionUdpPacket,
+    payload::scmp::{
+        model::{ScmpDestinationUnreachable, ScmpMessage},
+        types::ScmpDestinationUnreachableCode,
+        view::ScmpMessageExt,
+    },
+};
 use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
 use url::Url;
@@ -47,7 +53,7 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     //
     // Setup minimal topology
     let mut topo = ScionTopologyBuilder::new();
-    topo.add_as(ScionAs::new_core(server_ia.into()))?
+    topo.add_as(ScionAs::new_core(server_ia))?
         .add_as(ScionAs::new_core("1-2".parse()?))?
         .add_link("1-1#1 core 1-2#1".parse()?)?;
 
@@ -55,8 +61,8 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
 
     //
     // Setup snap
-    let snap_id = state.add_snap(server_ia.into())?;
-    let _eh_api_id = state.add_endhost_api(vec![server_ia.into()]);
+    let snap_id = state.add_snap(server_ia)?;
+    let _eh_api_id = state.add_endhost_api(vec![server_ia]);
 
     //
     // Start PocketScion
@@ -91,23 +97,20 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
     // Actual Test
     let (src, dst) = (
         client_raw.local_addr(),
-        "[1-2,10.0.0.1]:12345".parse::<SocketAddr>().unwrap(),
+        "[1-2,10.0.0.1]:12345".parse::<ScionSocketAddr>().unwrap(),
     );
     let path = client_path_manager
         .path_wait(src.isd_asn(), dst.isd_asn(), Utc::now())
         .await
         .expect("error getting path");
-    let random_message = Bytes::from_static(b"test message");
-    let packet = ScionPacketUdp::new(
-        ByEndpoint {
-            source: src,
-            destination: dst,
-        },
-        path.data_plane_path,
-        random_message,
-    )?;
+    let random_message = b"test message".to_vec();
+    let packet = ScionUdpPacket::new(src.into(), dst, path.dp_path().to_model(), random_message)
+        .encode_to_owned_view()
+        .expect("error encoding SCION packet")
+        .into_raw_owned();
+
     client_raw
-        .send(packet.into())
+        .send(&packet)
         .await
         .context("error sending client message")?;
 
@@ -116,18 +119,18 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
         .context("timeout receiving client message")?
         .context("error receiving client message")?;
 
-    let scmp = classify_scion_packet(recv)
-        .expect("error classifying SCION packet")
+    let scmp = recv
         .try_into_scmp()
         .expect("error converting to SCMP packet")
-        .message;
+        .scmp()
+        .message();
 
     assert!(scmp.is_error(), "Expected SCMP error message");
     assert!(
         matches!(
-            scmp,
+            scmp.to_model(),
             ScmpMessage::DestinationUnreachable(ScmpDestinationUnreachable {
-                code: DestinationUnreachableCode::AddressUnreachable,
+                code: ScmpDestinationUnreachableCode::AddressUnreachable,
                 ..
             })
         ),

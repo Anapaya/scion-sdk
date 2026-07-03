@@ -14,9 +14,8 @@
 
 use std::{io, time::Duration};
 
-use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use scion_proto::{address::IsdAsn, path::Path};
+use sciparse::{identifier::isd_asn::IsdAsn, path::ScionPath};
 use thiserror::Error;
 
 use crate::types::ResFut;
@@ -30,7 +29,7 @@ pub trait PathManager: SyncPathManager {
         src: IsdAsn,
         dst: IsdAsn,
         now: DateTime<Utc>,
-    ) -> impl ResFut<'_, Path<Bytes>, PathWaitError>;
+    ) -> impl ResFut<'_, ScionPath, PathWaitError>;
 
     /// Returns a path to the destination from the path cache or requests a new path from the
     /// SCION Control Plane, with a maximum wait time.
@@ -40,7 +39,7 @@ pub trait PathManager: SyncPathManager {
         dst: IsdAsn,
         now: DateTime<Utc>,
         timeout: Duration,
-    ) -> impl ResFut<'_, Path<Bytes>, PathWaitTimeoutError> {
+    ) -> impl ResFut<'_, ScionPath, PathWaitTimeoutError> {
         let fut = self.path_wait(src, dst, now);
         async move {
             match tokio::time::timeout(timeout, fut).await {
@@ -89,7 +88,7 @@ pub enum PathWaitTimeoutError {
 /// able to be used in sync and async context. The functions must not block.
 pub trait SyncPathManager {
     /// Add a path to the path cache. This can be used to register reverse paths.
-    fn register_path(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>, path: Path<Bytes>);
+    fn register_path(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>, path: ScionPath);
 
     /// Returns a path to the destination from the path cache.
     /// If the path is not in the cache, it returns Ok(None), possibly causing the path to be
@@ -100,7 +99,7 @@ pub trait SyncPathManager {
         src: IsdAsn,
         dst: IsdAsn,
         now: DateTime<Utc>,
-    ) -> io::Result<Option<Path<Bytes>>>;
+    ) -> io::Result<Option<ScionPath>>;
 }
 
 /// Trait for prefetching paths in the path manager.

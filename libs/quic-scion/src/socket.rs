@@ -14,7 +14,7 @@
 
 //! Generic SCION UDP socket abstraction for QUIC and HTTP/3 implementations.
 
-use sciparse::address::socket_addr::ScionSocketAddr;
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 
 /// Generic trait for a SCION UDP socket that can be used by the QUIC and HTTP/3 implementations.
 #[async_trait::async_trait]
@@ -23,16 +23,18 @@ pub trait GenericScionUdpSocket: Send + Sync + 'static {
     async fn send_to(
         &self,
         payload: &[u8],
-        destination: ScionSocketAddr,
+        destination: ScionSocketIpAddr,
     ) -> Result<(), BoxedSocketError>;
 
     /// Asynchronously receives a Datagram, writing it into the provided buffer, and returns the
     /// number of bytes read and the source address.
-    async fn recv_from(&self, buf: &mut [u8])
-    -> Result<(usize, ScionSocketAddr), BoxedSocketError>;
+    async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError>;
 
     /// Returns the local socket address of this socket.
-    fn local_addr(&self) -> ScionSocketAddr;
+    fn local_addr(&self) -> ScionSocketIpAddr;
 }
 
 /// Trait for errors that can occur when using a `GenericScionUdpSocket`.

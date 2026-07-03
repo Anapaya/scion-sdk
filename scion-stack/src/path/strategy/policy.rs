@@ -16,17 +16,17 @@
 //!
 //! For example, filtering out paths that go through certain ASes or paths.
 
-use scion_proto::path::Path;
+use sciparse::path::{ScionPath, policy::PathPolicy as SciParsePathPolicy};
 
 /// Path policies allow for the selection of paths based on certain criteria.
 pub trait PathPolicy: 'static + Send + Sync {
     /// Returns true if the path should be considered for selection.
-    fn predicate(&self, path: &Path) -> bool;
+    fn predicate(&self, path: &ScionPath) -> bool;
 }
 
-// Allow using scion_proto path policies directly
-impl<T: scion_proto::path::policy::PathPolicy> PathPolicy for T {
-    fn predicate(&self, path: &Path) -> bool {
-        <Self as scion_proto::path::policy::PathPolicy>::path_allowed(self, path).unwrap_or(false) // If the policy cannot be evaluated, the path is not allowed
+// Allow using sciparse path policies directly
+impl<T: SciParsePathPolicy> PathPolicy for T {
+    fn predicate(&self, path: &ScionPath) -> bool {
+        <Self as SciParsePathPolicy>::path_allowed(self, path).unwrap_or(false) // If the policy cannot be evaluated, the path is not allowed
     }
 }
