@@ -29,6 +29,8 @@
 //! is read continuously and there is no window where nobody is reading it. When
 //! the connection closes the driver returns, which cancels the ingress loop.
 
+mod ingress;
+
 use std::{sync::Arc, time::Duration};
 
 use ring::rand::{SecureRandom, SystemRandom};
@@ -38,7 +40,7 @@ use tokio::sync::{Notify, oneshot};
 use crate::{
     app::QuicScionApplication,
     h3::{
-        client::{app::Http3ClientApp, error::EstablishError, ingress},
+        client::{app::Http3ClientApp, error::EstablishError},
         common::H3_INTERNAL_ERROR,
     },
     quic::connection::{ConnectionHandle, IsdAsnPair, QuicScionConn, QuicScionConnDriver},

@@ -12,39 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The caller-driven request-body writer.
-//!
-//! [`RequestBodyWriter`] is the write half handed back by
-//! [`request`](super::Http3Client::request): it streams the
-//! request body out as HTTP/3 DATA frames with QUIC flow control as backpressure
-//! (a `write_chunk` pends when the stream lacks capacity rather than buffering
-//! without bound), and finishes the message with either a bare FIN
-//! ([`finish`](RequestBodyWriter::finish)) or a trailing header section
-//! ([`write_trailers`](RequestBodyWriter::write_trailers)).
-//!
-//! It also implements [`AsyncWrite`] (one DATA frame per `poll_write`, FIN on
-//! `poll_shutdown`), which is what [`H3DuplexStream`](super::H3DuplexStream)
-//! builds its write half on; trailers remain reachable only through the async
-//! [`write_trailers`](RequestBodyWriter::write_trailers).
-//!
-//! The writer owns the stream's write-side guard: dropping it before the body is
-//! finished resets the write side with `H3_REQUEST_CANCELLED`, leaving the read
-//! side (the response body) untouched.
+//! The **write half** of a request stream.
 
 use std::{
     io,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
 use bytes::Bytes;
+use squiche::h3::Header;
 use tokio::io::AsyncWrite;
 
+use super::StreamRef;
 use crate::{
     h3::{
-        client::app::{Http3ClientApp, WriteGuard},
+        client::app::Http3ClientApp,
         common::{
-            H3Error,
+            H3_REQUEST_CANCELLED, H3Error,
             headers::header_map_to_h3,
             write::{send_data, send_trailers},
         },
@@ -54,9 +40,9 @@ use crate::{
 
 /// The write half of a streamed HTTP/3 request.
 ///
-/// Returned by [`request`](super::Http3Client::request)
-/// alongside the response future. The two operate independently (full-duplex):
-/// the caller may observe the response head before finishing the request body.
+/// Returned by `initiate_request` alongside the response future. The two operate
+/// independently (full-duplex): the caller may observe the response head before
+/// finishing the request body.
 pub struct RequestBodyWriter {
     guard: WriteGuard,
 }
@@ -143,6 +129,62 @@ impl AsyncWrite for RequestBodyWriter {
     }
 }
 
+/// The write-side lifetime guard for a client stream. While held it keeps the
+/// shared [`StreamRef`] alive; dropped before the request body finished with a
+/// FIN it resets the write side with `H3_REQUEST_CANCELLED`.
+pub(crate) struct WriteGuard {
+    stream_ref: Arc<StreamRef>,
+    done: bool,
+}
+
+impl WriteGuard {
+    pub(crate) fn new(stream_ref: Arc<StreamRef>) -> Self {
+        Self {
+            stream_ref,
+            done: false,
+        }
+    }
+
+    /// A weak handle to the owning connection.
+    pub(crate) fn handle(&self) -> WeakConnectionHandle<Http3ClientApp> {
+        self.stream_ref.handle()
+    }
+
+    /// The stream this guard governs.
+    pub(crate) fn stream_id(&self) -> u64 {
+        self.stream_ref.stream_id()
+    }
+
+    /// Marks the write side finished (a FIN was sent), suppressing the reset on
+    /// drop.
+    pub(crate) fn mark_done(&mut self) {
+        self.done = true;
+    }
+}
+
+impl Drop for WriteGuard {
+    fn drop(&mut self) {
+        if !self.done {
+            shutdown_write(&self.stream_ref.handle(), self.stream_ref.stream_id());
+        }
+    }
+}
+
+/// Resets the *write* side of `stream_id` with `H3_REQUEST_CANCELLED`, aborting
+/// an unfinished request body. Touches only the QUIC stream, not the per-stream
+/// bookkeeping maps.
+fn shutdown_write(handle: &WeakConnectionHandle<Http3ClientApp>, stream_id: u64) {
+    let Some(handle) = handle.upgrade() else {
+        return;
+    };
+    let mut guard = handle.lock_recovering();
+    let _ = guard
+        .inner
+        .stream_shutdown(stream_id, squiche::Shutdown::Write, H3_REQUEST_CANCELLED);
+    drop(guard);
+    handle.notify();
+}
+
 /// Polls a single `send_body` of `buf` (with `fin`) on `stream_id`, registering a
 /// write waker and pending when the stream lacks capacity (backpressure).
 ///
@@ -194,4 +236,35 @@ fn poll_send(
         }
         Err(err) => Poll::Ready(Err(io::Error::other(format!("h3 send error: {err}")))),
     }
+}
+
+/// Builds the HTTP/3 request header list (pseudo-headers plus regular headers).
+///
+/// `CONNECT` uses authority-form (`:method` + `:authority`, no `:scheme`/`:path`);
+/// every other method gets `:method`/`:scheme`/`:authority`/`:path`.
+pub(crate) fn request_headers(parts: &http::request::Parts) -> Vec<Header> {
+    let mut headers = vec![Header::new(b":method", parts.method.as_str().as_bytes())];
+
+    if parts.method == http::Method::CONNECT {
+        if let Some(authority) = parts.uri.authority() {
+            headers.push(Header::new(b":authority", authority.as_str().as_bytes()));
+        }
+    } else {
+        let scheme = parts.uri.scheme_str().unwrap_or("https");
+        headers.push(Header::new(b":scheme", scheme.as_bytes()));
+        if let Some(authority) = parts.uri.authority() {
+            headers.push(Header::new(b":authority", authority.as_str().as_bytes()));
+        }
+        let path = parts
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/");
+        headers.push(Header::new(b":path", path.as_bytes()));
+    }
+
+    for (name, value) in parts.headers.iter() {
+        headers.push(Header::new(name.as_str().as_bytes(), value.as_bytes()));
+    }
+    headers
 }

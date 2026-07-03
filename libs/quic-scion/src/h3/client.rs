@@ -21,62 +21,42 @@
 //! [`request`](Http3Client::request) sends the request headers
 //! and returns a [`RequestBodyWriter`] the caller drives to stream the request
 //! body, plus a [`ResponseFut`] that resolves to an `http::Response` whose body
-//! is a streaming [`H3ResponseBody`] once the response head arrives. Because
+//! is a streaming [`H3ResponseBody`] once the response head arrives.
+//!
 //! HTTP/3 places no ordering between the request and response bodies, the caller
 //! must drive the two concurrently (typically by sending the body from a spawned
-//! task while awaiting/reading the response). A bidirectional exchange such as a
-//! `CONNECT` tunnel is just a request whose [`RequestBodyWriter`] and
-//! [`H3ResponseBody`] are the two directions; [`H3DuplexStream`] adapts that pair
-//! into an `AsyncRead + AsyncWrite` byte stream (e.g. for TCP forward proxying
-//! with `tokio::io::copy_bidirectional`). Read/establishment failures surface as
-//! [`H3Error`], [`EstablishError`], and [`RequestError`].
+//! task while awaiting/reading the response).
 //!
 //! This is the client counterpart of
 //! [`Http3Server`](crate::h3::server::Http3Server), built on the same
 //! [`QuicScionApplication`](crate::app::QuicScionApplication) /
-//! [`ConnectionHandle`] machinery. The
-//! per-connection internals — the application that routes responses, the
-//! connection bootstrap, the socket ingress loop, and the streaming body
-//! adapters — are private submodules; only the types above are part of the API.
+//! [`ConnectionHandle`] machinery. The per-connection internals are private
+//! submodules: the driver engine (`app`) that routes responses, the connection
+//! bootstrap and its ingress loop (`connect`), and an open request stream with
+//! its two halves (`stream`). Only the types above are part of
+//! the API.
 //!
 //! The legacy client lives under
 //! [`deprecated`](crate::h3::deprecated::client::H3Client).
 
 mod app;
-mod body;
 mod connect;
-mod duplex;
 mod error;
-mod ingress;
-mod writer;
+mod stream;
 
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::sync::Arc;
 
-pub use body::H3ResponseBody;
-pub use duplex::H3DuplexStream;
-pub use error::{EstablishError, RequestError};
 use sciparse::address::socket_addr::ScionSocketAddr;
-use squiche::h3::Header;
 use tokio::sync::Mutex;
-pub use writer::RequestBodyWriter;
 
-use self::{
-    app::{
-        Http3ClientApp, ReadGuard, ResponseHead, StreamRef, WriteGuard, poll_head, register_stream,
-    },
-    connect::connect,
+use self::{app::Http3ClientApp, connect::connect};
+pub use self::{
+    error::{EstablishError, RequestError},
+    stream::{H3DuplexStream, H3ResponseBody, RequestBodyWriter, ResponseFut},
 };
 pub use crate::h3::common::H3Error;
 use crate::{
-    quic::{
-        config::QuicConfig,
-        connection::{ConnectionHandle, QuicScionConn, WeakConnectionHandle},
-    },
+    quic::{config::QuicConfig, connection::ConnectionHandle},
     socket::GenericScionUdpSocket,
 };
 
@@ -151,16 +131,7 @@ impl Http3Client {
         req: http::Request<()>,
     ) -> Result<(ResponseFut, RequestBodyWriter), RequestError> {
         let handle = self.get_connection().await?;
-        let (parts, ()) = req.into_parts();
-        let headers = request_headers(&parts);
-
-        let stream_id = send_request(&handle, &headers, false)?;
-        handle.notify();
-        let stream_ref = StreamRef::new(handle.downgrade(), stream_id);
-
-        let response = ResponseFut::new(ReadGuard::new(stream_ref.clone()));
-        let writer = RequestBodyWriter::new(WriteGuard::new(stream_ref));
-        Ok((response, writer))
+        stream::initiate_request(&handle, req)
     }
 
     /// Returns the current connection, establishing (or re-establishing) one if
@@ -209,120 +180,5 @@ impl Http3Client {
         };
         let conn = handle.lock();
         conn.app.streams.len() + conn.app.response_heads.len()
-    }
-}
-
-/// Sends the request head on a fresh stream, registering per-stream state, and
-/// returns the allocated stream id.
-fn send_request(
-    handle: &ConnectionHandle<Http3ClientApp>,
-    headers: &[Header],
-    fin: bool,
-) -> Result<u64, RequestError> {
-    let mut guard = handle.lock();
-    let QuicScionConn { inner, app, .. } = &mut *guard;
-    let Some(h3) = app.h3.as_mut() else {
-        return Err(RequestError::ConnectionClosed);
-    };
-    match h3.send_request(inner, headers, fin) {
-        Ok(stream_id) => {
-            register_stream(app, stream_id);
-            Ok(stream_id)
-        }
-        Err(squiche::h3::Error::StreamBlocked) => Err(RequestError::StreamBlocked),
-        Err(err) => Err(RequestError::H3(err)),
-    }
-}
-
-/// Builds the HTTP/3 request header list (pseudo-headers plus regular headers).
-///
-/// `CONNECT` uses authority-form (`:method` + `:authority`, no `:scheme`/`:path`);
-/// every other method gets `:method`/`:scheme`/`:authority`/`:path`.
-fn request_headers(parts: &http::request::Parts) -> Vec<Header> {
-    let mut headers = vec![Header::new(b":method", parts.method.as_str().as_bytes())];
-
-    if parts.method == http::Method::CONNECT {
-        if let Some(authority) = parts.uri.authority() {
-            headers.push(Header::new(b":authority", authority.as_str().as_bytes()));
-        }
-    } else {
-        let scheme = parts.uri.scheme_str().unwrap_or("https");
-        headers.push(Header::new(b":scheme", scheme.as_bytes()));
-        if let Some(authority) = parts.uri.authority() {
-            headers.push(Header::new(b":authority", authority.as_str().as_bytes()));
-        }
-        let path = parts
-            .uri
-            .path_and_query()
-            .map(|pq| pq.as_str())
-            .unwrap_or("/");
-        headers.push(Header::new(b":path", path.as_bytes()));
-    }
-
-    for (name, value) in parts.headers.iter() {
-        headers.push(Header::new(name.as_str().as_bytes(), value.as_bytes()));
-    }
-    headers
-}
-
-/// Assembles an `http::Response` from a routed head and the streaming body.
-fn head_into_response(head: ResponseHead, body: H3ResponseBody) -> http::Response<H3ResponseBody> {
-    let mut response = http::Response::builder()
-        .status(head.status)
-        .body(body)
-        .expect("status is valid");
-    *response.headers_mut() = head.headers;
-    response
-}
-
-/// A future resolving to the response of a request issued via
-/// [`Http3Client::request`].
-///
-/// It resolves once the response head has arrived, yielding an `http::Response`
-/// whose body is the streaming [`H3ResponseBody`]. It owns the stream's read-side
-/// guard: dropped before the head arrives it stops the read side; on success the
-/// guard is handed to the response body, which continues to own it.
-pub struct ResponseFut {
-    handle: WeakConnectionHandle<Http3ClientApp>,
-    stream_id: u64,
-    /// The read-side guard, taken when the head arrives and moved into the
-    /// response body. `None` once the future has resolved.
-    read_guard: Option<ReadGuard>,
-}
-
-impl ResponseFut {
-    fn new(read_guard: ReadGuard) -> Self {
-        Self {
-            handle: read_guard.handle(),
-            stream_id: read_guard.stream_id(),
-            read_guard: Some(read_guard),
-        }
-    }
-}
-
-impl Future for ResponseFut {
-    type Output = Result<http::Response<H3ResponseBody>, RequestError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        match poll_head(&this.handle, this.stream_id, cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(head)) => {
-                let guard = this
-                    .read_guard
-                    .take()
-                    .expect("ResponseFut polled after completion");
-                Poll::Ready(Ok(head_into_response(head, H3ResponseBody::new(guard))))
-            }
-            Poll::Ready(Err(err)) => {
-                // The read side is already gone (reset or connection close); mark
-                // the guard done so its drop does not signal STOP_SENDING on a
-                // dead stream.
-                if let Some(guard) = this.read_guard.as_mut() {
-                    guard.mark_done();
-                }
-                Poll::Ready(Err(err))
-            }
-        }
     }
 }

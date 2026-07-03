@@ -21,32 +21,29 @@
 //! out-of-band through the [`ConnectionHandle`] (from the
 //! [`Http3Client`](super::Http3Client) facade), and the leading inbound
 //! `Headers` event is the **response head**, routed by stream id to the waiting
-//! response future (`ResponseFut`).
+//! response future.
 //!
 //! The read-side state (`Data`/`Finished`/`Reset`) and the `writable()` waker
 //! logic are shared with the server via `crate::h3::common`; this module adds
-//! the client-only response-head routing kept in a separate `response_heads` map (so the
-//! shared per-stream `StreamState` stays identical on both sides).
+//! the client-only response-head routing kept in a separate `response_heads` map
+//! (so the shared per-stream `StreamState` stays identical on both sides).
+//!
+//! This module is the *driver-side engine* only: it advances per-stream state as
+//! events arrive. The stream-facing API driven from the futures side lives in the
+//! stream module.
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    task::{Context, Poll, Waker},
-};
+use std::{collections::HashMap, task::Waker};
 
 use squiche::h3::NameValue;
 
 use crate::{
     app::{QuicScionApplication, Wakeups},
-    h3::{
-        client::error::RequestError,
-        common::{
-            H3_INTERNAL_ERROR, H3_REQUEST_CANCELLED, H3App, ReadState, StreamState,
-            headers::headers_to_map,
-            read::{on_data, on_finished, on_reset, wake_writable},
-        },
+    h3::common::{
+        H3_INTERNAL_ERROR, H3App, ReadState, StreamState,
+        headers::headers_to_map,
+        read::{on_data, on_finished, on_reset, wake_writable},
     },
-    quic::connection::{ConnectionHandle, QuicScionConn, WeakConnectionHandle},
+    quic::connection::{ConnectionHandle, WeakConnectionHandle},
 };
 
 /// An HTTP/3 client application running over a single QUIC/SCION connection.
@@ -265,213 +262,4 @@ fn parse_response_head(list: &[squiche::h3::Header]) -> Option<ResponseHead> {
         status: status?,
         headers,
     })
-}
-
-/// Shuts down the *read* side of `stream_id`: discards any unread body and, if
-/// the read side has not already finished, signals `STOP_SENDING`. Touches only
-/// the QUIC stream, not the per-stream bookkeeping maps (those are released by
-/// [`StreamRef`] once the last reference drops).
-fn shutdown_read(handle: &WeakConnectionHandle<Http3ClientApp>, stream_id: u64) {
-    let Some(handle) = handle.upgrade() else {
-        return;
-    };
-    let mut guard = handle.lock_recovering();
-    let _ = guard
-        .inner
-        .stream_shutdown(stream_id, squiche::Shutdown::Read, 0);
-    drop(guard);
-    handle.notify();
-}
-
-/// Resets the *write* side of `stream_id` with `H3_REQUEST_CANCELLED`, aborting
-/// an unfinished request body. Touches only the QUIC stream, not the per-stream
-/// bookkeeping maps.
-fn shutdown_write(handle: &WeakConnectionHandle<Http3ClientApp>, stream_id: u64) {
-    let Some(handle) = handle.upgrade() else {
-        return;
-    };
-    let mut guard = handle.lock_recovering();
-    let _ = guard
-        .inner
-        .stream_shutdown(stream_id, squiche::Shutdown::Write, H3_REQUEST_CANCELLED);
-    drop(guard);
-    handle.notify();
-}
-
-/// Shared lifetime token for one client stream, cloned into every handle that
-/// references the stream — its read half ([`ReadGuard`], carried by the response
-/// future and then [`H3ResponseBody`](super::H3ResponseBody)) and its write half
-/// ([`WriteGuard`], carried by the request-body sender). When the **last** clone
-/// drops, the per-stream bookkeeping — the shared `streams` entry plus the
-/// client-only `response_heads` entry — is released.
-///
-/// Directional teardown (read `STOP_SENDING`, write `RESET_STREAM`) is performed
-/// by the guards as each half drops; this token only collects the map entries,
-/// and only once both halves are gone, so neither half can strand the other's
-/// wakers.
-pub(crate) struct StreamRef {
-    handle: WeakConnectionHandle<Http3ClientApp>,
-    stream_id: u64,
-}
-
-impl StreamRef {
-    pub(crate) fn new(handle: WeakConnectionHandle<Http3ClientApp>, stream_id: u64) -> Arc<Self> {
-        Arc::new(Self { handle, stream_id })
-    }
-}
-
-impl Drop for StreamRef {
-    fn drop(&mut self) {
-        let Some(handle) = self.handle.upgrade() else {
-            return;
-        };
-        let mut guard = handle.lock_recovering();
-        guard.app.streams.remove(&self.stream_id);
-        guard.app.response_heads.remove(&self.stream_id);
-    }
-}
-
-/// The read-side lifetime guard for a client stream. While held it keeps the
-/// shared [`StreamRef`] alive; dropped before the read side has finished cleanly
-/// (EOF, trailers, or an error already observed) it signals `STOP_SENDING`.
-pub(crate) struct ReadGuard {
-    stream_ref: Arc<StreamRef>,
-    done: bool,
-}
-
-impl ReadGuard {
-    pub(crate) fn new(stream_ref: Arc<StreamRef>) -> Self {
-        Self {
-            stream_ref,
-            done: false,
-        }
-    }
-
-    /// A weak handle to the owning connection.
-    pub(crate) fn handle(&self) -> WeakConnectionHandle<Http3ClientApp> {
-        self.stream_ref.handle.clone()
-    }
-
-    /// The stream this guard governs.
-    pub(crate) fn stream_id(&self) -> u64 {
-        self.stream_ref.stream_id
-    }
-
-    /// Whether the read side has reached a terminal state.
-    pub(crate) fn is_done(&self) -> bool {
-        self.done
-    }
-
-    /// Marks the read side finished cleanly, suppressing `STOP_SENDING` on drop.
-    pub(crate) fn mark_done(&mut self) {
-        self.done = true;
-    }
-}
-
-impl Drop for ReadGuard {
-    fn drop(&mut self) {
-        if !self.done {
-            shutdown_read(&self.stream_ref.handle, self.stream_ref.stream_id);
-        }
-    }
-}
-
-/// The write-side lifetime guard for a client stream. While held it keeps the
-/// shared [`StreamRef`] alive; dropped before the request body finished with a
-/// FIN it resets the write side with `H3_REQUEST_CANCELLED`.
-pub(crate) struct WriteGuard {
-    stream_ref: Arc<StreamRef>,
-    done: bool,
-}
-
-impl WriteGuard {
-    pub(crate) fn new(stream_ref: Arc<StreamRef>) -> Self {
-        Self {
-            stream_ref,
-            done: false,
-        }
-    }
-
-    /// A weak handle to the owning connection.
-    pub(crate) fn handle(&self) -> WeakConnectionHandle<Http3ClientApp> {
-        self.stream_ref.handle.clone()
-    }
-
-    /// The stream this guard governs.
-    pub(crate) fn stream_id(&self) -> u64 {
-        self.stream_ref.stream_id
-    }
-
-    /// Marks the write side finished (a FIN was sent), suppressing the reset on
-    /// drop.
-    pub(crate) fn mark_done(&mut self) {
-        self.done = true;
-    }
-}
-
-impl Drop for WriteGuard {
-    fn drop(&mut self) {
-        if !self.done {
-            shutdown_write(&self.stream_ref.handle, self.stream_ref.stream_id);
-        }
-    }
-}
-
-/// Polls the response-head slot for `stream_id`, registering a waker when the
-/// head has not yet arrived. Drives the request [`ResponseFut`](super::ResponseFut);
-/// it performs no stream teardown of its own (the caller's guard owns the read
-/// side).
-pub(crate) fn poll_head(
-    handle: &WeakConnectionHandle<Http3ClientApp>,
-    stream_id: u64,
-    cx: &mut Context<'_>,
-) -> Poll<Result<ResponseHead, RequestError>> {
-    let Some(handle) = handle.upgrade() else {
-        return Poll::Ready(Err(RequestError::ConnectionClosed));
-    };
-    let mut guard = handle.lock();
-    let QuicScionConn { app, .. } = &mut *guard;
-    let Http3ClientApp {
-        response_heads,
-        streams,
-        ..
-    } = app;
-    let Some(slot) = response_heads.get_mut(&stream_id) else {
-        return Poll::Ready(Err(RequestError::ConnectionClosed));
-    };
-
-    match slot.state {
-        ResponseHeadState::Arrived(_) => {
-            let ResponseHeadState::Arrived(head) =
-                std::mem::replace(&mut slot.state, ResponseHeadState::Done)
-            else {
-                unreachable!("just matched Arrived")
-            };
-            Poll::Ready(Ok(head))
-        }
-        ResponseHeadState::Waiting => {
-            // A reset (or connection close, which sets `Reset(0)`) before the
-            // head means the request faulted.
-            match streams.get(&stream_id) {
-                Some(st) => {
-                    if let ReadState::Reset(code) = st.read_state {
-                        return Poll::Ready(Err(if code == 0 {
-                            RequestError::ConnectionClosed
-                        } else {
-                            RequestError::Reset(code)
-                        }));
-                    }
-                }
-                None => {
-                    return Poll::Ready(Err(RequestError::ConnectionClosed));
-                }
-            }
-            slot.waker = Some(cx.waker().clone());
-            Poll::Pending
-        }
-        ResponseHeadState::Done => {
-            // Polled again after the head was already delivered.
-            Poll::Ready(Err(RequestError::ConnectionClosed))
-        }
-    }
 }

@@ -14,15 +14,10 @@
 
 //! A full-duplex `AsyncRead + AsyncWrite` view over a single request stream.
 //!
-//! [`H3DuplexStream`] composes the two halves handed back by
-//! [`request`](super::Http3Client::request) — the
+//! [`H3DuplexStream`] composes the two halves of one request stream, the
 //! [`RequestBodyWriter`](super::RequestBodyWriter) (write direction, itself
 //! [`AsyncWrite`]) and the [`H3ResponseBody`](super::H3ResponseBody) (read
-//! direction) — into a single byte stream suitable for
-//! `tokio::io::copy_bidirectional`, e.g. the remote end of a TCP forward proxy
-//! over an HTTP/3 `CONNECT` tunnel. Both directions derive backpressure from the
-//! QUIC stream's flow-control window: a write pends when the stream lacks
-//! capacity rather than buffering without bound.
+//! direction) into a single byte stream.
 //!
 //! Half-close (shutdown of the write half) sends a FIN while the read half stays
 //! usable until the peer finishes; a peer reset surfaces as an I/O error.
@@ -39,19 +34,16 @@ use bytes::{Buf, Bytes};
 use http_body::Body;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-use crate::h3::{
-    client::{body::H3ResponseBody, writer::RequestBodyWriter},
-    common::H3Error,
-};
+use super::{request::RequestBodyWriter, response::H3ResponseBody};
+use crate::h3::common::H3Error;
 
 /// A bidirectional byte stream over one HTTP/3 request stream.
 ///
 /// Built with [`H3DuplexStream::new`] from the
 /// [`RequestBodyWriter`](super::RequestBodyWriter) and
-/// [`H3ResponseBody`](super::H3ResponseBody) of a single
-/// [`request`](super::Http3Client::request) call (typically a
-/// `CONNECT` request). Implements [`AsyncRead`] and [`AsyncWrite`]; the two
-/// directions operate independently (full-duplex).
+/// [`H3ResponseBody`](super::H3ResponseBody) of a single `initiate_request` call
+/// (typically a `CONNECT` request). Implements [`AsyncRead`] and [`AsyncWrite`];
+/// the two directions operate independently (full-duplex).
 pub struct H3DuplexStream {
     /// Write direction (one DATA frame per `poll_write`, FIN on shutdown).
     writer: RequestBodyWriter,
