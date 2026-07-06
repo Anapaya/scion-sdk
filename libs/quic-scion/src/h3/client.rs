@@ -35,9 +35,6 @@
 //! bootstrap and its ingress loop (`connect`), and an open request stream with
 //! its two halves (`stream`). Only the types above are part of
 //! the API.
-//!
-//! The legacy client lives under
-//! [`deprecated`](crate::h3::deprecated::client::H3Client).
 
 mod app;
 mod connect;
@@ -134,6 +131,17 @@ impl Http3Client {
         stream::initiate_request(&handle, req)
     }
 
+    /// Eagerly establishes the connection if none is currently up.
+    ///
+    /// Connections are normally established lazily on the first
+    /// [`request`](Http3Client::request); this warms one up ahead of time so
+    /// establishment failures surface here instead of on the first request. It
+    /// is a no-op when a live connection already exists.
+    pub async fn connect(&self) -> Result<(), EstablishError> {
+        self.get_connection().await?;
+        Ok(())
+    }
+
     /// Returns the current connection, establishing (or re-establishing) one if
     /// none exists or the current one is closed.
     ///
@@ -158,6 +166,7 @@ impl Http3Client {
             self.socket.clone(),
             self.server_name.clone(),
             quiche_config,
+            self.config.handshake_timeout,
         )
         .await?;
         *guard = Some(handle.clone());

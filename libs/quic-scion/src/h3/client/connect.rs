@@ -57,12 +57,22 @@ pub(crate) async fn connect(
     socket: Arc<dyn GenericScionUdpSocket>,
     server_name: Option<String>,
     mut quiche_config: squiche::Config,
+    handshake_timeout: Duration,
 ) -> Result<ConnectionHandle<Http3ClientApp>, EstablishError> {
     let (tx, rx) = oneshot::channel();
 
     tokio::spawn(async move {
-        let handshake_result =
-            handshake(remote, &socket, server_name.as_deref(), &mut quiche_config).await;
+        // Bound the handshake: an unreachable remote would otherwise only fail once quiche's idle
+        // timeout elapses (far longer than callers expect).
+        let handshake_result = match tokio::time::timeout(
+            handshake_timeout,
+            handshake(remote, &socket, server_name.as_deref(), &mut quiche_config),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_elapsed) => Err(EstablishError::Handshake),
+        };
         let conn = match handshake_result {
             Ok(conn) => conn,
             Err(err) => {

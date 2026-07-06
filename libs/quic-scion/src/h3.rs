@@ -19,11 +19,7 @@
 //! by the connection driver, with streaming `http_body` bodies flow-controlled by
 //! the QUIC stream window. It is split into a [`client`] and a [`server`], with
 //! their shared machinery in `common`.
-//!
-//! The legacy stack lives under [`deprecated`] and is retained only until its
-//! remaining call sites migrate.
 
 pub mod client;
 pub(crate) mod common;
-pub mod deprecated;
 pub mod server;

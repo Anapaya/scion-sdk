@@ -682,16 +682,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "buffer-pool"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc93b7d90a21061ffd23af7983e5c9e93a283c6220a5e4af26e06ec1031ada7"
-dependencies = [
- "crossbeam",
- "foundations",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1121,8 +1111,6 @@ version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1137cd7e7fc0fb5d3c5a8678be38ec56e819125d8d7907411fe24ccb943faca8"
 dependencies = [
- "crossbeam-epoch",
- "crossbeam-queue",
  "crossbeam-utils",
 ]
 
@@ -1150,15 +1138,6 @@ name = "crossbeam-epoch"
 version = "0.9.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-queue"
-version = "0.3.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f58bbc28f91df819d0aa2a2c00cd19754769c2fad90579b3592b1c9ba7a3115"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -4818,7 +4797,6 @@ name = "scion-sdk-quic-scion"
 version = "0.5.2"
 dependencies = [
  "async-trait",
- "buffer-pool",
  "bytes",
  "chacha20 0.10.0",
  "futures",
@@ -4837,7 +4815,6 @@ dependencies = [
  "tokio-quiche",
  "tokio-util",
  "tracing",
- "url",
 ]
 
 [[package]]
@@ -4863,8 +4840,10 @@ name = "scion-sdk-scion-connect-rpc"
 version = "0.5.2"
 dependencies = [
  "async-trait",
+ "bytes",
  "futures",
  "http",
+ "http-body",
  "ntest",
  "prost",
  "rcgen",
@@ -4877,6 +4856,7 @@ dependencies = [
  "test-log",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "url",
 ]

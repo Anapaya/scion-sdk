@@ -15,10 +15,7 @@
 //! QUIC over SCION transport.
 //!
 //! [`server_endpoint`]/[`connection`] are the modern sans-I/O QUIC server stack.
-//! The legacy channel/driver-based server and client live under [`deprecated`] and
-//! are retained only until their remaining call sites migrate.
 
 pub mod config;
 pub mod connection;
-pub mod deprecated;
 pub mod server_endpoint;

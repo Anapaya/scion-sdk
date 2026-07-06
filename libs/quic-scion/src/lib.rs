@@ -15,7 +15,6 @@
 //! QUIC over SCION transport.
 
 pub mod app;
-mod buf_factory;
 pub mod h3;
 pub mod quic;
 pub mod socket;

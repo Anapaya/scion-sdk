@@ -17,19 +17,28 @@
 //! These tests run a HTTP/3-over-QUIC server reachable through an in-memory mock SCION socket,
 //! and exercise the client against it — including the multi-remote failover behaviour.
 
-use std::{io, net::Ipv4Addr, sync::Arc, time::Duration};
+use std::{
+    convert::Infallible, io, net::Ipv4Addr, pin::Pin, sync::Arc, task::Poll, time::Duration,
+};
 
-use http::{HeaderMap, Method, StatusCode};
+use bytes::Bytes;
+use http::{Method, StatusCode};
+use http_body::{Body, Frame};
 use prost::Message as _;
 use scion_sdk_quic_scion::{
-    h3::deprecated::server::H3Server,
-    quic::{config::QuicConfig, deprecated::server::QuicServer},
+    h3::server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
+    quic::{
+        config::QuicConfig,
+        connection::ConnectionHandle,
+        server_endpoint::{Metrics, QuicScionEndpointDriver, QuicScionServerEndpoint},
+    },
     socket::{BoxedSocketError, GenericScionUdpSocket},
 };
 use scion_sdk_scion_connect_rpc::client::{ConnectRpcClient, CrpcClient, RemoteEndpoint};
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tempfile::NamedTempFile;
 use tokio::sync::{Mutex, mpsc};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 const SERVICE_URL: &str = "https://localhost/test.v1.EchoService/Echo";
@@ -188,6 +197,30 @@ fn make_server_quic_config() -> (squiche::Config, NamedTempFile, NamedTempFile) 
     (config, cert_file, key_file)
 }
 
+/// An [`HttpService`] that echoes the request's `value` back, prefixed with `prefix` so the test
+/// can tell which server responded.
+#[derive(Clone)]
+struct EchoService {
+    prefix: &'static str,
+}
+
+impl HttpService for EchoService {
+    type Body = H3RequestBody;
+    type ResponseBody = FullBody;
+
+    async fn call(&self, req: http::Request<H3RequestBody>) -> http::Response<FullBody> {
+        let body = read_request_body(req.into_body()).await;
+        let echo = Echo::decode(&body[..]).unwrap_or_default();
+        let response = Echo {
+            value: format!("{}{}", self.prefix, echo.value),
+        };
+        http::Response::builder()
+            .status(StatusCode::OK)
+            .body(FullBody::new(response.encode_to_vec()))
+            .expect("response is always well-formed")
+    }
+}
+
 /// Spawns an echo Connect-RPC server reachable through a fresh mock socket pair. Each request is
 /// answered by echoing the request's `value` back, prefixed with `prefix` so the test can tell
 /// which server responded. Returns the client-side socket and the SCION address to dial.
@@ -198,32 +231,69 @@ fn spawn_echo_server(
     let client_addr = scion_addr(idx, 1, 100 + idx as u16);
     let server_addr = scion_addr(idx, 2, 200 + idx as u16);
     let (client_socket, server_socket) = MockScionSocket::pair(1024, client_addr, server_addr);
+    let server_socket: Arc<dyn GenericScionUdpSocket> = Arc::new(server_socket);
 
     let (server_config, cert_file, key_file) = make_server_quic_config();
-    let quic_server =
-        QuicServer::new(Arc::new(server_socket), server_config).expect("QuicServer::new");
-    let mut h3_server = H3Server::new(quic_server);
+    let endpoint = QuicScionServerEndpoint::new(
+        [7u8; 32],
+        server_config,
+        server_socket.local_addr(),
+        Metrics::new_without_registry(),
+    );
+    let driver = QuicScionEndpointDriver::with_config(
+        endpoint,
+        server_socket,
+        // Requests are served by the endpoint's internal HTTP/3 dispatch, so the per-connection
+        // handle is not needed here.
+        |_handle: ConnectionHandle<Http3Server<EchoService>>| {},
+        Http3ServerConfig::new(EchoService { prefix }),
+    );
 
     tokio::spawn(async move {
         // Keep the certificate temp files alive for the lifetime of the server.
         let _temp_files = (cert_file, key_file);
-        while let Some(mut conn) = h3_server.accept().await {
-            tokio::spawn(async move {
-                while let Some((req, mut responder)) = conn.handle_request().await {
-                    let body = req.body.clone().unwrap_or_default();
-                    let echo = Echo::decode(&body[..]).unwrap_or_default();
-                    let response = Echo {
-                        value: format!("{prefix}{}", echo.value),
-                    };
-                    let _ = responder
-                        .send_response(StatusCode::OK, &HeaderMap::new(), &response.encode_to_vec())
-                        .await;
-                }
-            });
-        }
+        let _ = driver.run(CancellationToken::new()).await;
     });
 
     (Arc::new(client_socket), server_addr)
+}
+
+/// Reads an HTTP/3 request body to completion, concatenating its data frames.
+async fn read_request_body(mut body: H3RequestBody) -> Vec<u8> {
+    let mut data = Vec::new();
+    while let Some(frame) = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await {
+        if let Ok(frame) = frame
+            && let Ok(chunk) = frame.into_data()
+        {
+            data.extend_from_slice(&chunk);
+        }
+    }
+    data
+}
+
+/// A minimal HTTP/3 response body that yields its bytes in a single data frame.
+struct FullBody(Option<Bytes>);
+
+impl FullBody {
+    fn new(data: Vec<u8>) -> Self {
+        if data.is_empty() {
+            Self(None)
+        } else {
+            Self(Some(Bytes::from(data)))
+        }
+    }
+}
+
+impl Body for FullBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        Poll::Ready(self.0.take().map(|bytes| Ok(Frame::data(bytes))))
+    }
 }
 
 /// A `RemoteEndpoint` that can never be connected to (handshake always times out).
