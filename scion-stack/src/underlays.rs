@@ -17,10 +17,7 @@ use std::{net, sync::Arc};
 
 use ana_gotatun::packet::PacketBufPool;
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
-use sciparse::{
-    address::ip_socket_addr::ScionSocketIpAddr,
-    identifier::{isd::Isd, isd_asn::IsdAsn},
-};
+use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, identifier::isd_asn::IsdAsn};
 use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
@@ -29,12 +26,12 @@ use x25519_dalek::StaticSecret;
 
 use crate::{
     scionstack::{
-        AsyncUdpUnderlaySocket, DynUnderlayStack, InvalidBindAddressError, ScionSocketBindError,
-        SnapConnectionError, UnderlaySocket, builder::PreferredUnderlay, scmp_handler::ScmpHandler,
+        DynUnderlayStack, InvalidBindAddressError, ScionSocketBindError, SnapConnectionError,
+        UnderlaySocket, builder::PreferredUnderlay,
     },
     underlays::{
         discovery::{UnderlayDiscovery, UnderlayInfo},
-        udp::{OutboundIpResolver, UdpAsyncUdpUnderlaySocket, UdpUnderlaySocket},
+        udp::{OutboundIpResolver, UdpUnderlaySocket},
     },
 };
 
@@ -280,51 +277,6 @@ impl DynUnderlayStack for UnderlayStack {
                     Err(
                         crate::scionstack::ScionSocketBindError::NoUnderlayAvailable(
                             requested_isd_as.isd(),
-                        ),
-                    )
-                }
-            }
-        })
-    }
-
-    fn bind_async_udp_socket(
-        &self,
-        bind_addr: Option<ScionSocketIpAddr>,
-        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
-    ) -> futures::future::BoxFuture<
-        '_,
-        Result<
-            std::sync::Arc<dyn crate::scionstack::AsyncUdpUnderlaySocket>,
-            crate::scionstack::ScionSocketBindError,
-        >,
-    > {
-        Box::pin(async move {
-            match self.select_underlay(
-                bind_addr
-                    .map(|addr| addr.isd_asn())
-                    .unwrap_or(IsdAsn::WILDCARD),
-            ) {
-                Some((isd_as, UnderlayInfo::Snap(cp_url))) => {
-                    let socket = self.bind_snap_socket(bind_addr, isd_as, cp_url).await?;
-                    let async_udp_socket = snap::SnapAsyncUdpSocket::new(socket, scmp_handlers);
-                    Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
-                }
-                Some((isd_as, UnderlayInfo::Udp(_))) => {
-                    let (bind_addr, socket) = self.bind_udp_socket(isd_as, bind_addr).await?;
-                    let async_udp_socket = UdpAsyncUdpUnderlaySocket::new(
-                        bind_addr,
-                        self.underlay_discovery.clone(),
-                        socket,
-                        scmp_handlers,
-                    );
-                    Ok(Arc::new(async_udp_socket) as Arc<dyn AsyncUdpUnderlaySocket + 'static>)
-                }
-                None => {
-                    Err(
-                        crate::scionstack::ScionSocketBindError::NoUnderlayAvailable(
-                            bind_addr
-                                .map(|addr| addr.isd_asn().isd())
-                                .unwrap_or(Isd::WILDCARD),
                         ),
                     )
                 }

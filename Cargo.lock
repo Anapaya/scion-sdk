@@ -157,49 +157,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anapaya-quinn"
-version = "0.11.9-ana.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ddb3b7040c0a7c5eceddff046895003684d1e4e00fd9c3db652594a0337fa0e"
-dependencies = [
- "anapaya-quinn-proto",
- "bytes",
- "cfg_aliases",
- "pin-project-lite",
- "quinn-udp",
- "rustc-hash",
- "rustls",
- "socket2",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "web-time",
-]
-
-[[package]]
-name = "anapaya-quinn-proto"
-version = "0.11.13-ana.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df03dea9c2219f4368fcc22eadf4776468c94c62f5db9da941a05dbb7ef88c4e"
-dependencies = [
- "bytes",
- "fastbloom",
- "getrandom 0.3.4",
- "lru-slab",
- "rand 0.9.2",
- "ring",
- "rustc-hash",
- "rustls",
- "rustls-pki-types",
- "rustls-platform-verifier",
- "slab",
- "thiserror 2.0.18",
- "tinyvec",
- "tracing",
- "web-time",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -280,12 +237,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arrayvec"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
-
-[[package]]
 name = "asn1-rs"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -323,12 +274,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "assert_matches"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
 
 [[package]]
 name = "async-channel"
@@ -1756,15 +1701,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "etherparse"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b119b9796ff800751a220394b8b3613f26dd30c48f254f6837e64c464872d1c7"
-dependencies = [
- "arrayvec",
-]
-
-[[package]]
 name = "event-listener"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1793,18 +1729,6 @@ checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
 dependencies = [
  "indenter",
  "once_cell",
-]
-
-[[package]]
-name = "fastbloom"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e7f34442dbe69c60fe8eaf58a8cafff81a1f278816d8ab4db255b3bef4ac3c4"
-dependencies = [
- "getrandom 0.3.4",
- "libm",
- "rand 0.9.2",
- "siphasher",
 ]
 
 [[package]]
@@ -2116,10 +2040,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -3021,12 +2943,6 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
-
-[[package]]
-name = "lru-slab"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "matchers"
@@ -4540,7 +4456,6 @@ version = "1.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be040f8b0a225e40375822a563fa9524378b9d63112f53e19ffff34df5d33fdd"
 dependencies = [
- "web-time",
  "zeroize",
 ]
 
@@ -4730,18 +4645,13 @@ name = "scion-sdk-edge-tun"
 version = "0.5.2"
 dependencies = [
  "ana-gotatun",
- "anapaya-quinn",
- "assert_matches",
  "async-channel",
  "async-trait",
  "byteorder",
  "bytes",
  "chacha20 0.10.0",
- "chrono",
- "etherparse",
  "http",
  "http-body",
- "httparse",
  "ipnet",
  "ntest",
  "prometheus",
@@ -4749,15 +4659,11 @@ dependencies = [
  "rand 0.10.0",
  "rand_xorshift 0.5.0",
  "rcgen",
- "rustls",
  "scion-sdk-observability",
  "scion-sdk-quic-scion",
  "scion-sdk-scion-connect-rpc",
- "scion-sdk-token-validator",
  "scion-sdk-utils",
- "scion-stack",
  "sciparse",
- "serde",
  "serde_json",
  "squiche",
  "tempfile",
@@ -4897,13 +4803,9 @@ dependencies = [
 name = "scion-sdk-utils"
 version = "0.5.2"
 dependencies = [
- "anapaya-quinn",
  "chacha20 0.10.0",
- "ed25519-dalek",
  "num-traits",
- "pem",
  "rand 0.10.0",
- "rcgen",
  "rustls",
  "serde",
  "serde_json",
@@ -4918,13 +4820,11 @@ name = "scion-stack"
 version = "0.5.2"
 dependencies = [
  "ana-gotatun",
- "anapaya-quinn",
  "anyhow",
  "arc-swap",
  "async-trait",
  "bytes",
  "chrono",
- "derive_more",
  "endhost-api-client",
  "endhost-api-discovery-client",
  "endhost-api-discovery-models",
@@ -4934,19 +4834,16 @@ dependencies = [
  "hickory-server",
  "mockall",
  "ntest",
- "pin-project-lite",
  "pocketscion",
  "prost",
  "rand 0.10.0",
  "reqwest",
- "rustls",
  "scc",
  "scion-sdk-quic-scion",
  "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-token-validator",
  "scion-sdk-utils",
  "sciparse",
- "serde",
  "snap-control",
  "snap-tokens",
  "snap-tun",
@@ -5271,12 +5168,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "siphasher"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5444,7 +5335,6 @@ name = "snap-tun"
 version = "0.5.2"
 dependencies = [
  "ana-gotatun",
- "anapaya-quinn",
  "async-channel",
  "async-trait",
  "bitfield-struct 0.12.1",
@@ -5454,6 +5344,7 @@ dependencies = [
  "pem",
  "quinn-udp",
  "rcgen",
+ "rustls",
  "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-utils",
  "sciparse",

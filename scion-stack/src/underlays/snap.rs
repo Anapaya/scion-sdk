@@ -12,23 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //! SNAP underlay socket.
-use std::{
-    io, net,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll, ready},
-};
+use std::{io, net, sync::Arc};
 
 use ana_gotatun::packet::PacketBufPool;
-use anyhow::{Context as _, anyhow};
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use sciparse::{
-    address::ip_socket_addr::ScionSocketIpAddr,
-    core::{model::Model, view::View},
-    dataplane_path::view::ScionDpPathViewExt,
-    packet::view::ScionRawPacketView,
-    path::ScionPath,
-    payload::ProtocolNumber,
+    address::ip_socket_addr::ScionSocketIpAddr, core::view::View, packet::view::ScionRawPacketView,
 };
 use snap_control::client::{ControlPlaneApi as _, CrpcSnapControlClient};
 use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint, SnapTunnel};
@@ -36,10 +25,7 @@ use tokio::{net::UdpSocket, task::JoinHandle};
 use url::Url;
 
 use crate::scionstack::{
-    AsyncUdpUnderlaySocket, ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError,
-    UnderlaySocket,
-    scmp_handler::ScmpHandler,
-    udp_polling::{UdpPollHelper, UdpPoller},
+    ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError, UnderlaySocket,
 };
 
 /// A handle to the background task that runs the SNAP underlay socket task.
@@ -247,144 +233,5 @@ impl UnderlaySocket for SnapUnderlaySocket {
 
     fn snap_data_plane(&self) -> Option<net::SocketAddr> {
         Some(self.inner.data_plane_address())
-    }
-}
-
-pub(crate) struct SnapAsyncUdpSocket {
-    socket: SnapUnderlaySocket,
-    scmp_handlers: Vec<Box<dyn ScmpHandler>>,
-}
-
-impl SnapAsyncUdpSocket {
-    pub fn new(socket: SnapUnderlaySocket, scmp_handlers: Vec<Box<dyn ScmpHandler>>) -> Self {
-        Self {
-            socket,
-            scmp_handlers,
-        }
-    }
-}
-
-impl AsyncUdpUnderlaySocket for SnapAsyncUdpSocket {
-    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
-        Box::pin(UdpPollHelper::new(move || {
-            let self_clone = self.clone();
-            async move { self_clone.socket.inner.writable().await }
-        }))
-    }
-
-    fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), std::io::Error> {
-        let mut buf = self.socket.pool.get();
-        let pkt = packet.as_slice();
-        let packet_size = pkt.len();
-
-        {
-            let write = buf.buf_mut();
-            write.resize(packet_size, 0);
-            buf[..packet_size].copy_from_slice(pkt);
-        }
-
-        self.socket.inner.try_send(buf)?;
-        Ok(())
-    }
-
-    fn poll_recv_from_with_path(
-        &self,
-        cx: &mut Context,
-    ) -> Poll<std::io::Result<(ScionSocketIpAddr, Box<[u8]>, ScionPath)>> {
-        loop {
-            let Ok(raw) = ready!(self.socket.inner.poll_recv(cx)) else {
-                // XXX(uniquefine) this error handling is awkward. But this will only happen
-                // when the stack is dropped anyway.
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "SNAP tunnel closed",
-                )));
-            };
-
-            let packet = match ScionRawPacketView::from_slice(&raw) {
-                Ok((pkt, _rest)) => pkt,
-                Err(e) => {
-                    tracing::debug!(error = %e, "Failed to decode SCION packet, skipping");
-                    continue;
-                }
-            };
-
-            // Handle SCMP packets.
-            if packet.header().next_header() == ProtocolNumber::Scmp {
-                tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
-                for handler in &self.scmp_handlers {
-                    // Check if the handler wants to send a reply and send it
-                    let Some(reply) = handler.handle(packet) else {
-                        continue;
-                    };
-
-                    let reply = match reply.encode_to_owned_view() {
-                        Ok(reply) => reply,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to encode SCMP reply");
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) = self.try_send(&reply) {
-                        tracing::warn!(error = %e, "failed to send SCMP reply");
-                    }
-                }
-                continue;
-            };
-
-            let fallible = || {
-                let src = packet
-                    .src_scion_addr()
-                    .context("reading source address")?
-                    .try_into_scion_ip_addr()
-                    .map_err(|_| anyhow!("not a scion ip addr"))?;
-
-                let dst = packet
-                    .dst_scion_addr()
-                    .context("reading destination address")?;
-
-                // Drop packets that are not addressed to this socket.
-                if dst != self.socket.local_addr.scion_addr() {
-                    anyhow::bail!(
-                        "Packet destination does not match assigned address, skipping (dst: {}, assigned: {})",
-                        dst,
-                        self.socket.local_addr.scion_addr()
-                    );
-                }
-
-                let path = ScionPath::new(
-                    src.isd_asn(),
-                    dst.isd_asn(),
-                    packet.header().path().to_owned_view(),
-                    None,
-                    None,
-                );
-
-                let packet = packet.try_into_udp().context("parsing UDP packet")?;
-
-                anyhow::Ok((
-                    ScionSocketIpAddr::new(src.isd_asn(), src.ip(), packet.udp().src_port()),
-                    packet.udp().payload().to_vec().into_boxed_slice(),
-                    path,
-                ))
-            };
-
-            match fallible() {
-                Ok(result) => return Poll::Ready(Ok(result)),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Received invalid packet, skipping");
-                    continue;
-                }
-            }
-        }
-    }
-
-    fn local_addr(&self) -> ScionSocketIpAddr {
-        self.socket.local_addr()
-    }
-
-    fn snap_data_plane(&self) -> Option<net::SocketAddr> {
-        self.socket.snap_data_plane()
     }
 }

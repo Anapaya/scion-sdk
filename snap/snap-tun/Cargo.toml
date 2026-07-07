@@ -15,8 +15,8 @@ async-channel = { workspace = true }
 async-trait = { workspace = true }
 bitfield-struct = { workspace = true }
 bytes = { workspace = true }
-anapaya-quinn = { workspace = true }
 quinn-udp = { workspace = true }
+rustls = { workspace = true }
 scion-sdk-utils = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

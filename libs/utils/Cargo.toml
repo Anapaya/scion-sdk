@@ -9,12 +9,8 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 
 [dependencies]
-ed25519-dalek = { workspace = true }
 num-traits = { workspace = true }
-pem = { workspace = true }
-anapaya-quinn = { workspace = true }
 rand = { workspace = true }
-rcgen = { workspace = true}
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

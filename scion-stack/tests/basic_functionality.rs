@@ -99,32 +99,6 @@ async fn test_bind_port_already_in_use_udp() {
     test_bind_port_already_in_use_impl(two_path_topology(UnderlayType::Udp).await).await;
 }
 
-#[test(tokio::test)]
-#[ntest::timeout(10_000)]
-async fn test_quic_endpoint_creation_snap() {
-    test_quic_endpoint_creation_impl(two_path_topology(UnderlayType::Snap).await).await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(5_000)]
-async fn test_quic_endpoint_creation_udp() {
-    test_quic_endpoint_creation_impl(two_path_topology(UnderlayType::Udp).await).await;
-}
-
-#[test(tokio::test)]
-#[ntest::timeout(5_000)]
-async fn test_bind_two_endpoints_socket_already_in_use() {
-    let first_endpoint = anapaya_quinn::Endpoint::client(("0.0.0.0:0").parse().unwrap()).unwrap();
-    let local_addr = first_endpoint.local_addr().unwrap();
-    info!("Local address: {local_addr:?}");
-    let second_endpoint = anapaya_quinn::Endpoint::client(local_addr);
-    assert!(
-        second_endpoint.is_err(),
-        "expected error but got {second_endpoint:?}"
-    );
-    info!("Local address again: {:?}", first_endpoint.local_addr());
-}
-
 async fn test_bind_two_sockets_send_receive_impl(ps: PsSetup) {
     let sender_stack = ScionStackBuilder::new()
         .with_endhost_api(ps.endhost_api(IA132).unwrap())
@@ -229,22 +203,6 @@ async fn test_bind_port_already_in_use_impl(ps: PsSetup) {
     // Make sure the socket is only dropped now.
     info!("Socket is still around: {:?}", socket.local_addr());
     drop(socket);
-}
-
-async fn test_quic_endpoint_creation_impl(ps: PsSetup) {
-    let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps.endhost_api(IA132).unwrap())
-        .with_auth_token(dummy_snap_token())
-        .build()
-        .await
-        .expect("build SCION stack");
-
-    #[allow(deprecated)]
-    let endpoint = stack
-        .quic_endpoint(None, anapaya_quinn::EndpointConfig::default(), None, None)
-        .await;
-
-    assert!(endpoint.is_ok());
 }
 
 /// Test that an SCMP socket receives SCMP messages.

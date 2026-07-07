@@ -193,29 +193,17 @@
 //! ```
 
 pub mod builder;
-pub mod quic;
 pub mod scmp_handler;
 pub mod socket;
-pub(crate) mod udp_polling;
 
-use std::{
-    borrow::Cow,
-    fmt, net,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 
-use anyhow::Context as _;
 use futures::future::BoxFuture;
-use quic::{AddressTranslator, Endpoint, ScionAsyncUdpSocket};
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use sciparse::{
     address::ip_socket_addr::ScionSocketIpAddr,
     identifier::{isd::Isd, isd_asn::IsdAsn},
     packet::view::ScionRawPacketView,
-    path::ScionPath,
 };
 use snap_tun::client::ConnectSnapTunSocketError;
 pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
@@ -235,7 +223,7 @@ use crate::{
         scoring::PathScoring,
     },
     scionstack::{
-        scmp_handler::{ScmpErrorHandler, ScmpErrorReceiver, ScmpHandler},
+        scmp_handler::{ScmpErrorHandler, ScmpErrorReceiver},
         socket::SendErrorReceiver,
     },
     types::Subscribers,
@@ -454,123 +442,6 @@ impl ScionStack {
         Ok(PathUnawareUdpScionSocket::new(socket, vec![]))
     }
 
-    /// Create a QUIC over SCION endpoint.
-    ///
-    /// This is a convenience method that creates a QUIC (quinn) endpoint over a SCION socket.
-    ///
-    /// # Arguments
-    /// * `bind_addr` - The address to bind the socket to. If None, an available address will be
-    ///   used.
-    /// * `config` - The quinn endpoint configuration.
-    /// * `server_config` - The quinn server configuration.
-    /// * `runtime` - The runtime to spawn tasks on.
-    ///
-    /// # Returns
-    /// A QUIC endpoint that can be used to accept or create QUIC connections.
-    #[deprecated(
-        since = "0.4.0",
-        note = "will soon be removed; use the quic-scion crate instead"
-    )]
-    pub async fn quic_endpoint(
-        &self,
-        bind_addr: Option<ScionSocketIpAddr>,
-        config: anapaya_quinn::EndpointConfig,
-        server_config: Option<anapaya_quinn::ServerConfig>,
-        runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
-    ) -> anyhow::Result<Endpoint> {
-        #[allow(deprecated)]
-        self.quic_endpoint_with_config(
-            bind_addr,
-            config,
-            server_config,
-            runtime,
-            SocketConfig::default(),
-        )
-        .await
-    }
-
-    /// Create a QUIC over SCION endpoint using custom socket configuration.
-    ///
-    /// This is a convenience method that creates a QUIC (quinn) endpoint over a SCION socket.
-    ///
-    /// # Arguments
-    /// * `bind_addr` - The address to bind the socket to. If None, an available address will be
-    ///   used.
-    /// * `config` - The quinn endpoint configuration.
-    /// * `server_config` - The quinn server configuration.
-    /// * `runtime` - The runtime to spawn tasks on.
-    /// * `socket_config` - Scion Socket configuration
-    ///
-    /// # Returns
-    /// A QUIC endpoint that can be used to accept or create QUIC connections.
-    #[deprecated(
-        since = "0.4.0",
-        note = "will soon be removed; use the quic-scion crate instead"
-    )]
-    pub async fn quic_endpoint_with_config(
-        &self,
-        bind_addr: Option<ScionSocketIpAddr>,
-        config: anapaya_quinn::EndpointConfig,
-        server_config: Option<anapaya_quinn::ServerConfig>,
-        runtime: Option<Arc<dyn anapaya_quinn::Runtime>>,
-        socket_config: SocketConfig,
-    ) -> anyhow::Result<Endpoint> {
-        let scmp_handlers: Vec<Box<dyn ScmpHandler>> = vec![Box::new(ScmpErrorHandler::new(
-            self.scmp_error_receivers.clone(),
-        ))];
-        let socket = self
-            .underlay
-            .bind_async_udp_socket(bind_addr, scmp_handlers)
-            .await?;
-        let address_translator = Arc::new(AddressTranslator::default());
-
-        let pather = {
-            let mut segment_fetchers = socket_config.segment_fetchers;
-            if !socket_config.disable_default_segment_fetcher {
-                segment_fetchers.push(("Endhost API".into(), self.default_segment_fetcher.clone()));
-            }
-            let fetcher =
-                PathFetcherImpl::new(segment_fetchers, socket_config.segment_fetcher_timeout);
-
-            // Use default scorers if none are configured.
-            let mut strategy = socket_config.path_strategy;
-            if strategy.scoring.is_empty() {
-                strategy.scoring.use_default_scorers();
-            }
-
-            Arc::new(
-                MultiPathManager::new(MultiPathManagerConfig::default(), fetcher, strategy)
-                    .map_err(|e| anyhow::anyhow!("failed to create path manager: {}", e))?,
-            )
-        };
-
-        // Register the path manager as a SCMP error receiver.
-        self.scmp_error_receivers.register(pather.clone());
-
-        let local_scion_addr = socket.local_addr();
-
-        let socket = Arc::new(ScionAsyncUdpSocket::new(
-            socket,
-            pather.clone(),
-            address_translator.clone(),
-        ));
-
-        let runtime = match runtime {
-            Some(runtime) => runtime,
-            None => anapaya_quinn::default_runtime().context("No runtime found")?,
-        };
-
-        Ok(Endpoint::new_with_abstract_socket(
-            config,
-            server_config,
-            socket,
-            local_scion_addr,
-            runtime,
-            pather,
-            address_translator,
-        )?)
-    }
-
     /// Get the list of local ISD-ASes available on the endhost.
     ///
     /// # Returns
@@ -772,19 +643,12 @@ pub enum SocketKind {
 /// sending and receiving SCION packets.
 pub(crate) trait UnderlayStack: Send + Sync {
     type Socket: UnderlaySocket + 'static;
-    type AsyncUdpSocket: AsyncUdpUnderlaySocket + 'static;
 
     fn bind_socket(
         &self,
         kind: SocketKind,
         bind_addr: Option<ScionSocketIpAddr>,
     ) -> BoxFuture<'_, Result<Self::Socket, ScionSocketBindError>>;
-
-    fn bind_async_udp_socket(
-        &self,
-        bind_addr: Option<ScionSocketIpAddr>,
-        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
-    ) -> BoxFuture<'_, Result<Self::AsyncUdpSocket, ScionSocketBindError>>;
 
     /// Get the list of local ISD-ASes available on the endhost.
     fn local_ases(&self) -> Vec<IsdAsn>;
@@ -798,12 +662,6 @@ pub(crate) trait DynUnderlayStack: Send + Sync {
         bind_addr: Option<ScionSocketIpAddr>,
     ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>>;
 
-    fn bind_async_udp_socket(
-        &self,
-        bind_addr: Option<ScionSocketIpAddr>,
-        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
-    ) -> BoxFuture<'_, Result<Arc<dyn AsyncUdpUnderlaySocket>, ScionSocketBindError>>;
-
     fn local_ases(&self) -> Vec<IsdAsn>;
 }
 
@@ -816,17 +674,6 @@ impl<U: UnderlayStack> DynUnderlayStack for U {
         Box::pin(async move {
             let socket = self.bind_socket(kind, bind_addr).await?;
             Ok(Box::new(socket) as Box<dyn UnderlaySocket>)
-        })
-    }
-
-    fn bind_async_udp_socket(
-        &self,
-        bind_addr: Option<ScionSocketIpAddr>,
-        scmp_handlers: Vec<Box<dyn ScmpHandler>>,
-    ) -> BoxFuture<'_, Result<Arc<dyn AsyncUdpUnderlaySocket>, ScionSocketBindError>> {
-        Box::pin(async move {
-            let socket = self.bind_async_udp_socket(bind_addr, scmp_handlers).await?;
-            Ok(Arc::new(socket) as Arc<dyn AsyncUdpUnderlaySocket>)
         })
     }
 
@@ -925,33 +772,6 @@ pub(crate) trait UnderlaySocket: 'static + Send + Sync {
     /// Get the local socket address of this socket.
     fn local_addr(&self) -> ScionSocketIpAddr;
 
-    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
-    fn snap_data_plane(&self) -> Option<net::SocketAddr>;
-}
-
-/// A trait that defines an asynchronous path unaware UDP socket.
-/// This can be used to implement the [anapaya_quinn::AsyncUdpSocket] trait.
-pub(crate) trait AsyncUdpUnderlaySocket: Send + Sync {
-    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn udp_polling::UdpPoller>>;
-    /// Try to send a raw SCION UDP packet. Path resolution and packet encoding is
-    /// left to the caller.
-    /// This function should return std::io::ErrorKind::WouldBlock if the packet cannot be sent
-    /// immediately.
-    fn try_send(&self, raw_packet: &ScionRawPacketView) -> Result<(), std::io::Error>;
-    /// Poll for receiving a SCION packet with sender and path.
-    /// This function will only return valid UDP packets.
-    /// SCMP packets will be handled internally.
-    ///
-    /// Returns a tuple of (src_addr, payload, path) on success.
-    // TODO: Currently this forces alloc per received packet. Since we now have the views, this
-    // should be changed to a zero-copy receive
-    #[allow(clippy::type_complexity)]
-    fn poll_recv_from_with_path(
-        &self,
-        cx: &mut Context,
-    ) -> Poll<std::io::Result<(ScionSocketIpAddr, Box<[u8]>, ScionPath)>>;
-    /// Get the local socket address of this socket.
-    fn local_addr(&self) -> ScionSocketIpAddr;
     /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
     fn snap_data_plane(&self) -> Option<net::SocketAddr>;
 }
