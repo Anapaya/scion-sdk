@@ -28,6 +28,8 @@ use test_log::test;
 #[test(tokio::test)]
 #[ntest::timeout(10_000)]
 async fn endhost_api_unreachable_should_error() {
+    scion_sdk_utils::rustls::select_ring_crypto_provider();
+
     let unreachable_url = "http://127.0.0.1:1".parse().unwrap();
 
     let result = ScionStackBuilder::new()
