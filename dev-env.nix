@@ -21,6 +21,7 @@ in rec {
       clang
       llvmPackages.bintools
       m4
+      gnumake
       cmake
       ninja
       clang
