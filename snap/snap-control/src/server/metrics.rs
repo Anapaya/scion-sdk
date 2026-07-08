@@ -20,11 +20,17 @@ use std::{
     time::Instant,
 };
 
-use axum::body::Body;
+use axum::{body::Body, extract::MatchedPath};
 use http::{Request, Response};
 use prometheus::{HistogramVec, IntCounterVec};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use tower::{BoxError, Layer, Service};
+
+/// Label value used for requests that did not match any registered route.
+///
+/// This collapses probes against non-existent endpoints into a single time series instead of
+/// creating one series per unique (bogus) path.
+const UNMATCHED_ROUTE: &str = "<unmatched>";
 
 /// Prometheus middleware layer for tracking control plane API metrics.
 #[derive(Clone)]
@@ -76,13 +82,20 @@ where
     }
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
-        let method = request.uri().path().to_string();
+        // Use the matched route pattern, this keeps the label cardinality bounded to the set of
+        // endpoints that actually exist. Requests that do not match any route have no `MatchedPath`
+        // extension and are bucketed under a single label instead of exploding the label space.
+        let rpc_method = request
+            .extensions()
+            .get::<MatchedPath>()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_else(|| UNMATCHED_ROUTE.to_string());
         let metrics = self.metrics.clone();
 
         // Increment started metric
         metrics
             .control_plane_started_total
-            .with_label_values(&[&method])
+            .with_label_values(&[&rpc_method])
             .inc();
 
         let fut = self.inner.call(request);
@@ -95,14 +108,14 @@ where
             // Increment handled metric
             metrics
                 .control_plane_handled_total
-                .with_label_values(&[&method, &status])
+                .with_label_values(&[&rpc_method, &status])
                 .inc();
 
             // Observe latency
             let elapsed = start.elapsed().as_secs_f64();
             metrics
                 .control_plane_latency_seconds
-                .with_label_values(&[&method, &status])
+                .with_label_values(&[&rpc_method, &status])
                 .observe(elapsed);
 
             Ok(result)
@@ -128,19 +141,92 @@ impl Metrics {
             control_plane_started_total: metrics_registry.int_counter_vec(
                 "control_plane_requests_started_total",
                 "Total number of control plane API requests started on the server.",
-                &["method"],
+                &["rpc_method"],
             ),
             control_plane_handled_total: metrics_registry.int_counter_vec(
                 "control_plane_requests_handled_total",
                 "Total number of control plane API requests handled on the server.",
-                &["method", "status"],
+                &["rpc_method", "status"],
             ),
             control_plane_latency_seconds: metrics_registry.histogram_vec(
                 "control_plane_requests_latency_seconds",
                 "Latency of control plane API requests in seconds.",
                 vec![0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
-                &["method", "status"],
+                &["rpc_method", "status"],
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{Router, error_handling::HandleErrorLayer, routing::get};
+    use http::StatusCode;
+    use scion_sdk_observability::metrics::registry::MetricsRegistry;
+    use tower::{ServiceBuilder, ServiceExt};
+
+    use super::*;
+
+    fn test_app() -> (Router, Metrics) {
+        let metrics = Metrics::new(&MetricsRegistry::new());
+        let app = Router::new()
+            .route("/my-path/{id}", get(|| async { "ok" }))
+            .layer(
+                // Mirror the production stack: `HandleErrorLayer` absorbs the middleware's
+                // `BoxError` so the layered service satisfies `Router::layer`'s `Infallible`
+                // error bound.
+                ServiceBuilder::new()
+                    .layer(HandleErrorLayer::new(|_: BoxError| {
+                        async move { StatusCode::INTERNAL_SERVER_ERROR }
+                    }))
+                    .layer(PrometheusMiddlewareLayer::new(metrics.clone())),
+            );
+        (app, metrics)
+    }
+
+    #[tokio::test]
+    async fn matched_route_uses_route_pattern_as_label() {
+        let (app, metrics) = test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/my-path/test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            metrics
+                .control_plane_started_total
+                .with_label_values(&["/my-path/{id}"])
+                .get(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn unmatched_route_collapses_to_single_label() {
+        let (app, metrics) = test_app();
+
+        for path in ["/secrets", "/private.key", "/.git/config"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+
+        assert_eq!(
+            metrics
+                .control_plane_started_total
+                .with_label_values(&[UNMATCHED_ROUTE])
+                .get(),
+            3
+        );
     }
 }
