@@ -40,11 +40,12 @@ if [ ! -f "$PROF_DATA" ]; then
     exit 1
 fi
 
-# Generate the coverage report in HTML format
+# Generate the coverage report in LCOV format
 llvm-cov export "$TARGET_DIR/$FUZZ_TARGET" -Xdemangler=rustfilt \
                                          --ignore-filename-regex="\.cargo" \
                                          -instr-profile="$PROF_DATA" \
                                          --format=lcov \
                                          > "$OUTPUT_FILE"
 
+# Generate an HTML report from the LCOV file
 genhtml "$OUTPUT_FILE" -o report
