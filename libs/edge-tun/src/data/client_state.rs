@@ -76,7 +76,7 @@ impl<N: AsIpAddr + std::fmt::Debug> EdgeTunClientState<N> {
                 config.static_secret,
                 config.peer_static,
                 None,
-                None,
+                config.persistent_keep_alive,
                 0,
                 rate_limiter,
                 "0.0.0.0:0".parse().unwrap(),
