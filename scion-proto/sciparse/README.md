@@ -25,7 +25,7 @@ use sciparse::core::view::View;
 use sciparse::packet::view::ScionRawPacketView;
 
 fn handle_packet(buf: &[u8]) {
-    let (packet, _rest) = ScionRawPacketView::from_slice(buf)
+    let (packet, _rest) = ScionRawPacketView::try_from_slice(buf)
         .expect("buffer too small");
 
     let header = packet.header();
@@ -45,9 +45,9 @@ use sciparse::packet::view::ScionRawPacketView;
 use sciparse::packet::classify::ClassifiedPacketView;
 
 fn dispatch(buf: &[u8]) {
-    let (packet, _rest) = ScionRawPacketView::from_slice(buf).unwrap();
+    let (packet, _rest) = ScionRawPacketView::try_from_slice(buf).unwrap();
 
-    match packet.classify() {
+    match packet.try_classify() {
         Ok(ClassifiedPacketView::Udp(udp)) => {
             let dst_port = udp.udp().dst_port();
             println!("UDP packet to port {dst_port}");
@@ -74,10 +74,10 @@ use sciparse::packet::model::{ScionRawPacket, ScionUdpPacket};
 use sciparse::packet::classify::ClassifiedPacketView;
 
 fn view_to_model(buf: &[u8]) {
-    let (view, _rest) = ScionRawPacketView::from_slice(buf).unwrap();
+    let (view, _rest) = ScionRawPacketView::try_from_slice(buf).unwrap();
 
     // Convert a raw view directly into an owned model.
-    let raw_model = ScionRawPacket::from_view(&view).unwrap();
+    let raw_model = view.try_to_model().expect("should be valid");
 }
 ```
 
@@ -101,7 +101,7 @@ fn build_udp_packet(
     let packet = ScionUdpPacket::new(src, dst, path, b"hello SCION".to_vec());
 
     let mut buf = vec![0u8; packet.required_size()];
-    let written = packet.encode(&mut buf).expect("encode failed");
+    let written = packet.try_encode(&mut buf).expect("encode failed");
 
     println!("encoded {written} bytes");
 }
@@ -133,7 +133,7 @@ Encoding the same set of 10,000 packets using different methods:
 
 | Benchmark                          | Total   | Per Packet | vs Sciparse Model |
 | ---------------------------------- | ------- | ---------- | ----------------- |
-| sciparse/view_as_bytes             | 4.27 µs | 0.43 ns    | 0.01x             |
+| sciparse/view_as_slice             | 4.27 µs | 0.43 ns    | 0.01x             |
 | sciparse/model_encode_with_path    | 1.56 ms | 156.00 ns  | 1.00x             |
 | scion_proto/model_encode           | 1.60 ms | 160.00 ns  | 1.03x             |
 | scion_proto/model_encode_with_path | 4.47 ms | 446.00 ns  | 2.86x             |
@@ -169,7 +169,7 @@ which provides:
 
 1. `required_size()` - the exact number of bytes needed for the wire encoding.
 2. `wire_valid()` - minimal validation to prevent encoding structurally invalid packets.
-3. `encode()` / `encode_to_vec()` - serialization into a byte buffer.
+3. `try_encode()` / `try_encode_to_vec()` - serialization into a byte buffer.
 
 ### Layouts
 

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Core traits and utilities for zero-copy views, models, encoding, and layouts.
+
 pub mod convert;
 pub mod debug;
 pub mod encode;

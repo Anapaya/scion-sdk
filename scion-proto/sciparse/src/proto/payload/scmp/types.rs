@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Types and enums used by SCMP messages (message types and codes).
+
 use crate::core::{read::FromUnalignedRead, write::IntoUnalignedWrite};
 
 /// SCMP message types.
@@ -40,6 +42,7 @@ pub enum ScmpMessageType {
     Unknown(u8),
 }
 impl From<u8> for ScmpMessageType {
+    #[inline]
     fn from(value: u8) -> Self {
         match value {
             1 => ScmpMessageType::DestinationUnreachable,
@@ -56,6 +59,7 @@ impl From<u8> for ScmpMessageType {
     }
 }
 impl From<ScmpMessageType> for u8 {
+    #[inline]
     fn from(value: ScmpMessageType) -> Self {
         match value {
             ScmpMessageType::DestinationUnreachable => 1,
@@ -72,11 +76,13 @@ impl From<ScmpMessageType> for u8 {
     }
 }
 impl FromUnalignedRead for ScmpMessageType {
+    #[inline]
     fn from_unaligned_read(value: u128) -> Self {
         (value as u8).into()
     }
 }
 impl IntoUnalignedWrite for ScmpMessageType {
+    #[inline]
     fn into_write_value(v: Self) -> u128 {
         u8::from(v) as u128
     }
@@ -104,6 +110,7 @@ pub enum ScmpDestinationUnreachableCode {
     Unassigned(u8),
 }
 impl From<u8> for ScmpDestinationUnreachableCode {
+    #[inline]
     fn from(value: u8) -> Self {
         match value {
             0 => ScmpDestinationUnreachableCode::NoRouteToDestination,
@@ -118,6 +125,7 @@ impl From<u8> for ScmpDestinationUnreachableCode {
     }
 }
 impl From<ScmpDestinationUnreachableCode> for u8 {
+    #[inline]
     fn from(value: ScmpDestinationUnreachableCode) -> Self {
         match value {
             ScmpDestinationUnreachableCode::NoRouteToDestination => 0,
@@ -132,11 +140,13 @@ impl From<ScmpDestinationUnreachableCode> for u8 {
     }
 }
 impl FromUnalignedRead for ScmpDestinationUnreachableCode {
+    #[inline]
     fn from_unaligned_read(value: u128) -> Self {
         (value as u8).into()
     }
 }
 impl IntoUnalignedWrite for ScmpDestinationUnreachableCode {
+    #[inline]
     fn into_write_value(v: Self) -> u128 {
         u8::from(v) as u128
     }
@@ -248,11 +258,13 @@ impl From<ScmpParameterProblemCode> for u8 {
     }
 }
 impl FromUnalignedRead for ScmpParameterProblemCode {
+    #[inline]
     fn from_unaligned_read(value: u128) -> Self {
         (value as u8).into()
     }
 }
 impl IntoUnalignedWrite for ScmpParameterProblemCode {
+    #[inline]
     fn into_write_value(v: Self) -> u128 {
         u8::from(v) as u128
     }
@@ -273,7 +285,7 @@ pub mod ptest {
     /// Controls the relative probability of each variant being generated.
     ///
     /// Default weights: all known types = 1, unknown = 1.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryScmpMessageTypeParams {
         /// Weight for DestinationUnreachable.
         pub destination_unreachable: u32,
@@ -344,7 +356,7 @@ pub mod ptest {
     /// Controls the relative probability of known vs unknown codes.
     ///
     /// Default weights: `known = 7, unknown = 1`.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryScmpDestinationUnreachableCodeParams {
         /// Weight for generating any of the known destination unreachable codes (uniformly).
         pub known: u32,
@@ -386,7 +398,7 @@ pub mod ptest {
     /// Controls the relative probability of known vs unknown codes.
     ///
     /// Default weights: `known = 5, unknown = 1`.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryScmpParameterProblemCodeParams {
         /// Weight for generating any of the known parameter problem codes (uniformly).
         pub known: u32,

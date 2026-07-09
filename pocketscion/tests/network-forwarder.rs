@@ -140,7 +140,7 @@ async fn network_forwarder_should_send_and_receive() -> anyhow::Result<()> {
         real_payload.clone(),
     )
     .into_raw()
-    .encode_to_vec()
+    .try_encode_to_vec()
     .context("encode real packet")?;
 
     external_socket

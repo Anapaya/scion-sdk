@@ -29,6 +29,20 @@ pub trait SerdeExt: Sized + serde::Serialize + serde::de::DeserializeOwned {
         let obj = serde_json::from_reader(file)?;
         Ok(obj)
     }
+
+    /// Serialize `self` to a YAML file at `path`.
+    fn write_yaml_to_file(&self, path: impl AsRef<std::path::Path>) -> anyhow::Result<()> {
+        let file = std::fs::File::create(path)?;
+        serde_yaml_ng::to_writer(file, self)?;
+        Ok(())
+    }
+
+    /// Deserialize an object of type `Self` from a YAML file at `path`.
+    fn load_yaml_from_file(path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+        let file = std::fs::File::open(path)?;
+        let obj = serde_yaml_ng::from_reader(file)?;
+        Ok(obj)
+    }
 }
 
 impl<T> SerdeExt for T where T: serde::Serialize + serde::de::DeserializeOwned {}

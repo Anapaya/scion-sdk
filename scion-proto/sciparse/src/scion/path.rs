@@ -78,6 +78,7 @@ pub struct ScionPath {
 }
 impl ScionPath {
     /// Creates a new [ScionPath] with the given dataplane path and metadata.
+    #[inline]
     pub fn new(
         src_ia: IsdAsn,
         dst_ia: IsdAsn,
@@ -102,13 +103,14 @@ impl ScionPath {
 
         // Try to set the path fingerprint if possible
         this._cp_fingerprint =
-            fingerprint::control_plane::PathFingerprint::from_scion_path(&this).ok();
+            fingerprint::control_plane::PathFingerprint::try_from_scion_path(&this).ok();
         this
     }
 
     /// Creates a new [ScionPath] for a local path, sending packets within the same AS.
     ///
     /// Returns None if the AS is a wildcard.
+    #[inline]
     pub fn local(local_as: IsdAsn) -> Option<Self> {
         if local_as.is_wildcard() {
             None
@@ -126,6 +128,7 @@ impl ScionPath {
 // utility
 impl ScionPath {
     /// Returns the egress interface of the first hop of the path.
+    #[inline]
     pub fn first_egress_interface(&self) -> Option<PathInterface> {
         // Try from dataplane path first
         if let Some(if_id) = self.dp_path.first_egress_interface() {
@@ -151,6 +154,7 @@ impl ScionPath {
     }
 
     /// Returns the ingress interface of the last hop of the path, if metadata is available.
+    #[inline]
     pub fn last_ingress_interface(&self) -> Option<PathInterface> {
         // Try from dataplane path first
         if let Some(if_id) = self.dp_path.last_ingress_interface() {
@@ -182,6 +186,7 @@ impl ScionPath {
     /// is not possible to derive the reverse secret.
     ///
     /// If the dataplane path type does not support reversal, returns an error.
+    #[inline]
     pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
         self.dp_path.try_reverse()?;
         std::mem::swap(&mut self.src_ia, &mut self.dst_ia);
@@ -193,7 +198,7 @@ impl ScionPath {
             metadata.reverse();
 
             self._cp_fingerprint =
-                fingerprint::control_plane::PathFingerprint::from_scion_path(self).ok();
+                fingerprint::control_plane::PathFingerprint::try_from_scion_path(self).ok();
         }
 
         self._fingerprint = fingerprint::data_plane::DpPathFingerprint::from_dp_path(
@@ -213,7 +218,8 @@ impl ScionPath {
     ///
     /// If the dataplane path type does not support reversal, returns an error.
     #[allow(clippy::result_large_err)]
-    pub fn into_reversed(mut self) -> Result<Self, (Self, PathReverseError)> {
+    #[inline]
+    pub fn try_into_reversed(mut self) -> Result<Self, (Self, PathReverseError)> {
         match self.try_reverse() {
             Ok(()) => Ok(self),
             Err(e) => Err((self, e)),
@@ -225,7 +231,8 @@ impl ScionPath {
     /// First checks the expiration time from the dataplane path, if available. If not, checks the
     /// expiration time from the control plane metadata.
     ///
-    /// If neither is available, the function returns None
+    /// If neither is available, the function returns None.
+    #[inline]
     pub fn is_expired(&self, timestamp: u32) -> Option<bool> {
         let expiration = self.expiration()?;
         Some(timestamp >= expiration)
@@ -234,50 +241,58 @@ impl ScionPath {
 // accessors
 impl ScionPath {
     /// Returns the encoded dataplane path as returned by the SCION daemon.
-    pub fn dp_path(&self) -> &ScionDpPathView {
+    #[inline]
+    pub const fn dp_path(&self) -> &ScionDpPathView {
         &self.dp_path
     }
     /// Returns metadata about the path, if available.
-    pub fn metadata(&self) -> Option<&metadata::PathMetadata> {
+    #[inline]
+    pub const fn metadata(&self) -> Option<&metadata::PathMetadata> {
         self.metadata.as_ref()
     }
 
     /// Returns the ISD-AS of the path's source.
-    pub fn src_ia(&self) -> IsdAsn {
+    #[inline]
+    pub const fn src_ia(&self) -> IsdAsn {
         self.src_ia
     }
 
     /// Returns the ISD-AS of the path's destination.
-    pub fn dst_ia(&self) -> IsdAsn {
+    #[inline]
+    pub const fn dst_ia(&self) -> IsdAsn {
         self.dst_ia
     }
 
     /// Returns the address of the SCION router which is used to exit the local AS on this path, if
     /// available.
-    pub fn next_hop(&self) -> Option<SocketAddr> {
+    #[inline]
+    pub const fn next_hop(&self) -> Option<SocketAddr> {
         self.next_hop
     }
 
     /// Sets the address of the SCION router which is used to exit the local AS on this path.
+    #[inline]
     pub fn set_next_hop(&mut self, next_hop: Option<SocketAddr>) {
         self.next_hop = next_hop;
     }
 
     /// Returns a fingerprint for this path, uniquely identifying the route taken by the path.
     ///
-    /// Usually [Self::fingerprint] is prefferable, this method is only useful if the control plane
+    /// Usually [Self::fingerprint] is preferable, this method is only useful if the control plane
     /// fingerprint is needed.
     ///
     /// See [PathFingerprint](fingerprint::control_plane::PathFingerprint) for details.
-    pub fn cp_fingerprint(&self) -> Option<fingerprint::control_plane::PathFingerprint> {
+    #[inline]
+    pub const fn cp_fingerprint(&self) -> Option<fingerprint::control_plane::PathFingerprint> {
         self._cp_fingerprint
     }
 
     /// Returns the fingerprint for this path based on the dataplane path data, uniquely identifying
     /// the route taken by the path.
     ///
-    /// See [DpPathFingerprint](fingerprint::data_plane::DpPathFingerprint) for details
-    pub fn fingerprint(&self) -> fingerprint::data_plane::DpPathFingerprint {
+    /// See [DpPathFingerprint](fingerprint::data_plane::DpPathFingerprint) for details.
+    #[inline]
+    pub const fn fingerprint(&self) -> fingerprint::data_plane::DpPathFingerprint {
         self._fingerprint
     }
 
@@ -287,6 +302,7 @@ impl ScionPath {
     /// metadata if not.
     ///
     /// Returns None if the expiration time could not be obtained from either source.
+    #[inline]
     pub fn expiration(&self) -> Option<u32> {
         self._expiration.or_else(|| {
             self.metadata
@@ -303,7 +319,7 @@ impl ScionPath {
     /// - `rpc_path`: The RPC path as returned by the SCION daemon.
     /// - `src_ia`: The ISD-AS of the path's source.
     /// - `dst_ia`: The ISD-AS of the path's destination.
-    pub fn from_rpc(
+    pub fn try_from_rpc(
         rpc_path: rpc::Path,
         src_ia: IsdAsn,
         dst_ia: IsdAsn,
@@ -323,7 +339,7 @@ impl ScionPath {
         }
 
         // Parse the path
-        let (view, rest) = StandardPathView::from_slice(&rpc_path.raw).map_err(|err| {
+        let (view, rest) = StandardPathView::try_from_slice(&rpc_path.raw).map_err(|err| {
             FromRpcError::new(format!("failed to parse standard path from RPC: {err}"))
         })?;
 
@@ -488,7 +504,7 @@ impl ScionPath {
                 seconds: meta.expiration.try_into().unwrap_or(i64::MAX),
                 nanos: 0,
             });
-            rpc_path.epic_auths = meta.epic_auth.clone().map(|auth| auth.into_rpc());
+            rpc_path.epic_auths = meta.epic_auth.clone().map(|auth| auth.to_rpc());
 
             if let Some(if_meta) = &meta.interfaces {
                 rpc_path.interfaces = if_meta
@@ -534,7 +550,7 @@ impl ScionPath {
                     .map(|meta| {
                         meta.geo_info
                             .as_ref()
-                            .map(|geo| geo.into_rpc())
+                            .map(|geo| geo.to_rpc())
                             .unwrap_or_default()
                     })
                     .collect();
@@ -668,6 +684,7 @@ impl ScionPath {
     }
 }
 impl Display for ScionPath {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

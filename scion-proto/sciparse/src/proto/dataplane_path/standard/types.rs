@@ -19,45 +19,52 @@ use std::{fmt::Debug, ops::Deref, time::Duration};
 use serde::{Deserialize, Serialize};
 
 /// MAC (Message Authentication Code) used in HopFields.
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct HopFieldMac(pub [u8; 6]);
 impl HopFieldMac {
     /// Creates a new HopFieldMac from the given byte array.
-    pub fn new(bytes: [u8; 6]) -> Self {
+    #[inline]
+    pub const fn new(bytes: [u8; 6]) -> Self {
         HopFieldMac(bytes)
     }
 
     /// Returns a HopFieldMac with all bytes set to zero.
     ///
     /// This can be used as a placeholder or default value when a valid MAC is not available.
-    pub fn zero() -> Self {
+    #[inline]
+    pub const fn zero() -> Self {
         HopFieldMac([0; 6])
     }
 
     /// Returns the byte array representation of the HopFieldMac.
-    pub fn as_bytes(&self) -> &[u8; 6] {
+    #[inline]
+    pub const fn as_bytes(&self) -> &[u8; 6] {
         &self.0
     }
 }
 impl Deref for HopFieldMac {
     type Target = [u8; 6];
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 impl From<[u8; 6]> for HopFieldMac {
+    #[inline]
     fn from(bytes: [u8; 6]) -> Self {
         HopFieldMac::new(bytes)
     }
 }
 impl From<HopFieldMac> for [u8; 6] {
+    #[inline]
     fn from(mac: HopFieldMac) -> Self {
         mac.0
     }
 }
 impl Debug for HopFieldMac {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -85,11 +92,13 @@ bitflags::bitflags! {
 }
 impl InfoFieldFlags {
     /// Returns true if the construction direction flag is set.
+    #[inline]
     pub fn cons_dir(&self) -> bool {
         self.contains(InfoFieldFlags::CONS_DIR)
     }
 
     /// Returns true if the peering flag is set.
+    #[inline]
     pub fn peering(&self) -> bool {
         self.contains(InfoFieldFlags::PEERING)
     }
@@ -111,11 +120,13 @@ bitflags::bitflags! {
 }
 impl HopFieldFlags {
     /// Returns true if the ConsIngress Router Alert flag is set.
+    #[inline]
     pub fn cons_ingress_router_alert(&self) -> bool {
         self.contains(HopFieldFlags::CONS_INGRESS_ROUTER_ALERT)
     }
 
     /// Returns true if the ConsEgress Router Alert flag is set.
+    #[inline]
     pub fn cons_egress_router_alert(&self) -> bool {
         self.contains(HopFieldFlags::CONS_EGRESS_ROUTER_ALERT)
     }
@@ -124,6 +135,7 @@ impl HopFieldFlags {
     ///
     /// If `cons_dir` is true, the construction direction is used as is. If false, the direction
     /// is reversed.
+    #[inline]
     pub fn normalized_ingress_router_alert(&self, cons_dir: bool) -> bool {
         if cons_dir {
             self.cons_ingress_router_alert()
@@ -136,6 +148,7 @@ impl HopFieldFlags {
     ///
     /// If `cons_dir` is true, the construction direction is used as is. If false, the direction
     /// is reversed.
+    #[inline]
     pub fn normalized_egress_router_alert(&self, cons_dir: bool) -> bool {
         if cons_dir {
             self.cons_egress_router_alert()
@@ -155,6 +168,7 @@ pub const EXP_TIME_UNIT: Duration = Duration::new(337, 500_000_000);
 /// One unit of ExpTime corresponds to [EXP_TIME_UNIT] (5m38.5s).\
 /// The lowest possible expiration time is [EXP_TIME_UNIT] (when `exp_time` is 0).\
 /// The highest possible expiration time is 256 * [EXP_TIME_UNIT] (when `exp_time` is 255).
+#[inline]
 pub fn exp_time_to_duration(exp_time: u8) -> Duration {
     EXP_TIME_UNIT.saturating_mul(exp_time as u32 + 1)
 }

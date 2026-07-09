@@ -114,7 +114,7 @@ use crate::{
 /// It produces a [`TestPathContext`] which supplies valid packets.
 ///
 /// This is intended for tests only, not for constructing production paths.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TestPathBuilder {
     segments: Vec<TestPathBuilderSegment>,
     src_address: ScionAddr,
@@ -128,7 +128,6 @@ pub struct TestPathBuilder {
 
 impl TestPathBuilder {
     /// Creates a new TestBuilder
-    #[allow(unused)]
     pub fn new(src_address: ScionAddr, dst_address: ScionAddr) -> Self {
         let current_isd = src_address.isd_asn().isd().0;
         let current_asn = src_address.isd_asn().asn().0 as u32;
@@ -146,21 +145,21 @@ impl TestPathBuilder {
     }
 
     /// Sets the timestamp used in the following info fields
-    #[allow(unused)]
+    #[inline]
     pub fn using_info_timestamp(mut self, timestamp: u32) -> Self {
         self.default_timestamp = timestamp;
         self
     }
 
     /// Sets the hop expiry time used in the following hop fields
-    #[allow(unused)]
+    #[inline]
     pub fn with_hop_expiry(mut self, exp_time: u8) -> Self {
         self.default_hop_expiry = exp_time;
         self
     }
 
     /// Sets the forwarding key used in the following hop fields
-    #[allow(unused)]
+    #[inline]
     pub fn using_forwarding_key(mut self, key: ForwardingKey) -> Self {
         self.default_key = key;
         self
@@ -169,6 +168,7 @@ impl TestPathBuilder {
     /// Sets the ISD used in the next hops
     ///
     /// Note: This can make the path invalid if the ISD changes do not align with segment changes
+    #[inline]
     pub fn with_isd(mut self, isd: u16) -> Self {
         self.current_isd = isd;
         self
@@ -183,13 +183,14 @@ impl TestPathBuilder {
     ///
     /// Note: This can make the path invalid if the first or last ASNs do not match the source or
     /// destination addresses
+    #[inline]
     pub fn with_asn(mut self, asn: u32) -> Self {
         self.current_asn = asn;
         self
     }
 
     /// Adds a down segment to the path
-    #[allow(unused)]
+    #[inline]
     pub fn down(mut self) -> Self {
         self.add_segment(
             true,
@@ -200,7 +201,7 @@ impl TestPathBuilder {
     }
 
     /// Adds a core segment to the path
-    #[allow(unused)]
+    #[inline]
     pub fn core(mut self) -> Self {
         self.add_segment(
             true,
@@ -211,7 +212,7 @@ impl TestPathBuilder {
     }
 
     /// Adds an up segment to the path
-    #[allow(unused)]
+    #[inline]
     pub fn up(mut self) -> Self {
         self.add_segment(
             false,
@@ -222,20 +223,20 @@ impl TestPathBuilder {
     }
 
     /// Adds a hop to the current segment with given ingress and egress interfaces
-    #[allow(unused)]
+    #[inline]
     pub fn add_hop(self, ingress_if: u16, egress_if: u16) -> Self {
         self.add_hop_internal(ingress_if, false, egress_if, false, false)
     }
 
     /// Adds a hop to the current segment with given ingress and egress interface where the egress
     /// is down
-    #[allow(unused)]
+    #[inline]
     pub fn add_hop_with_egress_down(self, ingress_if: u16, egress_if: u16) -> Self {
         self.add_hop_internal(ingress_if, false, egress_if, false, true)
     }
 
     /// Adds a hop to the current segment with given ingress and egress interfaces and router alerts
-    #[allow(unused)]
+    #[inline]
     pub fn add_hop_with_alerts(
         self,
         ingress_if: u16,
@@ -315,7 +316,7 @@ impl TestPathBuilder {
     /// Contains a valid SCION packet derived from the segments defined in the builder.
     ///
     /// Will set the last hop's ISD-AS to the destination address's ISD-AS.
-    #[allow(unused)]
+    #[inline]
     pub fn build(self, routing_timestamp: u32) -> TestPathContext {
         self.build_with_path_modifier(routing_timestamp, |p| p)
     }
@@ -378,7 +379,7 @@ impl TestPathBuilder {
                         })
                         .collect::<Vec<_>>();
 
-                    let mut final_info = segment.info_field.clone();
+                    let mut final_info = segment.info_field;
 
                     // If against the construction direction, the segment id is set to the previous
                     // accumulator
@@ -490,13 +491,13 @@ impl TestPathBuilder {
 }
 
 /// Test Context providing a Path and relevant per hop information
+#[derive(Debug, Clone, PartialEq)]
 pub struct TestPathContext {
     /// The path used in the SCION packets
     pub data_plane_path: DpPath,
     /// The metadata for the path
     pub path_meta: PathMetadata,
     /// The timestamp used when simulating the packet traversal
-    #[allow(unused)]
     pub timestamp: u32,
 
     /// Defines the segments used to build the packet
@@ -560,7 +561,7 @@ impl TestPathContext {
             self.src_address.isd_asn(),
             self.dst_address.isd_asn(),
             self.data_plane_path
-                .encode_to_owned_view()
+                .try_encode_to_owned_view()
                 .expect("Failed to encode path"),
             Some(self.path_meta.clone()),
             None,
@@ -574,7 +575,7 @@ impl TestPathContext {
 /// [HopField]
 ///
 /// For fields which mirror hop fields, see [HopField] for documentation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TestPathBuilderHopField {
     /// The ISD-AS of this Hop
     pub isd_asn: IsdAsn,
@@ -645,7 +646,7 @@ impl TestPathBuilderHopField {
 /// General Definition of Segments
 ///
 /// Contains all relevant information to build a PathSegment
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TestPathBuilderSegment {
     /// Information field for this segment
     pub info_field: InfoField,
@@ -670,7 +671,8 @@ pub enum TestRoutingLinkType {
 
 impl TestRoutingLinkType {
     /// Returns the reverse link type of the current link type.
-    pub fn reverse(&self) -> Self {
+    #[inline]
+    pub const fn reverse(&self) -> Self {
         match self {
             TestRoutingLinkType::LinkToCore => TestRoutingLinkType::LinkToCore,
             TestRoutingLinkType::LinkToParent => TestRoutingLinkType::LinkToChild,

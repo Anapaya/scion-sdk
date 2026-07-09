@@ -24,7 +24,7 @@ use crate::{
     segment::{AsEntry, HopEntry, PeerEntry, SegmentHopField, UnsignedPathSegment},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Link {
     #[allow(dead_code)]
     a: IsdAsn,
@@ -35,19 +35,22 @@ struct Link {
 }
 
 /// Graph implements a graph of ASes and IfIDs for testing purposes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Graph {
     ases: HashSet<IsdAsn>,
     links: HashMap<IsdAsn, HashMap<u16, Link>>,
 }
 
 /// Error types for operations on the [`Graph`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum GraphError {
+    /// The referenced AS is not part of the graph.
     #[error("AS {0} not in graph")]
     AsNotInGraph(IsdAsn),
+    /// A segment cannot be created without any hops.
     #[error("cannot create empty segment")]
     EmptySegment,
+    /// The referenced interface id is not known.
     #[error("unknown interface id {0}")]
     UnknownIfId(u16),
 }
@@ -56,6 +59,7 @@ pub enum GraphError {
 pub const DEFAULT_HOP_EXPIRATION: u8 = 63;
 
 impl Graph {
+    /// Create a new empty graph.
     pub fn new() -> Self {
         Self {
             ases: HashSet::new(),
@@ -63,10 +67,12 @@ impl Graph {
         }
     }
 
+    /// Add an AS node to the graph.
     pub fn add_node(&mut self, ia: IsdAsn) {
         self.ases.insert(ia);
     }
 
+    /// Add a bidirectional link between two ASes, creating the nodes if needed.
     pub fn add_link(
         &mut self,
         a: IsdAsn,
@@ -102,6 +108,7 @@ impl Graph {
         Ok(())
     }
 
+    /// Delete a single interface of an AS from the graph.
     pub fn delete_interface(&mut self, ia: IsdAsn, if_id: u16) -> Result<(), GraphError> {
         self.links
             .get_mut(&ia)
@@ -110,6 +117,7 @@ impl Graph {
         Ok(())
     }
 
+    /// Remove a bidirectional link between two ASes by deleting both interfaces.
     pub fn remove_link(
         &mut self,
         a: IsdAsn,

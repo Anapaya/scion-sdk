@@ -46,6 +46,7 @@ use crate::{
 /// and duplicates.
 ///
 /// The algorithm is based on the scionproto go implementation.
+#[inline]
 pub fn combine<EntryType: Entry>(
     src: IsdAsn,
     dst: IsdAsn,
@@ -68,6 +69,7 @@ pub fn combine<EntryType: Entry>(
 /// and duplicates.
 ///
 /// The algorithm is based on the scionproto go implementation.
+#[inline]
 pub fn combine_with_weight_fn<EntryType: Entry>(
     src: IsdAsn,
     dst: IsdAsn,
@@ -96,6 +98,7 @@ pub fn combine_with_weight_fn<EntryType: Entry>(
 
 /// Returns true if the path has more than 2 interfaces from the same AS. I.e.
 /// if it has a loop.
+#[inline]
 fn has_loops(path: &ScionPath) -> bool {
     let mut ia_counts = HashMap::new();
     for i in path.metadata.as_ref().unwrap().interfaces.as_ref().unwrap() {
@@ -111,6 +114,7 @@ fn has_loops(path: &ScionPath) -> bool {
 /// XXX(uniquefine): the duplicates could/should be avoided directly by reducing the
 /// available options in the graph, as we could potentially create a large
 /// number of duplicates in wide network topologies.
+#[inline]
 fn filter_duplicates(paths: Vec<ScionPath>) -> Vec<ScionPath> {
     // Store the index of the path with the latest expiry for every unique path fingerprint.
     let mut path_result = Vec::new();

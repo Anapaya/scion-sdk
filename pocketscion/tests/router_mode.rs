@@ -84,7 +84,7 @@ async fn echo() {
             .header
             .path
             .clone()
-            .into_reversed()
+            .try_into_reversed()
             .expect("Failed to reverse path");
 
         let response_pkt = ScionUdpPacket::new(
@@ -96,7 +96,7 @@ async fn echo() {
 
         let pkt = response_pkt
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("Failed to encode response SCION UDP packet");
         debug_assert!(rest.is_empty(), "response packet was not fully consumed");
 
@@ -126,7 +126,7 @@ async fn echo() {
 
         let pkt_raw = packet
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("Failed to encode SCION UDP packet");
 
         client_socket
@@ -228,14 +228,14 @@ async fn send_scmp() {
                 packet
                     .header
                     .path
-                    .into_reversed()
+                    .try_into_reversed()
                     .expect("Failed to reverse path"),
                 response_payload.as_ref().into(),
             );
 
             let resp_raw = response_pkt
                 .into_raw()
-                .encode_to_owned_view()
+                .try_encode_to_owned_view()
                 .expect("Failed to encode response SCION UDP packet");
 
             receiver_socket
@@ -272,7 +272,7 @@ async fn send_scmp() {
 
         let echo_raw = echo_packet
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("Failed to encode SCMP echo packet");
         sender_socket
             .send_to(echo_raw.as_slice(), ia132_router_addr)
@@ -292,7 +292,7 @@ async fn send_scmp() {
             IA132,
             42,
             quoted_udp
-                .encode_to_vec()
+                .try_encode_to_vec()
                 .expect("Failed to encode quoted UDP packet"),
         ));
 
@@ -305,7 +305,7 @@ async fn send_scmp() {
 
         let interface_down_raw = interface_down_packet
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("Failed to encode SCMP interface down packet");
 
         sender_socket
@@ -453,7 +453,7 @@ async fn snap_interface_forwarding() {
             .header
             .path
             .clone()
-            .into_reversed()
+            .try_into_reversed()
             .expect("Failed to reverse path");
 
         let response_pkt = ScionUdpPacket::new(
@@ -466,7 +466,7 @@ async fn snap_interface_forwarding() {
         );
 
         let response_raw = response_pkt
-            .encode_to_vec()
+            .try_encode_to_vec()
             .expect("Failed to encode response SCION UDP packet");
 
         snap_socket
@@ -494,7 +494,7 @@ async fn snap_interface_forwarding() {
     );
 
     let pkt_raw = packet_to_snap
-        .encode_to_vec()
+        .try_encode_to_vec()
         .expect("Failed to encode SCION UDP packet");
     remote_socket
         .send_to(&pkt_raw, ia212_router_addr)
@@ -648,7 +648,7 @@ async fn snap_excluded_networks() {
             .header
             .path
             .clone()
-            .into_reversed()
+            .try_into_reversed()
             .expect("Failed to reverse path");
 
         let response_pkt = ScionUdpPacket::new(
@@ -659,7 +659,7 @@ async fn snap_excluded_networks() {
         );
 
         let response_raw = response_pkt
-            .encode_to_vec()
+            .try_encode_to_vec()
             .expect("Failed to encode response SCION UDP packet");
 
         excluded_socket
@@ -687,7 +687,7 @@ async fn snap_excluded_networks() {
     );
 
     let pkt_raw = packet_to_excluded
-        .encode_to_vec()
+        .try_encode_to_vec()
         .expect("Failed to encode SCION UDP packet");
 
     remote_socket

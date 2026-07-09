@@ -59,11 +59,12 @@ pub trait WireEncode {
 
     /// Writes the wire encoding into the provided buffer.
     ///
-    /// Returns the number of bytes written on success, or `Err(usize)` of the required size if the
-    /// buffer is too small or the packet.
+    /// Returns the number of bytes written on success, or an `EncodeError` if the structure is
+    /// invalid or the buffer is too small.
     ///
     /// The buffer must be at least `self.required_size()` bytes long.
-    fn encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
+    #[inline]
+    fn try_encode(&self, buf: &mut [u8]) -> Result<usize, EncodeError> {
         self.wire_valid()?;
 
         let required_size = self.required_size();
@@ -76,7 +77,8 @@ pub trait WireEncode {
     }
 
     /// Encodes the structure into a new `Vec<u8>`.
-    fn encode_to_vec(&self) -> Result<Vec<u8>, InvalidStructureError> {
+    #[inline]
+    fn try_encode_to_vec(&self) -> Result<Vec<u8>, InvalidStructureError> {
         self.wire_valid()?;
         let mut buf = vec![0u8; self.required_size()];
 
@@ -108,6 +110,7 @@ pub enum EncodeError {
 #[error("cannot encode structure: {0}")]
 pub struct InvalidStructureError(&'static str);
 impl From<&'static str> for InvalidStructureError {
+    #[inline]
     fn from(s: &'static str) -> Self {
         InvalidStructureError(s)
     }

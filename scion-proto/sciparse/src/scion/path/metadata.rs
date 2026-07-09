@@ -43,6 +43,7 @@ impl PathMetadata {
     /// - `expiration`: Unix epoch in seconds after which the path is considered expired.
     /// - `mtu`: Maximum Transmission Unit of the path in bytes.
     /// - `interfaces`: List of interfaces used by this path.
+    #[inline]
     pub fn new_minimal(expiration: u64, mtu: u16, interfaces: Vec<PathInterface>) -> Self {
         Self {
             expiration,
@@ -60,8 +61,9 @@ impl PathMetadata {
 
     /// Reverses the Path Metadata
     ///
-    /// This looses the EPIC authentication information, as it is not possible to derive the reverse
+    /// This drops the EPIC authentication information, as it is not possible to derive the reverse
     /// secret.
+    #[inline]
     pub fn reverse(&mut self) {
         if let Some(interfaces) = &mut self.interfaces {
             interfaces.reverse();
@@ -94,7 +96,8 @@ pub struct InterfaceMetadata {
 
 impl InterfaceMetadata {
     /// Creates a new [InterfaceMetadata] instance without any optional metadata.
-    pub fn new_without_metadata(interface: PathInterface) -> Self {
+    #[inline]
+    pub const fn new_without_metadata(interface: PathInterface) -> Self {
         Self {
             interface,
             geo_info: None,
@@ -124,7 +127,8 @@ pub mod epic {
 
     impl EpicAuths {
         /// Creates a new [EpicAuths] instance.
-        pub fn new(p_hop_validation_key: Vec<u8>, last_hop_validation_key: Vec<u8>) -> Self {
+        #[inline]
+        pub const fn new(p_hop_validation_key: Vec<u8>, last_hop_validation_key: Vec<u8>) -> Self {
             Self {
                 phop_authenticator: p_hop_validation_key,
                 lhop_authenticator: last_hop_validation_key,
@@ -132,6 +136,7 @@ pub mod epic {
         }
 
         /// Creates a new [EpicAuths] instance from a protobuf message.
+        #[inline]
         pub fn from_rpc(value: scion_protobuf::daemon::v1::EpicAuths) -> Self {
             Self {
                 phop_authenticator: value.auth_phvf,
@@ -140,7 +145,8 @@ pub mod epic {
         }
 
         /// Converts this [EpicAuths] instance into a protobuf message.
-        pub fn into_rpc(&self) -> scion_protobuf::daemon::v1::EpicAuths {
+        #[inline]
+        pub fn to_rpc(&self) -> scion_protobuf::daemon::v1::EpicAuths {
             scion_protobuf::daemon::v1::EpicAuths {
                 auth_phvf: self.phop_authenticator.clone(),
                 auth_lhvf: self.lhop_authenticator.clone(),
@@ -151,7 +157,7 @@ pub mod epic {
         EpicAuths::from_rpc(v)
     });
     impl_from!(EpicAuths, scion_protobuf::daemon::v1::EpicAuths, |v| {
-        v.into_rpc()
+        v.to_rpc()
     });
 }
 
@@ -173,7 +179,8 @@ pub mod geo {
     }
     impl GeoCoordinates {
         /// Creates a new [GeoCoordinates] instance.
-        pub fn new(latitude: f32, longitude: f32, address: Option<String>) -> Self {
+        #[inline]
+        pub const fn new(latitude: f32, longitude: f32, address: Option<String>) -> Self {
             Self {
                 latitude,
                 longitude,
@@ -185,6 +192,7 @@ pub mod geo {
         ///
         /// Returns None if all fields are empty or zero, indicating that no geographic information
         /// is available.
+        #[inline]
         pub fn try_from_rpc(value: scion_protobuf::daemon::v1::GeoCoordinates) -> Option<Self> {
             if value.latitude == 0.0 && value.longitude == 0.0 && value.address.is_empty() {
                 return None;
@@ -203,7 +211,8 @@ pub mod geo {
         }
 
         /// Converts this [GeoCoordinates] instance into a protobuf message.
-        pub fn into_rpc(&self) -> scion_protobuf::daemon::v1::GeoCoordinates {
+        #[inline]
+        pub fn to_rpc(&self) -> scion_protobuf::daemon::v1::GeoCoordinates {
             scion_protobuf::daemon::v1::GeoCoordinates {
                 latitude: self.latitude,
                 longitude: self.longitude,
@@ -214,7 +223,7 @@ pub mod geo {
     impl_from!(
         GeoCoordinates,
         scion_protobuf::daemon::v1::GeoCoordinates,
-        |v| v.into_rpc()
+        |v| v.to_rpc()
     );
 }
 
@@ -234,7 +243,8 @@ pub mod path_interface {
     }
     impl PathInterface {
         /// Creates a new [PathInterface] instance.
-        pub fn new(isd_asn: IsdAsn, interface_id: u16) -> Self {
+        #[inline]
+        pub const fn new(isd_asn: IsdAsn, interface_id: u16) -> Self {
             Self {
                 isd_asn,
                 id: interface_id,
@@ -242,7 +252,8 @@ pub mod path_interface {
         }
 
         /// Creates a new [PathInterface] instance from a protobuf message.
-        pub fn from_rpc(
+        #[inline]
+        pub fn try_from_rpc(
             value: scion_protobuf::daemon::v1::PathInterface,
         ) -> Result<Self, FromRpcError> {
             Ok(Self {
@@ -255,7 +266,8 @@ pub mod path_interface {
         }
 
         /// Converts this [PathInterface] instance into a protobuf message.
-        pub fn into_rpc(&self) -> scion_protobuf::daemon::v1::PathInterface {
+        #[inline]
+        pub fn to_rpc(&self) -> scion_protobuf::daemon::v1::PathInterface {
             scion_protobuf::daemon::v1::PathInterface {
                 isd_as: self.isd_asn.into(),
                 id: self.id as u64,
@@ -263,6 +275,7 @@ pub mod path_interface {
         }
     }
     impl Display for PathInterface {
+        #[inline]
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "{}#{}", self.isd_asn, self.id)
         }
@@ -270,13 +283,14 @@ pub mod path_interface {
     impl_from!(
         PathInterface,
         scion_protobuf::daemon::v1::PathInterface,
-        |v| v.into_rpc()
+        |v| v.to_rpc()
     );
     impl TryFrom<scion_protobuf::daemon::v1::PathInterface> for PathInterface {
         type Error = FromRpcError;
 
+        #[inline]
         fn try_from(value: scion_protobuf::daemon::v1::PathInterface) -> Result<Self, Self::Error> {
-            Self::from_rpc(value)
+            Self::try_from_rpc(value)
         }
     }
 }
@@ -286,7 +300,7 @@ pub mod link {
     use crate::core::macros::impl_from;
 
     /// Metadata about a link used in a path
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum LinkMeta {
         /// The route to the next hop is internal to the AS
         Ingress {
@@ -303,7 +317,7 @@ pub mod link {
     }
 
     /// The type of an inter-domain link based on the underlay connection.
-    #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
     #[repr(i32)]
     pub enum LinkType {
         /// Unspecified.
@@ -319,8 +333,9 @@ pub mod link {
         Unknown(u8),
     }
     impl LinkType {
-        /// Creates a [LinkType] from an i32 value
-        pub fn from_i32(value: i32) -> Self {
+        /// Creates a [LinkType] from an i32 value.
+        #[inline]
+        pub const fn from_i32(value: i32) -> Self {
             match value {
                 0 => Self::Unset,
                 1 => Self::Direct,
@@ -330,8 +345,9 @@ pub mod link {
             }
         }
 
-        /// Converts the [LinkType] to an i32 value
-        pub fn to_i32(&self) -> i32 {
+        /// Converts the [LinkType] to an i32 value.
+        #[inline]
+        pub const fn to_i32(&self) -> i32 {
             match self {
                 Self::Unset => 0,
                 Self::Direct => 1,

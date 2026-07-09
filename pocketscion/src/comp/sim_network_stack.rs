@@ -190,7 +190,7 @@ impl Receiver for NetSimStackInner {
         // Check packet type
         if packet.header().next_header() == ProtocolNumber::Udp {
             // Forward to UDP receivers based on destination port.
-            let pkt = match packet.try_into_udp() {
+            let pkt = match packet.try_as_udp() {
                 Ok(pkt) => pkt,
                 Err(e) => {
                     tracing::warn!(
@@ -281,7 +281,7 @@ impl NetSimUdpSocket {
 
         let mut view = packet
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         self.stack.send(&mut view, timestamp);
@@ -549,7 +549,7 @@ impl<P: NetSimPathProvider> GenericScionUdpSocket for PathAwareNetSimUdpSocket<P
                 }
             };
 
-            let Some(sock_addr) = sock_addr.to_scion_sock_ip_addr() else {
+            let Some(sock_addr) = sock_addr.try_to_scion_sock_ip_addr() else {
                 tracing::warn!("Dropping packet: source address is not an IP address");
                 continue;
             };
@@ -646,9 +646,9 @@ mod tests {
         let dst = ScionSocketAddr::new(local_as, bind_ip.into(), 40000);
         let payload = b"hello".to_vec();
         let packet = ScionUdpPacket::new(src, dst, DpPath::Empty, payload.clone());
-        let mut encoded = packet.encode_to_vec().expect("failed to encode packet");
-        let (pkt, _rest) =
-            ScionPacketView::from_mut_slice(&mut encoded).expect("failed to create packet view");
+        let mut encoded = packet.try_encode_to_vec().expect("failed to encode packet");
+        let (pkt, _rest) = ScionPacketView::try_from_mut_slice(&mut encoded)
+            .expect("failed to create packet view");
 
         state.dispatch_to_network_sim(local_as, 0, ScionNetworkTime::now(), pkt);
 
@@ -663,7 +663,7 @@ mod tests {
             .expect("raw recv timeout")
             .expect("raw recv packet");
         let recv_raw_udp: &ScionUdpPacketView =
-            recv_raw.try_into_udp().expect("raw recv packet is not UDP");
+            recv_raw.try_as_udp().expect("raw recv packet is not UDP");
         assert_eq!(&recv_raw_udp.udp().payload(), &payload); // raw socket receives same payload
     }
 

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! SCION packet payloads (UDP, SCMP) and protocol numbers.
+
 use std::fmt::Display;
 
 pub mod encode;
@@ -23,7 +25,7 @@ pub mod udp;
 /// See the [IETF SCION-dataplane RFC draft][rfc] for possible values.
 ///
 ///[rfc]: https://www.ietf.org/archive/id/draft-dekater-scion-dataplane-00.html#protnum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum ProtocolNumber {
     /// SCION/TCP next-header protocol number.
@@ -43,12 +45,14 @@ pub enum ProtocolNumber {
 }
 impl ProtocolNumber {
     /// Returns the protocol number as a `u8`.
+    #[inline]
     pub fn to_u8(&self) -> u8 {
         (*self).into()
     }
 
     /// Returns a string representation of the protocol number.
-    pub fn as_str(&self) -> &'static str {
+    #[inline]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             ProtocolNumber::Tcp => "TCP",
             ProtocolNumber::Udp => "UDP",
@@ -61,6 +65,7 @@ impl ProtocolNumber {
     }
 }
 impl From<u8> for ProtocolNumber {
+    #[inline]
     fn from(value: u8) -> Self {
         match value {
             6 => ProtocolNumber::Tcp,
@@ -74,6 +79,7 @@ impl From<u8> for ProtocolNumber {
     }
 }
 impl From<ProtocolNumber> for u8 {
+    #[inline]
     fn from(value: ProtocolNumber) -> Self {
         match value {
             ProtocolNumber::Tcp => 6,
@@ -87,6 +93,7 @@ impl From<ProtocolNumber> for u8 {
     }
 }
 impl Display for ProtocolNumber {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
     }
@@ -104,7 +111,7 @@ pub mod ptest {
     /// Controls the relative probability of each protocol number variant being generated.
     ///
     /// Default weights: all variants = 1.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryProtocolNumberParams {
         /// Weight for TCP protocol.
         pub tcp: u32,

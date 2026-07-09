@@ -50,6 +50,7 @@ pub struct ScionPacketHeader {
 }
 impl ScionPacketHeader {
     /// Returns the size of the SCION packet header in 4-byte units used in the header length field.
+    #[inline]
     fn size_units(&self) -> u8 {
         (self.required_size() / 4) as u8
     }
@@ -61,6 +62,7 @@ impl ScionPacketHeader {
     /// ## Safety
     /// This size must be correct, it is used to validate buffer sizes in `encode`.
     /// If this size is smaller than the actual encoded size, undefined behavior will occur.
+    #[inline]
     pub fn required_size(&self) -> usize {
         CommonHeaderLayout::SIZE_BYTES + self.address.required_size() + self.path.required_size()
     }
@@ -71,6 +73,7 @@ impl ScionPacketHeader {
     /// comprehensive validation.
     ///
     /// Returns Ok(()) if valid, otherwise a static error reference.
+    #[inline]
     pub fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         let required_size = self.required_size();
         if !required_size.is_multiple_of(4) {
@@ -98,6 +101,7 @@ impl ScionPacketHeader {
     /// ## SAFETY
     /// 1. The buffer must be at least `self.required_size()` bytes long
     /// 2. The structure must be valid for encoding, i.e., `self.valid()` must return `Ok(())`
+    #[inline]
     pub unsafe fn encode_unchecked(&self, buf: &mut [u8], payload_size: u16) -> usize {
         unsafe {
             use CommonHeaderLayout as CHL;
@@ -131,7 +135,8 @@ impl ScionPacketHeader {
     /// buffer is too small or the packet.
     ///
     /// The buffer must be at least `self.required_size()` bytes long.
-    pub fn encode(&self, buf: &mut [u8], payload_size: u16) -> Result<usize, EncodeError> {
+    #[inline]
+    pub fn try_encode(&self, buf: &mut [u8], payload_size: u16) -> Result<usize, EncodeError> {
         self.wire_valid()?;
 
         let required_size = self.required_size();
@@ -145,6 +150,7 @@ impl ScionPacketHeader {
 }
 impl TryFromView for ScionPacketHeader {
     type ViewType = ScionHeaderView;
+    #[inline]
     fn try_from_view(view: &Self::ViewType) -> Result<Self, ViewConversionError> {
         Ok(ScionPacketHeader {
             common: CommonHeader::from_view(view),
@@ -155,7 +161,7 @@ impl TryFromView for ScionPacketHeader {
 }
 
 /// Represents the common header of a SCION packet
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommonHeader {
     /// Traffic class of the SCION packet
     pub traffic_class: u8,
@@ -169,6 +175,7 @@ pub struct CommonHeader {
 // Wire Encode (needs size, so can't use trait)
 impl CommonHeader {
     /// Validates that all fields in the `CommonHeader` are valid for encoding
+    #[inline]
     pub fn valid(&self) -> Result<(), InvalidStructureError> {
         use CommonHeaderLayout as CHL;
 
@@ -187,6 +194,7 @@ impl CommonHeader {
     /// # Safety
     /// - The implementation may use unchecked indexing operations and relies on the caller to
     ///   provide a sufficiently large buffer (at least `CommonHeaderLayout::SIZE_BYTES` bytes).
+    #[inline]
     pub unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -218,6 +226,7 @@ impl CommonHeader {
 }
 impl FromView for CommonHeader {
     type ViewType = ScionHeaderView;
+    #[inline]
     fn from_view(view: &Self::ViewType) -> Self {
         debug_assert!(view.version() == Self::VERSION, "Unsupported SCION version");
         CommonHeader {
@@ -242,6 +251,7 @@ pub struct AddressHeader {
 }
 impl AddressHeader {
     /// Constructs an `AddressHeader` from the given source and destination `ScionAddr`
+    #[inline]
     pub fn new(src: ScionAddr, dst: ScionAddr) -> Self {
         AddressHeader {
             dst_ia: dst.isd_asn(),
@@ -252,16 +262,19 @@ impl AddressHeader {
     }
 
     /// Returns the destination address type
+    #[inline]
     pub fn dst_addr_type(&self) -> WireHostAddrType {
         self.dst_host_addr.addr_type()
     }
 
     /// Returns the source address type
+    #[inline]
     pub fn src_addr_type(&self) -> WireHostAddrType {
         self.src_host_addr.addr_type()
     }
 }
 impl WireEncode for AddressHeader {
+    #[inline]
     fn required_size(&self) -> usize {
         AddressHeaderLayout::new(
             self.dst_host_addr.required_size() as u8,
@@ -270,6 +283,7 @@ impl WireEncode for AddressHeader {
         .size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         // ISD and ASN are newtypes, so assumed valid
 
@@ -279,6 +293,7 @@ impl WireEncode for AddressHeader {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         unsafe {
             use AddressHeaderLayout as AHL;
@@ -310,6 +325,7 @@ impl WireEncode for AddressHeader {
 }
 impl TryFromView for AddressHeader {
     type ViewType = ScionHeaderView;
+    #[inline]
     fn try_from_view(view: &Self::ViewType) -> Result<Self, ViewConversionError> {
         Ok(AddressHeader {
             dst_ia: view.dst_ia(),

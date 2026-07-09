@@ -56,70 +56,83 @@ impl IsdAsn {
     /// The number of bits in a SCION ISD-AS number.
     pub const BITS: u32 = u64::BITS;
 
-    /// Construct a new identifier from ISD and AS identifiers.
+    /// Constructs a new identifier from ISD and AS identifiers.
+    #[inline]
     pub const fn new(isd: Isd, asn: Asn) -> Self {
         Self(((isd.to_u16() as u64) << Asn::BITS) | asn.to_u64())
     }
 
-    /// Return the ISD.
+    /// Returns the ISD.
+    #[inline]
     pub const fn isd(&self) -> Isd {
         Isd::new((self.0 >> Asn::BITS) as u16)
     }
 
-    /// Set the ISD number.
+    /// Sets the ISD number.
+    #[inline]
     pub fn set_isd(&mut self, isd: Isd) {
         self.0 = ((isd.to_u16() as u64) << Asn::BITS) | (self.0 & 0xffff_ffff_ffff);
     }
 
-    /// Return the AS number.
+    /// Returns the AS number.
+    #[inline]
     pub const fn asn(&self) -> Asn {
         Asn::new(self.0 & 0xffff_ffff_ffff)
     }
 
-    /// Set the AS number.
+    /// Sets the AS number.
+    #[inline]
     pub fn set_asn(&mut self, asn: Asn) {
         self.0 = (self.0 & 0xffff_0000_0000_0000) | asn.to_u64();
     }
 
-    /// Create an ISD-AS from a 64-bit integer.
+    /// Creates an ISD-AS from a 64-bit integer.
     /// First 16 bits are the ISD, last 48 bits are the AS.
+    #[inline]
     pub const fn from_u64(value: u64) -> Self {
         Self(value)
     }
 
-    /// Return the IA as a 64-bit integer.
+    /// Returns the IA as a 64-bit integer.
     /// First 16 bits are the ISD, last 48 bits are the AS.
+    #[inline]
     pub const fn to_u64(&self) -> u64 {
         self.0
     }
 
-    /// Return the IA as a big-endian byte array.
-    pub fn to_be_bytes(&self) -> [u8; 8] {
+    /// Returns the IA as a big-endian byte array.
+    #[inline]
+    pub const fn to_be_bytes(&self) -> [u8; 8] {
         self.0.to_be_bytes()
     }
 
     /// Returns true if either the ISD or AS numbers are wildcards.
+    #[inline]
     pub const fn is_wildcard(&self) -> bool {
         self.isd().is_wildcard() || self.asn().is_wildcard()
     }
 
-    /// Returns true if this IsdAsn matches another IsdAsn, taking wildcards into account.
+    /// Returns true if this [`IsdAsn`] matches another [`IsdAsn`], taking wildcards into account.
+    #[inline]
     pub const fn matches(&self, other: IsdAsn) -> bool {
         self.isd().matches(other.isd()) && self.asn().matches(other.asn())
     }
 
-    /// Returns true if this IsdAsn is contained in the given collection, taking wildcards into
+    /// Returns true if this [`IsdAsn`] is contained in the given collection, taking wildcards into
     /// account.
+    #[inline]
     pub fn matches_any_in<'a>(&self, collection: impl IntoIterator<Item = &'a IsdAsn>) -> bool {
         collection.into_iter().any(|other| self.matches(*other))
     }
 }
 impl Debug for IsdAsn {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         <Self as Display>::fmt(self, f)
     }
 }
 impl Display for IsdAsn {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}-{}", self.isd(), self.asn())
     }
@@ -127,6 +140,7 @@ impl Display for IsdAsn {
 impl FromStr for IsdAsn {
     type Err = AddressParseError;
 
+    #[inline]
     fn from_str(string: &str) -> Result<Self, Self::Err> {
         let n_separators = string.chars().filter(|c| *c == '-').take(2).count();
         if n_separators != 1 {
@@ -147,6 +161,7 @@ impl FromStr for IsdAsn {
 impl TryFrom<String> for IsdAsn {
     type Error = AddressParseError;
 
+    #[inline]
     fn try_from(value: String) -> Result<Self, Self::Error> {
         IsdAsn::from_str(&value)
     }
@@ -155,11 +170,13 @@ impl_from!(IsdAsn, String, |v| v.to_string());
 impl_from!(IsdAsn, u64, |v| v.to_u64());
 impl_from!(u64, IsdAsn, |v| IsdAsn::from_u64(v));
 impl FromUnalignedRead for IsdAsn {
+    #[inline]
     fn from_unaligned_read(v: u128) -> Self {
         IsdAsn::from_u64(u64::from_unaligned_read(v))
     }
 }
 impl IntoUnalignedWrite for IsdAsn {
+    #[inline]
     fn into_write_value(v: IsdAsn) -> u128 {
         v.to_u64() as u128
     }

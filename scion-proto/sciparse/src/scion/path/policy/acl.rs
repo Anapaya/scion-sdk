@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! ACL-based path policy filtering.
+
 use std::str::FromStr;
 
 use super::types::{HopPredicate, PathPolicyHop};
 use crate::path::{ScionPath, policy::PathPolicy};
 
-/// ACL Policy filters segments based on if they contain certain hops
+/// ACL policy filters segments based on if they contain certain hops.
 ///
 /// ## Examples
 ///```
@@ -41,7 +43,7 @@ use crate::path::{ScionPath, policy::PathPolicy};
 /// // Deny all paths that go through ISD 2 or IsdAsn 3-1 using ingress interface 1 and egress interface 2
 /// let acl = AclPolicy::parse("- 2 - 3-1#1,2 +").unwrap();
 /// ```
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AclPolicy {
     /// ACL entries to evaluate in order
     pub entries: Vec<AclEntry>,
@@ -49,20 +51,22 @@ pub struct AclPolicy {
     pub default: AclEntryOperator,
 }
 impl AclPolicy {
-    /// Creates a new empty AclPolicy
+    /// Creates a new empty [`AclPolicy`].
     ///
     /// - `default` defines the action to take if no entries match
-    pub fn new(default: AclEntryOperator) -> Self {
+    #[inline]
+    pub const fn new(default: AclEntryOperator) -> Self {
         Self {
             entries: Vec::new(),
             default,
         }
     }
 
-    /// Creates a new AclPolicy from entries
+    /// Creates a new [`AclPolicy`] from entries.
     ///
     /// - `default` defines the action to take if no entries match
     /// - `entries` defines the ACL entries to evaluate in order
+    #[inline]
     pub fn new_from_entries(
         default: AclEntryOperator,
         entries: impl IntoIterator<Item = AclEntry>,
@@ -73,7 +77,7 @@ impl AclPolicy {
         }
     }
 
-    /// Parses an AclPolicy from a string
+    /// Parses an [`AclPolicy`] from a string.
     ///
     /// format:
     /// - "{operator} {hop-predicate} {operator} {hop-predicate} {default-operator}"
@@ -111,18 +115,19 @@ impl AclPolicy {
         Ok(Self { entries, default })
     }
 
-    /// Adds a new entry to the ACL policy
+    /// Adds a new entry to the ACL policy.
     ///
     /// - `operator` defines if the entry allows or denies a path matching the hop predicate
     /// - `hop` defines the hop predicate to match against
+    #[inline]
     pub fn add_entry(mut self, operator: AclEntryOperator, hop: HopPredicate) -> Self {
         self.entries.push(AclEntry::new(operator, hop));
         self
     }
 
-    /// Checks if the ACL policy allows the given path
+    /// Checks if the ACL policy allows the given path.
     ///
-    /// Returns true if the path is allowed
+    /// Returns true if the path is allowed.
     pub fn matches(&self, path: &[PathPolicyHop]) -> bool {
         // If path is empty, or no acl  entries exist, use default
         if path.is_empty() || self.entries.is_empty() {
@@ -159,11 +164,13 @@ impl AclPolicy {
 impl FromStr for AclPolicy {
     type Err = String;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
 }
 impl PathPolicy for AclPolicy {
+    #[inline]
     fn path_allowed(&self, path: &ScionPath) -> Result<bool, std::borrow::Cow<'static, str>> {
         let path_hops = PathPolicyHop::hops_from_path(path)?;
         Ok(self.matches(&path_hops))
@@ -179,7 +186,7 @@ impl PathPolicy for AclPolicy {
 /// - "- 1"   - Disallow Isd 1
 /// - "+ 1-2" - Allow IsdAsn 1-2
 /// - "- 13-21#1,2" - Disallow IsdAsn 13-21 ingress 1 egress 2
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AclEntry {
     /// Operator to apply if predicate matches
     pub operator: AclEntryOperator,
@@ -187,15 +194,17 @@ pub struct AclEntry {
     pub hop_predicate: HopPredicate,
 }
 impl AclEntry {
-    /// Creates a new AclEntry
-    pub fn new(operator: AclEntryOperator, hop: HopPredicate) -> Self {
+    /// Creates a new [`AclEntry`].
+    #[inline]
+    pub const fn new(operator: AclEntryOperator, hop: HopPredicate) -> Self {
         Self {
             operator,
             hop_predicate: hop,
         }
     }
 
-    /// Parses an AclEntry from a string
+    /// Parses an [`AclEntry`] from a string.
+    #[inline]
     pub fn parse(s: &str) -> Result<Self, String> {
         let mut iter = s.splitn(2, ' ');
 
@@ -215,9 +224,10 @@ impl AclEntry {
         })
     }
 
-    /// Checks if the AclEntry matches the given hop
-    /// Returns Allow, Deny or Impartial
-    /// If Impartial, the next entry should be checked
+    /// Checks if the [`AclEntry`] matches the given hop.
+    ///
+    /// Returns `Allow`, `Deny` or `Impartial`. If `Impartial`, the next entry should be checked.
+    #[inline]
     fn matches(&self, hop: &PathPolicyHop) -> AclMatchResult {
         if hop.matches(&self.hop_predicate) {
             match self.operator {
@@ -232,13 +242,14 @@ impl AclEntry {
 impl FromStr for AclEntry {
     type Err = String;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
 }
 
-/// Result of matching an ACL entry against a hop
-#[derive(Debug, PartialEq, Eq, Clone)]
+/// Result of matching an ACL entry against a hop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum AclMatchResult {
     /// The hop matched and the entry allows it
     Allow,
@@ -248,10 +259,10 @@ enum AclMatchResult {
     Impartial,
 }
 
-/// Access control list entry operator
+/// Access control list entry operator.
 ///
-/// Defines operation to apply on a hop matching the [AclEntry]
-#[derive(Debug, PartialEq, Eq, Clone)]
+/// Defines the operation to apply on a hop matching the [`AclEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AclEntryOperator {
     /// Allows the usage of this segment
     Allow,
@@ -259,7 +270,8 @@ pub enum AclEntryOperator {
     Deny,
 }
 impl AclEntryOperator {
-    /// Parses an AclEntryOperator from a string
+    /// Parses an [`AclEntryOperator`] from a string.
+    #[inline]
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
             "+" => Ok(AclEntryOperator::Allow),
@@ -271,6 +283,7 @@ impl AclEntryOperator {
 impl FromStr for AclEntryOperator {
     type Err = String;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }

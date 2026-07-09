@@ -69,11 +69,13 @@ pub struct PathSegment<E: Entry> {
 }
 impl<E: Entry + Sized> PathSegment<E> {
     /// Returns a reference to the segment info of the path segment.
-    pub fn info(&self) -> &SegmentInfo {
+    #[inline]
+    pub const fn info(&self) -> &SegmentInfo {
         &self.info
     }
 
     /// Returns a hash of the segment covering all hops, except for peerings.
+    #[inline]
     pub fn id(&self) -> SegmentID {
         let mut hasher = Sha256::new();
 
@@ -90,6 +92,7 @@ impl<E: Entry + Sized> PathSegment<E> {
     }
 
     /// Returns a hash of the segment covering all hops including peerings.
+    #[inline]
     pub fn full_id(&self) -> SegmentID {
         let mut hasher = Sha256::new();
 
@@ -114,41 +117,49 @@ impl<E: Entry + Sized> PathSegment<E> {
     }
 
     /// Returns the first IA in the path segment.
+    #[inline]
     pub fn first_ia(&self) -> Option<IsdAsn> {
         self.as_entries.first().map(|e| e.get().local)
     }
 
     /// Returns the last IA in the path segment.
+    #[inline]
     pub fn last_ia(&self) -> Option<IsdAsn> {
         self.as_entries.last().map(|e| e.get().local)
     }
 
     /// Returns the number of AS entries in the path segment.
+    #[inline]
     pub fn len(&self) -> usize {
         self.as_entries.len()
     }
 
     /// Returns true if the path segment is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.as_entries.is_empty()
     }
 
     /// Returns an iterator over the AS entries in the path segment
     /// in the order of the path segment.
+    #[inline]
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &AsEntry> + DoubleEndedIterator {
         self.as_entries.iter().map(Entry::get)
     }
 
     /// Returns the latest expiry time of the segment.
+    #[inline]
     pub fn expires_latest(&self) -> SystemTime {
         self.expiry(Duration::ZERO, |hf_ttl, ttl| hf_ttl > ttl)
     }
 
     /// Returns the earliest expiry time of the segment.
+    #[inline]
     pub fn expires_earliest(&self) -> SystemTime {
         self.expiry(Duration::MAX, |hf_ttl, ttl| hf_ttl < ttl)
     }
 
+    #[inline]
     fn expiry(
         &self,
         init_ttl: Duration,
@@ -229,6 +240,7 @@ impl<E: Entry + Sized> PathSegment<E> {
     }
 }
 impl<E: Entry> fmt::Display for PathSegment<E> {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -242,6 +254,7 @@ impl<E: Entry> fmt::Display for PathSegment<E> {
 }
 impl<E: Entry> std::hash::Hash for PathSegment<E> {
     /// Hash of the path segment to be used as hash table key.
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for ase in &self.as_entries {
             let ase = ase.get();
@@ -269,7 +282,8 @@ impl<E: Entry> std::hash::Hash for PathSegment<E> {
 /// Unsigned path segments can not be converted into protobuf messages.
 pub type UnsignedPathSegment = PathSegment<AsEntry>;
 impl UnsignedPathSegment {
-    /// Creates an new unsigned path segment with the given timestamp and segment ID.
+    /// Creates a new unsigned path segment with the given timestamp and segment ID.
+    #[inline]
     pub fn new(timestamp: u32, segment_id: u16, as_entries: Vec<AsEntry>) -> Self {
         Self {
             info: SegmentInfo::new(timestamp, segment_id),
@@ -281,6 +295,7 @@ impl UnsignedPathSegment {
     ///
     /// This does not require a valid MAC, as the MAC will be recalculated for each entry using the
     /// provided MAC key.
+    #[inline]
     pub fn add_unsigned_entry(&mut self, mut entry: AsEntry, mac_key: &ForwardingKey) {
         entry.update_macs(mac_key, self);
         self.as_entries.push(entry);
@@ -292,7 +307,8 @@ impl UnsignedPathSegment {
     /// * `key_provider`: A function taking the local ISD-AS of an ASEntry and returning the signing
     ///   key and optional key ID to sign the entry.
     /// * `timestamp`: The timestamp to include in the signature header of each AS entry.
-    pub fn into_signed_segment(
+    #[inline]
+    pub fn try_into_signed_segment(
         self,
         key_provider: impl Fn(IsdAsn) -> Option<(p256::ecdsa::SigningKey, Option<VerificationKeyId>)>,
         timestamp: u32,
@@ -335,6 +351,7 @@ impl SignedPathSegment {
     ///   the provided key provider.
     /// * `key_provider`: A function taking the local ISD-AS of an ASEntry and returning the signing
     ///   key, optional key ID, and MAC key to sign the entry.
+    #[inline]
     pub fn new(
         timestamp: u32,
         segment_id: u16,
@@ -365,6 +382,7 @@ impl SignedPathSegment {
     }
 
     /// Creates an empty signed path segment with the given timestamp and segment ID.
+    #[inline]
     pub fn empty(timestamp: u32, segment_id: u16) -> Self {
         Self {
             info: SegmentInfo::new(timestamp, segment_id),
@@ -374,6 +392,7 @@ impl SignedPathSegment {
 
     /// Creates an empty signed path segment with the given timestamp, segment ID, and capacity for
     /// AS entries.
+    #[inline]
     pub fn with_capacity(timestamp: u32, segment_id: u16, capacity: usize) -> Self {
         Self {
             info: SegmentInfo::new(timestamp, segment_id),
@@ -385,6 +404,7 @@ impl SignedPathSegment {
     ///
     /// This will update the entries MAC, and create a signature for the entry using the provided
     /// signing key, key ID, and timestamp.
+    #[inline]
     pub fn add_entry(
         &mut self,
         mut entry: AsEntry,
@@ -401,6 +421,7 @@ impl SignedPathSegment {
     /// Adds a entry to the Path Segment without updating the entry's MAC.
     ///
     /// Private as misuse would create invalid segments
+    #[inline]
     fn add_entry_no_mac_update(
         &mut self,
         entry: AsEntry,
@@ -424,6 +445,7 @@ impl SignedPathSegment {
     ///
     /// This strips the signatures from all AS entries, so the resulting unsigned path segment will
     /// not be verifiable.
+    #[inline]
     pub fn into_unsigned_segment(self) -> PathSegment<AsEntry> {
         PathSegment::<AsEntry> {
             info: self.info,
@@ -437,14 +459,17 @@ impl SignedPathSegment {
 }
 
 /// Segment ID, which is a hash of a path segment.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SegmentID([u8; 32]);
 impl From<[u8; 32]> for SegmentID {
+    #[inline]
     fn from(value: [u8; 32]) -> Self {
         Self(value)
     }
 }
 impl SegmentID {
+    /// Returns a short hex-encoded prefix of the segment ID for logging.
+    #[inline]
     fn logging_id(&self) -> String {
         self.0[0..12]
             .iter()
@@ -453,6 +478,7 @@ impl SegmentID {
     }
 }
 impl std::hash::Hash for SegmentID {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write(&self.0);
     }
@@ -495,6 +521,7 @@ impl AsEntry {
     ///
     /// Returns the total length of the associated data and an iterator over the associated data
     /// slices.
+    #[inline]
     pub fn associated_data<'seg>(
         &self,
         path_segment: &'seg PathSegment<SignedAsEntry>,
@@ -597,6 +624,7 @@ impl AsEntry {
     ///
     /// The MAC beta value is calculated based on the segment ID and the hop field MACs of all
     /// previous entries in the path segment.
+    #[inline]
     pub fn update_macs(&mut self, mac_key: &ForwardingKey, path_segment: &PathSegment<impl Entry>) {
         let mac_beta = mac_chaining_beta(
             path_segment.info.segment_id,
@@ -620,6 +648,7 @@ impl AsEntry {
     }
 }
 impl std::fmt::Display for AsEntry {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -633,6 +662,7 @@ impl std::fmt::Display for AsEntry {
     }
 }
 impl Entry for AsEntry {
+    #[inline]
     fn get(&self) -> &AsEntry {
         self
     }
@@ -647,13 +677,15 @@ pub struct SignedAsEntry {
     signed: SignedMessage,
 }
 impl SignedAsEntry {
-    /// Returns the AS entry
-    pub fn entry(&self) -> &AsEntry {
+    /// Returns the AS entry.
+    #[inline]
+    pub const fn entry(&self) -> &AsEntry {
         &self.entry
     }
 
     /// Returns the signature of the AS entry.
-    pub fn signature(&self) -> &SignedMessage {
+    #[inline]
+    pub const fn signature(&self) -> &SignedMessage {
         &self.signed
     }
 
@@ -664,6 +696,7 @@ impl SignedAsEntry {
     ///   the corresponding `p256::ecdsa::VerifyingKey` if available.
     /// * `path_segment`: The `PathSegment` containing the AS entry. All entries before the AS entry
     ///   in the path segment must be included, as the signature covers all previous entries.
+    #[inline]
     pub fn validate_signature(
         &self,
         key_provider: impl Fn(&[u8]) -> Result<p256::ecdsa::VerifyingKey, ValidateError>,
@@ -677,6 +710,7 @@ impl SignedAsEntry {
     }
 }
 impl Entry for SignedAsEntry {
+    #[inline]
     fn get(&self) -> &AsEntry {
         self.entry.get()
     }
@@ -684,6 +718,7 @@ impl Entry for SignedAsEntry {
 impl Deref for SignedAsEntry {
     type Target = AsEntry;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.entry
     }
@@ -691,7 +726,7 @@ impl Deref for SignedAsEntry {
 
 /// Immutable information about a path segment, used for signing and verification of AS entries in
 /// the path segment.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SegmentInfo {
     /// Creation timestamp.
     pub timestamp: u32,
@@ -702,6 +737,7 @@ pub struct SegmentInfo {
 }
 impl SegmentInfo {
     /// Creates a new Info with the given timestamp and segment ID.
+    #[inline]
     pub fn new(timestamp: u32, segment_id: u16) -> Self {
         use prost::Message;
 
@@ -719,6 +755,7 @@ impl SegmentInfo {
     }
 }
 impl std::fmt::Display for SegmentInfo {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -739,6 +776,7 @@ pub struct HopEntry {
     pub hop_field: SegmentHopField,
 }
 impl std::fmt::Display for HopEntry {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -762,6 +800,7 @@ pub struct PeerEntry {
 }
 
 impl std::fmt::Display for PeerEntry {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -788,6 +827,7 @@ impl SegmentHopField {
     /// Recalculates the MAC for this hop field and updates the `mac` field with the new value.
     ///
     /// See [`HopMacCalculate::calculate_mac`](crate::dataplane_path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
+    #[inline]
     pub fn with_calculated_mac(
         mut self,
         mac_chain_beta: u16,
@@ -799,6 +839,7 @@ impl SegmentHopField {
     }
 
     /// Converts the [SegmentHopField] into a [HopField] used in the data plane.
+    #[inline]
     pub fn to_dp_hopfield(&self) -> HopField {
         HopField {
             flags: HopFieldFlags::empty(),
@@ -810,6 +851,7 @@ impl SegmentHopField {
     }
 }
 impl HopMacInputSource for SegmentHopField {
+    #[inline]
     fn get_mac_input(&self) -> HopMacInput {
         HopMacInput {
             exp_time: self.expiration_units,
@@ -819,6 +861,7 @@ impl HopMacInputSource for SegmentHopField {
     }
 }
 impl std::fmt::Display for SegmentHopField {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -828,8 +871,8 @@ impl std::fmt::Display for SegmentHopField {
     }
 }
 
-/// Segments containing up, down, and core segments along with a next page token.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+/// Segments grouped into up, down, and core segments.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Segments {
     /// Up segments.
     pub up_segments: Vec<SignedPathSegment>,
@@ -840,6 +883,7 @@ pub struct Segments {
 }
 impl Segments {
     /// Returns an iterator over vectors of path segments by type.
+    #[inline]
     pub fn iter_with_type(&self) -> impl Iterator<Item = (&'static str, &Vec<SignedPathSegment>)> {
         [
             ("up", &self.up_segments),
@@ -852,6 +896,7 @@ impl Segments {
     /// Splits the segments into core and non-core segments.
     ///
     /// Returns (core_segments, non_core_segments)
+    #[inline]
     pub fn split_parts(self) -> (Vec<SignedPathSegment>, Vec<SignedPathSegment>) {
         (
             self.core_segments,
@@ -860,6 +905,7 @@ impl Segments {
     }
 }
 impl std::fmt::Display for Segments {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let format_vec = |v: &Vec<SignedPathSegment>| {
             let shown = v
@@ -885,7 +931,7 @@ impl std::fmt::Display for Segments {
 }
 
 /// Segments containing up, down, and core segments along with a next page token.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SegmentsPage {
     /// Segments.
     pub segments: Segments,
@@ -893,6 +939,7 @@ pub struct SegmentsPage {
     pub next_page_token: String,
 }
 impl std::fmt::Display for SegmentsPage {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,

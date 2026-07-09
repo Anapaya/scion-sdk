@@ -71,7 +71,7 @@ pub enum LayoutParseError {
 }
 
 /// Represents a range of bits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BitRange {
     /// Start bit (inclusive)
     pub start: usize,
@@ -132,6 +132,7 @@ impl BitRange {
     /// Returns the byte range containing the bit range
     ///
     /// Does not require byte alignment
+    #[inline]
     pub const fn containing_byte_range(&self) -> std::ops::Range<usize> {
         let start_byte = self.start / 8; // floor division
         let end_byte = self.end.div_ceil(8); // ceiling division
@@ -162,7 +163,7 @@ impl BitRange {
 
     /// Offsets the bit range by the given number of bits
     #[inline]
-    pub fn shift_bits(&self, offset: usize) -> Self {
+    pub const fn shift_bits(&self, offset: usize) -> Self {
         // Check no overflow occurs
         debug_assert!(self.start + offset >= self.start);
         debug_assert!(self.end + offset >= self.end);
@@ -171,6 +172,13 @@ impl BitRange {
             start: self.start + offset,
             end: self.end + offset,
         }
+    }
+}
+
+impl From<std::ops::Range<usize>> for BitRange {
+    #[inline]
+    fn from(range: std::ops::Range<usize>) -> Self {
+        Self::from_range(range)
     }
 }
 

@@ -35,17 +35,17 @@ pub trait Model: WireEncode {
     /// Returns the view and the remaining buffer after the encoded data on success, or an
     /// `EncodeError` if encoding fails.
     #[inline]
-    fn encode_to_view<'buf>(
+    fn try_encode_to_view<'buf>(
         &self,
         buf: &'buf mut [u8],
     ) -> Result<(&'buf mut Self::ViewType, &'buf mut [u8]), EncodeError> {
-        let encoded_size = self.encode(buf)?;
+        let encoded_size = self.try_encode(buf)?;
 
         let (view_buf, rest) = buf.split_at_mut(encoded_size);
 
         // SAFETY: all encoded models must produce valid view encodings, and the view is only
         // constructed from the encoded data.
-        let (view, rest2) = Self::ViewType::from_mut_slice(view_buf)
+        let (view, rest2) = Self::ViewType::try_from_mut_slice(view_buf)
             .expect("All encoded models must produce valid view encodings");
 
         debug_assert!(
@@ -56,13 +56,13 @@ pub trait Model: WireEncode {
         Ok((view, rest))
     }
 
-    /// Encodes the into a boxed view, returning an error if encoding fails.
+    /// Encodes the model into a boxed view, returning an error if encoding fails.
     #[inline]
-    fn encode_to_owned_view(&self) -> Result<Box<Self::ViewType>, InvalidStructureError> {
-        let vec = self.encode_to_vec()?;
+    fn try_encode_to_owned_view(&self) -> Result<Box<Self::ViewType>, InvalidStructureError> {
+        let vec = self.try_encode_to_vec()?;
         // SAFETY:`` buffer length is checked above, and all encoded models must produce valid view
         // encodings.
-        let view = Self::ViewType::from_boxed(vec.into_boxed_slice())
+        let view = Self::ViewType::try_from_boxed(vec.into_boxed_slice())
             .expect("All encoded models must produce valid view encodings");
 
         Ok(view)

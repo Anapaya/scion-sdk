@@ -52,6 +52,7 @@ pub enum ScionIpAddr {
 }
 impl ScionIpAddr {
     /// Create a new SCION address
+    #[inline]
     pub const fn new(ia: IsdAsn, host: IpAddr) -> Self {
         match host {
             IpAddr::V4(host) => Self::V4(ScionAddrV4::new(ia, host)),
@@ -60,6 +61,7 @@ impl ScionIpAddr {
     }
 
     /// Returns the ISD-AS number
+    #[inline]
     pub const fn isd_asn(&self) -> IsdAsn {
         match self {
             ScionIpAddr::V4(addr) => addr.isd_asn,
@@ -68,6 +70,7 @@ impl ScionIpAddr {
     }
 
     /// Sets the ISD-AS number
+    #[inline]
     pub fn set_isd_asn(&mut self, ia: IsdAsn) {
         match self {
             ScionIpAddr::V4(addr) => addr.isd_asn = ia,
@@ -76,6 +79,7 @@ impl ScionIpAddr {
     }
 
     /// Returns the Host Address
+    #[inline]
     pub const fn host(&self) -> ScionHostAddr {
         match self {
             ScionIpAddr::V4(addr) => ScionHostAddr::V4(addr.host),
@@ -84,11 +88,13 @@ impl ScionIpAddr {
     }
 
     /// Sets the Host Address
+    #[inline]
     pub fn set_host(&mut self, host: IpAddr) {
         *self = Self::new(self.isd_asn(), host);
     }
 
     /// Returns the IpAddr
+    #[inline]
     pub const fn ip(&self) -> std::net::IpAddr {
         match self {
             ScionIpAddr::V4(addr) => std::net::IpAddr::V4(addr.host),
@@ -96,17 +102,20 @@ impl ScionIpAddr {
         }
     }
     /// Returns true if the SCION IP Address is an IPv4 address
-    pub fn is_ipv4(&self) -> bool {
+    #[inline]
+    pub const fn is_ipv4(&self) -> bool {
         matches!(self, ScionIpAddr::V4(_))
     }
 
     /// Returns true if the SCION IP Address is an IPv6 address
-    pub fn is_ipv6(&self) -> bool {
+    #[inline]
+    pub const fn is_ipv6(&self) -> bool {
         matches!(self, ScionIpAddr::V6(_))
     }
 
     /// Converts to a [ScionAddr]
-    pub fn into_scion_addr(self) -> ScionAddr {
+    #[inline]
+    pub const fn into_scion_addr(self) -> ScionAddr {
         match self {
             ScionIpAddr::V4(addr) => ScionAddr::V4(addr),
             ScionIpAddr::V6(addr) => ScionAddr::V6(addr),
@@ -115,6 +124,7 @@ impl ScionIpAddr {
 }
 impl FromStr for ScionIpAddr {
     type Err = AddressParseError;
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(addr) = ScionAddrV4::from_str(s) {
             Ok(ScionIpAddr::V4(addr))
@@ -126,6 +136,7 @@ impl FromStr for ScionIpAddr {
     }
 }
 impl Display for ScionIpAddr {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScionIpAddr::V4(addr) => addr.fmt(f),
@@ -140,6 +151,7 @@ impl_from!(ScionSocketIpAddr, ScionIpAddr, |v| {
 });
 impl TryFrom<ScionAddr> for ScionIpAddr {
     type Error = ScionAddr;
+    #[inline]
     fn try_from(value: ScionAddr) -> Result<Self, Self::Error> {
         value.try_into_scion_ip_addr()
     }

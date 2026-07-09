@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCION Control Plane Primitives
+//! SCION Control Plane Primitives.
 
 pub mod address;
 pub mod checksum;

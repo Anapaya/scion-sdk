@@ -59,6 +59,7 @@ pub enum ScionSocketIpAddr {
 }
 impl ScionSocketIpAddr {
     /// Create a new SCION Socket Address
+    #[inline]
     pub const fn new(isd_asn: IsdAsn, host: IpAddr, port: u16) -> Self {
         match host {
             IpAddr::V4(host) => {
@@ -79,6 +80,7 @@ impl ScionSocketIpAddr {
     }
 
     /// Create a SCION Socket Address from a standard Socket Address
+    #[inline]
     pub const fn from_std(isd_asn: IsdAsn, addr: std::net::SocketAddr) -> Self {
         match addr {
             SocketAddr::V4(v4) => {
@@ -101,6 +103,7 @@ impl ScionSocketIpAddr {
     /// Create a SCION Socket Address from a SCION Address and a port number
     ///
     /// Returns an error if the SCION Address is a Service Address.
+    #[inline]
     pub const fn try_from_scion_addr(scion_addr: ScionAddr, port: u16) -> Result<Self, ScionAddr> {
         match scion_addr {
             ScionAddr::V4(addr) => {
@@ -122,6 +125,7 @@ impl ScionSocketIpAddr {
     }
 
     /// Returns a [SocketAddr]
+    #[inline]
     pub const fn socket_addr(&self) -> SocketAddr {
         match self {
             ScionSocketIpAddr::V4(addr) => {
@@ -134,7 +138,8 @@ impl ScionSocketIpAddr {
     }
 
     /// Converts to a [ScionSocketAddr]
-    pub fn into_scion_sock_addr(self) -> ScionSocketAddr {
+    #[inline]
+    pub const fn into_scion_sock_addr(self) -> ScionSocketAddr {
         match self {
             ScionSocketIpAddr::V4(addr) => ScionSocketAddr::V4(addr),
             ScionSocketIpAddr::V6(addr) => ScionSocketAddr::V6(addr),
@@ -143,6 +148,7 @@ impl ScionSocketIpAddr {
 
     /// Returns an [IpAddr] if the SCION Socket Address is an IPv4 or IPv6 address.
     /// Returns None if it is a Service Address.
+    #[inline]
     pub const fn ip(&self) -> IpAddr {
         match self {
             ScionSocketIpAddr::V4(addr) => IpAddr::V4(addr.host),
@@ -151,21 +157,25 @@ impl ScionSocketIpAddr {
     }
 
     /// Returns true if the SCION Socket Address is an IPv4 address
-    pub fn is_ipv4(&self) -> bool {
+    #[inline]
+    pub const fn is_ipv4(&self) -> bool {
         matches!(self, ScionSocketIpAddr::V4(_))
     }
 
     /// Returns true if the SCION Socket Address is an IPv6 address
-    pub fn is_ipv6(&self) -> bool {
+    #[inline]
+    pub const fn is_ipv6(&self) -> bool {
         matches!(self, ScionSocketIpAddr::V6(_))
     }
 
     /// Sets the [IpAddr]
+    #[inline]
     pub fn set_ip(&mut self, host: IpAddr) {
         *self = Self::new(self.isd_asn(), host, self.port());
     }
 
     /// Returns a [ScionAddr] from the SCION Socket Address
+    #[inline]
     pub const fn scion_addr(&self) -> ScionAddr {
         match self {
             ScionSocketIpAddr::V4(addr) => {
@@ -184,6 +194,7 @@ impl ScionSocketIpAddr {
     }
 
     /// Returns a [ScionIpAddr] from the SCION Socket Address
+    #[inline]
     pub const fn scion_ip_addr(&self) -> ScionIpAddr {
         match self {
             ScionSocketIpAddr::V4(addr) => {
@@ -202,6 +213,7 @@ impl ScionSocketIpAddr {
     }
 
     /// Returns the port number
+    #[inline]
     pub const fn port(&self) -> u16 {
         match self {
             ScionSocketIpAddr::V4(addr) => addr.port,
@@ -210,11 +222,13 @@ impl ScionSocketIpAddr {
     }
 
     /// Sets the port number
+    #[inline]
     pub fn set_port(&mut self, port: u16) {
         *self = Self::new(self.isd_asn(), self.ip(), port);
     }
 
     /// Returns the [ScionIpAddr]
+    #[inline]
     pub const fn host(&self) -> ScionIpAddr {
         match self {
             ScionSocketIpAddr::V4(addr) => {
@@ -233,11 +247,13 @@ impl ScionSocketIpAddr {
     }
 
     /// Sets the [ScionIpAddr], keeping the port number unchanged
+    #[inline]
     pub fn set_host(&mut self, host: ScionIpAddr) {
         *self = Self::new(host.isd_asn(), host.ip(), self.port());
     }
 
     /// Returns the ISD-AS number
+    #[inline]
     pub const fn isd_asn(&self) -> IsdAsn {
         match self {
             ScionSocketIpAddr::V4(addr) => addr.isd_asn,
@@ -246,6 +262,7 @@ impl ScionSocketIpAddr {
     }
 
     /// Sets the ISD-AS number
+    #[inline]
     pub fn set_isd_asn(&mut self, isd_asn: IsdAsn) {
         match self {
             ScionSocketIpAddr::V4(addr) => addr.isd_asn = isd_asn,
@@ -254,6 +271,7 @@ impl ScionSocketIpAddr {
     }
 }
 impl Display for ScionSocketIpAddr {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScionSocketIpAddr::V4(addr) => addr.fmt(f),
@@ -264,6 +282,7 @@ impl Display for ScionSocketIpAddr {
 impl FromStr for ScionSocketIpAddr {
     type Err = AddressParseError;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         ScionSocketAddrV4::from_str(s)
             .map(Self::V4)
@@ -276,6 +295,7 @@ impl_from!(ScionSocketAddrV6, ScionSocketIpAddr, |v| Self::V6(v));
 impl TryFrom<ScionAddr> for ScionSocketIpAddr {
     type Error = ScionAddr;
 
+    #[inline]
     fn try_from(value: ScionAddr) -> Result<Self, Self::Error> {
         Self::try_from_scion_addr(value, 0)
     }

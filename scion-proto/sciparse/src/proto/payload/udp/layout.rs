@@ -28,6 +28,7 @@ use crate::core::layout::{Layout, macros::gen_bitrange_const};
 /// |                         Payload ...                           |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UdpDatagramLayout;
 
 impl UdpDatagramLayout {

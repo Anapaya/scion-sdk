@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCION path fingerprinting based on the control plane path.
+//! SCION path fingerprinting based on the dataplane path.
 //!
 //! This module provides the [DpPathFingerprint] type, which uniquely identifies a SCION path based
-//! on the sequence interfaces traversed.
+//! on the sequence of interfaces traversed.
 
 use std::fmt;
 
@@ -51,6 +51,7 @@ impl DpPathFingerprint {
     ///
     /// For unsupported path types, the fingerprint is computed by hashing the path type, src and
     /// dst AS and the raw path data.
+    #[inline]
     pub fn from_scion_path(path: &ScionPath) -> DpPathFingerprint {
         Self::from_dp_path(path.dp_path.as_ref(), path.src_ia, path.dst_ia)
     }
@@ -110,6 +111,7 @@ impl DpPathFingerprint {
     /// Writes the fingerprint as lower or upper case hex, without the leading 0x.
     ///
     /// The argument n_displayed controls how many characters are written.
+    #[inline]
     fn format(&self, f: &mut fmt::Formatter<'_>, n_displayed: usize, lower: bool) -> fmt::Result {
         for byte in &self.0[..n_displayed] {
             if lower {
@@ -122,7 +124,14 @@ impl DpPathFingerprint {
         Ok(())
     }
 }
+impl From<&ScionPath> for DpPathFingerprint {
+    #[inline]
+    fn from(path: &ScionPath) -> Self {
+        Self::from_scion_path(path)
+    }
+}
 impl AsRef<[u8]> for DpPathFingerprint {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
@@ -130,11 +139,13 @@ impl AsRef<[u8]> for DpPathFingerprint {
 impl TryFrom<&[u8]> for DpPathFingerprint {
     type Error = std::array::TryFromSliceError;
 
+    #[inline]
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Ok(Self(value.try_into()?))
     }
 }
 impl From<[u8; 32]> for DpPathFingerprint {
+    #[inline]
     fn from(value: [u8; 32]) -> Self {
         Self(value)
     }
@@ -143,6 +154,7 @@ impl fmt::Display for DpPathFingerprint {
     /// Formats the first 8 bytes of the fingerprint as a lower-case hex.
     ///
     /// The alternate flag formats the entire 32-bytes of the fingerprint.
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             self.format(f, Self::LENGTH, true)
@@ -152,6 +164,7 @@ impl fmt::Display for DpPathFingerprint {
     }
 }
 impl fmt::LowerHex for DpPathFingerprint {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             f.write_str("0x")?;
@@ -160,6 +173,7 @@ impl fmt::LowerHex for DpPathFingerprint {
     }
 }
 impl fmt::UpperHex for DpPathFingerprint {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             f.write_str("0x")?;

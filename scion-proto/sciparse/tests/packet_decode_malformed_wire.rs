@@ -50,7 +50,7 @@ fn broken_wire_packets_must_not_panic() {
         let unwind = catch_unwind(|| {
             let mut broken_buf = breaking_opts.apply();
 
-            match ScionRawPacketView::from_mut_slice(&mut broken_buf) {
+            match ScionRawPacketView::try_from_mut_slice(&mut broken_buf) {
                 Ok((view, _rest)) => {
                     sciparse::util::fuzz::view_function_checks::packet::exec_every_view_function(
                         view,
@@ -138,11 +138,11 @@ mod wire_manipulation {
             }
 
             let mut buf = vec![0u8; self.base.required_size()];
-            if self.base.encode(&mut buf).is_err() {
+            if self.base.try_encode(&mut buf).is_err() {
                 return vec![];
             }
 
-            if let Ok((view, _rest)) = ScionHeaderView::from_mut_slice(&mut buf) {
+            if let Ok((view, _rest)) = ScionHeaderView::try_from_mut_slice(&mut buf) {
                 // ── Payload-level header field mutations ──────────────
                 if let Some(nh) = self.next_header {
                     view.set_next_header(nh.into());

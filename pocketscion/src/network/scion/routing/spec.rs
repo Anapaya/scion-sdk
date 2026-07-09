@@ -199,7 +199,7 @@ mod tests {
                 ProtocolNumber::Other(0),
                 Vec::new(),
             )
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("Failed to encode packet");
 
             let action = SpecRoutingLogic::route(
@@ -241,7 +241,7 @@ mod tests {
             let path = match packet.header().path() {
                 ScionDpPathViewRef::OneHop(path) => {
                     path.to_model()
-                        .into_reversed_standard_path()
+                        .try_into_reversed_standard_path()
                         .expect("Failed to convert OneHopPath to StandardPath")
                 }
                 _ => panic!("Path should be decodable as OneHop"),
@@ -254,7 +254,7 @@ mod tests {
                 ProtocolNumber::Other(0),
                 Vec::new(),
             )
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("Failed to encode packet");
 
             let action = SpecRoutingLogic::route(
@@ -546,7 +546,7 @@ mod tests {
                 &mut test_ctx
                     .scion_packet_udp(&[1, 2], 1234, 1234)
                     .into_raw()
-                    .encode_to_owned_view()
+                    .try_encode_to_owned_view()
                     .unwrap(),
                 0,
                 ScionNetworkTime::from_timestamp_secs(test_ctx.timestamp),
@@ -744,7 +744,7 @@ mod tests {
                     packet: test_context
                         .scion_packet_udp(&[1, 2], 22222, 11111)
                         .into_raw()
-                        .encode_to_owned_view()
+                        .try_encode_to_owned_view()
                         .expect("Failed to encode packet"),
                     test_context,
                     last_error: None,

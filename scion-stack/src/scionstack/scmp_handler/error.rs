@@ -36,7 +36,7 @@ impl ScmpErrorHandler {
 impl ScmpHandler for ScmpErrorHandler {
     fn handle(&self, pkt: &ScionRawPacketView) -> Option<ScionRawPacket> {
         let path = pkt.header().path();
-        let Ok(scmp_pkg) = pkt.try_into_scmp() else {
+        let Ok(scmp_pkg) = pkt.try_as_scmp() else {
             tracing::debug!("ignoring non SCMP packet");
             return None;
         };
@@ -105,7 +105,7 @@ mod scmp_error_handler_tests {
         let packet = ctx
             .scion_packet_scmp(scmp_msg)
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
 
         let expected_path = packet.header().path().to_owned_view();
@@ -147,7 +147,7 @@ mod scmp_error_handler_tests {
         let echo_request = ctx
             .scion_packet_scmp(ScmpEchoRequest::new(1, 2, b"data".to_vec()).into())
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
         let result = handler.handle(&echo_request);
         assert!(result.is_none());
@@ -156,7 +156,7 @@ mod scmp_error_handler_tests {
         let echo_reply = ctx
             .scion_packet_scmp(ScmpEchoReply::new(1, 2, b"data".to_vec()).into())
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
         let result = handler.handle(&echo_reply);
         assert!(result.is_none());
@@ -179,7 +179,7 @@ mod scmp_error_handler_tests {
         let invalid_packet = ctx.scion_packet_raw(b"not scmp");
         let result = handler.handle(
             &invalid_packet
-                .encode_to_owned_view()
+                .try_encode_to_owned_view()
                 .expect("failed to encode packet"),
         );
         assert!(result.is_none());
@@ -198,7 +198,7 @@ mod scmp_error_handler_tests {
         let packet = ctx
             .scion_packet_scmp(error_msg)
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
         let expected_path = packet.header().path().to_owned_view();
 
@@ -250,7 +250,7 @@ mod scmp_error_handler_tests {
         let packet = ctx
             .scion_packet_scmp(error_msg)
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
 
         let mut mock_receiver = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();

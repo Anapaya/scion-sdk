@@ -26,6 +26,7 @@ use crate::{
 };
 
 /// Layout for the standard SCION path, composed of a meta header and data
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StdPathLayout {
     /// Layout of the path meta header
     pub meta: StdPathMetaLayout,
@@ -40,7 +41,7 @@ impl StdPathLayout {
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
     /// Attempts to parse the standard SCION path layout from the given buffer
-    pub fn from_slice(buf: &[u8]) -> Result<Self, LayoutParseError> {
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, LayoutParseError> {
         // Check Meta header
         let (meta_buf, _rest) = StdPathMetaLayout.split_off_checked(buf).ok_or_else(|| {
             LayoutParseError::BufferTooSmall {
@@ -81,12 +82,14 @@ impl Layout for StdPathLayout {
 }
 impl TryFrom<&[u8]> for StdPathLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf).map_err(ViewConversionError::from)
+        Self::try_from_slice(buf).map_err(ViewConversionError::from)
     }
 }
 
 /// Layout for the standard SCION path meta header
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StdPathMetaLayout;
 impl StdPathMetaLayout {
     //  0                   1                   2                   3
@@ -115,6 +118,7 @@ impl StdPathMetaLayout {
 }
 impl StdPathMetaLayout {
     /// Returns annotations for the common header fields
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let ann = vec![
             (StdPathMetaLayout::CURR_INFO_FIELD_RNG, "curr_info_field"),
@@ -136,6 +140,7 @@ impl Layout for StdPathMetaLayout {
 }
 
 /// Layout for the standard SCION path data
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StdPathDataLayout {
     /// Lengths of the three path segments
     pub segment_lengths: (u8, u8, u8),
@@ -215,6 +220,7 @@ impl StdPathDataLayout {
 }
 impl StdPathDataLayout {
     /// Returns annotations for all info and hop fields
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let mut annotations = Annotations::new();
 
@@ -239,6 +245,7 @@ impl Layout for StdPathDataLayout {
 }
 
 /// Layout for a SCION standard path info field
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InfoFieldLayout;
 impl InfoFieldLayout {
     //  0                   1                   2                   3
@@ -260,6 +267,7 @@ impl InfoFieldLayout {
 }
 impl InfoFieldLayout {
     /// Returns annotations for the info field
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let ann = vec![
             (InfoFieldLayout::FLAGS_RNG, "flags"),
@@ -272,12 +280,14 @@ impl InfoFieldLayout {
     }
 }
 impl Layout for InfoFieldLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         Self::SIZE_BYTES
     }
 }
 
 /// Layout for a SCION standard path hop field
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HopFieldLayout;
 impl HopFieldLayout {
     //  0                   1                   2                   3
@@ -302,6 +312,7 @@ impl HopFieldLayout {
 }
 impl HopFieldLayout {
     /// Returns annotations for the hop field
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let ann = vec![
             (HopFieldLayout::FLAGS_RNG, "flags"),

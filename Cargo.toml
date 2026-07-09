@@ -51,7 +51,6 @@ scion-sdk-utils = { path = "libs/utils", version = "0.5.2" }
 
 pocketscion = { path = "pocketscion", version = "0.5.2" }
 
-scion-proto = { path = "scion-proto/scion-proto", version = "0.5.2" }
 scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.5.2" }
 sciparse = { path = "scion-proto/sciparse" , version = "0.5.2" }
 
@@ -181,7 +180,8 @@ ignored = [
     "foldhash",
     "scion-proto",
     "endhost-api-discovery-api",
-    "endhost-api-discovery-client"
+    "endhost-api-discovery-client",
+    "serde_yaml_ng"
 ]
 
 [profile.ci]

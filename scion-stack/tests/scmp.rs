@@ -105,9 +105,9 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
         .expect("error getting path");
     let random_message = b"test message".to_vec();
     let packet = ScionUdpPacket::new(src.into(), dst, path.dp_path().to_model(), random_message)
-        .encode_to_owned_view()
+        .try_encode_to_owned_view()
         .expect("error encoding SCION packet")
-        .into_raw_owned();
+        .into_raw();
 
     client_raw
         .send(&packet)
@@ -120,7 +120,7 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
         .context("error receiving client message")?;
 
     let scmp = recv
-        .try_into_scmp()
+        .try_as_scmp()
         .expect("error converting to SCMP packet")
         .scmp()
         .message();

@@ -43,7 +43,7 @@ pub fn build_test_scion_packet(payload: &[u8]) -> Packet {
     let required_size = packet.required_size();
     let mut bytes = BytesMut::with_capacity(required_size);
     bytes.resize(required_size, 0);
-    packet.encode(&mut bytes).unwrap();
+    packet.try_encode(&mut bytes).unwrap();
 
     Packet::from_bytes(bytes)
 }

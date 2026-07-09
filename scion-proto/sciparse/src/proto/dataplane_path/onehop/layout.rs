@@ -24,6 +24,7 @@ use crate::{
 };
 
 /// Layout for a one-hop path between neighboring border routers in SCION.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OneHopPathLayout;
 impl OneHopPathLayout {
     // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -52,6 +53,7 @@ impl OneHopPathLayout {
 }
 impl OneHopPathLayout {
     /// Returns an array of all field layouts in the one-hop path layout.
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let mut annotations = Annotations::new();
         annotations.extend(InfoFieldLayout.annotations());
@@ -68,6 +70,7 @@ impl Layout for OneHopPathLayout {
 }
 impl TryFrom<&[u8]> for OneHopPathLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
         if buf.len() < Self::SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {

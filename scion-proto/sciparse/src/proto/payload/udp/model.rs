@@ -43,6 +43,7 @@ pub struct UdpDatagram {
 }
 impl UdpDatagram {
     /// Creates a new UDP message.
+    #[inline]
     pub fn new(src_port: u16, dst_port: u16, payload: Vec<u8>) -> Self {
         Self {
             src_port,
@@ -57,12 +58,14 @@ impl UdpDatagram {
     ///
     /// Returns the parsed UDP datagram and the remaining byte slice after the UDP datagram, or an
     /// error if parsing fails.
-    pub fn from_slice(data: &[u8]) -> Result<(UdpDatagram, &[u8]), ViewConversionError> {
-        let (view, rest) = UdpDatagramView::from_slice(data)?;
+    #[inline]
+    pub fn try_from_slice(data: &[u8]) -> Result<(UdpDatagram, &[u8]), ViewConversionError> {
+        let (view, rest) = UdpDatagramView::try_from_slice(data)?;
         Ok((Self::from_view(view), rest))
     }
 
     /// Creates a new UDP message from a view.
+    #[inline]
     pub fn from_view(view: &UdpDatagramView) -> Self {
         Self {
             src_port: view.src_port(),
@@ -71,7 +74,14 @@ impl UdpDatagram {
         }
     }
 }
+impl From<&UdpDatagramView> for UdpDatagram {
+    #[inline]
+    fn from(view: &UdpDatagramView) -> Self {
+        Self::from_view(view)
+    }
+}
 impl Debug for UdpDatagram {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UdpDatagram")
             .field("src_port", &self.src_port)
@@ -81,14 +91,17 @@ impl Debug for UdpDatagram {
     }
 }
 impl PayloadEncode for &UdpDatagram {
+    #[inline]
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         UdpDatagramLayout::HEADER_SIZE_BYTES + self.payload.len()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -128,14 +141,17 @@ impl PayloadEncode for &UdpDatagram {
     }
 }
 impl PayloadEncode for UdpDatagram {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         (&self).required_size(header_and_extensions_size)
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         (&self).wire_valid()
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -146,11 +162,13 @@ impl PayloadEncode for UdpDatagram {
     }
 }
 impl AsRef<UdpDatagram> for UdpDatagram {
+    #[inline]
     fn as_ref(&self) -> &UdpDatagram {
         self
     }
 }
 impl AsMut<UdpDatagram> for UdpDatagram {
+    #[inline]
     fn as_mut(&mut self) -> &mut UdpDatagram {
         self
     }

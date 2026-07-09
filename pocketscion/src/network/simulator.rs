@@ -130,7 +130,7 @@ impl NetworkSimulator<'_> {
                     0,
                     now,
                     &mut reply
-                        .encode_to_owned_view()
+                        .try_encode_to_owned_view()
                         .context("Failed to encode response")?,
                 );
             };
@@ -244,7 +244,7 @@ mod test {
             packet: test
                 .scion_packet_udp(&[1, 2], 22222, 11111)
                 .into_raw()
-                .encode_to_owned_view()
+                .try_encode_to_owned_view()
                 .expect("Failed to encode packet"),
             ctx: test,
             targets,
@@ -285,7 +285,7 @@ mod test {
                         vec![1, 2, 3],
                     )))
                     .into_raw()
-                    .encode_to_owned_view()
+                    .try_encode_to_owned_view()
                     .expect("Failed to encode SCMP EchoRequest"),
             );
 
@@ -299,7 +299,7 @@ mod test {
 
             let scmp_packet = test.src_dp.last_recv().unwrap();
             let scmp = scmp_packet
-                .classify()
+                .try_classify()
                 .expect("Should classify SCMP packet")
                 .try_into_scmp()
                 .expect("Should convert to SCMP packet");
@@ -386,7 +386,7 @@ mod test {
                 ServiceResolutionRequest {}.encode_to_vec(),
             )
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("Should encode");
 
             NetworkSimulator::new(&network_receivers, &Default::default(), &topology, false)
@@ -486,7 +486,7 @@ mod test {
 
             let scmp_packet = test.src_dp.last_recv().unwrap();
             let scmp = scmp_packet
-                .classify()
+                .try_classify()
                 .expect("Should classify SCMP packet")
                 .try_into_scmp()
                 .expect("Should convert to SCMP packet");
@@ -576,7 +576,7 @@ mod test {
 
     impl Receiver for MockReceiver {
         fn receive_packet(&self, packet: &ScionRawPacketView) {
-            let packet_type = packet.classify().expect("All packets should be valid");
+            let packet_type = packet.try_classify().expect("All packets should be valid");
             self.dispatch_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 

@@ -51,9 +51,9 @@ fn encoding_invalid_packets_must_not_panic() {
             let required_size = packet.required_size();
             let mut buf = vec![0u8; required_size];
 
-            match packet.encode(&mut buf) {
+            match packet.try_encode(&mut buf) {
                 Ok(_) => {
-                    let (view, _rest) = ScionRawPacketView::from_mut_slice(&mut buf)
+                    let (view, _rest) = ScionRawPacketView::try_from_mut_slice(&mut buf)
                         .expect("Anything that encodes must be decodable");
                     sciparse::util::fuzz::view_function_checks::packet::exec_every_view_function(
                         view,

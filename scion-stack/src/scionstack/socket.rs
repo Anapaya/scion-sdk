@@ -92,9 +92,9 @@ impl PathUnawareUdpScionSocket {
             path.dp_path().to_model(),
             payload.to_vec(),
         )
-        .encode_to_owned_view()
+        .try_encode_to_owned_view()
         {
-            Ok(packet) => packet.into_raw_owned(),
+            Ok(packet) => packet.into_raw(),
             Err(e) => {
                 return Box::pin(async move {
                     Err(ScionSocketSendError::InvalidPacket(
@@ -138,7 +138,7 @@ impl PathUnawareUdpScionSocket {
                                 continue;
                             };
 
-                            let reply = match reply.encode_to_owned_view() {
+                            let reply = match reply.try_encode_to_owned_view() {
                                 Ok(reply) => reply,
                                 Err(e) => {
                                     tracing::warn!(error = %e, "failed to encode SCMP reply");
@@ -182,7 +182,7 @@ impl PathUnawareUdpScionSocket {
                     "received packet",
                 );
 
-                let Some(src_addr) = src_addr.to_scion_sock_ip_addr() else {
+                let Some(src_addr) = src_addr.try_to_scion_sock_ip_addr() else {
                     tracing::debug!("Received packet with non-IP source address, skipping");
                     continue;
                 };
@@ -231,7 +231,7 @@ impl PathUnawareUdpScionSocket {
                                 continue;
                             };
 
-                            let reply = match reply.encode_to_owned_view() {
+                            let reply = match reply.try_encode_to_owned_view() {
                                 Ok(reply) => reply,
                                 Err(e) => {
                                     tracing::warn!(error = %e, "failed to encode SCMP reply");
@@ -274,7 +274,7 @@ impl PathUnawareUdpScionSocket {
                     "received packet",
                 );
 
-                let Some(src_addr) = src_addr.to_scion_sock_ip_addr() else {
+                let Some(src_addr) = src_addr.try_to_scion_sock_ip_addr() else {
                     tracing::debug!("Received packet with non-IP source address, skipping");
                     continue;
                 };
@@ -323,9 +323,9 @@ impl ScmpScionSocket {
             path.dp_path().to_model(),
             message,
         )
-        .encode_to_owned_view()
+        .try_encode_to_owned_view()
         {
-            Ok(packet) => packet.into_raw_owned(),
+            Ok(packet) => packet.into_raw(),
             Err(e) => {
                 return Box::pin(async move {
                     Err(ScionSocketSendError::InvalidPacket(
@@ -347,7 +347,7 @@ impl ScmpScionSocket {
         Box::pin(async move {
             loop {
                 let packet = self.inner.recv().await?;
-                let packet = match packet.try_into_scmp_owned() {
+                let packet = match packet.try_into_scmp() {
                     Ok(packet) => packet,
                     Err(e) => {
                         tracing::debug!(error = %e, "Received invalid SCMP packet, dropping");
@@ -383,7 +383,7 @@ impl ScmpScionSocket {
         Box::pin(async move {
             loop {
                 let packet = self.inner.recv().await?;
-                let packet = match packet.try_into_scmp_owned() {
+                let packet = match packet.try_into_scmp() {
                     Ok(packet) => packet,
                     Err(e) => {
                         tracing::debug!(error = %e, "Received invalid SCMP packet, skipping");
@@ -595,7 +595,7 @@ impl<P: PathManager> UdpScionSocket<P> {
         let (len, sender_addr, path): (usize, ScionSocketIpAddr, ScionPath) =
             self.socket.recv_from_with_path(buffer, path_buffer).await?;
 
-        match path.clone().into_reversed() {
+        match path.clone().try_into_reversed() {
             Ok(reversed_path) => {
                 // Register the path for future use
                 self.pather.register_path(
@@ -878,7 +878,7 @@ mod cancel_safety_tests {
     ) -> Box<ScionRawPacketView> {
         let ctx = test_path_ctx(src.scion_addr(), dst.scion_addr());
         ctx.scion_packet_udp(payload, src.port(), dst.port())
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode")
             .into()
     }

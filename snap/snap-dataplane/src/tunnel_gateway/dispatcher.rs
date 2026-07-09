@@ -67,7 +67,7 @@ impl TunnelGatewayDispatcher {
 
 impl Dispatcher for TunnelGatewayDispatcher {
     fn try_dispatch(&self, packet: &ScionPacketView) {
-        let classification = match packet.classify() {
+        let classification = match packet.try_classify() {
             Ok(c) => c,
             Err(e) => {
                 self.metrics.invalid_packets_errors.inc();

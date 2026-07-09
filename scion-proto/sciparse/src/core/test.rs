@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Utilities for writing parametrized tests.
+
 /// Macro for creating parametrized *synchronous* tests.
 ///
 /// The `param_test!` macro accepts the name of an existing function, followed by a list of case

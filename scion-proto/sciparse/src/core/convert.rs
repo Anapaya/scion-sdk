@@ -42,7 +42,7 @@ pub trait TryFromView: Sized {
     where
         <Self as TryFromView>::ViewType: 'buf,
     {
-        let (view, rest) = Self::ViewType::from_slice(buf)?;
+        let (view, rest) = Self::ViewType::try_from_slice(buf)?;
         let model = Self::try_from_view(view)?;
         Ok((model, rest))
     }
@@ -130,12 +130,12 @@ pub trait TryFromModel: View {
         model: &Self::ModelType,
         buf: &'buf mut [u8],
     ) -> Result<(&'buf mut Self, &'buf mut [u8]), EncodeError> {
-        model.encode_to_view(buf)
+        model.try_encode_to_view(buf)
     }
 
     /// Attempts to encode a model into a boxed view and return it.
     #[inline]
     fn try_boxed_from_model(model: &Self::ModelType) -> Result<Box<Self>, InvalidStructureError> {
-        model.encode_to_owned_view()
+        model.try_encode_to_owned_view()
     }
 }

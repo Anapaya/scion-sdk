@@ -47,6 +47,7 @@ pub struct StandardPath {
 }
 impl StandardPath {
     /// Creates a new empty [StandardPath] with zeroed fields and no segments.
+    #[inline]
     pub fn new_empty() -> Self {
         StandardPath {
             current_info_field: 0,
@@ -58,6 +59,7 @@ impl StandardPath {
 // Utility
 impl StandardPath {
     /// Returns the total number of hop fields in the path
+    #[inline]
     pub fn hop_field_count(&self) -> usize {
         self.segments
             .iter()
@@ -66,11 +68,13 @@ impl StandardPath {
     }
 
     /// Returns the total number of info fields in the path
+    #[inline]
     pub fn info_field_count(&self) -> usize {
         self.segments.len()
     }
 
     /// Returns the lengths of each segment in the path as a tuple
+    #[inline]
     pub fn segment_lengths(&self) -> (u8, u8, u8) {
         let seg0 = self.segments.first().map_or(0, |s| s.hop_fields.len()) as u8;
         let seg1 = self.segments.get(1).map_or(0, |s| s.hop_fields.len()) as u8;
@@ -79,6 +83,7 @@ impl StandardPath {
     }
 
     /// Returns an iterator over all hop fields in the path
+    #[inline]
     pub fn iter_hop_fields(&self) -> impl Iterator<Item = &HopField> {
         self.segments
             .iter()
@@ -86,11 +91,13 @@ impl StandardPath {
     }
 
     /// Returns an iterator over all info fields in the path
+    #[inline]
     pub fn iter_info_fields(&self) -> impl Iterator<Item = &InfoField> {
         self.segments.iter().map(|segment| &segment.info_field)
     }
 
     /// Returns the sizes of each segment in the path
+    #[inline]
     pub fn segment_sizes(&self) -> [u8; 3] {
         let seg0 = self.segments.first().map_or(0, |s| s.hop_fields.len()) as u8;
         let seg1 = self.segments.get(1).map_or(0, |s| s.hop_fields.len()) as u8;
@@ -101,6 +108,7 @@ impl StandardPath {
     /// Calculates expiry time of the path as a Unix timestamp in seconds by scanning all segments.
     ///
     /// Returns 0 if any of the segments in the path has no hop fields
+    #[inline]
     pub fn expiration(&self) -> u32 {
         let mut min_expiry = u32::MAX;
         for segment in &self.segments {
@@ -173,11 +181,13 @@ impl StandardPath {
     }
 }
 impl WireEncode for StandardPath {
+    #[inline]
     fn required_size(&self) -> usize {
         let [seg0, seg1, seg2] = self.segment_sizes();
         StdPathMetaLayout::SIZE_BYTES + StdPathDataLayout::new(seg0, seg1, seg2).size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         if self.required_size() > ScionHeaderPathLayout::MAX_SIZE_BYTES {
             return Err("Encoded path size exceeds maximum allowed".into());
@@ -220,6 +230,7 @@ impl WireEncode for StandardPath {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         use StdPathMetaLayout as SL;
 
@@ -269,6 +280,7 @@ impl TryFromModel for StandardPathView {
 impl FromView for StandardPath {
     type ViewType = StandardPathView;
 
+    #[inline]
     fn from_view(view: &Self::ViewType) -> Self {
         let info_fields = view.info_fields();
         let hop_fields = view.hop_fields();
@@ -309,6 +321,7 @@ pub struct Segment {
     pub hop_fields: TinyVec<[HopField; 12]>,
 }
 impl Default for Segment {
+    #[inline]
     fn default() -> Self {
         Self {
             info_field: InfoField {
@@ -322,7 +335,7 @@ impl Default for Segment {
 }
 
 /// Represents an info field in a standard SCION path
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InfoField {
     /// Info field flags
     pub flags: InfoFieldFlags,
@@ -339,15 +352,18 @@ pub struct InfoField {
     pub timestamp: u32,
 }
 impl WireEncode for InfoField {
+    #[inline]
     fn required_size(&self) -> usize {
         InfoFieldLayout::SIZE_BYTES
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         // All values are full range, so always valid
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         unsafe {
             use InfoFieldLayout as IFL;
@@ -368,6 +384,7 @@ impl TryFromModel for InfoFieldView {
 impl FromView for InfoField {
     type ViewType = InfoFieldView;
 
+    #[inline]
     fn from_view(view: &Self::ViewType) -> Self {
         InfoField {
             flags: view.flags(),
@@ -380,7 +397,7 @@ impl FromView for InfoField {
 /// Represents a hop field in a standard SCION path
 ///
 /// Hop fields contain information about individual hops in a SCION path.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HopField {
     /// Hop field flags
     pub flags: HopFieldFlags,
@@ -421,6 +438,7 @@ pub struct HopField {
     pub mac: HopFieldMac,
 }
 impl Default for HopField {
+    #[inline]
     fn default() -> Self {
         Self {
             flags: HopFieldFlags::empty(),
@@ -433,7 +451,8 @@ impl Default for HopField {
 }
 impl HopField {
     /// Creates an empty `HopField` with zeroed fields.
-    pub fn empty() -> Self {
+    #[inline]
+    pub const fn empty() -> Self {
         Self {
             flags: HopFieldFlags::empty(),
             expiration_units: 0,
@@ -448,6 +467,7 @@ impl HopField {
     /// Recalculates the MAC for this hop field and updates the `mac` field with the new value.
     ///
     /// See [`HopMacCalculate::calculate_mac`](crate::dataplane_path::standard::mac::HopMacCalculate::calculate_mac) for details on how the MAC is calculated.
+    #[inline]
     pub fn with_calculated_mac(
         mut self,
         mac_chain_beta: u16,
@@ -472,15 +492,18 @@ impl HopMacInputSource for HopField {
     }
 }
 impl WireEncode for HopField {
+    #[inline]
     fn required_size(&self) -> usize {
         HopFieldLayout::SIZE_BYTES
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         // All values are full range, so always valid
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         unsafe {
             use HopFieldLayout as HFL;
@@ -502,6 +525,7 @@ impl TryFromModel for HopFieldView {
 }
 impl FromView for HopField {
     type ViewType = HopFieldView;
+    #[inline]
     fn from_view(view: &Self::ViewType) -> Self {
         HopField {
             flags: view.flags(),
@@ -839,7 +863,7 @@ pub mod ptest {
     }
 
     /// Configuration for generating arbitrary [`HopField`] values.
-    #[derive(Clone, Default)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
     pub struct ArbitraryHopFieldContext {
         /// If true, the `cons_ingress` and `cons_egress` fields may be zero, indicating start or
         /// end of segment. If false, they will be in the range `1..=u16::MAX`, indicating valid

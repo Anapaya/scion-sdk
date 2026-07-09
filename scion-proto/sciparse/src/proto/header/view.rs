@@ -103,10 +103,10 @@ impl ScionHeaderView {
     }
 
     /// Returns the path type bit range
-    /// TODO(uniquefine): create constructors for SCMP messages that make this function
-    /// unnecessary.
+    // TODO(uniquefine): create constructors for SCMP messages that make this function
+    // unnecessary.
     #[inline]
-    pub fn path_type_range(&self) -> BitRange {
+    pub const fn path_type_range(&self) -> BitRange {
         CommonHeaderLayout::PATH_TYPE_RNG
     }
 }
@@ -245,6 +245,7 @@ impl ScionHeaderView {
     }
 
     /// Returns the destination ISD
+    #[inline]
     pub fn dst_isd(&self) -> Isd {
         // SAFETY: buffer size is checked on construction
         let val = unsafe {
@@ -258,6 +259,7 @@ impl ScionHeaderView {
     }
 
     /// Returns the destination ASN
+    #[inline]
     pub fn dst_as(&self) -> Asn {
         // SAFETY: buffer size is checked on construction
         let val = unsafe {
@@ -285,6 +287,7 @@ impl ScionHeaderView {
     }
 
     /// Returns the source ISD
+    #[inline]
     pub fn src_isd(&self) -> Isd {
         // SAFETY: buffer size is checked on construction
         let val = unsafe {
@@ -298,6 +301,7 @@ impl ScionHeaderView {
     }
 
     /// Returns the source ASN
+    #[inline]
     pub fn src_as(&self) -> Asn {
         // SAFETY: buffer size is checked on construction
         let val = unsafe {
@@ -324,7 +328,7 @@ impl ScionHeaderView {
         // SAFETY: buffer size is checked on construction
         let raw = unsafe { self.0.get_unchecked(range.aligned_byte_range()) };
 
-        WireHostAddr::from_parts(self.dst_addr_type(), raw)
+        WireHostAddr::try_from_parts(self.dst_addr_type(), raw)
     }
 
     /// Returns the source host address range in the buffer.
@@ -351,12 +355,13 @@ impl ScionHeaderView {
         // SAFETY: buffer size is checked on construction
         let raw = unsafe { self.0.get_unchecked(range.aligned_byte_range()) };
 
-        WireHostAddr::from_parts(self.src_addr_type(), raw)
+        WireHostAddr::try_from_parts(self.src_addr_type(), raw)
     }
 }
 // Address header mut
 impl ScionHeaderView {
     /// Sets the source ISD
+    #[inline]
     pub fn set_src_isd(&mut self, isd: Isd) {
         // SAFETY: buffer size is checked on construction
         unsafe {
@@ -369,6 +374,7 @@ impl ScionHeaderView {
     }
 
     /// Sets the source ASN
+    #[inline]
     pub fn set_src_as(&mut self, asn: Asn) {
         // SAFETY: buffer size is checked on construction
         unsafe {
@@ -381,6 +387,7 @@ impl ScionHeaderView {
     }
 
     /// Sets the destination ISD
+    #[inline]
     pub fn set_dst_isd(&mut self, isd: Isd) {
         // SAFETY: buffer size is checked on construction
         unsafe {
@@ -393,6 +400,7 @@ impl ScionHeaderView {
     }
 
     /// Sets the destination ASN
+    #[inline]
     pub fn set_dst_as(&mut self, asn: Asn) {
         // SAFETY: buffer size is checked on construction
         unsafe {

@@ -245,7 +245,7 @@ async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
         path.dp_path().to_model(),
         ScmpEchoReply::new(receiver_addr.port(), sequence, echo_data.clone()).into(),
     )
-    .encode_to_owned_view()
+    .try_encode_to_owned_view()
     .expect("should encode");
 
     tracing::info!(src = %sender.local_addr(), dst = %receiver_addr, "Sending echo reply");
@@ -271,7 +271,7 @@ async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
             }
         },
         async {
-            within_duration!(MS_100, sender.send(echo_request.into_raw()))
+            within_duration!(MS_100, sender.send(echo_request.as_raw()))
                 .expect("error sending echo reply");
         },
     );
@@ -332,7 +332,7 @@ async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
             echo_data.clone(),
         )),
     )
-    .encode_to_owned_view()
+    .try_encode_to_owned_view()
     .expect("should encode");
 
     tracing::info!(src = %sender.local_addr(), dst = %receiver_addr, "Sending echo reply");
@@ -358,7 +358,7 @@ async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
             }
         },
         async {
-            within_duration!(MS_100, sender.send(echo_reply.into_raw()))
+            within_duration!(MS_100, sender.send(echo_reply.as_raw()))
                 .expect("error sending echo reply");
         },
     );
@@ -398,7 +398,7 @@ async fn send_raw_packet_directly(
 ) -> Result<(), std::io::Error> {
     let target_addr = target_socket_addr.socket_addr();
     let sender_socket = UdpSocket::bind("127.0.0.1:0").await?;
-    let packet_bytes = packet.encode_to_owned_view().expect("failed to encode");
+    let packet_bytes = packet.try_encode_to_owned_view().expect("failed to encode");
 
     sender_socket
         .send_to(packet_bytes.as_slice(), target_addr)
@@ -583,7 +583,7 @@ async fn test_as_local_packets_impl(ps: PsSetup) {
     // Helper to create a UDP-over-SCION packet as ScionPacketRaw.
     let local_packet = |dst: ScionSocketAddr, payload: &[u8]| -> Box<ScionRawPacketView> {
         ScionUdpPacket::new(sender_addr.into(), dst, DpPath::Empty, payload.to_vec())
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode")
             .into()
     };

@@ -201,7 +201,7 @@ impl UnderlaySocket for SnapUnderlaySocket {
                         ))
                     })?;
 
-                let packet = match ScionRawPacketView::from_slice(&raw) {
+                let packet = match ScionRawPacketView::try_from_slice(&raw) {
                     Ok((pkt, _rest)) => pkt,
                     Err(e) => {
                         tracing::debug!(error = %e, "Failed to decode SCION packet, skipping");

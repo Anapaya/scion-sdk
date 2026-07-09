@@ -28,18 +28,21 @@ use std::fmt::Write as FmtWrite;
 use crate::core::{layout::BitRange, read::unchecked_bit_range_be_read};
 
 /// Annotations for bit-level fields in a buffer
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Annotations {
     buckets: Vec<AnnotationBucket>,
     current_offset: usize,
 }
 impl Default for Annotations {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
 }
 impl Annotations {
     /// Create a new, empty Annotations instance
-    pub fn new() -> Self {
+    #[inline]
+    pub const fn new() -> Self {
         Self {
             buckets: Vec::new(),
             current_offset: 0,
@@ -47,6 +50,7 @@ impl Annotations {
     }
 
     /// Create a new Annotations instance containing the given title and annotations
+    #[inline]
     pub fn new_with(title: String, annotations: Vec<(BitRange, &'static str)>) -> Self {
         let mut ann = Self::new();
         ann.add(title, annotations);
@@ -57,6 +61,7 @@ impl Annotations {
     ///
     /// The added annotations will be offset by the current total bit length of the existing
     /// annotations,
+    #[inline]
     pub fn extend(&mut self, other: Annotations) {
         for bucket in other.buckets {
             let ann = offset_annotations(bucket.annotations, self.current_offset);
@@ -73,6 +78,7 @@ impl Annotations {
     }
 
     /// Add a new annotation bucket with the given title and annotations
+    #[inline]
     pub fn add(&mut self, title: String, annotations: Vec<(BitRange, &'static str)>) {
         let annotations = offset_annotations(annotations, self.current_offset);
         self.buckets.push(AnnotationBucket { title, annotations });
@@ -269,12 +275,14 @@ impl Annotations {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct AnnotationBucket {
     title: String,
     annotations: Vec<(BitRange, &'static str)>,
 }
 
 /// Offset all annotations by the given bit offset
+#[inline]
 fn offset_annotations(
     annotations: Vec<(BitRange, &str)>,
     bit_offset: usize,

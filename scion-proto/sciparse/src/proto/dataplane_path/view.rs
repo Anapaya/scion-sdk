@@ -45,21 +45,25 @@ pub enum ScionDpPathViewRef<'a> {
 }
 impl ScionDpPathViewExt for ScionDpPathViewRef<'_> {
     /// Returns an immutable view over the same path data.
+    #[inline]
     fn as_ref(&self) -> ScionDpPathViewRef<'_> {
         *self
     }
 }
 impl<'a> From<&'a StandardPathView> for ScionDpPathViewRef<'a> {
+    #[inline]
     fn from(value: &'a StandardPathView) -> Self {
         ScionDpPathViewRef::Standard(value)
     }
 }
 impl<'a> From<&'a OneHopPathView> for ScionDpPathViewRef<'a> {
+    #[inline]
     fn from(value: &'a OneHopPathView) -> Self {
         ScionDpPathViewRef::OneHop(value)
     }
 }
 impl Display for ScionDpPathViewRef<'_> {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.display(f)
     }
@@ -84,6 +88,7 @@ pub enum ScionDpPathViewRefMut<'a> {
 }
 impl ScionDpPathViewExt for ScionDpPathViewRefMut<'_> {
     /// Returns an immutable view over the same path data.
+    #[inline]
     fn as_ref(&self) -> ScionDpPathViewRef<'_> {
         match self {
             ScionDpPathViewRefMut::Standard(standard_path_view) => {
@@ -103,6 +108,7 @@ impl ScionDpPathViewExt for ScionDpPathViewRefMut<'_> {
     }
 }
 impl ScionDpPathViewExtMut for ScionDpPathViewRefMut<'_> {
+    #[inline]
     fn as_mut(&mut self) -> ScionDpPathViewRefMut<'_> {
         // XXX(ake): looks a bit weird, but this allows reborrowing the mutable reference while
         // preserving the lifetime.
@@ -120,16 +126,19 @@ impl ScionDpPathViewExtMut for ScionDpPathViewRefMut<'_> {
     }
 }
 impl<'a> From<&'a mut StandardPathView> for ScionDpPathViewRef<'a> {
+    #[inline]
     fn from(value: &'a mut StandardPathView) -> Self {
         ScionDpPathViewRef::Standard(value)
     }
 }
 impl<'a> From<&'a mut OneHopPathView> for ScionDpPathViewRef<'a> {
+    #[inline]
     fn from(value: &'a mut OneHopPathView) -> Self {
         ScionDpPathViewRef::OneHop(value)
     }
 }
 impl Display for ScionDpPathViewRefMut<'_> {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.display(f)
     }
@@ -154,6 +163,7 @@ pub enum ScionDpPathView {
 }
 impl ScionDpPathViewExt for ScionDpPathView {
     /// Returns an immutable view over the same path data.
+    #[inline]
     fn as_ref(&self) -> ScionDpPathViewRef<'_> {
         match self {
             ScionDpPathView::Standard(standard_path_view) => {
@@ -173,6 +183,7 @@ impl ScionDpPathViewExt for ScionDpPathView {
     }
 }
 impl ScionDpPathViewExtMut for ScionDpPathView {
+    #[inline]
     fn as_mut(&mut self) -> ScionDpPathViewRefMut<'_> {
         match self {
             ScionDpPathView::Standard(standard_path_view) => {
@@ -198,6 +209,7 @@ impl_from!(OneHopPathView, ScionDpPathView, |v| {
     ScionDpPathView::OneHop(v)
 });
 impl Display for ScionDpPathView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.display(f)
     }
@@ -210,6 +222,7 @@ pub trait ScionDpPathViewExt {
     fn as_ref(&self) -> ScionDpPathViewRef<'_>;
 
     /// Clones the path data into an owned view.
+    #[inline]
     fn to_owned_view(&self) -> ScionDpPathView {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
@@ -229,6 +242,7 @@ pub trait ScionDpPathViewExt {
     }
 
     /// Returns the raw bytes of the path data as a slice.
+    #[inline]
     fn as_slice(&self) -> &[u8] {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => standard_path_view.as_slice(),
@@ -242,6 +256,7 @@ pub trait ScionDpPathViewExt {
     ///
     /// Returns `None` if the expiration time cannot be determined (e.g., for unsupported path
     /// types).
+    #[inline]
     fn expiration(&self) -> Option<u32> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
@@ -254,6 +269,7 @@ pub trait ScionDpPathViewExt {
     }
 
     /// Returns the normalized first egress interface of the path if available.
+    #[inline]
     fn first_egress_interface(&self) -> Option<u16> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
@@ -275,6 +291,7 @@ pub trait ScionDpPathViewExt {
     ///
     /// If the path is a one-hop path, the current egress interface is the egress interface of the
     /// first hop field.
+    #[inline]
     fn current_egress_interface(&self) -> Option<u16> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
@@ -296,6 +313,7 @@ pub trait ScionDpPathViewExt {
     }
 
     /// Returns the normalized last ingress interface of the path if available.
+    #[inline]
     fn last_ingress_interface(&self) -> Option<u16> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
@@ -324,6 +342,7 @@ pub trait ScionDpPathViewExt {
     ///
     /// If the path is a one-hop path, the current ingress interface is the ingress interface of the
     /// last hop field.
+    #[inline]
     fn current_ingress_interface(&self) -> Option<u16> {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => {
@@ -345,11 +364,13 @@ pub trait ScionDpPathViewExt {
     }
 
     /// Converts the view into a `DpPath` model.
+    #[inline]
     fn to_model(&self) -> DpPath {
         DpPath::from_view(&self.as_ref())
     }
 
     /// Displays the path view in a human-readable format.
+    #[inline]
     fn display(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.as_ref() {
             ScionDpPathViewRef::Standard(standard_path_view) => write!(f, "{}", standard_path_view),
@@ -362,6 +383,7 @@ pub trait ScionDpPathViewExt {
     }
 }
 impl<T: ScionDpPathViewExt> ScionDpPathViewExt for &T {
+    #[inline]
     fn as_ref(&self) -> ScionDpPathViewRef<'_> {
         (*self).as_ref()
     }
@@ -376,6 +398,7 @@ pub trait ScionDpPathViewExtMut: ScionDpPathViewExt {
     /// Attempts to reverse the path in place if supported by the path type.
     ///
     /// Returns an error if the path type does not support reversal.
+    #[inline]
     fn try_reverse(&mut self) -> Result<&mut Self, PathReverseError>
     where
         Self: Sized,
@@ -403,7 +426,8 @@ pub trait ScionDpPathViewExtMut: ScionDpPathViewExt {
     /// Converts the path into a reversed view if supported by the path type.
     ///
     /// Returns an error if the path type does not support reversal.
-    fn into_reversed(mut self) -> Result<Self, (Self, PathReverseError)>
+    #[inline]
+    fn try_into_reversed(mut self) -> Result<Self, (Self, PathReverseError)>
     where
         Self: Sized,
     {

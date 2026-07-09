@@ -41,18 +41,20 @@ use crate::{core::encode::WireEncode as _, header::model::AddressHeader};
 ///
 /// assert_eq!(checksum, 0x220d);
 /// ```
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct ChecksumDigest {
     checksum_with_overflow: u32,
 }
 
 impl ChecksumDigest {
     /// Creates a new empty digest.
+    #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Calculate the checksum for a SCION message.
+    #[inline]
     pub fn with_pseudoheader(
         // Address header of the packet.
         addr_header: &AddressHeader,
@@ -79,6 +81,7 @@ impl ChecksumDigest {
     }
 
     /// Adds a u64 value to the checksum computation.
+    #[inline]
     pub fn add_u64(&mut self, value: u64) -> &mut Self {
         const MASK: u64 = 0xffff;
         let sum = (value & MASK)
@@ -91,6 +94,7 @@ impl ChecksumDigest {
     }
 
     /// Adds a u32 value to the checksum computation.
+    #[inline]
     pub fn add_u32(&mut self, value: u32) -> &mut Self {
         const MASK: u32 = 0xffff;
         self.checksum_with_overflow += (value & MASK) + ((value >> u16::BITS) & MASK);
@@ -98,6 +102,7 @@ impl ChecksumDigest {
     }
 
     /// Adds a u16 value to the checksum computation.
+    #[inline]
     pub fn add_u16(&mut self, value: u16) -> &mut Self {
         self.checksum_with_overflow += value as u32;
         self
@@ -107,6 +112,7 @@ impl ChecksumDigest {
     ///
     /// If the slice is not a multiple of 2-bytes, then it is zero-padded
     /// before being added to the checksum.
+    #[inline]
     pub fn add_slice(&mut self, mut data: &[u8]) -> &mut Self {
         if data.is_empty() {
             return self;
@@ -169,6 +175,7 @@ impl ChecksumDigest {
     }
 
     /// Returns the computed checksum value.
+    #[inline]
     pub fn checksum(&self) -> u16 {
         !(Self::fold_checksum(self.checksum_with_overflow) as u16)
     }
@@ -181,7 +188,7 @@ mod tests {
 
     fn pseudoheader_with_data(addresses: &AddressHeader, protocol: u8, data: &[u8]) -> Vec<u8> {
         let mut buffer = vec![0; addresses.required_size()];
-        addresses.encode(&mut buffer).unwrap();
+        addresses.try_encode(&mut buffer).unwrap();
         buffer.extend_from_slice(&(data.len() as u32).to_be_bytes());
         buffer.extend_from_slice(&(protocol as u32).to_be_bytes());
         buffer.extend_from_slice(data);

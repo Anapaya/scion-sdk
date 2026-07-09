@@ -14,9 +14,9 @@
 
 //! Classification of SCION packets by payload protocol.
 //!
-//! [`ScionPacketView::classify`] inspects the `next_header` field of a [`ScionPacketView`] and, for
-//! UDP and SCMP payloads, extracts the destination port without copying the packet or constructing
-//! an owned representation.
+//! Classifying a raw packet view inspects the `next_header` field of the packet and, for UDP and
+//! SCMP payloads, extracts the destination port without copying the packet or constructing an owned
+//! representation.
 
 use crate::{
     address::socket_addr::ScionSocketAddr,
@@ -35,6 +35,7 @@ use crate::{
 /// (via [`View::as_slice`](crate::core::view::View::as_slice)) without a copy.
 ///
 /// Use [`ClassifiedPacketView::dst_socket_addr`] to obtain the destination [`ScionSocketAddr`].
+#[derive(Debug, Clone, Copy)]
 pub enum ClassifiedPacketView<'a> {
     /// A SCION/UDP packet.  `dst_port` is taken from the UDP header.
     Udp(&'a ScionUdpPacketView),
@@ -54,9 +55,10 @@ impl<'a> ClassifiedPacketView<'a> {
     /// Returns `None` for SCMP packets without a deduced port, for the
     /// [`ClassifiedPacketView::Other`] variant, and when the destination host address cannot be
     /// parsed.
+    #[inline]
     pub fn dst_socket_addr(&self) -> Option<ScionSocketAddr> {
         let dst_port = self.dst_port()?;
-        let scion_addr = self.into_raw().dst_scion_addr().ok()?;
+        let scion_addr = self.as_raw().dst_scion_addr().ok()?;
 
         Some(ScionSocketAddr::new(
             scion_addr.isd_asn(),
@@ -69,6 +71,7 @@ impl<'a> ClassifiedPacketView<'a> {
     ///
     /// Returns `None` if the packet is neither a UDP nor a SCMP packet, or if the SCMP packet does
     /// not contain a port.
+    #[inline]
     pub fn dst_port(&self) -> Option<u16> {
         match self {
             ClassifiedPacketView::Udp(udp) => Some(udp.udp().dst_port()),
@@ -78,32 +81,36 @@ impl<'a> ClassifiedPacketView<'a> {
     }
 
     /// Returns `true` if the classified packet is a UDP packet.
-    pub fn is_udp(&self) -> bool {
+    #[inline]
+    pub const fn is_udp(&self) -> bool {
         matches!(self, ClassifiedPacketView::Udp(_))
     }
 
     /// Returns `true` if the classified packet is a SCMP packet.
-    pub fn is_scmp(&self) -> bool {
+    #[inline]
+    pub const fn is_scmp(&self) -> bool {
         matches!(self, ClassifiedPacketView::Scmp(_))
     }
 
     /// Returns `true` if the classified packet is neither a UDP nor a SCMP packet.
-    pub fn is_other(&self) -> bool {
+    #[inline]
+    pub const fn is_other(&self) -> bool {
         matches!(self, ClassifiedPacketView::Other(_))
     }
 
     /// Returns a reference to the underlying raw packet view.
-    pub fn into_raw(&self) -> &'a ScionRawPacketView {
+    #[inline]
+    pub fn as_raw(&self) -> &'a ScionRawPacketView {
         match self {
-            ClassifiedPacketView::Udp(udp) => udp.into_raw(),
-            ClassifiedPacketView::Scmp(scmp) => scmp.into_raw(),
+            ClassifiedPacketView::Udp(udp) => udp.as_raw(),
+            ClassifiedPacketView::Scmp(scmp) => scmp.as_raw(),
             ClassifiedPacketView::Other(other) => other,
         }
     }
 }
 
 /// The result of classifying a SCION packet by its payload protocol.
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClassifiedPacket {
     /// A SCMP packet with a parsed SCMP message as payload.
     Scmp(ScionScmpPacket),
@@ -119,6 +126,7 @@ impl ClassifiedPacket {
     /// Returns `None` for SCMP packets without a deduced port, for the
     /// [`ClassifiedPacket::Other`] variant, and when the destination host address cannot be
     /// parsed.
+    #[inline]
     pub fn dst_socket_addr(&self) -> Option<ScionSocketAddr> {
         let (header, dst_port) = match self {
             ClassifiedPacket::Udp(packet) => (&packet.header, packet.payload.dst_port),
@@ -165,7 +173,8 @@ impl ClassifiedPacket {
     }
 
     /// Returns a reference to the SCION packet header.
-    pub fn header(&self) -> &crate::header::model::ScionPacketHeader {
+    #[inline]
+    pub const fn header(&self) -> &crate::header::model::ScionPacketHeader {
         match self {
             ClassifiedPacket::Udp(packet) => &packet.header,
             ClassifiedPacket::Scmp(packet) => &packet.header,
@@ -174,6 +183,7 @@ impl ClassifiedPacket {
     }
 }
 impl WireEncode for ClassifiedPacket {
+    #[inline]
     fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
         match self {
             ClassifiedPacket::Udp(packet) => packet.wire_valid(),
@@ -182,6 +192,7 @@ impl WireEncode for ClassifiedPacket {
         }
     }
 
+    #[inline]
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         unsafe {
             match self {
@@ -192,6 +203,7 @@ impl WireEncode for ClassifiedPacket {
         }
     }
 
+    #[inline]
     fn required_size(&self) -> usize {
         match self {
             ClassifiedPacket::Udp(packet) => packet.required_size(),
@@ -201,25 +213,28 @@ impl WireEncode for ClassifiedPacket {
     }
 }
 impl From<ClassifiedPacket> for ScionRawPacket {
+    #[inline]
     fn from(packet: ClassifiedPacket) -> Self {
         packet.into_raw()
     }
 }
 impl TryFrom<ClassifiedPacket> for ScionUdpPacket {
     type Error = ClassifiedPacket;
+    #[inline]
     fn try_from(packet: ClassifiedPacket) -> Result<Self, Self::Error> {
         packet.try_into_udp()
     }
 }
 impl TryFrom<ClassifiedPacket> for ScionScmpPacket {
     type Error = ClassifiedPacket;
+    #[inline]
     fn try_from(packet: ClassifiedPacket) -> Result<Self, Self::Error> {
         packet.try_into_scmp()
     }
 }
 
 /// Error returned when a SCION packet cannot be classified.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ClassifyError {
     /// The UDP header in the payload is malformed or truncated.
     #[error("malformed UDP payload: {0}")]
@@ -337,11 +352,11 @@ mod tests {
             DpPath::Empty,
             b"payload".to_vec(),
         )
-        .encode_to_vec()
+        .try_encode_to_vec()
         .expect("failed to encode SCION UDP packet");
 
-        let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
-        let classified = view.classify().unwrap();
+        let (view, _) = ScionPacketView::try_from_slice(&buf).unwrap();
+        let classified = view.try_classify().unwrap();
         match &classified {
             ClassifiedPacketView::Udp { .. } => {}
             _ => panic!("expected Udp variant"),
@@ -369,11 +384,11 @@ mod tests {
         );
 
         let buf = scion_scmp_packet
-            .encode_to_vec()
+            .try_encode_to_vec()
             .expect("failed to encode SCION SCMP packet");
 
-        let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
-        let classified = view.classify().unwrap();
+        let (view, _) = ScionPacketView::try_from_slice(&buf).unwrap();
+        let classified = view.try_classify().unwrap();
         match &classified {
             ClassifiedPacketView::Scmp(scmp) => {
                 assert_eq!(Some(54321), scmp.scmp().dst_port());
@@ -399,7 +414,7 @@ mod tests {
         );
 
         let quoted_udp_data = quoted_udp
-            .encode_to_vec()
+            .try_encode_to_vec()
             .expect("failed to encode quoted UDP packet");
 
         let scmp_packet = ScionScmpPacket::new(
@@ -413,9 +428,9 @@ mod tests {
             .into(),
         );
 
-        let buf = scmp_packet.encode_to_vec().unwrap();
-        let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
-        let classified = view.classify().unwrap();
+        let buf = scmp_packet.try_encode_to_vec().unwrap();
+        let (view, _) = ScionPacketView::try_from_slice(&buf).unwrap();
+        let classified = view.try_classify().unwrap();
         match &classified {
             ClassifiedPacketView::Scmp(scmp) => {
                 assert!(scmp.scmp().dst_port().is_some());
@@ -443,9 +458,9 @@ mod tests {
             .into(),
         );
 
-        let buf = scmp_packet.encode_to_vec().unwrap();
-        let (view, _) = ScionPacketView::from_slice(&buf).unwrap();
-        let classified = view.classify().unwrap();
+        let buf = scmp_packet.try_encode_to_vec().unwrap();
+        let (view, _) = ScionPacketView::try_from_slice(&buf).unwrap();
+        let classified = view.try_classify().unwrap();
         match &classified {
             ClassifiedPacketView::Scmp(scmp) => {
                 assert!(scmp.scmp().dst_port().is_none());
@@ -464,14 +479,14 @@ mod tests {
             ProtocolNumber::Other(0xFE),
             b"rawr".to_vec(),
         )
-        .encode_to_vec()
+        .try_encode_to_vec()
         .expect("failed to encode SCION raw packet");
 
-        let (view, _) = ScionPacketView::from_slice(&bytes).unwrap();
+        let (view, _) = ScionPacketView::try_from_slice(&bytes).unwrap();
         assert!(matches!(
-            view.classify().unwrap(),
+            view.try_classify().unwrap(),
             ClassifiedPacketView::Other(_)
         ));
-        assert!(view.classify().unwrap().dst_socket_addr().is_none());
+        assert!(view.try_classify().unwrap().dst_socket_addr().is_none());
     }
 }

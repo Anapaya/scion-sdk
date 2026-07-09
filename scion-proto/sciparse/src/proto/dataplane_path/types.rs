@@ -38,6 +38,7 @@ pub enum PathType {
     Other(u8),
 }
 impl From<u8> for PathType {
+    #[inline]
     fn from(value: u8) -> Self {
         match value {
             0 => PathType::Empty,
@@ -50,6 +51,7 @@ impl From<u8> for PathType {
     }
 }
 impl From<PathType> for u8 {
+    #[inline]
     fn from(val: PathType) -> Self {
         match val {
             PathType::Empty => 0,
@@ -74,7 +76,7 @@ pub mod ptest {
     /// Controls the relative probability of each variant being generated.
     ///
     /// Default weights: `empty = 1, scion = 4, one_hop = 2, epic = 1, colibri = 1, other = 1`.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryPathTypeParams {
         /// Weight for generating Empty path type.
         pub empty: u32,
@@ -129,6 +131,7 @@ pub struct PathReverseError {
 }
 impl PathReverseError {
     /// Creates a new `PathReverseError` with the given reason.
+    #[inline]
     pub fn new(reason: impl Into<Cow<'static, str>>) -> Self {
         Self {
             reason: reason.into(),

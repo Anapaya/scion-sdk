@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Layout definitions for SCMP messages (bit ranges and sizes).
+
 use crate::{
     core::{
         layout::{BitRange, Layout, macros::gen_bitrange_const},
@@ -25,6 +27,7 @@ use crate::{
 pub const SCMP_ERROR_MAX_PACKET_SIZE: usize = 1232;
 
 /// Layout for all SCMP messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScmpMessageLayout {
     /// Layout for a `DestinationUnreachable` SCMP message.
     DestinationUnreachable(ScmpDestinationUnreachableLayout),
@@ -56,11 +59,11 @@ impl ScmpMessageLayout {
     /// data, it assumes that the messages takes up the whole buffer and there are no trailing
     /// bytes.
     ///
-    /// Note, that this functions does not validate the total size of the SCION SCMP packet
-    /// which for SCMP error messages is required to be at most `MAX_OFFENDING_PACKET_LENGTH`
+    /// Note that this function does not validate the total size of the SCION SCMP packet
+    /// which for SCMP error messages is required to be at most [SCMP_ERROR_MAX_PACKET_SIZE]
     /// bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
-        let (view, _) = ScmpUnknownMessageView::from_slice(buf).map_err(|e| {
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+        let (view, _) = ScmpUnknownMessageView::try_from_slice(buf).map_err(|e| {
             match e {
                 ViewConversionError::BufferTooSmall {
                     required, actual, ..
@@ -96,8 +99,9 @@ impl ScmpMessageLayout {
 }
 impl TryFrom<&[u8]> for ScmpMessageLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 impl ScmpMessageLayout {
@@ -113,6 +117,7 @@ impl ScmpMessageLayout {
 }
 
 impl Layout for ScmpMessageLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         match self {
             Self::DestinationUnreachable(inner) => inner.size_bytes(),
@@ -130,6 +135,7 @@ impl Layout for ScmpMessageLayout {
 }
 
 /// Layout for an SCMP `DestinationUnreachable` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpDestinationUnreachableLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields).
     payload_length: usize,
@@ -139,11 +145,13 @@ impl ScmpDestinationUnreachableLayout {
     pub const HEADER_SIZE_BYTES: usize = 8;
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Create a layout based on the byte length of the offending packet.
+    #[inline]
     pub fn from_offending_packet_length(
         offending_packet_length: usize,
         header_and_extensions_size: usize,
@@ -176,7 +184,8 @@ impl ScmpDestinationUnreachableLayout {
 
     /// Returns the bit range of the offending packet in the SCMP message.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn offending_packet_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn offending_packet_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -184,6 +193,7 @@ impl ScmpDestinationUnreachableLayout {
     }
 }
 impl Layout for ScmpDestinationUnreachableLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
@@ -191,7 +201,8 @@ impl Layout for ScmpDestinationUnreachableLayout {
 impl ScmpDestinationUnreachableLayout {
     /// Create a layout from a raw buffer, validating minimum size.
     /// This assumes that the buffer contains exactly the scmp message without trailing bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpDestinationUnreachable",
@@ -206,12 +217,14 @@ impl ScmpDestinationUnreachableLayout {
 }
 impl TryFrom<&[u8]> for ScmpDestinationUnreachableLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `PacketTooBig` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpPacketTooBigLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields)..
     payload_length: usize,
@@ -222,11 +235,13 @@ impl ScmpPacketTooBigLayout {
     pub const HEADER_SIZE_BYTES: usize = 8;
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Create a layout based on the length of the offending packet.
+    #[inline]
     pub fn from_offending_packet_length(
         offending_packet_length: usize,
         header_and_extensions_size: usize,
@@ -261,7 +276,8 @@ impl ScmpPacketTooBigLayout {
 
     /// Returns the bit range of the offending packet in the SCMP message.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn offending_packet_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn offending_packet_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -269,6 +285,7 @@ impl ScmpPacketTooBigLayout {
     }
 }
 impl Layout for ScmpPacketTooBigLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
@@ -276,7 +293,8 @@ impl Layout for ScmpPacketTooBigLayout {
 impl ScmpPacketTooBigLayout {
     /// Create a layout from a raw buffer, validating minimum size.
     /// This assumes that the buffer contains exactly the scmp message without trailing bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpPacketTooBig",
@@ -291,12 +309,14 @@ impl ScmpPacketTooBigLayout {
 }
 impl TryFrom<&[u8]> for ScmpPacketTooBigLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `ParameterProblem` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpParameterProblemLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields)..
     payload_length: usize,
@@ -306,11 +326,13 @@ impl ScmpParameterProblemLayout {
     pub const HEADER_SIZE_BYTES: usize = 8;
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Create a layout based on the byte length of the offending packet.
+    #[inline]
     pub fn from_offending_packet_length(
         offending_packet_length: usize,
         header_and_extensions_size: usize,
@@ -344,7 +366,8 @@ impl ScmpParameterProblemLayout {
 
     /// Returns the bit range of the offending packet in the SCMP message.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn offending_packet_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn offending_packet_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -352,6 +375,7 @@ impl ScmpParameterProblemLayout {
     }
 }
 impl Layout for ScmpParameterProblemLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
@@ -359,7 +383,8 @@ impl Layout for ScmpParameterProblemLayout {
 impl ScmpParameterProblemLayout {
     /// Create a layout from a raw buffer, validating minimum size.
     /// This assumes that the buffer contains exactly the scmp message without trailing bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpParameterProblem",
@@ -374,12 +399,14 @@ impl ScmpParameterProblemLayout {
 }
 impl TryFrom<&[u8]> for ScmpParameterProblemLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `ExternalInterfaceDown` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpExternalInterfaceDownLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields)..
     payload_length: usize,
@@ -389,11 +416,13 @@ impl ScmpExternalInterfaceDownLayout {
     pub const HEADER_SIZE_BYTES: usize = 20;
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Create a layout based on the byte length of the offending packet.
+    #[inline]
     pub fn from_offending_packet_length(
         offending_packet_length: usize,
         header_and_extensions_size: usize,
@@ -435,7 +464,8 @@ impl ScmpExternalInterfaceDownLayout {
 
     /// Returns the bit range of the offending packet in the SCMP message.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn offending_packet_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn offending_packet_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -444,6 +474,7 @@ impl ScmpExternalInterfaceDownLayout {
 }
 
 impl Layout for ScmpExternalInterfaceDownLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
@@ -451,7 +482,8 @@ impl Layout for ScmpExternalInterfaceDownLayout {
 impl ScmpExternalInterfaceDownLayout {
     /// Create a layout from a raw buffer, validating minimum size.
     /// This assumes that the buffer contains exactly the scmp message without trailing bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpExternalInterfaceDown",
@@ -466,12 +498,14 @@ impl ScmpExternalInterfaceDownLayout {
 }
 impl TryFrom<&[u8]> for ScmpExternalInterfaceDownLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `InternalConnectivityDown` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpInternalConnectivityDownLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields)..
     payload_length: usize,
@@ -481,11 +515,13 @@ impl ScmpInternalConnectivityDownLayout {
     pub const HEADER_SIZE_BYTES: usize = 28;
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Create a layout based on the byte length of the offending packet.
+    #[inline]
     pub fn from_offending_packet_length(
         offending_packet_length: usize,
         header_and_extensions_size: usize,
@@ -532,7 +568,8 @@ impl ScmpInternalConnectivityDownLayout {
 
     /// Returns the bit range of the offending packet in the SCMP message.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn offending_packet_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn offending_packet_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -540,6 +577,7 @@ impl ScmpInternalConnectivityDownLayout {
     }
 }
 impl Layout for ScmpInternalConnectivityDownLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
@@ -547,7 +585,8 @@ impl Layout for ScmpInternalConnectivityDownLayout {
 impl ScmpInternalConnectivityDownLayout {
     /// Create a layout from a raw buffer, validating minimum size.
     /// This assumes that the buffer contains exactly the scmp message without trailing bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpInternalConnectivityDown",
@@ -562,12 +601,14 @@ impl ScmpInternalConnectivityDownLayout {
 }
 impl TryFrom<&[u8]> for ScmpInternalConnectivityDownLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `EchoRequest` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpEchoRequestLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields)..
     payload_length: usize,
@@ -577,12 +618,14 @@ impl ScmpEchoRequestLayout {
     pub const HEADER_SIZE_BYTES: usize = 8;
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Create a layout based on the byte length of the echo data.
-    pub fn from_data_length(data_length: usize) -> Self {
+    #[inline]
+    pub const fn from_data_length(data_length: usize) -> Self {
         Self {
             payload_length: data_length + Self::HEADER_SIZE_BYTES,
         }
@@ -608,7 +651,8 @@ impl ScmpEchoRequestLayout {
 
     /// Returns the bit range of the echo data.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn data_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn data_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -616,6 +660,7 @@ impl ScmpEchoRequestLayout {
     }
 }
 impl Layout for ScmpEchoRequestLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
@@ -623,7 +668,8 @@ impl Layout for ScmpEchoRequestLayout {
 impl ScmpEchoRequestLayout {
     /// Create a layout from a raw buffer, validating minimum size.
     /// This assumes that the buffer contains exactly the scmp message without trailing bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpEchoRequest",
@@ -638,12 +684,14 @@ impl ScmpEchoRequestLayout {
 }
 impl TryFrom<&[u8]> for ScmpEchoRequestLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `EchoReply` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpEchoReplyLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields)..
     payload_length: usize,
@@ -653,12 +701,14 @@ impl ScmpEchoReplyLayout {
     pub const HEADER_SIZE_BYTES: usize = 8;
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Create a layout based on the length of the echo data.
-    pub fn from_data_length(data_length: usize) -> Self {
+    #[inline]
+    pub const fn from_data_length(data_length: usize) -> Self {
         Self {
             payload_length: data_length + Self::HEADER_SIZE_BYTES,
         }
@@ -684,7 +734,8 @@ impl ScmpEchoReplyLayout {
 
     /// Returns the range of the echo data in bits.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn data_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn data_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -692,13 +743,15 @@ impl ScmpEchoReplyLayout {
     }
 }
 impl Layout for ScmpEchoReplyLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
 }
 impl ScmpEchoReplyLayout {
     /// Create a layout from a raw buffer, validating minimum size.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpEchoReply",
@@ -713,12 +766,14 @@ impl ScmpEchoReplyLayout {
 }
 impl TryFrom<&[u8]> for ScmpEchoReplyLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `TracerouteRequest` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpTracerouteRequestLayout;
 impl ScmpTracerouteRequestLayout {
     /// The size of the header in bytes.
@@ -754,13 +809,15 @@ impl ScmpTracerouteRequestLayout {
     gen_bitrange_const!(INTERFACE_ID_RNG, 128, 64);
 }
 impl Layout for ScmpTracerouteRequestLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         Self::HEADER_SIZE_BYTES
     }
 }
 impl ScmpTracerouteRequestLayout {
     /// Create a layout from a raw buffer, validating minimum size.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpTracerouteRequest",
@@ -773,12 +830,14 @@ impl ScmpTracerouteRequestLayout {
 }
 impl TryFrom<&[u8]> for ScmpTracerouteRequestLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP `TracerouteReply` message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpTracerouteReplyLayout;
 impl ScmpTracerouteReplyLayout {
     /// Size of the fixed SCMP traceroute reply header in bytes.
@@ -813,13 +872,15 @@ impl ScmpTracerouteReplyLayout {
     gen_bitrange_const!(INTERFACE_ID_RNG, 128, 64);
 }
 impl Layout for ScmpTracerouteReplyLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         Self::HEADER_SIZE_BYTES
     }
 }
 impl ScmpTracerouteReplyLayout {
     /// Create a layout from a raw buffer, validating minimum size.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpTracerouteReply",
@@ -832,12 +893,14 @@ impl ScmpTracerouteReplyLayout {
 }
 impl TryFrom<&[u8]> for ScmpTracerouteReplyLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }
 
 /// Layout for an SCMP unknown message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScmpUnknownMessageLayout {
     /// Total size of the SCMP message in bytes (including type, code and checksum fields)..
     payload_length: usize,
@@ -846,7 +909,8 @@ impl ScmpUnknownMessageLayout {
     const HEADER_SIZE_BYTES: usize = 8;
 
     /// Create a layout based on the byte length of the message specific data.
-    pub fn from_message_specific_data_length(message_specific_data_length: usize) -> Self {
+    #[inline]
+    pub const fn from_message_specific_data_length(message_specific_data_length: usize) -> Self {
         Self {
             payload_length: message_specific_data_length + Self::HEADER_SIZE_BYTES,
         }
@@ -866,13 +930,15 @@ impl ScmpUnknownMessageLayout {
     gen_bitrange_const!(CHECKSUM_RNG, 16, 16);
 
     /// Create a new layout with the given payload length.
-    pub fn new(payload_length: usize) -> Self {
+    #[inline]
+    pub const fn new(payload_length: usize) -> Self {
         Self { payload_length }
     }
 
     /// Returns the bit range of the message specific data.
     /// The returned bit range is guaranteed to be aligned to the byte boundary.
-    pub fn message_specific_data_rng(&self) -> BitRange {
+    #[inline]
+    pub const fn message_specific_data_rng(&self) -> BitRange {
         BitRange::new(
             Self::HEADER_SIZE_BYTES * 8,
             self.payload_length.saturating_sub(Self::HEADER_SIZE_BYTES) * 8,
@@ -880,6 +946,7 @@ impl ScmpUnknownMessageLayout {
     }
 }
 impl Layout for ScmpUnknownMessageLayout {
+    #[inline]
     fn size_bytes(&self) -> usize {
         self.payload_length
     }
@@ -887,7 +954,8 @@ impl Layout for ScmpUnknownMessageLayout {
 impl ScmpUnknownMessageLayout {
     /// Create a layout from a raw buffer, validating minimum size.
     /// This assumes that the buffer contains exactly the scmp message without trailing bytes.
-    pub fn from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
+    #[inline]
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, ViewConversionError> {
         if buf.len() < Self::HEADER_SIZE_BYTES {
             return Err(ViewConversionError::BufferTooSmall {
                 at: "ScmpUnknownMessage",
@@ -902,7 +970,8 @@ impl ScmpUnknownMessageLayout {
 }
 impl TryFrom<&[u8]> for ScmpUnknownMessageLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf)
+        Self::try_from_slice(buf)
     }
 }

@@ -30,6 +30,7 @@ use crate::{
 };
 
 /// Layout for the SCION path header
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScionHeaderPathLayout {
     /// Layout for the standard SCION path
     Standard(StdPathMetaLayout, StdPathDataLayout),
@@ -63,6 +64,7 @@ impl ScionHeaderPathLayout {
     }
 
     /// Returns annotations for the path header fields
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let mut annotations = Annotations::new();
         match self {
@@ -96,6 +98,7 @@ impl Layout for ScionHeaderPathLayout {
     }
 }
 impl From<StdPathDataLayout> for ScionHeaderPathLayout {
+    #[inline]
     fn from(data_layout: StdPathDataLayout) -> Self {
         ScionHeaderPathLayout::Standard(StdPathMetaLayout, data_layout)
     }

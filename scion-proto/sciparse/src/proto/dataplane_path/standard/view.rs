@@ -341,6 +341,7 @@ impl StandardPathView {
     /// Reverses the path in-place
     ///
     /// This function preserves the current logical position in the path.
+    #[inline]
     pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
         let seg0 = self.seg0_len();
         let seg1 = self.seg1_len();
@@ -435,10 +436,10 @@ impl StandardPathView {
 }
 // Utility
 impl StandardPathView {
-    /// Returns a iterator over the segments of the path, where each segment is represented as a
+    /// Returns an iterator over the segments of the path, where each segment is represented as a
     /// tuple of an info field and a slice of hop fields.
     ///
-    /// The iterator gurantees that each info field has at least one hop field, and that the number
+    /// The iterator guarantees that each info field has at least one hop field, and that the number
     /// of info fields and hop fields matches the segment lengths in the meta header.
     #[inline]
     pub fn segments(&self) -> SegmentIterator<'_> {
@@ -449,6 +450,7 @@ impl StandardPathView {
     ///
     /// Returns the absolute expiry time as a UNIX timestamp in seconds, or 0 if the path has no hop
     /// fields.
+    #[inline]
     pub fn expiration(&self) -> u32 {
         let segment_iter = self.segments();
         if segment_iter.is_empty() {
@@ -487,11 +489,13 @@ impl StandardPathView {
     ///
     /// Returns (segment_idx, is_segment_start, is_segment_end) if the hop field index is valid,
     /// or None if the hop field index is out of bounds.
+    #[inline]
     pub fn calculate_segment_index(&self, hop_idx: usize) -> Option<(usize, bool, bool)> {
         let segment_lengths = [self.seg0_len(), self.seg1_len(), self.seg2_len()];
         Self::_calculate_segment_index(hop_idx, segment_lengths)
     }
 
+    #[inline]
     fn _calculate_segment_index(
         hop_idx: usize,
         segment_lengths: [u8; 3],
@@ -516,6 +520,7 @@ impl StandardPathView {
 }
 
 impl Debug for StandardPathView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hop_fields = self.hop_fields();
         let info_fields = self.info_fields();
@@ -577,6 +582,7 @@ impl Display for StandardPathView {
 
 /// Iterator over the segments of a standard path, where each segment is represented as a tuple of
 /// an info field and a slice of hop fields.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SegmentIterator<'a> {
     segment_lengths: [u8; 3],
     hop_fields: &'a [HopFieldView],
@@ -586,6 +592,7 @@ pub struct SegmentIterator<'a> {
     hop_idx: usize,
 }
 impl SegmentIterator<'_> {
+    #[inline]
     fn new(path_view: &StandardPathView) -> SegmentIterator<'_> {
         let segment_lengths = [
             path_view.seg0_len(),
@@ -612,23 +619,27 @@ impl SegmentIterator<'_> {
     }
 
     /// Returns true if the path has no segments, i.e. no info fields and no hop fields.
-    pub fn is_empty(&self) -> bool {
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
         self.total_segments == 0
     }
 
-    /// Returns the total number of segments in the path, which is determined by the number of info
-    pub fn segment_count(&self) -> usize {
+    /// Returns the total number of segments in the path.
+    #[inline]
+    pub const fn segment_count(&self) -> usize {
         self.total_segments
     }
 
     /// Returns the total number of hop fields in the path.
-    pub fn hop_field_count(&self) -> usize {
+    #[inline]
+    pub const fn hop_field_count(&self) -> usize {
         self.hop_fields.len()
     }
 }
 impl<'a> Iterator for SegmentIterator<'a> {
     type Item = (&'a InfoFieldView, &'a [HopFieldView]);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.seg_idx >= self.total_segments {
             return None;
@@ -647,7 +658,7 @@ impl<'a> Iterator for SegmentIterator<'a> {
 
 /// A view over a standard SCION path info field
 #[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InfoFieldView([u8; InfoFieldLayout::SIZE_BYTES]);
 impl View for InfoFieldView {
     #[inline]
@@ -716,15 +727,14 @@ impl InfoFieldView {
 
     gen_field_read!(segment_id, InfoFieldLayout::SEGMENT_ID_RNG, u16);
 
-    #[inline]
-    #[allow(unused)]
     /// Returns the timestamp of the info field, which is used for path expiry calculations
     ///
     /// The timestamp is the number of seconds since the UNIX epoch, and is used in combination with
     /// the `exp_time` field of the hop fields to calculate the absolute expiry time of the path.
+    #[inline]
     pub fn timestamp(&self) -> u32 {
         use crate::core::read::unchecked_bit_range_be_read;
-        unsafe { unchecked_bit_range_be_read::<u32>(&self.0, (InfoFieldLayout::TIMESTAMP_RNG)) }
+        unsafe { unchecked_bit_range_be_read::<u32>(&self.0, InfoFieldLayout::TIMESTAMP_RNG) }
     }
 }
 // Mutable
@@ -741,6 +751,7 @@ impl InfoFieldView {
     gen_field_write!(set_timestamp, InfoFieldLayout::TIMESTAMP_RNG, u32);
 }
 impl Debug for InfoFieldView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StandardPathInfoFieldView")
             .field("flags", &self.flags())
@@ -752,7 +763,7 @@ impl Debug for InfoFieldView {
 
 /// A view over a standard SCION path hop field
 #[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HopFieldView([u8; HopFieldLayout::SIZE_BYTES]);
 impl View for HopFieldView {
     #[inline]
@@ -910,6 +921,7 @@ impl HopFieldView {
     /// field and the exp_time of the hop field.
     ///
     /// The timestamp is a unix epoch timestamp in seconds.
+    #[inline]
     pub fn expiry_timestamp(&self, info: &InfoFieldView) -> u32 {
         let info_expiry = info.timestamp();
         let exp_time = exp_time_to_duration(self.exp_time()).as_secs();
@@ -917,6 +929,7 @@ impl HopFieldView {
     }
 }
 impl Debug for HopFieldView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StandardPathHopFieldView")
             .field("flags", &self.flags())
@@ -1024,8 +1037,8 @@ mod test {
                 ),
             };
 
-            let data = std.encode_to_vec().unwrap();
-            let (v, _) = StandardPathView::from_slice(&data).unwrap();
+            let data = std.try_encode_to_vec().unwrap();
+            let (v, _) = StandardPathView::try_from_slice(&data).unwrap();
             let std_path_fmt = format!("{}", v);
             assert_eq!(
                 std_path_fmt,

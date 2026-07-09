@@ -147,7 +147,7 @@ where
         // dispatcher classification, so the egress accounting path only needs a
         // zero-copy SCION header parse to recover src/dst IA and packet length
         // before ownership of the buffer moves into WireGuard encapsulation.
-        let (view, _) = ScionPacketView::from_slice(&packet[..]).ok()?;
+        let (view, _) = ScionPacketView::try_from_slice(&packet[..]).ok()?;
 
         Some(Self::observed_packet_meta(
             view,
@@ -420,7 +420,7 @@ where
             DpPath::Empty,
             scmp_message,
         );
-        scmp_packet_model.encode(target_buf)
+        scmp_packet_model.try_encode(target_buf)
     }
 }
 
@@ -533,7 +533,7 @@ mod tests {
         );
         let mut raw = vec![0; packet.required_size()];
         packet
-            .encode(&mut raw)
+            .try_encode(&mut raw)
             .expect("failed to encode SCION packet");
         raw
     }

@@ -47,10 +47,12 @@ fn valid_packets_should_roundtrip_correctly() {
             }
 
             let mut buf = vec![0u8; packet.required_size()];
-            packet.encode(&mut buf).expect("Writing to buffer failed");
+            packet
+                .try_encode(&mut buf)
+                .expect("Writing to buffer failed");
 
             let (view, rst) =
-                ScionRawPacketView::from_mut_slice(&mut buf).expect("Creating view failed");
+                ScionRawPacketView::try_from_mut_slice(&mut buf).expect("Creating view failed");
 
             prop_assert_eq!(rst.len(), 0);
 

@@ -45,11 +45,13 @@ impl OneHopPath {
     /// Creates a new OneHopPath from the given info field and hop fields.
     ///
     /// No validation is performed on the provided data.
-    pub fn new_from_parts(info: InfoField, hops: [HopField; 2]) -> Self {
+    #[inline]
+    pub const fn new_from_parts(info: InfoField, hops: [HopField; 2]) -> Self {
         Self { info, hops }
     }
 
     /// Creates a new OneHopPath with the given parameters, calculating the MACs for the hop fields.
+    #[inline]
     pub fn new(
         egress_interface: u16,
         segment_id: u16,
@@ -90,6 +92,7 @@ impl OneHopPath {
     /// * `forwarding_key` is the key used for MAC calculation
     /// * `segment_id_was_advanced` indicates whether the segment ID was advanced to the next hop
     ///   before calling this method, or if it is still at the first hop
+    #[inline]
     pub fn set_second_hop(
         &mut self,
         ingress_interface: u16,
@@ -123,7 +126,7 @@ impl OneHopPath {
     /// Since the One Hop does not track which hop it is currently on, the caller must ensure that
     /// the Segment ID is correctly set to reflect the final hop of the path before calling this
     /// method.
-    pub fn into_reversed_standard_path(self) -> Result<StandardPath, (PathReverseError, Self)> {
+    pub fn try_into_reversed_standard_path(self) -> Result<StandardPath, (PathReverseError, Self)> {
         if self.hops[1].cons_ingress == 0 {
             // The second hop is not set, we cannot reverse the path
             return Err((
@@ -159,6 +162,7 @@ impl OneHopPath {
     ///
     /// Returns an error if the second hop field has not been set yet (i.e., its ingress
     /// interface is still 0, meaning the path is incomplete).
+    #[inline]
     pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
         if self.hops[1].cons_ingress == 0 {
             return Err(PathReverseError::new(
@@ -173,15 +177,18 @@ impl OneHopPath {
     }
 }
 impl WireEncode for OneHopPath {
+    #[inline]
     fn required_size(&self) -> usize {
         OneHopPathLayout::SIZE_BYTES
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
         // No specific validation rules for OneHopPath, so we consider it always valid.
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         unsafe {
             use OneHopPathLayout as OHPL;
@@ -206,6 +213,7 @@ impl TryFromModel for OneHopPathView {
 impl FromView for OneHopPath {
     type ViewType = OneHopPathView;
 
+    #[inline]
     fn from_view(view: &Self::ViewType) -> Self {
         let info: InfoField = InfoField::from_view(view.info_field());
         let [hop1, hop2] = view.hop_fields();
@@ -223,7 +231,7 @@ pub mod ptest {
     use super::*;
 
     /// Configuration for generating arbitrary [`OneHopPath`] values.
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
     pub struct ArbitraryOneHopPathContext {
         // Not implemented yet, but would allow providing ForwardingKeys for generating valid MACs,
         // or even generating paths valid on a topology

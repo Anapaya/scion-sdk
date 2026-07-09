@@ -14,11 +14,11 @@
 
 //! SCION packet parsing and serialization.
 
-/// path interpretation
+/// Path interpretation.
 pub mod dataplane_path;
-/// SCION header interpretation
+/// SCION header interpretation.
 pub mod header;
-/// Full SCION packet  interpretation
+/// Full SCION packet interpretation.
 pub mod packet;
-/// payload interpretation
+/// Payload interpretation.
 pub mod payload;

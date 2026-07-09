@@ -58,11 +58,13 @@ impl Asn {
     /// Creates a new AS from a u64 value.
     ///
     /// This function will truncate the input value to fit within 48 bits.
+    #[inline]
     pub const fn new(id: u64) -> Self {
         Self(id & Self::MAX.0)
     }
 
     /// Creates a new AS from a u64 value, returning none if the value is out of range.
+    #[inline]
     pub const fn new_checked(id: u64) -> Option<Self> {
         if id > Self::MAX.0 {
             None
@@ -72,32 +74,38 @@ impl Asn {
     }
 
     /// Returns the AS number as a u64 integer.
+    #[inline]
     pub const fn to_u64(&self) -> u64 {
         self.0
     }
 
-    /// Returns true if this Asn is a wildcard.
+    /// Returns true if this [`Asn`] is a wildcard.
+    #[inline]
     pub const fn is_wildcard(&self) -> bool {
         self.0 == Self::WILDCARD.0
     }
 
-    /// Returns true if this Asn matches another Asn, taking wildcards into account.
+    /// Returns true if this [`Asn`] matches another [`Asn`], taking wildcards into account.
+    #[inline]
     pub const fn matches(&self, other: Asn) -> bool {
         self.is_wildcard() || other.is_wildcard() || self.0 == other.0
     }
 
-    /// Returns true if this Asn matches any entry in the given collection, taking wildcards into
-    /// account.
+    /// Returns true if this [`Asn`] matches any entry in the given collection, taking wildcards
+    /// into account.
+    #[inline]
     pub fn matches_any_in<'a>(&self, collection: impl IntoIterator<Item = &'a Asn>) -> bool {
         collection.into_iter().any(|other| self.matches(*other))
     }
 }
 impl Debug for Asn {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         <Self as Display>::fmt(self, f)
     }
 }
 impl Display for Asn {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         const BGP_ASN_FORMAT_BOUNDARY: u64 = u32::MAX as u64;
 
@@ -118,6 +126,7 @@ impl Display for Asn {
 impl FromStr for Asn {
     type Err = AddressParseError;
 
+    #[inline]
     fn from_str(asn_string: &str) -> Result<Self, Self::Err> {
         // AS numbers less than 2^32 can be provided as decimal
         if let Ok(bgp_asn) = u64::from_str(asn_string) {
@@ -154,6 +163,7 @@ impl FromStr for Asn {
 impl TryFrom<u64> for Asn {
     type Error = AddressParseError;
 
+    #[inline]
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         match Asn::new_checked(value) {
             Some(asn) => Ok(asn),
@@ -163,6 +173,7 @@ impl TryFrom<u64> for Asn {
 }
 impl_from!(Asn, u64, |v| v.to_u64());
 impl FromUnalignedRead for Asn {
+    #[inline]
     fn from_unaligned_read(v: u128) -> Self {
         Asn::new(u64::from_unaligned_read(v))
     }

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Shared types for path policy predicates and hops.
+
 use std::{fmt::Display, str::FromStr};
 
 use crate::{
@@ -19,55 +21,65 @@ use crate::{
     path::ScionPath,
 };
 
-/// A Predicate to check a Hop Interface against
+/// A predicate to check a hop interface against.
 ///
-/// Is either a wildcard (0) or a specific value
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+/// Is either a wildcard (0) or a specific value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InterfacePredicate(u16);
 impl InterfacePredicate {
-    /// Creates a new Hop Interface Predicate
+    /// Creates a new hop interface predicate.
     ///
-    /// 0 is deemed as a wildcard
-    ///
-    /// all other values have to match exactly
-    pub fn new(interface: u16) -> Self {
+    /// 0 is deemed as a wildcard, all other values have to match exactly.
+    #[inline]
+    pub const fn new(interface: u16) -> Self {
         Self(interface)
     }
 
-    /// Checks if given interface matches the predicate
-    pub fn matches(&self, interface: u16) -> bool {
+    /// Checks if the given interface matches the predicate.
+    #[inline]
+    pub const fn matches(&self, interface: u16) -> bool {
         self.is_wildcard() || self.0 == interface
     }
 
-    /// Checks if any item in the given collection matches the predicate
+    /// Checks if any item in the given collection matches the predicate.
+    #[inline]
     pub fn matches_any_in<'c>(&self, collection: impl IntoIterator<Item = &'c u16>) -> bool {
         collection.into_iter().any(|h| self.matches(*h))
     }
 
-    /// Returns true if this is a wildcard and matches against any interface
-    pub fn is_wildcard(&self) -> bool {
+    /// Returns true if this is a wildcard and matches against any interface.
+    #[inline]
+    pub const fn is_wildcard(&self) -> bool {
         self.0 == 0
     }
 
-    /// Returns the contained value as a u16
-    pub fn into_inner(&self) -> u16 {
+    /// Returns the contained value as a u16.
+    #[inline]
+    pub const fn into_inner(self) -> u16 {
         self.0
     }
 }
 impl From<u16> for InterfacePredicate {
+    #[inline]
     fn from(value: u16) -> Self {
         Self::new(value)
     }
 }
+impl From<InterfacePredicate> for u16 {
+    #[inline]
+    fn from(value: InterfacePredicate) -> Self {
+        value.into_inner()
+    }
+}
 
-/// Predicate to check SCION segment hops against
+/// Predicate to check SCION segment hops against.
 ///
 /// String Format:
 /// - "1"       - Just Match ISD
 /// - "1-2"     - Match ISD and ASN
 /// - "1-2#3"   - Match ISD, ASN and either ingress or egress interface
 /// - "1-2#3,4" - Match ISD, ASN and exact ingress and egress interface
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HopPredicate {
     /// The Isd predicate to match against
     pub isd: Isd,
@@ -77,7 +89,8 @@ pub struct HopPredicate {
     pub interfaces: InterfacesPredicate,
 }
 impl HopPredicate {
-    /// Creates a new Hop Predicate
+    /// Creates a new hop predicate.
+    #[inline]
     pub fn new(
         isd: impl Into<Isd>,
         asn: Option<impl Into<Asn>>,
@@ -90,7 +103,8 @@ impl HopPredicate {
         }
     }
 
-    /// Checks if the Hop Predicate matches the given hop
+    /// Checks if the hop predicate matches the given hop.
+    #[inline]
     pub fn matches(&self, hop_isd_asn: IsdAsn, hop_ingress: u16, hop_egress: u16) -> bool {
         self.isd.matches(hop_isd_asn.isd())
             && self
@@ -100,7 +114,8 @@ impl HopPredicate {
             && self.interfaces.matches(hop_ingress, hop_egress)
     }
 
-    /// Returns true if this is a wildcard predicate which matches any hop
+    /// Returns true if this is a wildcard predicate which matches any hop.
+    #[inline]
     pub fn is_wildcard(&self) -> bool {
         self.isd.is_wildcard()
             && (self.asn.map(|a| a.is_wildcard()).unwrap_or(true))
@@ -145,6 +160,7 @@ impl FromStr for HopPredicate {
     }
 }
 impl Display for HopPredicate {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.isd)?;
         if let Some(asn) = &self.asn {
@@ -158,12 +174,12 @@ impl Display for HopPredicate {
     }
 }
 
-/// Predicate to check the ingress and egress interface of a SCION hop
+/// Predicate to check the ingress and egress interface of a SCION hop.
 ///
 /// String Format: \
 /// "1" - Any interface must be 1
 /// "1,2" - Ingress must be 1, egress must be 2
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InterfacesPredicate {
     /// No Predicate
     Any,
@@ -178,15 +194,18 @@ pub enum InterfacesPredicate {
     },
 }
 impl InterfacesPredicate {
-    /// Creates a new Any predicate
-    pub fn any() -> Self {
+    /// Creates a new `Any` predicate.
+    #[inline]
+    pub const fn any() -> Self {
         Self::Any
     }
-    /// Creates a new Either predicate
+    /// Creates a new `Either` predicate.
+    #[inline]
     pub fn either(any: impl Into<InterfacePredicate>) -> Self {
         Self::Either(any.into())
     }
-    /// Creates a new Both predicate
+    /// Creates a new `Both` predicate.
+    #[inline]
     pub fn both(
         ingress: impl Into<InterfacePredicate>,
         egress: impl Into<InterfacePredicate>,
@@ -197,8 +216,9 @@ impl InterfacesPredicate {
         }
     }
 
-    /// Checks if given ingress and egress matches the predicate
-    pub fn matches(&self, hop_ingress: u16, hop_egress: u16) -> bool {
+    /// Checks if the given ingress and egress matches the predicate.
+    #[inline]
+    pub const fn matches(&self, hop_ingress: u16, hop_egress: u16) -> bool {
         match self {
             InterfacesPredicate::Either(any) => any.matches(hop_ingress) || any.matches(hop_egress),
             InterfacesPredicate::Both { ingress, egress } => {
@@ -208,8 +228,9 @@ impl InterfacesPredicate {
         }
     }
 
-    /// Returns true if this is a wildcard and matches against any interface
-    pub fn is_wildcard(&self) -> bool {
+    /// Returns true if this is a wildcard and matches against any interface.
+    #[inline]
+    pub const fn is_wildcard(&self) -> bool {
         match self {
             InterfacesPredicate::Any => true,
             InterfacesPredicate::Either(pred) => pred.is_wildcard(),
@@ -222,6 +243,7 @@ impl InterfacesPredicate {
 impl FromStr for InterfacesPredicate {
     type Err = String;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut iter = s.splitn(2, ",");
 
@@ -246,6 +268,7 @@ impl FromStr for InterfacesPredicate {
     }
 }
 impl Display for InterfacesPredicate {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InterfacesPredicate::Any => Ok(()),
@@ -257,8 +280,8 @@ impl Display for InterfacesPredicate {
     }
 }
 
-/// Path Hop used to match against a Path Policy
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Path hop used to match against a path policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PathPolicyHop {
     /// The ISD-ASN of the hop
     pub isd_asn: IsdAsn,
@@ -268,12 +291,13 @@ pub struct PathPolicyHop {
     pub egress: u16,
 }
 impl PathPolicyHop {
-    /// Checks if the hop matches the given predicate
+    /// Checks if the hop matches the given predicate.
+    #[inline]
     pub fn matches(&self, pred: &HopPredicate) -> bool {
         pred.matches(self.isd_asn, self.ingress, self.egress)
     }
 
-    /// Converts a SCION Path into a vector of PathPolicyHops
+    /// Converts a SCION path into a vector of [`PathPolicyHop`]s.
     pub fn hops_from_path(path: &ScionPath) -> Result<Vec<Self>, &'static str> {
         let Some(metadata) = &path.metadata else {
             // If there is no metadata, we cannot apply any policy

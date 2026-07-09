@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! SCION header interpretation.
+//!
+//! Provides the layout, model, and view representations of the SCION header.
+
 pub mod layout;
 pub mod model;
 pub mod view;

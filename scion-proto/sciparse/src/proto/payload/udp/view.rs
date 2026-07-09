@@ -90,6 +90,7 @@ impl View for UdpDatagramView {
     }
 }
 impl Debug for UdpDatagramView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UdpDatagramView")
             .field("src_port", &self.src_port())
@@ -155,7 +156,7 @@ mod tests {
     #[test]
     fn udp_packet_view_valid_header() {
         let buf = make_udp(1234, 5678, b"hello");
-        let (view, _) = UdpDatagramView::from_slice(&buf).unwrap();
+        let (view, _) = UdpDatagramView::try_from_slice(&buf).unwrap();
         assert_eq!(view.src_port(), 1234);
         assert_eq!(view.dst_port(), 5678);
         assert_eq!(view.length(), 13);
@@ -165,13 +166,13 @@ mod tests {
     #[test]
     fn udp_packet_view_truncated_input() {
         let buf = [0u8; 7]; // shorter than 8 bytes
-        assert!(UdpDatagramView::from_slice(&buf).is_err());
+        assert!(UdpDatagramView::try_from_slice(&buf).is_err());
     }
 
     #[test]
     fn udp_packet_view_exact_header_no_payload() {
         let buf = make_udp(80, 443, &[]);
-        let (view, _) = UdpDatagramView::from_slice(&buf).unwrap();
+        let (view, _) = UdpDatagramView::try_from_slice(&buf).unwrap();
         assert_eq!(view.src_port(), 80);
         assert_eq!(view.dst_port(), 443);
         assert_eq!(view.payload(), b"");

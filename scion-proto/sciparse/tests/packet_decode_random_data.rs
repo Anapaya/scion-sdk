@@ -43,7 +43,7 @@ fn parsing_random_packet_data_must_not_panic() {
     ) -> Result<(), proptest::prelude::TestCaseError> {
         let unwind = catch_unwind(|| {
             let mut data = data;
-            match ScionRawPacketView::from_mut_slice(&mut data) {
+            match ScionRawPacketView::try_from_mut_slice(&mut data) {
                 Ok((view, _rest)) => {
                     sciparse::util::fuzz::view_function_checks::packet::exec_every_view_function(
                         view,

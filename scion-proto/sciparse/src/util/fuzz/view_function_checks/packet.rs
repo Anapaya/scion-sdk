@@ -44,7 +44,7 @@ pub fn exec_every_view_function(view: &mut ScionRawPacketView) {
 
     // ── Classification ────────────────────────────────────────────────
 
-    if let Ok(class) = view.classify() {
+    if let Ok(class) = view.try_classify() {
         black_box(class.dst_socket_addr());
 
         match class {
@@ -63,24 +63,27 @@ pub fn exec_every_view_function(view: &mut ScionRawPacketView) {
     // everything we can on it to surface any out-of-bounds access.
 
     // Immutable UDP
-    if let Ok((udp_view, _rest)) = ScionUdpPacketView::from_slice(view.as_slice()) {
+    if let Ok((udp_view, _rest)) = ScionUdpPacketView::try_from_slice(view.as_slice()) {
         exec_udp_packet_view(udp_view);
     }
     // Immutable SCMP
-    if let Ok((scmp_view, _rest)) = ScionScmpPacketView::from_slice(view.as_slice()) {
+    if let Ok((scmp_view, _rest)) = ScionScmpPacketView::try_from_slice(view.as_slice()) {
         exec_scmp_packet_view(scmp_view);
     }
 
     // Mutable UDP
     unsafe {
-        if let Ok((udp_view_mut, _rest)) = ScionUdpPacketView::from_mut_slice(view.as_slice_mut()) {
+        if let Ok((udp_view_mut, _rest)) =
+            ScionUdpPacketView::try_from_mut_slice(view.as_slice_mut())
+        {
             exec_udp_packet_view_mut(udp_view_mut);
         }
     }
 
     // Mutable SCMP
     unsafe {
-        if let Ok((scmp_view_mut, _rest)) = ScionScmpPacketView::from_mut_slice(view.as_slice_mut())
+        if let Ok((scmp_view_mut, _rest)) =
+            ScionScmpPacketView::try_from_mut_slice(view.as_slice_mut())
         {
             exec_scmp_packet_view_mut(scmp_view_mut);
         }
@@ -102,7 +105,7 @@ fn exec_udp_packet_view(view: &ScionUdpPacketView) {
     read_slice_bounds(udp.as_slice());
 
     // Round-trip back to raw
-    let raw = view.into_raw();
+    let raw = view.as_raw();
     black_box(raw.header());
     read_slice_bounds(raw.payload());
     read_slice_bounds(raw.as_slice());
@@ -120,7 +123,7 @@ fn exec_udp_packet_view_mut(view: &mut ScionUdpPacketView) {
         payload::udp::exec_every_view_function_ref(udp);
     }
 
-    let raw = view.into_raw_mut();
+    let raw = view.as_raw_mut();
     touch_slice_bounds(raw.payload_mut());
 }
 
@@ -139,7 +142,7 @@ fn exec_scmp_packet_view(view: &ScionScmpPacketView) {
     read_slice_bounds(scmp.as_slice());
 
     // Round-trip back to raw
-    let raw = view.into_raw();
+    let raw = view.as_raw();
     black_box(raw.header());
     read_slice_bounds(raw.payload());
     read_slice_bounds(raw.as_slice());
@@ -162,6 +165,6 @@ fn exec_scmp_packet_view_mut(view: &mut ScionScmpPacketView) {
     }
 
     // Safety: we don't mutate in a way that invalidates the view.
-    let raw = unsafe { view.into_raw_mut() };
+    let raw = unsafe { view.as_raw_mut() };
     touch_slice_bounds(raw.payload_mut());
 }

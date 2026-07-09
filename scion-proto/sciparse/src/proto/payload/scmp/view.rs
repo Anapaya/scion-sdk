@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Zero-copy views over SCMP messages and headers.
+
 use std::fmt::Debug;
 
 use crate::{
@@ -45,11 +47,12 @@ use crate::{
 };
 
 /// A view over a valid SCMP payload.
-/// This types has_required_size ensures that the buffer is large enough to contain the SCMP
-/// message.
+///
+/// Construction of this type ensures that the buffer is large enough to contain the SCMP message.
 #[repr(transparent)]
 pub struct ScmpPayloadView([u8]);
 impl Debug for ScmpPayloadView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpPayloadView")
             .field("message", &self.message())
@@ -210,13 +213,14 @@ impl ScmpPayloadView {
     /// - Informational messages: returns the identifier field.
     /// - Error messages: parses the offending packet as UDP and returns its source port.
     /// - Unknown error messages: returns `None`.
+    #[inline]
     pub fn dst_port(&self) -> Option<u16> {
         let udp_src_port = |offending_packet: &[u8]| {
-            let (inner, _) = ScionRawPacketView::from_slice(offending_packet).ok()?;
+            let (inner, _) = ScionRawPacketView::try_from_slice(offending_packet).ok()?;
             if inner.header().next_header() != ProtocolNumber::Udp {
                 return None;
             }
-            let (udp, _) = UdpDatagramView::from_slice(inner.payload()).ok()?;
+            let (udp, _) = UdpDatagramView::try_from_slice(inner.payload()).ok()?;
             Some(udp.src_port())
         };
         match self.message() {
@@ -259,6 +263,7 @@ pub enum ScmpMessageView<'a> {
     Unknown(&'a ScmpUnknownMessageView),
 }
 impl ScmpMessageExt for ScmpMessageView<'_> {
+    #[inline]
     fn to_ref(&self) -> ScmpMessageView<'_> {
         *self
     }
@@ -289,6 +294,7 @@ pub enum ScmpMessageViewMut<'a> {
     Unknown(&'a mut ScmpUnknownMessageView),
 }
 impl ScmpMessageExt for ScmpMessageViewMut<'_> {
+    #[inline]
     fn to_ref(&self) -> ScmpMessageView<'_> {
         match self {
             Self::DestinationUnreachable(a) => ScmpMessageView::DestinationUnreachable(a),
@@ -313,6 +319,7 @@ pub trait ScmpMessageExt {
     fn to_ref(&self) -> ScmpMessageView<'_>;
 
     /// Returns `true` if this message is an SCMP error message.
+    #[inline]
     fn is_error(&self) -> bool {
         matches!(
             self.to_ref(),
@@ -325,6 +332,7 @@ pub trait ScmpMessageExt {
     }
 
     /// Returns `true` if this message is an SCMP informational message.
+    #[inline]
     fn is_informational(&self) -> bool {
         matches!(
             self.to_ref(),
@@ -336,6 +344,7 @@ pub trait ScmpMessageExt {
     }
 
     /// Parses a model from the provided view.
+    #[inline]
     fn to_model(&self) -> ScmpMessage {
         match self.to_ref() {
             ScmpMessageView::DestinationUnreachable(m) => m.to_model().into(),
@@ -391,6 +400,7 @@ impl ScmpDestinationUnreachableMessageView {
     );
 
     /// Returns a slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet(&self) -> &[u8] {
         let range = ScmpDestinationUnreachableLayout::new(self.0.len())
             .offending_packet_rng()
@@ -399,6 +409,7 @@ impl ScmpDestinationUnreachableMessageView {
     }
 
     /// Returns a mutable slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet_mut(&mut self) -> &mut [u8] {
         let range = ScmpDestinationUnreachableLayout::new(self.0.len())
             .offending_packet_rng()
@@ -407,6 +418,7 @@ impl ScmpDestinationUnreachableMessageView {
     }
 }
 impl Debug for ScmpDestinationUnreachableMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpDestinationUnreachableMessageView")
             .field("message_type", &self.message_type())
@@ -449,6 +461,7 @@ impl ScmpPacketTooBigMessageView {
     gen_field_read_and_write!(mtu, set_mtu, ScmpPacketTooBigLayout::MTU_RNG, u16);
 
     /// Returns a slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet(&self) -> &[u8] {
         let range = ScmpPacketTooBigLayout::new(self.0.len())
             .offending_packet_rng()
@@ -457,6 +470,7 @@ impl ScmpPacketTooBigMessageView {
     }
 
     /// Returns a mutable slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet_mut(&mut self) -> &mut [u8] {
         let range = ScmpPacketTooBigLayout::new(self.0.len())
             .offending_packet_rng()
@@ -466,6 +480,7 @@ impl ScmpPacketTooBigMessageView {
 }
 
 impl Debug for ScmpPacketTooBigMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpPacketTooBigMessageView")
             .field("message_type", &self.message_type())
@@ -519,6 +534,7 @@ impl ScmpParameterProblemMessageView {
     );
 
     /// Returns a slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet(&self) -> &[u8] {
         let range = ScmpParameterProblemLayout::new(self.0.len())
             .offending_packet_rng()
@@ -527,6 +543,7 @@ impl ScmpParameterProblemMessageView {
     }
 
     /// Returns a mutable slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet_mut(&mut self) -> &mut [u8] {
         let range = ScmpParameterProblemLayout::new(self.0.len())
             .offending_packet_rng()
@@ -536,6 +553,7 @@ impl ScmpParameterProblemMessageView {
 }
 
 impl Debug for ScmpParameterProblemMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpParameterProblemMessageView")
             .field("message_type", &self.message_type())
@@ -592,6 +610,7 @@ impl ScmpExternalInterfaceDownMessageView {
     );
 
     /// Returns a slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet(&self) -> &[u8] {
         let range = ScmpExternalInterfaceDownLayout::new(self.0.len())
             .offending_packet_rng()
@@ -600,6 +619,7 @@ impl ScmpExternalInterfaceDownMessageView {
     }
 
     /// Returns a mutable slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet_mut(&mut self) -> &mut [u8] {
         let range = ScmpExternalInterfaceDownLayout::new(self.0.len())
             .offending_packet_rng()
@@ -609,6 +629,7 @@ impl ScmpExternalInterfaceDownMessageView {
 }
 
 impl Debug for ScmpExternalInterfaceDownMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpExternalInterfaceDownMessageView")
             .field("message_type", &self.message_type())
@@ -671,6 +692,7 @@ impl ScmpInternalConnectivityDownMessageView {
     );
 
     /// Returns a slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet(&self) -> &[u8] {
         let range = ScmpInternalConnectivityDownLayout::new(self.0.len())
             .offending_packet_rng()
@@ -679,6 +701,7 @@ impl ScmpInternalConnectivityDownMessageView {
     }
 
     /// Returns a mutable slice over the offending packet of the message.
+    #[inline]
     pub fn offending_packet_mut(&mut self) -> &mut [u8] {
         let range = ScmpInternalConnectivityDownLayout::new(self.0.len())
             .offending_packet_rng()
@@ -688,6 +711,7 @@ impl ScmpInternalConnectivityDownMessageView {
 }
 
 impl Debug for ScmpInternalConnectivityDownMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpInternalConnectivityDownMessageView")
             .field("message_type", &self.message_type())
@@ -736,7 +760,8 @@ impl ScmpEchoRequestMessageView {
         u16
     );
 
-    /// Returns a slice over the messages data.
+    /// Returns a slice over the message's data.
+    #[inline]
     pub fn data(&self) -> &[u8] {
         let range = ScmpEchoRequestLayout::new(self.0.len())
             .data_rng()
@@ -744,7 +769,8 @@ impl ScmpEchoRequestMessageView {
         &self.0[range]
     }
 
-    /// Returns a mutable slice over the messages data.
+    /// Returns a mutable slice over the message's data.
+    #[inline]
     pub fn data_mut(&mut self) -> &mut [u8] {
         let range = ScmpEchoRequestLayout::new(self.0.len())
             .data_rng()
@@ -754,6 +780,7 @@ impl ScmpEchoRequestMessageView {
 }
 
 impl Debug for ScmpEchoRequestMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpEchoRequestMessageView")
             .field("message_type", &self.message_type())
@@ -797,7 +824,8 @@ impl ScmpEchoReplyMessageView {
         u16
     );
 
-    /// Returns a slice over the messages data.
+    /// Returns a slice over the message's data.
+    #[inline]
     pub fn data(&self) -> &[u8] {
         let range = ScmpEchoReplyLayout::new(self.0.len())
             .data_rng()
@@ -805,7 +833,8 @@ impl ScmpEchoReplyMessageView {
         &self.0[range]
     }
 
-    /// Returns a mutable slice over the messages data.
+    /// Returns a mutable slice over the message's data.
+    #[inline]
     pub fn data_mut(&mut self) -> &mut [u8] {
         let range = ScmpEchoReplyLayout::new(self.0.len())
             .data_rng()
@@ -815,6 +844,7 @@ impl ScmpEchoReplyMessageView {
 }
 
 impl Debug for ScmpEchoReplyMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpEchoReplyMessageView")
             .field("message_type", &self.message_type())
@@ -879,6 +909,7 @@ impl ScmpTracerouteRequestMessageView {
 }
 
 impl Debug for ScmpTracerouteRequestMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpTracerouteRequestMessageView")
             .field("message_type", &self.message_type())
@@ -942,6 +973,7 @@ impl ScmpTracerouteReplyMessageView {
 }
 
 impl Debug for ScmpTracerouteReplyMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpTracerouteReplyMessageView")
             .field("message_type", &self.message_type())
@@ -976,7 +1008,8 @@ impl ScmpUnknownMessageView {
         u16
     );
 
-    /// Returns a slice over the messages specific data.
+    /// Returns a slice over the message's specific data.
+    #[inline]
     pub fn message_specific_data(&self) -> &[u8] {
         let range = ScmpUnknownMessageLayout::new(self.0.len())
             .message_specific_data_rng()
@@ -984,7 +1017,8 @@ impl ScmpUnknownMessageView {
         &self.0[range]
     }
 
-    /// Returns a mutable slice over the messages specific data.
+    /// Returns a mutable slice over the message's specific data.
+    #[inline]
     pub fn message_specific_data_mut(&mut self) -> &mut [u8] {
         let range = ScmpUnknownMessageLayout::new(self.0.len())
             .message_specific_data_rng()
@@ -994,6 +1028,7 @@ impl ScmpUnknownMessageView {
 }
 
 impl Debug for ScmpUnknownMessageView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScmpUnknownMessageView")
             .field("message_type", &self.message_type())

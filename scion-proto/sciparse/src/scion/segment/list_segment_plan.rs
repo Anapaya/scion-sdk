@@ -22,7 +22,7 @@ use crate::identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn};
 /// Plan to look up segments from a source to a destination ISD-AS
 /// by splitting the request into up, core, and down segments requests
 /// against SCION control services.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ListSegmentPlan {
     /// Up segment request
     pub up: Option<(IsdAsn, IsdAsn)>,
@@ -33,7 +33,7 @@ pub struct ListSegmentPlan {
 }
 
 /// Error returned when creating a [`ListSegmentPlan`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ListSegmentPlanError {
     /// Source and destination AS must differ in path segment lookup.
     #[error("source and destination AS must differ in path segment lookup")]
@@ -57,6 +57,7 @@ pub enum ListSegmentPlanError {
 
 impl ListSegmentPlan {
     /// Plans the lookups to be done on given Parameters
+    #[inline]
     pub fn new(
         src: Src,
         src_cores: CoreHint,
@@ -72,6 +73,7 @@ impl ListSegmentPlan {
         }
     }
 
+    #[inline]
     fn plan_same_isd(
         src: Src,
         src_cores: CoreHint,
@@ -120,6 +122,7 @@ impl ListSegmentPlan {
         }
     }
 
+    #[inline]
     fn plan_cross_isd(src: Src, dst: Dst) -> Result<ListSegmentPlan, ListSegmentPlanError> {
         let src_any_core = IsdAsn::new(src.isd(), Asn::WILDCARD);
         let dst_any_core = IsdAsn::new(dst.isd(), Asn::WILDCARD);
@@ -146,6 +149,7 @@ impl ListSegmentPlan {
 
 impl ListSegmentPlan {
     /// Checks if the Lookup could be satisfied
+    #[inline]
     fn validate(self) -> Result<Self, ListSegmentPlanError> {
         if self.up.is_none() && self.core.is_none() && self.down.is_none() {
             return Err(ListSegmentPlanError::NoSegmentLookup);
@@ -181,6 +185,7 @@ impl ListSegmentPlan {
     }
 
     /// No-op segments lookup.
+    #[inline]
     pub fn none() -> Result<ListSegmentPlan, ListSegmentPlanError> {
         ListSegmentPlan {
             up: None,
@@ -191,6 +196,7 @@ impl ListSegmentPlan {
     }
 
     /// Core segments lookup.
+    #[inline]
     pub fn core(src: IsdAsn, dst: IsdAsn) -> Result<ListSegmentPlan, ListSegmentPlanError> {
         ListSegmentPlan {
             up: None,
@@ -203,6 +209,7 @@ impl ListSegmentPlan {
     /// Single Up Segments lookup.
     ///
     /// src and dst must be in same ISD
+    #[inline]
     pub fn up(src: IsdAsn, dst: IsdAsn) -> Result<ListSegmentPlan, ListSegmentPlanError> {
         ListSegmentPlan {
             up: Some((src, dst)),
@@ -215,6 +222,7 @@ impl ListSegmentPlan {
     /// Single Down Segments lookup.
     ///
     /// src and dst must be in same ISD
+    #[inline]
     pub fn down(src: IsdAsn, dst: IsdAsn) -> Result<ListSegmentPlan, ListSegmentPlanError> {
         ListSegmentPlan {
             up: None,
@@ -228,6 +236,7 @@ impl ListSegmentPlan {
     ///
     /// src and transit must be in same ISD
     /// dst can only be a core
+    #[inline]
     pub fn up_core(
         src: IsdAsn,
         transit: IsdAsn,
@@ -245,6 +254,7 @@ impl ListSegmentPlan {
     ///
     /// src must be a core AS
     /// transit and dst must be in same ISD
+    #[inline]
     pub fn core_down(
         src: IsdAsn,
         transit: IsdAsn,
@@ -260,7 +270,8 @@ impl ListSegmentPlan {
 
     /// Up lookup followed by a down lookup
     ///
-    /// src, dst and transit mut be in the same ISD
+    /// src, dst and transit must be in the same ISD
+    #[inline]
     pub fn up_down(
         src: IsdAsn,
         transit: IsdAsn,
@@ -274,10 +285,11 @@ impl ListSegmentPlan {
         .validate()
     }
 
-    /// Up lookup followed by a down lookup
+    /// Up lookup, followed by a core lookup, followed by a down lookup
     ///
     /// src and src_transit must be in the same ISD
     /// dst_transit and dst must be in the same ISD
+    #[inline]
     pub fn up_core_down(
         src: IsdAsn,
         src_transit: IsdAsn,
@@ -294,6 +306,7 @@ impl ListSegmentPlan {
 }
 
 /// Destination AS Type for Segment Lookup
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dst {
     /// A Core AS
     Core(IsdAsn),
@@ -305,7 +318,8 @@ pub enum Dst {
 
 impl Dst {
     /// Creates a new destination AS type
-    pub fn new(ias: IsdAsn, is_core: bool) -> Self {
+    #[inline]
+    pub const fn new(ias: IsdAsn, is_core: bool) -> Self {
         match ias.is_wildcard() {
             true => Dst::AnyCore(ias),
             false if is_core => Dst::Core(ias),
@@ -314,7 +328,8 @@ impl Dst {
     }
 
     /// Returns the ISD-AS of the destination.
-    pub fn ias(&self) -> IsdAsn {
+    #[inline]
+    pub const fn ias(&self) -> IsdAsn {
         match self {
             Dst::Core(ias) => *ias,
             Dst::NonCore(ias) => *ias,
@@ -323,7 +338,8 @@ impl Dst {
     }
 
     /// Returns the ISD of the destination.
-    pub fn isd(&self) -> Isd {
+    #[inline]
+    pub const fn isd(&self) -> Isd {
         match self {
             Dst::Core(ias) => ias.isd(),
             Dst::NonCore(ias) => ias.isd(),
@@ -333,6 +349,7 @@ impl Dst {
 }
 
 /// Source AS Type for Segment Lookup
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Src {
     /// A Core AS
     Core(IsdAsn),
@@ -341,13 +358,14 @@ pub enum Src {
 }
 
 /// Error returned when creating a [`Src`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("source AS must not be wildcard")]
 pub struct SrcWildcardError;
 
 impl Src {
     /// Creates a new source AS type
-    pub fn new(ias: IsdAsn, is_core: bool) -> Result<Self, SrcWildcardError> {
+    #[inline]
+    pub const fn new(ias: IsdAsn, is_core: bool) -> Result<Self, SrcWildcardError> {
         match ias.is_wildcard() {
             true => Err(SrcWildcardError),
             false if is_core => Ok(Src::Core(ias)),
@@ -356,7 +374,8 @@ impl Src {
     }
 
     /// Returns the ISD-AS of the source.
-    pub fn ias(&self) -> IsdAsn {
+    #[inline]
+    pub const fn ias(&self) -> IsdAsn {
         match self {
             Src::Core(ias) => *ias,
             Src::NonCore(ias) => *ias,
@@ -364,7 +383,8 @@ impl Src {
     }
 
     /// Returns the ISD of the source.
-    pub fn isd(&self) -> Isd {
+    #[inline]
+    pub const fn isd(&self) -> Isd {
         match self {
             Src::Core(ias) => ias.isd(),
             Src::NonCore(ias) => ias.isd(),
@@ -373,6 +393,7 @@ impl Src {
 }
 
 /// Hint on count of Core ASes in an ISD
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CoreHint {
     /// Only a single Core can be used to route in this AS
     Single(IsdAsn),

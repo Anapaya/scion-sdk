@@ -56,7 +56,7 @@ where
 }
 
 /// Edge in the graph.
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Edge {
     /// The weight of the edge calculated by the given weight_fn.
     pub weight: u64,
@@ -77,7 +77,7 @@ type EdgeMap<'a, EntryType> = HashMap<&'a InputSegment<'a, EntryType>, Edge>;
 type VertexInfo<'a, EntryType> = HashMap<Vertex, EdgeMap<'a, EntryType>>;
 
 /// A vertex in the graph is either an IA or represents a peering link.
-#[derive(Hash, Eq, PartialEq, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Vertex {
     /// IA vertex.
     AS(IsdAsn),
@@ -96,6 +96,7 @@ pub enum Vertex {
 }
 
 impl std::fmt::Display for Vertex {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Vertex::AS(ia) => write!(f, "IA({ia})"),
@@ -115,8 +116,9 @@ impl std::fmt::Display for Vertex {
 }
 
 impl Vertex {
-    #[allow(dead_code)]
     /// Generate a valid mermaid node id for the vertex.
+    #[allow(dead_code)]
+    #[inline]
     fn mermaid_id(&self) -> String {
         match self {
             Vertex::AS(ia) => ia.to_u64().to_string(),
@@ -139,11 +141,14 @@ impl Vertex {
 
     /// Generate a valid mermaid node for the vertex.
     #[allow(dead_code)]
+    #[inline]
     pub fn mermaid_node(&self) -> String {
         format!("{}[\"{}\"]", self.mermaid_id(), self)
     }
 
-    fn ia(&self) -> Option<IsdAsn> {
+    /// Returns the IA of the vertex if it is an [`Vertex::AS`] vertex.
+    #[inline]
+    const fn ia(&self) -> Option<IsdAsn> {
         match self {
             Vertex::AS(ia) => Some(*ia),
             _ => None,
@@ -153,7 +158,7 @@ impl Vertex {
 
 /// Input segment is a wrapper around PathSegment that also includes the segment type (core or
 /// non-core).
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InputSegment<'a, EntryType: Entry> {
     /// Core segment.
     Core(&'a PathSegment<EntryType>, SegmentID),
@@ -163,33 +168,43 @@ pub enum InputSegment<'a, EntryType: Entry> {
 
 impl<'a, EntryType: Entry> InputSegment<'a, EntryType> {
     /// Create a new core input segment.
+    #[inline]
     pub fn new_core(path_segment: &'a PathSegment<EntryType>) -> Self {
         let id = path_segment.id();
         Self::Core(path_segment, id)
     }
 
     /// Create a new non-core input segment.
+    #[inline]
     pub fn new_non_core(path_segment: &'a PathSegment<EntryType>) -> Self {
         let id = path_segment.id();
         Self::NonCore(path_segment, id)
     }
 
-    fn is_non_core(&self) -> bool {
+    /// Returns true if this is a non-core segment.
+    #[inline]
+    const fn is_non_core(&self) -> bool {
         matches!(self, Self::NonCore(_, _))
     }
 
-    fn is_core(&self) -> bool {
+    /// Returns true if this is a core segment.
+    #[inline]
+    const fn is_core(&self) -> bool {
         matches!(self, Self::Core(_, _))
     }
 
-    fn id(&self) -> &SegmentID {
+    /// Returns the segment id.
+    #[inline]
+    const fn id(&self) -> &SegmentID {
         match self {
             Self::Core(_, id) => id,
             Self::NonCore(_, id) => id,
         }
     }
 
-    fn path_segment(&self) -> &PathSegment<EntryType> {
+    /// Returns the wrapped path segment.
+    #[inline]
+    const fn path_segment(&self) -> &PathSegment<EntryType> {
         match self {
             Self::Core(path_segment, _) => path_segment,
             Self::NonCore(path_segment, _) => path_segment,
@@ -197,6 +212,8 @@ impl<'a, EntryType: Entry> InputSegment<'a, EntryType> {
     }
 }
 
+/// Weight function that uses the number of links traversed when using the segment as cost.
+#[inline]
 pub(crate) fn number_of_hops<EntryType: Entry>(
     segment: &InputSegment<EntryType>,
     shortcut_idx: u64,
@@ -219,6 +236,7 @@ where
     F: Fn(&InputSegment<EntryType>, u64, bool) -> u64,
 {
     /// Create a new empty graph with the given weight function.
+    #[inline]
     pub fn new(weight_fn: F) -> Self {
         Self {
             adjacencies: HashMap::new(),
@@ -233,6 +251,7 @@ where
     ///
     /// Returns the count of segments which were successfully added.
     /// If a segment contains no hops, it is not added to the graph.``
+    #[inline]
     pub fn add_segments(&mut self, segments: &'a [InputSegment<EntryType>]) -> usize {
         let mut added = 0;
         for segment in segments {
@@ -243,6 +262,7 @@ where
         added
     }
 
+    #[inline]
     fn add_segment(&mut self, segment: &'a InputSegment<EntryType>) -> Result<(), &'static str> {
         match segment {
             InputSegment::Core(..) => {
@@ -262,6 +282,7 @@ where
     ///
     /// Returns Ok if the edge was added successfully, or an error if the segment does not
     /// contain any hops.
+    #[inline]
     fn add_core_segment(
         &mut self,
         segment: &'a InputSegment<EntryType>,
@@ -362,6 +383,7 @@ where
     }
 
     /// Add a bidirectional edge from src to dst and back.
+    #[inline]
     fn add_edge(
         &mut self,
         src: Vertex,
@@ -369,11 +391,12 @@ where
         segment: &'a InputSegment<EntryType>,
         edge: Edge,
     ) {
-        self.add_directed_edge(src.clone(), dst.clone(), segment, edge.clone());
+        self.add_directed_edge(src, dst, segment, edge);
         self.add_directed_edge(dst, src, segment, edge);
     }
 
     /// Add a directed edge from src to dst.
+    #[inline]
     fn add_directed_edge(
         &mut self,
         src: Vertex,
@@ -382,11 +405,11 @@ where
         edge: Edge,
     ) {
         self.adjacencies
-            .entry(src.clone())
+            .entry(src)
             .or_default()
-            .entry(dst.clone())
+            .entry(dst)
             .or_default()
-            .insert(segment, edge.clone());
+            .insert(segment, edge);
     }
 
     /// Finds and returns all possible valid paths from src to dst.
@@ -398,9 +421,9 @@ where
                 for (next_vertex, edges) in next_vertex {
                     for (segment, edge) in edges {
                         let new_solution = match current_solution.try_add_edge(SolutionEdge {
-                            edge: edge.clone(),
-                            src: current_solution.current_vertex.clone(),
-                            dst: next_vertex.clone(),
+                            edge: *edge,
+                            src: current_solution.current_vertex,
+                            dst: *next_vertex,
                             segment,
                         }) {
                             Some(s) => s,
@@ -513,7 +536,7 @@ where
 }
 
 /// An edge that is part of a path solution.
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SolutionEdge<'a, EntryType: Entry> {
     /// The edge in the graph.
     pub edge: Edge,
@@ -582,7 +605,7 @@ impl<'a, EntryType: Entry> SolutionEdge<'a, EntryType> {
 }
 
 /// Path solution is a sequence of edges that form a valid path from src to dst.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PathSolution<'a, EntryType: Entry> {
     /// Edges that are already part of the solution.
     edges: Vec<SolutionEdge<'a, EntryType>>,
@@ -593,6 +616,7 @@ pub struct PathSolution<'a, EntryType: Entry> {
 }
 
 impl<'a, EntryType: Entry> std::fmt::Debug for PathSolution<'a, EntryType> {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -608,7 +632,8 @@ impl<'a, EntryType: Entry> std::fmt::Debug for PathSolution<'a, EntryType> {
 
 impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
     /// Create a new [`PathSolution`] starting at the given vertex.
-    pub fn new(current_vertex: Vertex) -> Self {
+    #[inline]
+    pub const fn new(current_vertex: Vertex) -> Self {
         Self {
             edges: Vec::new(),
             current_vertex,
@@ -618,12 +643,13 @@ impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
 
     /// Create a new solution with the given edge added.
     /// Returns None if the solution with the new edge would be invalid.
+    #[inline]
     pub fn try_add_edge(&self, e: SolutionEdge<'a, EntryType>) -> Option<Self> {
         if !self.valid_next_seg(e.segment) {
             return None;
         }
         let cost = self.cost + e.edge.weight;
-        let current_vertex = e.dst.clone();
+        let current_vertex = e.dst;
         let mut new_edges = self.edges.clone();
         new_edges.push(e);
         Some(Self {
@@ -633,6 +659,7 @@ impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
         })
     }
 
+    #[inline]
     fn valid_next_seg(&self, segment: &InputSegment<EntryType>) -> bool {
         match self.edges.as_slice() {
             [] => true,
@@ -769,9 +796,9 @@ impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
 
         let expiration = path.expiration();
 
-        let encoded = path.encode_to_vec()?.into_boxed_slice();
+        let encoded = path.try_encode_to_vec()?.into_boxed_slice();
         let encoded = crate::dataplane_path::view::ScionDpPathView::Standard(
-            StandardPathView::from_boxed(encoded)
+            StandardPathView::try_from_boxed(encoded)
                 .expect("valid path encoding should always produce a valid view"),
         );
 

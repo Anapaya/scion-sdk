@@ -36,6 +36,7 @@ macro_rules! impl_from {
 }
 pub(crate) use impl_from;
 
+/// Like [`impl_from`], but implements `From<&Src>` for a reference to the source type.
 macro_rules! impl_from_ref {
     ($src:ty, $dst:ty, |$v:ident| $body:expr) => {
         impl<'a> From<&'a $src> for $dst {

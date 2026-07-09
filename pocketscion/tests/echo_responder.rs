@@ -92,7 +92,7 @@ async fn echo_responder() -> anyhow::Result<()> {
         ScmpEchoRequest::new(0, 0, vec![0u8; 32]).into(),
     )
     .into_raw()
-    .encode_to_owned_view()
+    .try_encode_to_owned_view()
     .context("error encoding packet")?;
 
     raw.try_send(&mut pkt, ScionNetworkTime::now())

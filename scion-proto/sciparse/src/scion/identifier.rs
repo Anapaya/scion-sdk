@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Scion identifier primitives.
+//! SCION identifier primitives.
 
 pub mod asn;
 pub mod isd;

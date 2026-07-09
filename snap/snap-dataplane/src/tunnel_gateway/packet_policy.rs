@@ -38,7 +38,7 @@ pub fn inbound_datagram_check<'a>(
     datagram: &'a [u8],
     expected_ip: IpAddr,
 ) -> Result<&'a ScionPacketView, PacketPolicyError<'a>> {
-    let (view, _) = ScionPacketView::from_slice(datagram)
+    let (view, _) = ScionPacketView::try_from_slice(datagram)
         .map_err(|e| PacketPolicyError::MalformedPacket(datagram, e))?;
 
     // Check if the SCION source address matches the expected socket address (IP part).
@@ -130,7 +130,7 @@ mod tests {
             b"my SCION packet".to_vec(),
         );
 
-        packet.encode_to_vec().unwrap()
+        packet.try_encode_to_vec().unwrap()
     }
 
     #[test]

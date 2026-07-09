@@ -76,14 +76,14 @@ fn sciparse_scionproto_interop() {
 
     fn test_impl(sciparse_packet: ClassifiedPacket) {
         let original_buf = sciparse_packet
-            .encode_to_vec()
+            .try_encode_to_vec()
             .expect("Encoding packet failed");
-        let (view, _) = ScionRawPacketView::from_slice(&original_buf)
+        let (view, _) = ScionRawPacketView::try_from_slice(&original_buf)
             .expect("Parsing packet with sciparse failed");
 
         let recreated_sciparse_packet = ScionRawPacket::try_from_view(view)
             .expect("Converting sciparse packet view to proto packet failed")
-            .classify()
+            .try_classify()
             .unwrap();
 
         assert_eq!(sciparse_packet, recreated_sciparse_packet);
@@ -111,7 +111,7 @@ fn sciparse_scionproto_interop() {
         // The re-encoded packet from scion-proto should match the original buffer from sciparse.
         let proto_buf = classified_proto_packet.encode_to_vec();
         if proto_buf != original_buf {
-            let layout = ScionHeaderLayout::from_loaded(sciparse_packet.header());
+            let layout = ScionHeaderLayout::from_model(sciparse_packet.header());
 
             println!("Pkt {:#?}", sciparse_packet);
 

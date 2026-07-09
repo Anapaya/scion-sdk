@@ -58,6 +58,7 @@ reqwest = { workspace = true, features = ["json", "blocking"] }
 rustls = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
 serde_with = { workspace = true, features = ["base64"] }
 tempfile = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }

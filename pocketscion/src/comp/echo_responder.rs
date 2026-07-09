@@ -58,7 +58,7 @@ impl PsEchoResponder {
             return;
         };
 
-        let reply = match reply.encode_to_owned_view() {
+        let reply = match reply.try_encode_to_owned_view() {
             Ok(repl) => repl,
             Err(e) => {
                 tracing::error!("Failed to encode SCMP reply: {:?}", e);
@@ -72,7 +72,7 @@ impl PsEchoResponder {
 
             async move {
                 let local_as = reply.header().src_ia();
-                let mut raw = reply.into_raw_owned();
+                let mut raw = reply.into_raw();
                 state_c.dispatch_to_network_sim(local_as, 0, ScionNetworkTime::now(), &mut raw);
             }
         });
@@ -116,7 +116,7 @@ impl PsEchoResponder {
                 .header()
                 .path()
                 .to_model()
-                .into_reversed()
+                .try_into_reversed()
                 .map_err(|(_, e)| e)
                 .context("Failed to reverse path")?;
 

@@ -279,7 +279,7 @@ impl IssueKind {
                             | RejectRouteToDestination => {
                                 let offending = scmp_destination_unreachable.get_offending_packet();
                                 let (pkt, _rest) =
-                                    ScionRawPacketView::from_slice(offending).ok()?;
+                                    ScionRawPacketView::try_from_slice(offending).ok()?;
                                 let dst = pkt.header().path().last_ingress_interface()?;
                                 let dst_host =
                                     pkt.header().dst_host_addr().ok()?.scion_host_addr().ok()?;

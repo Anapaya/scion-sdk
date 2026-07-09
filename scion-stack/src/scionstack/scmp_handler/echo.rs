@@ -49,7 +49,7 @@ impl DefaultEchoHandler {
         p_raw: &ScionRawPacketView,
     ) -> anyhow::Result<Option<ScionScmpPacket>> {
         let p = p_raw
-            .try_into_scmp()
+            .try_as_scmp()
             .context("Packet is not a valid SCMP packet")?;
 
         let reply_msg = match p.scmp().message() {
@@ -67,7 +67,7 @@ impl DefaultEchoHandler {
             .header()
             .path()
             .to_model()
-            .into_reversed()
+            .try_into_reversed()
             .map_err(|(_, e)| anyhow::anyhow!("Failed to reverse path: {e:?}"))?;
 
         let src = p
@@ -135,7 +135,7 @@ mod default_echo_handler_tests {
         let request = ctx
             .scion_packet_scmp(ScmpEchoRequest::new(7, 9, b"payload".to_vec()).into())
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
 
         let handler = DefaultEchoHandler::new();
@@ -165,7 +165,7 @@ mod default_echo_handler_tests {
         let non_echo = ctx
             .scion_packet_scmp(ScmpEchoReply::new(1, 2, b"resp".to_vec()).into())
             .into_raw()
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
 
         let reply = handler.handle(&non_echo);
@@ -179,7 +179,7 @@ mod default_echo_handler_tests {
 
         let wrong_protocol = ctx
             .scion_packet_raw(b"not scmp")
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should encode");
         let reply = handler.handle(&wrong_protocol);
         assert!(reply.is_none());

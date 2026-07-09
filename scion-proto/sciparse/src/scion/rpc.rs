@@ -24,7 +24,8 @@ pub struct FromRpcError {
     pub message: Cow<'static, str>,
 }
 impl FromRpcError {
-    /// Creates a new [FromRpcError] with the given message.
+    /// Creates a new [`FromRpcError`] with the given message.
+    #[inline]
     pub fn new(message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             message: message.into(),
@@ -33,6 +34,7 @@ impl FromRpcError {
 }
 
 impl<T: Into<Cow<'static, str>>> From<T> for FromRpcError {
+    #[inline]
     fn from(value: T) -> Self {
         Self::new(value)
     }

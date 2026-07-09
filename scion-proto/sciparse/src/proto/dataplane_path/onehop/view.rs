@@ -34,7 +34,7 @@ use crate::{
 
 /// View for a one-hop path between neighboring border routers in SCION.
 #[repr(transparent)]
-#[derive(Eq, PartialEq, Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct OneHopPathView([u8; OneHopPathLayout::SIZE_BYTES]);
 impl OneHopPathView {
     /// Returns a reference to the info field
@@ -99,6 +99,7 @@ impl OneHopPathView {
     /// * `forwarding_key` is the key used for MAC calculation
     /// * `segment_id_was_advanced` indicates whether the segment ID was advanced to the next hop
     ///   before calling this method, or if it is still at the first hop
+    #[inline]
     pub fn set_second_hop(
         &mut self,
         ingress_interface: u16,
@@ -131,6 +132,7 @@ impl OneHopPathView {
     ///
     /// Returns an error if the second hop field has not been set yet (i.e., its ingress
     /// interface is still 0, meaning the path is incomplete).
+    #[inline]
     pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
         if self.hop_fields()[1].cons_ingress() == 0 {
             return Err(PathReverseError::new(
@@ -151,6 +153,7 @@ impl OneHopPathView {
 // Util
 impl OneHopPathView {
     /// Returns the expiration time of the path in seconds since the UNIX epoch.
+    #[inline]
     pub fn expiration(&self) -> u32 {
         let base = self.info_field().timestamp();
 
@@ -165,6 +168,7 @@ impl OneHopPathView {
     }
 }
 impl Debug for OneHopPathView {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OneHopPathView")
             .field("info_field", &self.info_field())
@@ -211,26 +215,31 @@ impl Display for OneHopPathView {
 
 // Note: can't use gen_view_impl! as self is a fixed size array
 impl View for OneHopPathView {
+    #[inline]
     fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
         use crate::core::layout::Layout;
         let layout = OneHopPathLayout::try_from(buf)?;
         Ok(layout.size_bytes())
     }
 
+    #[inline]
     fn as_slice(&self) -> &[u8] {
         &self.0
     }
 
+    #[inline]
     unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
 
+    #[inline]
     fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
         // SAFETY: repr(transparent) over [u8; N]
         let sized: Box<[u8; OneHopPathLayout::SIZE_BYTES]> = unsafe { transmute(self) };
         sized
     }
 
+    #[inline]
     unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
         // SAFETY: see View trait documentation
         let sized: &[u8; OneHopPathLayout::SIZE_BYTES] =
@@ -238,6 +247,7 @@ impl View for OneHopPathView {
         unsafe { transmute(sized) }
     }
 
+    #[inline]
     unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
         // SAFETY: see View trait documentation
         let sized: &mut [u8; OneHopPathLayout::SIZE_BYTES] =
@@ -245,6 +255,7 @@ impl View for OneHopPathView {
         unsafe { transmute(sized) }
     }
 
+    #[inline]
     unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
         // SAFETY: see View trait documentation
         let sized: Box<[u8; OneHopPathLayout::SIZE_BYTES]> =

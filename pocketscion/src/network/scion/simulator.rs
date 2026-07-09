@@ -656,7 +656,7 @@ mod tests {
                 sciparse::payload::ProtocolNumber::Other(0),
                 payload,
             )
-            .encode_to_owned_view()
+            .try_encode_to_owned_view()
             .expect("should be able to encode a SCION packet")
         }
     }

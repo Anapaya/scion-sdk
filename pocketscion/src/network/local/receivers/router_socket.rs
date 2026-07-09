@@ -68,7 +68,7 @@ impl<D: Dispatcher> RouterSocket<D> {
         loop {
             match self.socket.recv_from(&mut buf).await {
                 Ok((size, src)) => {
-                    let view = match ScionPacketView::from_slice(&buf[..size]) {
+                    let view = match ScionPacketView::try_from_slice(&buf[..size]) {
                         Ok((view, _)) => view,
                         Err(e) => {
                             tracing::error!(error = ?e, ?src, "Failed to parse SCION packet");
@@ -108,7 +108,7 @@ impl<D: Dispatcher> Clone for SharedRouterSocket<D> {
 
 impl<D: Dispatcher> Receiver for SharedRouterSocket<D> {
     fn receive_packet(&self, packet: &ScionRawPacketView) {
-        let classified_packet = match packet.classify() {
+        let classified_packet = match packet.try_classify() {
             Ok(classified) => classified,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to classify SCION packet");

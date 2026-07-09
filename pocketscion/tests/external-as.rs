@@ -133,7 +133,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
         ProtocolNumber::Other(0),
         b"hello external AS".to_vec(),
     )
-    .encode_to_owned_view()?;
+    .try_encode_to_owned_view()?;
 
     ps_rt.dispatch_packet(ia1, 0, network_time, &mut packet);
 
@@ -172,7 +172,7 @@ async fn external_as_should_work() -> anyhow::Result<()> {
         ProtocolNumber::Other(0),
         b"hello local AS".to_vec(),
     )
-    .encode_to_owned_view()?;
+    .try_encode_to_owned_view()?;
 
     external_as_socket
         .send_to(response_packet.as_slice(), ext_as_listen_addr)

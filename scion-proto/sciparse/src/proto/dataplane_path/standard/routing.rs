@@ -162,6 +162,7 @@ pub enum IngressValidateResult<ValidationErrorType> {
 }
 impl<E> IngressValidateResult<E> {
     /// Converts the IngressAdvanceValidateResult into a Result
+    #[inline]
     pub fn into_result(self) -> Result<IngressAdvanceOutput, (IngressAdvanceOutput, E)> {
         match self {
             IngressValidateResult::Ok(output) => Ok(output),
@@ -413,6 +414,7 @@ pub enum EgressValidateResult<ValidationErrorType> {
 }
 impl<E> EgressValidateResult<E> {
     /// Converts the EgressAdvanceValidateResult into a Result
+    #[inline]
     pub fn into_result(self) -> Result<EgressAdvanceOutput, (EgressAdvanceOutput, E)> {
         match self {
             EgressValidateResult::Ok(output) => Ok(output),
@@ -676,8 +678,8 @@ mod tests {
         );
 
         fn test_imp(path: StandardPath) -> Result<(), proptest::test_runner::TestCaseError> {
-            let mut view = path.encode_to_vec()?;
-            let (view, rest) = StandardPathView::from_mut_slice(view.as_mut_slice())?;
+            let mut view = path.try_encode_to_vec()?;
+            let (view, rest) = StandardPathView::try_from_mut_slice(view.as_mut_slice())?;
             if !rest.is_empty() {
                 return Err(proptest::test_runner::TestCaseError::Fail(
                     "Encoded path has remaining bytes".into(),
@@ -716,8 +718,8 @@ mod tests {
             path: StandardPath,
             advance_seed: u8,
         ) -> Result<(), proptest::test_runner::TestCaseError> {
-            let mut view = path.encode_to_vec()?;
-            let (view, rest) = StandardPathView::from_mut_slice(view.as_mut_slice())?;
+            let mut view = path.try_encode_to_vec()?;
+            let (view, rest) = StandardPathView::try_from_mut_slice(view.as_mut_slice())?;
             if !rest.is_empty() {
                 return Err(proptest::test_runner::TestCaseError::Fail(
                     "Encoded path has remaining bytes".into(),

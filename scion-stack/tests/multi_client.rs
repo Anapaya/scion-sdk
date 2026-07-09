@@ -87,7 +87,7 @@ async fn multi_client() {
                     let mut path_buffer = BytesMut::zeroed(1024);
                     let (received_len, sender_addr, path) = server_socket.recv_from_with_path(&mut rdata, &mut path_buffer).await.unwrap();
                     tracing::info!("Server received packet from {}", sender_addr);
-                    let reversed_path = path.into_reversed().unwrap();
+                    let reversed_path = path.try_into_reversed().unwrap();
                     rdata.resize(received_len, 0);
                     server_socket.send_to_via(rdata.as_ref(), sender_addr, &reversed_path).await.unwrap();
                 }

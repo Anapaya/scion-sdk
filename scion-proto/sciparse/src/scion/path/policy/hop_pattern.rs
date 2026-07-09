@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Hop-pattern-based path policy matching.
+
 use std::{borrow::Cow, collections::BTreeSet, str::FromStr};
 
 pub use parser::ParseError;
@@ -53,17 +55,19 @@ use crate::path::{ScionPath, policy::PathPolicy};
 /// // in ISD 1 or 2, and one or more hops in ISD 3.
 /// HopPatternPolicy::parse("0+ (1 | 2)+ 3+").unwrap();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HopPatternPolicy(Vec<HopPatternExpression>);
 
 impl HopPatternPolicy {
     /// Parses a hop pattern expression from a string.
+    #[inline]
     pub fn parse(s: &str) -> Result<Self, ParseError> {
         let tokens = HopPatternLexer::new(s).tokenize();
         HopPatternParser::new(&tokens).parse()
     }
 
     /// Checks if the hop pattern matches the given hops.
+    #[inline]
     pub fn matches(&self, hops: &[PathPolicyHop]) -> bool {
         // Start at position 0, apply each top-level expression in hop pattern
         let mut positions: Vec<usize> = vec![0];
@@ -91,11 +95,13 @@ impl HopPatternPolicy {
 impl FromStr for HopPatternPolicy {
     type Err = ParseError;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
 }
 impl PathPolicy for HopPatternPolicy {
+    #[inline]
     fn path_allowed(&self, path: &ScionPath) -> Result<bool, std::borrow::Cow<'static, str>> {
         let path_hops = PathPolicyHop::hops_from_path(path).map_err(Cow::from)?;
         Ok(self.matches(&path_hops))
@@ -103,7 +109,7 @@ impl PathPolicy for HopPatternPolicy {
 }
 
 /// An expression in a path policy hop pattern.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum HopPatternExpression {
     HopPredicate(HopPredicate),
     Or(Box<HopPatternExpression>, Box<HopPatternExpression>),
@@ -162,6 +168,7 @@ impl HopPatternExpression {
 
     /// Recursively matches the inner expression starting from `pos`, collecting all reachable
     /// positions
+    #[inline]
     fn all_nested_matches(
         hops: &[PathPolicyHop],
         pos: usize,
@@ -424,7 +431,7 @@ mod tests {
 /// Lexer for path policy hop patterns
 pub mod lexer {
     /// The different kinds of tokens that can appear in a hop pattern expression.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub enum TokenKind {
         /// A hop predicate, e.g. "1-ff00:0:133#1"
         HopPredicate(String),
@@ -449,7 +456,7 @@ pub mod lexer {
     }
 
     /// A token with its kind and the span (start, end) in the input string.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct Token {
         /// The kind of token.
         pub kind: TokenKind,
@@ -461,14 +468,15 @@ pub mod lexer {
     pub type TokenSplat<'t> = (TokenKind, (usize, usize));
 
     impl Token {
-        /// Returns a tuple of (&TokenKind, &Token) for convenience.
+        /// Returns a tuple of the token's kind and span for convenience.
+        #[inline]
         pub fn splat(&self) -> TokenSplat<'_> {
             (self.kind.clone(), self.span)
         }
 
         /// Creates a simple token with a single-character span.
         #[inline]
-        fn single_char(kind: TokenKind, i: usize) -> Self {
+        const fn single_char(kind: TokenKind, i: usize) -> Self {
             Self {
                 kind,
                 span: (i, i + 1),
@@ -488,6 +496,7 @@ pub mod lexer {
         const RESERVED_CHARS: &'static str = "!&|()+?*";
 
         /// Create a new lexer for the given input string.
+        #[inline]
         pub fn new(s: &'a str) -> Self {
             Self {
                 input: s.char_indices().peekable(),
@@ -496,6 +505,7 @@ pub mod lexer {
         }
 
         /// Returns the next token from the input, or None if finished.
+        #[inline]
         fn next_token(&mut self) -> Option<Token> {
             while let Some((idx, c)) = self.input.next() {
                 return Some(match c {
@@ -515,6 +525,7 @@ pub mod lexer {
         }
 
         /// Reads a hop predicate token starting with the given character.
+        #[inline]
         fn read_hop_predicate(&mut self, first_char: char, start: usize) -> Token {
             let mut ident = String::new();
             ident.push(first_char);
@@ -533,6 +544,7 @@ pub mod lexer {
         }
 
         /// Tokenizes the entire input and returns a vector of tokens, ending with EOI.
+        #[inline]
         pub fn tokenize(&mut self) -> Vec<Token> {
             let mut out = Vec::new();
             while let Some(t) = self.next_token() {
@@ -648,7 +660,7 @@ pub mod parser {
     const OR_BIND_POWER: u8 = 10;
 
     /// Defines associativity (grouping direction) for infix operators.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     enum Grouping {
         /// Left Associative: a OP b OP c == (a OP b) OP c
         LeftToRight,
@@ -658,7 +670,7 @@ pub mod parser {
     }
 
     /// Error returned by the Pratt parser.
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     pub struct ParseError {
         /// The span (start, end) in the input string where the error occurred.
         pub span: (usize, usize),
@@ -666,14 +678,16 @@ pub mod parser {
         pub message: Cow<'static, str>,
     }
     impl ParseError {
-        /// Creates a new ParseError with the given span and message.
-        pub fn new(span: (usize, usize), message: Cow<'static, str>) -> Self {
+        /// Creates a new [`ParseError`] with the given span and message.
+        #[inline]
+        pub const fn new(span: (usize, usize), message: Cow<'static, str>) -> Self {
             Self { span, message }
         }
 
         /// Pretty formatting of the error with context from the input string.
         ///
         /// `input` must be the original parser input string.
+        #[inline]
         pub fn report(&self, input: &str) -> String {
             let (start, end) = self.span;
 
@@ -708,16 +722,19 @@ pub mod parser {
 
     impl<'a> HopPatternParser<'a> {
         /// Create a new parser for the given tokens.
-        pub fn new(tokens: &'a [Token]) -> Self {
+        #[inline]
+        pub const fn new(tokens: &'a [Token]) -> Self {
             Self { tokens, pos: 0 }
         }
 
         /// Peek current token kind without consuming.
+        #[inline]
         fn peek_kind(&self) -> Option<&TokenKind> {
             self.tokens.get(self.pos).map(|t| &t.kind)
         }
 
         /// Consume current token and advance.
+        #[inline]
         fn consume(&mut self) -> Option<TokenSplat<'_>> {
             if let Some(t) = self.tokens.get(self.pos) {
                 self.pos += 1;
@@ -856,6 +873,7 @@ pub mod parser {
         /// Parse a Path Policy Hop Pattern
         ///
         /// Returns a [HopPatternPolicy] on success, or a ParseError on failure.
+        #[inline]
         pub fn parse(&mut self) -> Result<HopPatternPolicy, ParseError> {
             let mut hop_pattern = Vec::new();
             while self.peek_kind() != Some(&TokenKind::EOI) {

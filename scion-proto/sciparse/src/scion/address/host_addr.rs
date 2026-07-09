@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! SCION host address. (IpV4, IPv6, or service address)
+//! SCION host address. (IPv4, IPv6, or service address)
 
 use std::{
     fmt::{Debug, Display, Formatter},
@@ -47,7 +47,8 @@ pub enum ScionHostAddr {
 }
 impl ScionHostAddr {
     /// Creates a HostAddr from an IpAddr.
-    pub fn from_ip(ip: IpAddr) -> Self {
+    #[inline]
+    pub const fn from_ip(ip: IpAddr) -> Self {
         match ip {
             IpAddr::V4(v4) => ScionHostAddr::V4(v4),
             IpAddr::V6(v6) => ScionHostAddr::V6(v6),
@@ -55,7 +56,8 @@ impl ScionHostAddr {
     }
 
     /// Returns the address as an `IpAddr` if it is IPv4 or IPv6.
-    pub fn ip(&self) -> Option<IpAddr> {
+    #[inline]
+    pub const fn ip(&self) -> Option<IpAddr> {
         match self {
             ScionHostAddr::V4(v4) => Some(IpAddr::V4(*v4)),
             ScionHostAddr::V6(v6) => Some(IpAddr::V6(*v6)),
@@ -64,7 +66,8 @@ impl ScionHostAddr {
     }
 
     /// Returns the service address if it is a service address.
-    pub fn service(&self) -> Option<ServiceAddr> {
+    #[inline]
+    pub const fn service(&self) -> Option<ServiceAddr> {
         match self {
             ScionHostAddr::Svc(svc) => Some(*svc),
             _ => None,
@@ -72,27 +75,32 @@ impl ScionHostAddr {
     }
 
     /// Returns the address as a [WireHostAddr] for encoding on the wire.
+    #[inline]
     pub fn to_wire_host_addr(&self) -> WireHostAddr {
         (*self).into()
     }
 
     /// Returns true if the SCION Host Address is an IPv4 address
-    pub fn is_ipv4(&self) -> bool {
+    #[inline]
+    pub const fn is_ipv4(&self) -> bool {
         matches!(self, ScionHostAddr::V4(_))
     }
 
     /// Returns true if the SCION Host Address is an IPv6 address
-    pub fn is_ipv6(&self) -> bool {
+    #[inline]
+    pub const fn is_ipv6(&self) -> bool {
         matches!(self, ScionHostAddr::V6(_))
     }
 
     /// Returns true if the SCION Host Address is a service address
-    pub fn is_service(&self) -> bool {
+    #[inline]
+    pub const fn is_service(&self) -> bool {
         matches!(self, ScionHostAddr::Svc(_))
     }
 }
 impl FromStr for ScionHostAddr {
     type Err = AddressParseError;
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(ipv4) = s.parse::<Ipv4Addr>() {
             Ok(ScionHostAddr::V4(ipv4))
@@ -106,6 +114,7 @@ impl FromStr for ScionHostAddr {
     }
 }
 impl Display for ScionHostAddr {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ScionHostAddr::V4(v4) => write!(f, "{}", v4)?,
@@ -117,6 +126,7 @@ impl Display for ScionHostAddr {
 }
 impl TryFrom<ScionHostAddr> for Ipv4Addr {
     type Error = &'static str;
+    #[inline]
     fn try_from(value: ScionHostAddr) -> Result<Self, Self::Error> {
         match value {
             ScionHostAddr::V4(v4) => Ok(v4),
@@ -126,6 +136,7 @@ impl TryFrom<ScionHostAddr> for Ipv4Addr {
 }
 impl TryFrom<ScionHostAddr> for Ipv6Addr {
     type Error = &'static str;
+    #[inline]
     fn try_from(value: ScionHostAddr) -> Result<Self, Self::Error> {
         match value {
             ScionHostAddr::V6(v6) => Ok(v6),
@@ -135,6 +146,7 @@ impl TryFrom<ScionHostAddr> for Ipv6Addr {
 }
 impl TryFrom<WireHostAddr> for ScionHostAddr {
     type Error = UnknownAddressTypeError;
+    #[inline]
     fn try_from(value: WireHostAddr) -> Result<Self, Self::Error> {
         value.scion_host_addr()
     }
@@ -169,31 +181,37 @@ impl ServiceAddr {
     const MULTICAST_FLAG: u16 = 0x8000;
 
     /// Returns the raw u16 value of the service address.
-    pub fn to_u16(&self) -> u16 {
+    #[inline]
+    pub const fn to_u16(&self) -> u16 {
         self.0
     }
 
     /// Returns true if the service address is multicast, false otherwise.
-    pub fn is_multicast(&self) -> bool {
+    #[inline]
+    pub const fn is_multicast(&self) -> bool {
         (self.0 & Self::MULTICAST_FLAG) == Self::MULTICAST_FLAG
     }
 
     /// Creates a new service address as multicast, disabling anycast.
-    pub fn to_multicast(self) -> Self {
+    #[inline]
+    pub const fn to_multicast(self) -> Self {
         Self(self.0 | Self::MULTICAST_FLAG)
     }
 
     /// Creates a new service address as anycast, disabling multicast.
-    pub fn to_anycast(self) -> Self {
+    #[inline]
+    pub const fn to_anycast(self) -> Self {
         Self(self.0 & !Self::MULTICAST_FLAG)
     }
 
     /// Returns true if the service address is anycast, false otherwise.
-    pub fn is_anycast(&self) -> bool {
+    #[inline]
+    pub const fn is_anycast(&self) -> bool {
         (self.0 & Self::MULTICAST_FLAG) == 0
     }
 }
 impl Display for ServiceAddr {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.to_anycast() {
             ServiceAddr::DAEMON => write!(f, "DS")?,
@@ -212,6 +230,7 @@ impl Display for ServiceAddr {
 impl FromStr for ServiceAddr {
     type Err = &'static str;
 
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         const ERR: &str = "invalid service address";
         let (service, suffix) = s.split_once('_').unwrap_or((s, "A"));
@@ -232,6 +251,7 @@ impl FromStr for ServiceAddr {
 }
 impl TryFrom<ScionHostAddr> for ServiceAddr {
     type Error = &'static str;
+    #[inline]
     fn try_from(value: ScionHostAddr) -> Result<Self, Self::Error> {
         match value {
             ScionHostAddr::Svc(svc) => Ok(svc),
@@ -272,7 +292,7 @@ impl WireHostAddr {
     ///
     /// If the advertised address type does not match the expected length of the byte buffer, an
     /// error is returned.
-    pub fn from_parts(
+    pub fn try_from_parts(
         addr_type: WireHostAddrType,
         buf: &[u8],
     ) -> Result<Self, HostAddressSizeError> {
@@ -329,7 +349,8 @@ impl WireHostAddr {
     }
 
     /// Returns an `IpAddr` if the address is IPv4 or IPv6.
-    pub fn ip(&self) -> Option<IpAddr> {
+    #[inline]
+    pub const fn ip(&self) -> Option<IpAddr> {
         match self {
             WireHostAddr::V4(v4) => Some(IpAddr::V4(*v4)),
             WireHostAddr::V6(v6) => Some(IpAddr::V6(*v6)),
@@ -338,7 +359,8 @@ impl WireHostAddr {
     }
 
     /// Returns the service address bytes if the address is a service address.
-    pub fn service(&self) -> Option<ServiceAddr> {
+    #[inline]
+    pub const fn service(&self) -> Option<ServiceAddr> {
         match self {
             WireHostAddr::Svc(svc) => Some(*svc),
             _ => None,
@@ -347,7 +369,8 @@ impl WireHostAddr {
 
     /// Returns the address as a [ScionHostAddr] if it is a recognized address type (IPv4, IPv6, or
     /// service) or an error if it is an unknown address type.
-    pub fn scion_host_addr(&self) -> Result<ScionHostAddr, UnknownAddressTypeError> {
+    #[inline]
+    pub const fn scion_host_addr(&self) -> Result<ScionHostAddr, UnknownAddressTypeError> {
         match self {
             WireHostAddr::V4(v4) => Ok(ScionHostAddr::V4(*v4)),
             WireHostAddr::V6(v6) => Ok(ScionHostAddr::V6(*v6)),
@@ -357,6 +380,7 @@ impl WireHostAddr {
     }
 
     /// Returns the address type of the address.
+    #[inline]
     pub fn addr_type(&self) -> WireHostAddrType {
         match self {
             WireHostAddr::V4(_) => WireHostAddrType::IPV4,
@@ -372,6 +396,7 @@ impl WireHostAddr {
     }
 }
 impl WireEncode for WireHostAddr {
+    #[inline]
     fn required_size(&self) -> usize {
         match self {
             WireHostAddr::V4(_) => 4,
@@ -381,6 +406,7 @@ impl WireEncode for WireHostAddr {
         }
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         match self {
             WireHostAddr::V4(_) => Ok(()),
@@ -441,7 +467,7 @@ impl_from!(ScionHostAddr, WireHostAddr, |value| {
 });
 
 /// Host Address types on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum WireHostAddrType {
     /// IPv4 address.
@@ -461,7 +487,8 @@ pub enum WireHostAddrType {
 }
 impl WireHostAddrType {
     /// Returns the size of the address type in bytes.
-    pub fn size(&self) -> u8 {
+    #[inline]
+    pub const fn size(&self) -> u8 {
         match self {
             WireHostAddrType::IPV4 => 4,
             WireHostAddrType::IPV6 => 16,
@@ -471,6 +498,7 @@ impl WireHostAddrType {
     }
 }
 impl From<u8> for WireHostAddrType {
+    #[inline]
     fn from(value: u8) -> Self {
         match value {
             0 => WireHostAddrType::IPV4,
@@ -485,6 +513,7 @@ impl From<u8> for WireHostAddrType {
     }
 }
 impl From<WireHostAddrType> for u8 {
+    #[inline]
     fn from(val: WireHostAddrType) -> Self {
         match val {
             WireHostAddrType::IPV4 => 0,
@@ -545,7 +574,7 @@ pub mod ptest {
     /// and `svc` and `unknown` to `0` will only generate IPv4 and IPv6 addresses.
     ///
     /// Default weights: `v4 = 3, v6 = 3, svc = 3, unknown = 1`.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryWireHostAddrParams {
         /// Weight for generating IPv4 addresses.
         pub v4: u32,
@@ -605,7 +634,7 @@ pub mod ptest {
     /// Controls the relative probability of each variant being generated.
     ///
     /// Default weights: `ipv4 = 3, ipv6 = 3, service = 3, unknown = 1`.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryWireHostAddrTypeParams {
         /// Weight for generating IPv4 address types.
         pub ipv4: u32,

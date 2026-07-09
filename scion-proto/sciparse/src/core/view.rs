@@ -86,7 +86,7 @@ pub trait View {
     ///
     /// This function checks that the buffer is at least as large as required by the view.
     #[inline]
-    fn from_slice(buf: &[u8]) -> Result<(&Self, &[u8]), ViewConversionError> {
+    fn try_from_slice(buf: &[u8]) -> Result<(&Self, &[u8]), ViewConversionError> {
         let size = Self::has_required_size(buf)?;
 
         debug_assert!(buf.len() >= size);
@@ -102,7 +102,7 @@ pub trait View {
     ///
     /// This function checks that the buffer is at least as large as required by the view.
     #[inline]
-    fn from_mut_slice(buf: &mut [u8]) -> Result<(&mut Self, &mut [u8]), ViewConversionError> {
+    fn try_from_mut_slice(buf: &mut [u8]) -> Result<(&mut Self, &mut [u8]), ViewConversionError> {
         let size = Self::has_required_size(buf)?;
 
         debug_assert!(buf.len() >= size);
@@ -118,7 +118,7 @@ pub trait View {
     ///
     /// This function checks that the buffer is exactly as large as required by the view.
     #[inline]
-    fn from_boxed(buf: Box<[u8]>) -> Result<Box<Self>, ViewConversionError> {
+    fn try_from_boxed(buf: Box<[u8]>) -> Result<Box<Self>, ViewConversionError> {
         let size = Self::has_required_size(&buf)?;
 
         if buf.len() != size {
@@ -177,6 +177,7 @@ pub trait View {
     ///
     /// Returns Ok with a new view into the provided buffer, and the rest of the buffer after the
     /// view.
+    #[inline]
     fn copy_to_slice<'buf>(
         &self,
         buf: &'buf mut [u8],
@@ -218,6 +219,7 @@ pub enum ViewConversionError {
     Other(&'static str),
 }
 impl From<LayoutParseError> for ViewConversionError {
+    #[inline]
     fn from(value: LayoutParseError) -> Self {
         match value {
             LayoutParseError::BufferTooSmall {
@@ -322,41 +324,49 @@ pub(crate) mod macros {
     macro_rules! gen_view_impl {
         ($name:ident, $layout:ident) => {
             impl View for $name {
+                #[inline]
                 fn has_required_size(buf: &[u8]) -> Result<usize, ViewConversionError> {
                     use crate::core::layout::Layout;
                     let layout = $layout::try_from(buf)?;
                     Ok(layout.size_bytes())
                 }
 
+                #[inline]
                 fn as_slice(&self) -> &[u8] {
                     &self.0
                 }
 
+                #[inline]
                 unsafe fn as_slice_mut(&mut self) -> &mut [u8] {
                     &mut self.0
                 }
 
+                #[inline]
                 fn as_slice_boxed(self: Box<Self>) -> Box<[u8]> {
                     // SAFETY: repr(transparent) over [u8], identical fat pointer layout
                     unsafe { std::mem::transmute(self) }
                 }
 
+                #[inline]
                 unsafe fn from_slice_unchecked(buf: &[u8]) -> &Self {
                     // SAFETY: see View trait documentation
                     unsafe { std::mem::transmute(buf) }
                 }
 
+                #[inline]
                 unsafe fn from_mut_slice_unchecked(buf: &mut [u8]) -> &mut Self {
                     // SAFETY: see View trait documentation
                     unsafe { std::mem::transmute(buf) }
                 }
 
+                #[inline]
                 unsafe fn from_boxed_unchecked(buf: Box<[u8]>) -> Box<Self> {
                     // SAFETY: see View trait documentation
                     unsafe { std::mem::transmute(buf) }
                 }
             }
             impl Clone for Box<$name> {
+                #[inline]
                 fn clone(&self) -> Self {
                     self.to_boxed()
                 }

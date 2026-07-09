@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Utilities for reading unaligned values from byte buffers.
+
 use crate::core::layout::BitRange;
 
 /// Trait for types that can be constructed from an unaligned read value
 /// Required to use the `unchecked_unaligned_be_read` function.
 pub trait FromUnalignedRead {
+    /// Constructs the value from a `u128` produced by an unaligned read.
     fn from_unaligned_read(v: u128) -> Self;
 }
 

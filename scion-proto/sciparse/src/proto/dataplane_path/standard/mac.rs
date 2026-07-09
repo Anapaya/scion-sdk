@@ -75,9 +75,13 @@ impl<AnySource: HopMacInputSource> HopMacCalculate for AnySource {
 }
 
 /// Represents the input required for MAC calculation of a hop field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct HopMacInput {
+    /// Hop field expiration time in [`EXP_TIME_UNIT`](super::types::EXP_TIME_UNIT) units.
     pub exp_time: u8,
+    /// Construction ingress interface identifier.
     pub cons_ingress: u16,
+    /// Construction egress interface identifier.
     pub cons_egress: u16,
 }
 
@@ -154,7 +158,7 @@ pub mod algo {
     ///
     /// `accumulator` is the current value of `beta`, starting at the segment ID from the InfoField.
     #[inline]
-    pub fn mac_beta_step(accumulator: u16, hop_mac: [u8; 6]) -> u16 {
+    pub const fn mac_beta_step(accumulator: u16, hop_mac: [u8; 6]) -> u16 {
         let partial_mac = u16::from_be_bytes([hop_mac[0], hop_mac[1]]); // Sigma
         accumulator ^ partial_mac
     }

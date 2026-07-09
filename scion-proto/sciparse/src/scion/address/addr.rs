@@ -55,6 +55,7 @@ pub enum ScionAddr {
 }
 impl ScionAddr {
     /// Create a new SCION address
+    #[inline]
     pub const fn new(ia: IsdAsn, host: ScionHostAddr) -> Self {
         match host {
             ScionHostAddr::V4(host) => Self::V4(ScionAddrV4::new(ia, host)),
@@ -64,6 +65,7 @@ impl ScionAddr {
     }
 
     /// Returns the ISD-AS number
+    #[inline]
     pub const fn isd_asn(&self) -> IsdAsn {
         match self {
             ScionAddr::V4(addr) => addr.isd_asn,
@@ -73,6 +75,7 @@ impl ScionAddr {
     }
 
     /// Sets the ISD-AS number
+    #[inline]
     pub fn set_isd_asn(&mut self, ia: IsdAsn) {
         match self {
             ScionAddr::V4(addr) => addr.isd_asn = ia,
@@ -82,6 +85,7 @@ impl ScionAddr {
     }
 
     /// Returns the Host Address
+    #[inline]
     pub const fn host(&self) -> ScionHostAddr {
         match self {
             ScionAddr::V4(addr) => ScionHostAddr::V4(addr.host),
@@ -91,11 +95,13 @@ impl ScionAddr {
     }
 
     /// Sets the Host Address
+    #[inline]
     pub fn set_host(&mut self, host: ScionHostAddr) {
         *self = Self::new(self.isd_asn(), host);
     }
 
     /// Returns the IpAddr, or None if it is a service address.
+    #[inline]
     pub const fn ip(&self) -> Option<std::net::IpAddr> {
         match self {
             ScionAddr::V4(addr) => Some(std::net::IpAddr::V4(addr.host)),
@@ -104,9 +110,28 @@ impl ScionAddr {
         }
     }
 
+    /// Returns `true` if this is an IPv4 SCION address.
+    #[inline]
+    pub const fn is_ipv4(&self) -> bool {
+        matches!(self, ScionAddr::V4(_))
+    }
+
+    /// Returns `true` if this is an IPv6 SCION address.
+    #[inline]
+    pub const fn is_ipv6(&self) -> bool {
+        matches!(self, ScionAddr::V6(_))
+    }
+
+    /// Returns `true` if this is a service SCION address.
+    #[inline]
+    pub const fn is_service(&self) -> bool {
+        matches!(self, ScionAddr::Svc(_))
+    }
+
     /// Attempts to convert to a [ScionIpAddr]
     ///
     /// Returns Err(Self) if the contained Addr is not an IP
+    #[inline]
     pub const fn try_into_scion_ip_addr(self) -> Result<ScionIpAddr, Self> {
         match self {
             Self::V4(a) => Ok(ScionIpAddr::V4(a)),
@@ -117,6 +142,7 @@ impl ScionAddr {
 }
 impl FromStr for ScionAddr {
     type Err = AddressParseError;
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(addr) = ScionAddrSvc::from_str(s) {
             Ok(ScionAddr::Svc(addr))
@@ -130,6 +156,7 @@ impl FromStr for ScionAddr {
     }
 }
 impl Display for ScionAddr {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScionAddr::V4(addr) => addr.fmt(f),
@@ -146,6 +173,7 @@ impl_from!(ScionSocketAddr, ScionAddr, |v| {
 });
 impl_from!(ScionIpAddr, ScionAddr, |v| v.into_scion_addr());
 impl PartialSchema for ScionAddr {
+    #[inline]
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         utoipa::openapi::ObjectBuilder::new()
             .examples([
@@ -174,24 +202,28 @@ pub struct ScionAddrV4 {
 }
 impl ScionAddrV4 {
     /// Create a new SCION IPv4 address
+    #[inline]
     pub const fn new(isd_asn: IsdAsn, host: Ipv4Addr) -> Self {
         Self { isd_asn, host }
     }
 }
 impl FromStr for ScionAddrV4 {
     type Err = AddressParseError;
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (isd_asn, host) = parse_scion_addr::<Ipv4Addr>(s, AddressParseError::SocketV4)?;
         Ok(ScionAddrV4::new(isd_asn, host))
     }
 }
 impl Display for ScionAddrV4 {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         format_scion_addr(self.isd_asn, self.host, f)
     }
 }
 impl TryFrom<ScionAddr> for ScionAddrV4 {
     type Error = &'static str;
+    #[inline]
     fn try_from(value: ScionAddr) -> Result<Self, Self::Error> {
         match value {
             ScionAddr::V4(addr) => Ok(addr),
@@ -200,6 +232,7 @@ impl TryFrom<ScionAddr> for ScionAddrV4 {
     }
 }
 impl PartialSchema for ScionAddrV4 {
+    #[inline]
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         utoipa::openapi::ObjectBuilder::new()
             .examples(["1-ff00:0:110,192.0.2.1"])
@@ -224,24 +257,28 @@ pub struct ScionAddrV6 {
 }
 impl ScionAddrV6 {
     /// Create a new SCION IPv6 address
+    #[inline]
     pub const fn new(isd_asn: IsdAsn, host: Ipv6Addr) -> Self {
         Self { isd_asn, host }
     }
 }
 impl FromStr for ScionAddrV6 {
     type Err = AddressParseError;
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (isd_asn, host) = parse_scion_addr::<Ipv6Addr>(s, AddressParseError::SocketV6)?;
         Ok(ScionAddrV6::new(isd_asn, host))
     }
 }
 impl Display for ScionAddrV6 {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         format_scion_addr(self.isd_asn, self.host, f)
     }
 }
 impl TryFrom<ScionAddr> for ScionAddrV6 {
     type Error = &'static str;
+    #[inline]
     fn try_from(value: ScionAddr) -> Result<Self, Self::Error> {
         match value {
             ScionAddr::V6(addr) => Ok(addr),
@@ -250,6 +287,7 @@ impl TryFrom<ScionAddr> for ScionAddrV6 {
     }
 }
 impl PartialSchema for ScionAddrV6 {
+    #[inline]
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         utoipa::openapi::ObjectBuilder::new()
             .examples(["1-ff00:0:110,2001:db8::1"])
@@ -274,24 +312,28 @@ pub struct ScionAddrSvc {
 }
 impl ScionAddrSvc {
     /// Create a new SCION service address
+    #[inline]
     pub const fn new(isd_asn: IsdAsn, host: ServiceAddr) -> Self {
         Self { isd_asn, host }
     }
 }
 impl FromStr for ScionAddrSvc {
     type Err = AddressParseError;
+    #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (isd_asn, host) = parse_scion_addr::<ServiceAddr>(s, AddressParseError::Service)?;
         Ok(ScionAddrSvc::new(isd_asn, host))
     }
 }
 impl Display for ScionAddrSvc {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         format_scion_addr(self.isd_asn, self.host, f)
     }
 }
 impl TryFrom<ScionAddr> for ScionAddrSvc {
     type Error = &'static str;
+    #[inline]
     fn try_from(value: ScionAddr) -> Result<Self, Self::Error> {
         match value {
             ScionAddr::Svc(addr) => Ok(addr),
@@ -300,6 +342,7 @@ impl TryFrom<ScionAddr> for ScionAddrSvc {
     }
 }
 impl PartialSchema for ScionAddrSvc {
+    #[inline]
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         utoipa::openapi::ObjectBuilder::new()
             .examples(["1-ff00:0:110,CS", "1-ff00:0:110,DS"])
@@ -309,6 +352,7 @@ impl PartialSchema for ScionAddrSvc {
 }
 impl ToSchema for ScionAddrSvc {}
 
+#[inline]
 fn format_scion_addr<T: Display>(
     isd_asn: IsdAsn,
     host: T,
@@ -317,6 +361,7 @@ fn format_scion_addr<T: Display>(
     write!(f, "{},{}", isd_asn, host)
 }
 
+#[inline]
 fn parse_scion_addr<T: FromStr>(
     s: &str,
     err_type: AddressParseError,

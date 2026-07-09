@@ -33,7 +33,7 @@ use crate::{identifier::isd_asn::IsdAsn, path::ScionPath};
 ///
 /// This indicates that the interfaces over which the fingerprint is computed
 /// are wholly or partially missing from the provided path.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("interface metadata is required to compute path fingerprints")]
 pub struct FingerprintError;
 
@@ -54,7 +54,10 @@ impl PathFingerprint {
     const DISPLAYED_BYTES: usize = 8;
 
     /// Returns the fingerprint for the provided path.
-    pub(crate) fn from_scion_path(path: &ScionPath) -> Result<PathFingerprint, FingerprintError> {
+    #[inline]
+    pub(crate) fn try_from_scion_path(
+        path: &ScionPath,
+    ) -> Result<PathFingerprint, FingerprintError> {
         if path.src_ia == path.dst_ia {
             Ok(PathFingerprint::local(path.src_ia))
         } else {
@@ -77,6 +80,7 @@ impl PathFingerprint {
     }
 
     /// Returns a fingerprint for a path that starts and ends in the same AS.
+    #[inline]
     pub fn local(local_ia: IsdAsn) -> Self {
         Self(
             Sha256::new_with_prefix(local_ia.to_u64().to_be_bytes())
@@ -88,6 +92,7 @@ impl PathFingerprint {
     /// Writes the fingerprint as lower or upper case hex, without the leading 0x.
     ///
     /// The argument n_displayed controls how many characters are written.
+    #[inline]
     fn format(&self, f: &mut fmt::Formatter<'_>, n_displayed: usize, lower: bool) -> fmt::Result {
         for byte in &self.0[..n_displayed] {
             if lower {
@@ -101,6 +106,7 @@ impl PathFingerprint {
     }
 }
 impl AsRef<[u8]> for PathFingerprint {
+    #[inline]
     fn as_ref(&self) -> &[u8] {
         &self.0
     }
@@ -108,11 +114,13 @@ impl AsRef<[u8]> for PathFingerprint {
 impl TryFrom<&[u8]> for PathFingerprint {
     type Error = std::array::TryFromSliceError;
 
+    #[inline]
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Ok(Self(value.try_into()?))
     }
 }
 impl From<[u8; 32]> for PathFingerprint {
+    #[inline]
     fn from(value: [u8; 32]) -> Self {
         Self(value)
     }
@@ -121,6 +129,7 @@ impl fmt::Display for PathFingerprint {
     /// Formats the first 8 bytes of the fingerprint as a lower-case hex.
     ///
     /// The alternate flag formats the entire 32-bytes of the fingerprint.
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             self.format(f, Self::LENGTH, true)
@@ -130,6 +139,7 @@ impl fmt::Display for PathFingerprint {
     }
 }
 impl fmt::LowerHex for PathFingerprint {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             f.write_str("0x")?;
@@ -138,6 +148,7 @@ impl fmt::LowerHex for PathFingerprint {
     }
 }
 impl fmt::UpperHex for PathFingerprint {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             f.write_str("0x")?;

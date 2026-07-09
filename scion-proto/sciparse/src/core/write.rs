@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Utilities for writing unaligned values into byte buffers.
+
 use crate::core::layout::BitRange;
 
 /// Trait for types that can be converted into an unaligned write value
 /// Required to use the `unchecked_unaligned_be_write` function.
 pub trait IntoUnalignedWrite {
+    /// Converts the value into its `u128` unaligned write representation.
     fn into_write_value(v: Self) -> u128;
 }
 

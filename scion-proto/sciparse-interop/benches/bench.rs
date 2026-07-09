@@ -73,7 +73,7 @@ fn generate_packet_bytes() -> Vec<Bytes> {
             if pkt.wire_valid().is_err() {
                 panic!("Generated invalid packet with seed {seed}");
             }
-            pkt.encode_to_vec().ok().map(Bytes::from)
+            pkt.try_encode_to_vec().ok().map(Bytes::from)
         })
         .collect()
 }
@@ -99,8 +99,8 @@ fn bench_parsing(c: &mut Criterion) {
         c.bench_function(&format!("sciparse/view_parse_{num}_packets"), |b| {
             b.iter(|| {
                 for pkt in &packets {
-                    let (view, _rest) =
-                        black_box(ScionRawPacketView::from_slice(pkt)).expect("view parse failed");
+                    let (view, _rest) = black_box(ScionRawPacketView::try_from_slice(pkt))
+                        .expect("view parse failed");
                     black_box(view);
                 }
             });
@@ -179,7 +179,7 @@ fn bench_encode(c: &mut Criterion) {
         let sciparse_models: Vec<ScionRawPacket> = packets
             .iter()
             .map(|pkt| {
-                let (view, _) = ScionRawPacketView::from_slice(pkt).unwrap();
+                let (view, _) = ScionRawPacketView::try_from_slice(pkt).unwrap();
                 ScionRawPacket::try_from_view(view).unwrap()
             })
             .collect();
@@ -204,7 +204,7 @@ fn bench_encode(c: &mut Criterion) {
                     || [0; 4000],
                     |mut buf| {
                         for model in &sciparse_models {
-                            black_box(model.encode(&mut buf).expect("encode failed"));
+                            black_box(model.try_encode(&mut buf).expect("encode failed"));
                         }
                     },
                     BatchSize::LargeInput,
@@ -294,7 +294,7 @@ fn bench_access(c: &mut Criterion) {
         let sciparse_models: Vec<ScionRawPacket> = packets
             .iter()
             .map(|pkt| {
-                let (view, _) = ScionRawPacketView::from_slice(pkt).unwrap();
+                let (view, _) = ScionRawPacketView::try_from_slice(pkt).unwrap();
                 ScionRawPacket::try_from_view(view).unwrap()
             })
             .collect();

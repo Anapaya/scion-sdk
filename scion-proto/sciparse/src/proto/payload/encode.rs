@@ -23,7 +23,7 @@ use std::{fmt::Debug, hash::Hash};
 use crate::header::model::AddressHeader;
 
 /// Error type for indicating that a provided buffer is too small for encoding.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, thiserror::Error)]
 #[error(
     "buffer too small for payload encoding: expected at least {expected_size} bytes, got {actual_size} bytes"
 )]
@@ -67,7 +67,8 @@ pub trait PayloadEncode: Debug + Send + Sync + PartialEq + PartialOrd + Hash {
     ///
     /// Returns the number of bytes written on success, or an [`BufferTooSmallError`] error
     /// containing the required size if the buffer is too small.
-    fn encode(
+    #[inline]
+    fn try_encode(
         &self,
         buf: &mut [u8],
         address_header: &AddressHeader,
@@ -98,10 +99,12 @@ pub trait PayloadEncode: Debug + Send + Sync + PartialEq + PartialOrd + Hash {
 /// Encodes a slice of bytes as the payload disregarding the address header and header and
 /// extensions size.
 impl PayloadEncode for &[u8] {
+    #[inline]
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         self.len()
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -116,6 +119,7 @@ impl PayloadEncode for &[u8] {
         self.len()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
         Ok(())
     }
@@ -124,10 +128,12 @@ impl PayloadEncode for &[u8] {
 /// Encodes a vector of bytes as the payload disregarding the address header and header and
 /// extensions size.
 impl PayloadEncode for Vec<u8> {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         self.as_slice().required_size(header_and_extensions_size)
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -141,6 +147,7 @@ impl PayloadEncode for Vec<u8> {
         }
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), crate::core::encode::InvalidStructureError> {
         self.as_slice().wire_valid()
     }

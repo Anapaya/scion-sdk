@@ -204,7 +204,7 @@ impl NetworkForwarder {
 
                 // Overwrite the recv buffer with the encoded packet, so that we can forward it to
                 // the sim socket without an extra copy.
-                let (updated_view, _rest) = match pkt.encode_to_view(recv_buf) {
+                let (updated_view, _rest) = match pkt.try_encode_to_view(recv_buf) {
                     Ok(view) => view,
                     Err(e) => {
                         tracing::warn!(
@@ -270,7 +270,7 @@ impl NetworkForwarder {
                     }
                 };
 
-                let encoded = match pkt.encode_to_vec() {
+                let encoded = match pkt.try_encode_to_vec() {
                     Ok(encoded) => encoded,
                     Err(e) => {
                         tracing::warn!(
@@ -555,7 +555,10 @@ mod tests {
         );
 
         peer_socket
-            .send_to(&packet.encode_to_vec().expect("encode packet"), listen_addr)
+            .send_to(
+                &packet.try_encode_to_vec().expect("encode packet"),
+                listen_addr,
+            )
             .await
             .expect("send to forwarder");
 

@@ -39,6 +39,7 @@ pub trait PathPolicy: Send + Sync + 'static {
 }
 
 /// A Segment Policy combining ACL's and a Hop pattern
+#[derive(Debug, Clone)]
 pub struct Policy {
     /// ACL Policy filters segments based on if they contain certain hops
     pub acl: Option<AclPolicy>,
@@ -47,13 +48,15 @@ pub struct Policy {
 }
 impl Policy {
     /// Creates a new Policy
-    pub fn new(acl: Option<AclPolicy>, hop_pattern: Option<HopPatternPolicy>) -> Self {
+    #[inline]
+    pub const fn new(acl: Option<AclPolicy>, hop_pattern: Option<HopPatternPolicy>) -> Self {
         Self { acl, hop_pattern }
     }
 
     /// Merges another policy into this one
     ///
     /// If a field is already set, it will not be overwritten
+    #[inline]
     pub fn merge_from(mut self, other: Policy) -> Self {
         Self {
             acl: self.acl.take().or(other.acl),
@@ -64,6 +67,7 @@ impl Policy {
     /// Checks if the policy matches the given path
     ///
     /// Returns true if the path is allowed by this policy
+    #[inline]
     pub fn matches(&self, path: &[types::PathPolicyHop]) -> bool {
         self.hop_pattern
             .as_ref()
@@ -77,6 +81,7 @@ impl Policy {
     }
 }
 impl PathPolicy for Policy {
+    #[inline]
     fn path_allowed(&self, path: &ScionPath) -> Result<bool, Cow<'static, str>> {
         let path_hops = types::PathPolicyHop::hops_from_path(path).map_err(Cow::from)?;
         Ok(self.matches(&path_hops))
@@ -89,12 +94,14 @@ impl PathPolicy for Policy {
 ///
 /// When selecting segments, the policy with the highest weight that matches at least one segment
 /// will be chosen
+#[derive(Debug, Clone)]
 pub struct WeightedPolicies {
     /// Policies with their associated weight
     pub policies: BTreeMap<u8, Policy>,
 }
 impl WeightedPolicies {
     /// Creates a new WeightedPolicies
+    #[inline]
     pub fn new(policies: impl IntoIterator<Item = (u8, Policy)>) -> Self {
         Self {
             policies: policies.into_iter().collect(),
@@ -104,6 +111,7 @@ impl WeightedPolicies {
     /// Adds a new policy with the given weight
     ///
     /// If a policy with the same weight already exists, it will be replaced and returned
+    #[inline]
     pub fn add_policy(&mut self, policy: Policy, weight: u8) -> Option<Policy> {
         self.policies.insert(weight, policy)
     }
@@ -111,6 +119,7 @@ impl WeightedPolicies {
     /// Finds the highest weighted policy that matches the given path
     ///
     /// Returns None if no policy matches
+    #[inline]
     pub fn match_highest(&self, path: &[types::PathPolicyHop]) -> Option<&Policy> {
         self.policies
             .values()

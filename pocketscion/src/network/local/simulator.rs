@@ -308,7 +308,7 @@ impl LocalNetworkSimulation<'_> {
         // Packet comes from this AS, dispatch, we don't generate any responses for this case
         match self.dispatch(
             &reply
-                .encode_to_owned_view()
+                .try_encode_to_owned_view()
                 .context("failed to encode reply for dispatching")?,
         ) {
             None => {}
@@ -336,7 +336,7 @@ impl LocalNetworkSimulation<'_> {
         let _s = info_span!("scmp", iid = self.local_if_id, at = at).entered();
 
         let request = packet
-            .try_into_scmp()
+            .try_as_scmp()
             .context("error classifying SCION packet for SCMP response")?;
 
         match request.scmp().message() {
@@ -383,7 +383,7 @@ fn create_udp_reply(
     respond_to: &ScionRawPacketView,
 ) -> anyhow::Result<ScionUdpPacket> {
     let respond_to_udp = respond_to
-        .try_into_udp()
+        .try_as_udp()
         .context("packet is not a UDP packet, cannot create reply")?;
 
     // Note: if src address is a multicast address, this should not generate a response.
@@ -413,7 +413,7 @@ fn maybe_create_scmp_reply(
     respond_to: &ScionRawPacketView,
 ) -> anyhow::Result<Option<ScionScmpPacket>> {
     let classify = respond_to
-        .classify()
+        .try_classify()
         .context("can't classify SCION packet for SCMP response")?;
 
     match classify {

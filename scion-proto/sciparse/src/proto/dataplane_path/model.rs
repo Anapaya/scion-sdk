@@ -53,6 +53,7 @@ pub enum DpPath {
 }
 impl DpPath {
     /// Constructs a `DpPath` from a `ScionDpPathView`
+    #[inline]
     pub fn from_view(view: &ScionDpPathViewRef) -> Self {
         match *view {
             ScionDpPathViewRef::Standard(standard_view) => {
@@ -73,13 +74,14 @@ impl DpPath {
     }
 
     /// Encodes the `DpPath` into a boxed view.
-    pub fn encode_to_owned_view(&self) -> Result<ScionDpPathView, InvalidStructureError> {
+    #[inline]
+    pub fn try_encode_to_owned_view(&self) -> Result<ScionDpPathView, InvalidStructureError> {
         let res = match self {
             DpPath::Standard(standard_path) => {
-                ScionDpPathView::Standard(standard_path.encode_to_owned_view()?)
+                ScionDpPathView::Standard(standard_path.try_encode_to_owned_view()?)
             }
             DpPath::OneHop(onehop_path) => {
-                ScionDpPathView::OneHop(*onehop_path.encode_to_owned_view()?)
+                ScionDpPathView::OneHop(*onehop_path.try_encode_to_owned_view()?)
             }
             DpPath::Empty => ScionDpPathView::Empty,
             DpPath::Unsupported { path_type, data } => {
@@ -95,6 +97,7 @@ impl DpPath {
 }
 impl DpPath {
     /// Returns the type of the path
+    #[inline]
     pub fn path_type(&self) -> PathType {
         match self {
             DpPath::Standard(_) => PathType::Scion,
@@ -105,7 +108,8 @@ impl DpPath {
     }
 
     /// Returns a reference to the standard path if it is of that type
-    pub fn standard(&self) -> Option<&StandardPath> {
+    #[inline]
+    pub const fn standard(&self) -> Option<&StandardPath> {
         match self {
             DpPath::Standard(path) => Some(path),
             _ => None,
@@ -117,13 +121,14 @@ impl DpPath {
     /// Note: A OneHop path will be converted into a Standard path upon reversal.
     ///
     /// Returns an error if the path type is unsupported or if the path is invalid for reversal.
+    #[inline]
     pub fn try_reverse(&mut self) -> Result<(), PathReverseError> {
         match self {
             DpPath::Standard(path) => path.try_reverse(),
             DpPath::OneHop(path) => {
                 let rev = path
                     .clone()
-                    .into_reversed_standard_path()
+                    .try_into_reversed_standard_path()
                     .map_err(|(e, _)| e)?;
                 *self = DpPath::Standard(rev);
                 Ok(())
@@ -144,7 +149,8 @@ impl DpPath {
     /// Returns an error containing the original path and the reason for failure if reversal is not
     /// possible.
     #[allow(clippy::result_large_err)]
-    pub fn into_reversed(mut self) -> Result<Self, (Self, PathReverseError)> {
+    #[inline]
+    pub fn try_into_reversed(mut self) -> Result<Self, (Self, PathReverseError)> {
         match self.try_reverse() {
             Ok(()) => Ok(self),
             Err(e) => Err((self, e)),
@@ -153,8 +159,15 @@ impl DpPath {
 }
 impl_from!(StandardPath, DpPath, |p| DpPath::Standard(p));
 impl_from!(OneHopPath, DpPath, |p| DpPath::OneHop(p));
+impl From<&ScionDpPathViewRef<'_>> for DpPath {
+    #[inline]
+    fn from(view: &ScionDpPathViewRef<'_>) -> Self {
+        DpPath::from_view(view)
+    }
+}
 
 impl WireEncode for DpPath {
+    #[inline]
     fn required_size(&self) -> usize {
         match self {
             DpPath::Standard(path) => path.required_size(),
@@ -164,6 +177,7 @@ impl WireEncode for DpPath {
         }
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         if self.required_size() > ScionHeaderPathLayout::MAX_SIZE_BYTES {
             return Err("Path size exceeds maximum encodable size (984 bytes)".into());
@@ -183,6 +197,7 @@ impl WireEncode for DpPath {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(&self, buf: &mut [u8]) -> usize {
         match self {
             DpPath::Standard(path) => unsafe { path.encode_unchecked(buf) },

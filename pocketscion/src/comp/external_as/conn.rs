@@ -83,7 +83,7 @@ impl ExternalAsConnection {
         }
 
         // We ignore extra bytes in the packet
-        let (packet, _rest) = ScionPacketView::from_mut_slice(buf)
+        let (packet, _rest) = ScionPacketView::try_from_mut_slice(buf)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         Ok(packet)

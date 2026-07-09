@@ -117,8 +117,9 @@ impl ScmpMessage {
     /// error if parsing fails.
     ///
     /// This method does not validate the checksum of the SCMP message.
-    pub fn from_slice(bytes: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
-        let (view, rest) = ScmpPayloadView::from_slice(bytes)?;
+    #[inline]
+    pub fn try_from_slice(bytes: &[u8]) -> Result<(Self, &[u8]), ViewConversionError> {
+        let (view, rest) = ScmpPayloadView::try_from_slice(bytes)?;
         Ok((Self::from_view(&view.message()), rest))
     }
 
@@ -156,7 +157,8 @@ impl ScmpMessage {
 }
 impl ScmpMessage {
     /// Get the type of the SCMP message.
-    pub fn message_type(&self) -> ScmpMessageType {
+    #[inline]
+    pub const fn message_type(&self) -> ScmpMessageType {
         match self {
             Self::DestinationUnreachable(_) => ScmpMessageType::DestinationUnreachable,
             Self::PacketTooBig(_) => ScmpMessageType::PacketTooBig,
@@ -176,13 +178,14 @@ impl ScmpMessage {
     /// - Informational messages: returns the identifier field.
     /// - Error messages: parses the offending packet as UDP and returns its source port.
     /// - Unknown error messages: returns `None`.
+    #[inline]
     pub fn dst_port(&self) -> Option<u16> {
         let udp_src_port = |offending_packet: &[u8]| {
-            let (inner, _) = ScionRawPacketView::from_slice(offending_packet).ok()?;
+            let (inner, _) = ScionRawPacketView::try_from_slice(offending_packet).ok()?;
             if inner.header().next_header() != ProtocolNumber::Udp {
                 return None;
             }
-            let (udp, _) = UdpDatagramView::from_slice(inner.payload()).ok()?;
+            let (udp, _) = UdpDatagramView::try_from_slice(inner.payload()).ok()?;
             Some(udp.src_port())
         };
         match self {
@@ -200,6 +203,7 @@ impl ScmpMessage {
     }
 
     /// Convert the SCMP message to an informational message.
+    #[inline]
     pub fn try_into_informational_message(self) -> Result<ScmpInformationalMessage, ScmpMessage> {
         match self {
             Self::EchoRequest(x) => Ok(ScmpInformationalMessage::EchoRequest(x)),
@@ -211,6 +215,7 @@ impl ScmpMessage {
     }
 
     /// Convert the SCMP message to an error message.
+    #[inline]
     pub fn try_into_error_message(self) -> Result<ScmpErrorMessage, ScmpMessage> {
         match self {
             Self::DestinationUnreachable(x) => Ok(ScmpErrorMessage::DestinationUnreachable(x)),
@@ -223,6 +228,7 @@ impl ScmpMessage {
     }
 }
 impl PayloadEncode for &ScmpMessage {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         match *self {
             ScmpMessage::DestinationUnreachable(x) => x.required_size(header_and_extensions_size),
@@ -238,6 +244,7 @@ impl PayloadEncode for &ScmpMessage {
         }
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         match *self {
             ScmpMessage::DestinationUnreachable(x) => x.wire_valid(),
@@ -253,6 +260,7 @@ impl PayloadEncode for &ScmpMessage {
         }
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -296,12 +304,15 @@ impl PayloadEncode for &ScmpMessage {
     }
 }
 impl PayloadEncode for ScmpMessage {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         (&self).required_size(header_and_extensions_size)
     }
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         (&self).wire_valid()
     }
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -312,6 +323,7 @@ impl PayloadEncode for ScmpMessage {
     }
 }
 impl From<ScmpErrorMessage> for ScmpMessage {
+    #[inline]
     fn from(value: ScmpErrorMessage) -> Self {
         match value {
             ScmpErrorMessage::DestinationUnreachable(x) => Self::DestinationUnreachable(x),
@@ -323,6 +335,7 @@ impl From<ScmpErrorMessage> for ScmpMessage {
     }
 }
 impl From<ScmpInformationalMessage> for ScmpMessage {
+    #[inline]
     fn from(value: ScmpInformationalMessage) -> Self {
         match value {
             ScmpInformationalMessage::EchoRequest(x) => Self::EchoRequest(x),
@@ -364,7 +377,8 @@ pub enum ScmpErrorMessage {
 }
 impl ScmpErrorMessage {
     /// Get the type of the error SCMP message.
-    pub fn message_type(&self) -> ScmpMessageType {
+    #[inline]
+    pub const fn message_type(&self) -> ScmpMessageType {
         match self {
             Self::DestinationUnreachable(_) => ScmpMessageType::DestinationUnreachable,
             Self::PacketTooBig(_) => ScmpMessageType::PacketTooBig,
@@ -375,6 +389,7 @@ impl ScmpErrorMessage {
     }
 }
 impl PayloadEncode for ScmpErrorMessage {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         match self {
             Self::DestinationUnreachable(m) => m.required_size(header_and_extensions_size),
@@ -385,6 +400,7 @@ impl PayloadEncode for ScmpErrorMessage {
         }
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         match self {
             Self::DestinationUnreachable(x) => x.wire_valid(),
@@ -395,6 +411,7 @@ impl PayloadEncode for ScmpErrorMessage {
         }
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -453,7 +470,8 @@ pub enum ScmpInformationalMessage {
 }
 impl ScmpInformationalMessage {
     /// Get the type of the informational SCMP message.
-    pub fn message_type(&self) -> ScmpMessageType {
+    #[inline]
+    pub const fn message_type(&self) -> ScmpMessageType {
         match self {
             Self::EchoRequest(_) => ScmpMessageType::EchoRequest,
             Self::EchoReply(_) => ScmpMessageType::EchoReply,
@@ -463,6 +481,7 @@ impl ScmpInformationalMessage {
     }
 }
 impl PayloadEncode for ScmpInformationalMessage {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         match self {
             Self::EchoRequest(m) => m.required_size(header_and_extensions_size),
@@ -472,6 +491,7 @@ impl PayloadEncode for ScmpInformationalMessage {
         }
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         match self {
             Self::EchoRequest(x) => x.wire_valid(),
@@ -481,6 +501,7 @@ impl PayloadEncode for ScmpInformationalMessage {
         }
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -529,6 +550,7 @@ macro_rules! error_message {
         }
 
         impl ::core::fmt::Debug for $name {
+            #[inline]
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 let mut d = f.debug_struct(stringify!($name));
                 $(d.field(stringify!($field), &self.$field);)*
@@ -542,6 +564,7 @@ macro_rules! error_message {
 
         impl $name {
             /// Create a new message with the corresponding values and an unset checksum.
+            #[inline]
             pub fn new($($field: $type,)* offending_packet: Vec<u8>) -> Self {
                 Self{
                     $($field,)*
@@ -563,11 +586,13 @@ macro_rules! error_message {
         }
 
         impl From<$name> for ScmpErrorMessage {
+            #[inline]
             fn from(value: $name) -> Self {
                 Self::$message_type(value)
             }
         }
         impl From<$name> for ScmpMessage {
+            #[inline]
             fn from(value: $name) -> Self {
                 Self::$message_type(value)
             }
@@ -575,6 +600,8 @@ macro_rules! error_message {
     };
 }
 
+/// Formats the offending packet as a short byte-length summary for `Debug` output.
+#[inline]
 fn format_offending_packet(offending_packet: &[u8]) -> String {
     format!("<{} bytes>", offending_packet.len())
 }
@@ -589,6 +616,7 @@ error_message!(
 );
 impl FromView for ScmpDestinationUnreachable {
     type ViewType = ScmpDestinationUnreachableMessageView;
+    #[inline]
     fn from_view(view: &ScmpDestinationUnreachableMessageView) -> Self {
         Self {
             code: view.code(),
@@ -600,6 +628,7 @@ impl ToModel for ScmpDestinationUnreachableMessageView {
     type ModelType = ScmpDestinationUnreachable;
 }
 impl PayloadEncode for ScmpDestinationUnreachable {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpDestinationUnreachableLayout::from_offending_packet_length(
             self.offending_packet.len(),
@@ -608,10 +637,12 @@ impl PayloadEncode for ScmpDestinationUnreachable {
         .size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -663,6 +694,7 @@ error_message!(
 );
 impl FromView for ScmpPacketTooBig {
     type ViewType = ScmpPacketTooBigMessageView;
+    #[inline]
     fn from_view(view: &ScmpPacketTooBigMessageView) -> Self {
         Self {
             mtu: view.mtu(),
@@ -674,6 +706,7 @@ impl ToModel for ScmpPacketTooBigMessageView {
     type ModelType = ScmpPacketTooBig;
 }
 impl PayloadEncode for ScmpPacketTooBig {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpPacketTooBigLayout::from_offending_packet_length(
             self.offending_packet.len(),
@@ -682,10 +715,12 @@ impl PayloadEncode for ScmpPacketTooBig {
         .size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -743,6 +778,7 @@ error_message!(
 );
 impl FromView for ScmpParameterProblem {
     type ViewType = ScmpParameterProblemMessageView;
+    #[inline]
     fn from_view(view: &ScmpParameterProblemMessageView) -> Self {
         Self {
             code: view.code(),
@@ -755,6 +791,7 @@ impl ToModel for ScmpParameterProblemMessageView {
     type ModelType = ScmpParameterProblem;
 }
 impl PayloadEncode for ScmpParameterProblem {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpParameterProblemLayout::from_offending_packet_length(
             self.offending_packet.len(),
@@ -763,10 +800,12 @@ impl PayloadEncode for ScmpParameterProblem {
         .size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -821,6 +860,7 @@ error_message!(
 );
 impl FromView for ScmpExternalInterfaceDown {
     type ViewType = ScmpExternalInterfaceDownMessageView;
+    #[inline]
     fn from_view(view: &ScmpExternalInterfaceDownMessageView) -> Self {
         Self {
             isd_asn: view.isd_asn(),
@@ -833,6 +873,7 @@ impl ToModel for ScmpExternalInterfaceDownMessageView {
     type ModelType = ScmpExternalInterfaceDown;
 }
 impl PayloadEncode for ScmpExternalInterfaceDown {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpExternalInterfaceDownLayout::from_offending_packet_length(
             self.offending_packet.len(),
@@ -841,10 +882,12 @@ impl PayloadEncode for ScmpExternalInterfaceDown {
         .size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -901,6 +944,7 @@ error_message!(
 );
 impl FromView for ScmpInternalConnectivityDown {
     type ViewType = ScmpInternalConnectivityDownMessageView;
+    #[inline]
     fn from_view(view: &ScmpInternalConnectivityDownMessageView) -> Self {
         Self {
             isd_asn: view.isd_asn(),
@@ -914,6 +958,7 @@ impl ToModel for ScmpInternalConnectivityDownMessageView {
     type ModelType = ScmpInternalConnectivityDown;
 }
 impl PayloadEncode for ScmpInternalConnectivityDown {
+    #[inline]
     fn required_size(&self, header_and_extensions_size: usize) -> usize {
         ScmpInternalConnectivityDownLayout::from_offending_packet_length(
             self.offending_packet.len(),
@@ -922,10 +967,12 @@ impl PayloadEncode for ScmpInternalConnectivityDown {
         .size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -1001,6 +1048,7 @@ macro_rules! informational_message {
 
         impl $name {
             /// Create a new message with the corresponding values and an unset checksum.
+            #[inline]
             pub fn new(identifier: u16, sequence_number: u16, $($field: $type,)*) -> Self {
                 Self {
                     identifier,
@@ -1011,11 +1059,13 @@ macro_rules! informational_message {
         }
 
         impl From<$name> for ScmpInformationalMessage {
+            #[inline]
             fn from(value: $name) -> Self {
                 Self::$message_type(value)
             }
         }
         impl From<$name> for ScmpMessage {
+            #[inline]
             fn from(value: $name) -> Self {
                 Self::$message_type(value)
             }
@@ -1033,6 +1083,7 @@ informational_message!(
 );
 impl FromView for ScmpEchoRequest {
     type ViewType = ScmpEchoRequestMessageView;
+    #[inline]
     fn from_view(view: &ScmpEchoRequestMessageView) -> Self {
         Self {
             identifier: view.identifier(),
@@ -1046,15 +1097,19 @@ impl ToModel for ScmpEchoRequestMessageView {
 }
 impl PayloadEncode for ScmpEchoRequest {
     /// Returns the required size of the SCMP EchoRequest message.
-    /// _header and extensions size is ignored for this message.
+    ///
+    /// The header and extensions size is ignored for this message.
+    #[inline]
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpEchoRequestLayout::from_data_length(self.data.len()).size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -1100,6 +1155,7 @@ informational_message!(
 );
 impl FromView for ScmpEchoReply {
     type ViewType = ScmpEchoReplyMessageView;
+    #[inline]
     fn from_view(view: &ScmpEchoReplyMessageView) -> Self {
         Self {
             identifier: view.identifier(),
@@ -1113,15 +1169,19 @@ impl ToModel for ScmpEchoReplyMessageView {
 }
 impl PayloadEncode for ScmpEchoReply {
     /// Returns the required size of the SCMP EchoReply message.
-    /// _header and extensions size is ignored for this message.
+    ///
+    /// The header and extensions size is ignored for this message.
+    #[inline]
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpEchoReplyLayout::from_data_length(self.data.len()).size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -1160,6 +1220,7 @@ informational_message!(
 );
 impl FromView for ScmpTracerouteRequest {
     type ViewType = ScmpTracerouteRequestMessageView;
+    #[inline]
     fn from_view(view: &ScmpTracerouteRequestMessageView) -> Self {
         Self {
             identifier: view.identifier(),
@@ -1172,15 +1233,19 @@ impl ToModel for ScmpTracerouteRequestMessageView {
 }
 impl PayloadEncode for ScmpTracerouteRequest {
     /// Returns the required size of the SCMP TracerouteRequest message.
-    /// _header and extensions size is ignored for this message.
+    ///
+    /// The header and extensions size is ignored for this message.
+    #[inline]
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpTracerouteRequestLayout.size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -1226,6 +1291,7 @@ informational_message!(
 );
 impl FromView for ScmpTracerouteReply {
     type ViewType = ScmpTracerouteReplyMessageView;
+    #[inline]
     fn from_view(view: &ScmpTracerouteReplyMessageView) -> Self {
         Self {
             identifier: view.identifier(),
@@ -1240,15 +1306,19 @@ impl ToModel for ScmpTracerouteReplyMessageView {
 }
 impl PayloadEncode for ScmpTracerouteReply {
     /// Returns the required size of the SCMP TracerouteReply message.
-    /// _header and extensions size is ignored for this message.
+    ///
+    /// The header and extensions size is ignored for this message.
+    #[inline]
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpTracerouteReplyLayout.size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -1294,6 +1364,7 @@ pub struct ScmpMessageUnknown {
 }
 impl ScmpMessageUnknown {
     /// Create a new unknown SCMP message.
+    #[inline]
     pub fn new(message_type: u8, code: u8, payload: Vec<u8>) -> Self {
         Self {
             message_type,
@@ -1306,6 +1377,7 @@ impl FromView for ScmpMessageUnknown {
     type ViewType = ScmpUnknownMessageView;
 
     /// Create a new unknown SCMP message from a view.
+    #[inline]
     fn from_view(view: &ScmpUnknownMessageView) -> Self {
         Self {
             message_type: view.message_type(),
@@ -1319,7 +1391,9 @@ impl ToModel for ScmpUnknownMessageView {
 }
 impl PayloadEncode for ScmpMessageUnknown {
     /// Returns the required size of the SCMP Unknown message.
-    /// _header and extensions size is ignored for this message.
+    ///
+    /// The header and extensions size is ignored for this message.
+    #[inline]
     fn required_size(&self, _header_and_extensions_size: usize) -> usize {
         ScmpUnknownMessageLayout::from_message_specific_data_length(
             self.message_specific_data.len(),
@@ -1327,10 +1401,12 @@ impl PayloadEncode for ScmpMessageUnknown {
         .size_bytes()
     }
 
+    #[inline]
     fn wire_valid(&self) -> Result<(), InvalidStructureError> {
         Ok(())
     }
 
+    #[inline]
     unsafe fn encode_unchecked(
         &self,
         buf: &mut [u8],
@@ -1366,6 +1442,7 @@ impl PayloadEncode for ScmpMessageUnknown {
     }
 }
 impl From<ScmpMessageUnknown> for ScmpMessage {
+    #[inline]
     fn from(value: ScmpMessageUnknown) -> Self {
         Self::Unknown(value)
     }
@@ -1383,7 +1460,7 @@ pub mod ptest {
     /// Controls the relative probability of each SCMP message variant being generated.
     ///
     /// Default weights: all variants = 1.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct ArbitraryScmpMessageParams {
         /// Weight for DestinationUnreachable messages.
         pub destination_unreachable: u32,

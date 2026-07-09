@@ -59,37 +59,44 @@ impl Isd {
     pub const BITS: u32 = u16::BITS;
 
     /// Creates a new ISD from a 16-bit value.
+    #[inline]
     pub const fn new(id: u16) -> Self {
         Self(id)
     }
 
-    /// Return the identifier as a 16-bit value.
+    /// Returns the identifier as a 16-bit value.
+    #[inline]
     pub const fn to_u16(&self) -> u16 {
         self.0
     }
 
-    /// Return true if this Isd is a wildcard.
+    /// Returns true if this [`Isd`] is a wildcard.
+    #[inline]
     pub const fn is_wildcard(&self) -> bool {
         self.0 == Self::WILDCARD.0
     }
 
-    /// Returns true if this Isd matches another Isd, taking wildcards into account.
+    /// Returns true if this [`Isd`] matches another [`Isd`], taking wildcards into account.
+    #[inline]
     pub const fn matches(&self, other: Isd) -> bool {
         self.is_wildcard() || other.is_wildcard() || self.0 == other.0
     }
 
-    /// Returns true if this Isd matches any entry in the given collection, taking wildcards into
-    /// account.
+    /// Returns true if this [`Isd`] matches any entry in the given collection, taking wildcards
+    /// into account.
+    #[inline]
     pub fn matches_any_in<'a>(&self, collection: impl IntoIterator<Item = &'a Isd>) -> bool {
         collection.into_iter().any(|other| self.matches(*other))
     }
 }
 impl Debug for Isd {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         <Self as Display>::fmt(self, f)
     }
 }
 impl Display for Isd {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -100,6 +107,7 @@ impl FromStr for Isd {
     /// Parses an ISD from a decimal string.
     ///
     /// ISD 0 is parsed without any errors.
+    #[inline]
     fn from_str(string: &str) -> Result<Self, Self::Err> {
         u16::from_str(string)
             .map(Isd::new)
@@ -109,6 +117,7 @@ impl FromStr for Isd {
 impl_from!(u16, Isd, |v| Isd::new(v));
 impl_from!(Isd, u16, |v| v.to_u16());
 impl FromUnalignedRead for Isd {
+    #[inline]
     fn from_unaligned_read(v: u128) -> Self {
         Isd::new(u16::from_unaligned_read(v))
     }

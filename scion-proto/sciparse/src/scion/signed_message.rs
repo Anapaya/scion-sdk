@@ -28,7 +28,7 @@ use sha2::Digest;
 use thiserror::Error;
 
 /// Supported digest algorithms for signing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(missing_docs)]
 pub enum DigestAlgorithm {
     Sha256,
@@ -260,6 +260,7 @@ impl SignedMessage {
 // Decoding
 impl SignedMessage {
     /// Decodes a signed message after validating its signature.
+    #[inline]
     pub fn decode_validated<'a, Body, Metadata>(
         &'a self,
         key_provider: impl Fn(&[u8]) -> Result<p256::ecdsa::VerifyingKey, ValidateError>,
@@ -288,6 +289,7 @@ impl SignedMessage {
     /// Decodes the header and body of the signed message, returning the body and optional metadata.
     ///
     /// If metadata should be ignored, the caller can use `()` as the `Metadata` type parameter
+    #[inline]
     pub fn decode_unvalidated<Body, Metadata>(
         &self,
     ) -> Result<(Body, Option<Metadata>), DecodeError>
@@ -313,6 +315,7 @@ impl SignedMessage {
 // Protobuf conversions
 impl SignedMessage {
     /// Converts this signed message into the protobuf representation used for RPCs.
+    #[inline]
     pub fn into_rpc(self) -> scion_protobuf::crypto::v1::SignedMessage {
         scion_protobuf::crypto::v1::SignedMessage {
             header_and_body: self.header_and_body,
@@ -321,6 +324,7 @@ impl SignedMessage {
     }
 
     /// Converts from the protobuf representation of a signed message to this struct.
+    #[inline]
     pub fn from_rpc(value: scion_protobuf::crypto::v1::SignedMessage) -> Self {
         Self {
             header_and_body: value.header_and_body,
@@ -329,17 +333,20 @@ impl SignedMessage {
     }
 }
 impl From<scion_protobuf::crypto::v1::SignedMessage> for SignedMessage {
+    #[inline]
     fn from(value: scion_protobuf::crypto::v1::SignedMessage) -> Self {
         SignedMessage::from_rpc(value)
     }
 }
 impl From<SignedMessage> for scion_protobuf::crypto::v1::SignedMessage {
+    #[inline]
     fn from(signed: SignedMessage) -> Self {
         signed.into_rpc()
     }
 }
 
 /// Computes the hash of the given data using the specified digest algorithm.
+#[inline]
 fn hash<D: Digest>(msg: &[u8], data: impl IntoIterator<Item: AsRef<[u8]>>) -> Vec<u8> {
     let mut hasher = D::new();
     hasher.update(msg);

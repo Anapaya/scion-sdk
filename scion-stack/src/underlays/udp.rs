@@ -155,7 +155,7 @@ impl UdpUnderlaySocket {
                 "Packet for local dispatch dst was not an IP address".into(),
             ))?;
 
-        let classified = packet.classify().map_err(|e| {
+        let classified = packet.try_classify().map_err(|e| {
             crate::scionstack::ScionSocketSendError::InvalidPacket(
                 format!("Failed to classify packet for local dispatch: {e}").into(),
             )
@@ -317,7 +317,7 @@ impl UnderlaySocket for UdpUnderlaySocket {
             loop {
                 let (n, _) = self.socket.recv_from(&mut buf).await?;
 
-                let packet = match ScionRawPacketView::from_slice(&buf[..n]) {
+                let packet = match ScionRawPacketView::try_from_slice(&buf[..n]) {
                     Ok((packet, _rest)) => packet,
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to decode SCION packet");

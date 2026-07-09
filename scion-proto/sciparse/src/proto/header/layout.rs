@@ -41,6 +41,7 @@ use crate::{
 /// Includes information about the common header, address header, path header, and payload
 ///
 /// The total header size and payload size are stored for convenience
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScionHeaderLayout {
     /// Layout of the common header
     pub common: CommonHeaderLayout,
@@ -68,6 +69,7 @@ impl ScionHeaderLayout {
     pub const MAX_SIZE_BYTES: usize = 1020;
 
     /// Constructs the layout from its individual parts
+    #[inline]
     pub fn from_parts(
         src_addr_len: u8,
         dst_addr_len: u8,
@@ -98,7 +100,7 @@ impl ScionHeaderLayout {
     /// Does not validate:
     /// - Field values beyond version and size
     /// - That the given buffer contains the payload
-    pub fn from_slice(buf: &[u8]) -> Result<Self, LayoutParseError> {
+    pub fn try_from_slice(buf: &[u8]) -> Result<Self, LayoutParseError> {
         // Impl Note: We perform size checks before accessing any fields beyond the common header.
         // Ensuring the entire buffer is large enough, happens at the end, after all size
         // calculations.
@@ -221,7 +223,7 @@ impl ScionHeaderLayout {
     }
 
     /// Constructs the layout from a loaded SCION packet header
-    pub fn from_loaded(packet: &ScionPacketHeader) -> Self {
+    pub fn from_model(packet: &ScionPacketHeader) -> Self {
         let common = CommonHeaderLayout;
         let address = AddressHeaderLayout::new(
             packet.address.src_host_addr.required_size() as u8,
@@ -261,6 +263,7 @@ impl ScionHeaderLayout {
 }
 impl ScionHeaderLayout {
     /// Returns annotations for all SCION header fields
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let mut annotations = Annotations::new();
 
@@ -279,12 +282,14 @@ impl Layout for ScionHeaderLayout {
 }
 impl TryFrom<&[u8]> for ScionHeaderLayout {
     type Error = ViewConversionError;
+    #[inline]
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        Self::from_slice(buf).map_err(ViewConversionError::from)
+        Self::try_from_slice(buf).map_err(ViewConversionError::from)
     }
 }
 
 /// Layout for the SCION common header
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommonHeaderLayout;
 impl CommonHeaderLayout {
     //  0                   1                   2                   3
@@ -314,6 +319,7 @@ impl CommonHeaderLayout {
 }
 impl CommonHeaderLayout {
     /// Returns annotations for the common header fields
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let ann = vec![
             (CommonHeaderLayout::VERSION_RNG, "version"),
@@ -339,6 +345,7 @@ impl Layout for CommonHeaderLayout {
 }
 
 /// Layout for the SCION address header
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AddressHeaderLayout {
     /// Length of the source host address in bytes
     pub src_addr_len: u8,
@@ -416,6 +423,7 @@ impl AddressHeaderLayout {
 }
 impl AddressHeaderLayout {
     /// Returns annotations for the address header fields
+    #[inline]
     pub fn annotations(&self) -> Annotations {
         let ann = vec![
             (AddressHeaderLayout::DST_ISD_RNG, "dst_isd"),

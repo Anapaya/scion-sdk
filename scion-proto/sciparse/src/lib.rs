@@ -60,7 +60,7 @@
 //! # use sciparse::packet::view::ScionRawPacketView;
 //! # use sciparse::core::view::View;
 //! let buf: Vec<u8> = vec![/* ... */]; // Buffer containing a SCION packet
-//! let packet_view = ScionRawPacketView::from_slice(&buf[..]).expect("Failed to parse SCION packet");
+//! let packet_view = ScionRawPacketView::try_from_slice(&buf[..]).expect("Failed to parse SCION packet");
 //!
 //! println!("Parsed view: {:?}", packet_view);
 //! ```
