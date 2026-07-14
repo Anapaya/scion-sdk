@@ -27,6 +27,16 @@ pub mod session_manager;
 
 pub use auth::AuthInfo;
 
+/// Encode the WAP IP address as base32 encoded WAP ID.
+pub fn encode_ap_id(ip: IpAddr) -> String {
+    let ip_bytes: &[u8] = match ip {
+        IpAddr::V4(ip) => &ip.octets(),
+        IpAddr::V6(ip) => &ip.octets(),
+    };
+
+    base32::encode(base32::Alphabet::Rfc4648 { padding: false }, ip_bytes)
+}
+
 /// Handles WAP control plane interactions
 #[derive(Clone)]
 pub struct WapControl {
@@ -49,18 +59,9 @@ impl WapControl {
         Self {
             session_manager,
             auth_service,
-            encoded_local_ip: Self::encode_ap_id(local_ip),
+            encoded_local_ip: encode_ap_id(local_ip),
             data_plane_port,
         }
-    }
-
-    fn encode_ap_id(ip: IpAddr) -> String {
-        let ip_bytes: &[u8] = match ip {
-            IpAddr::V4(ip) => &ip.octets(),
-            IpAddr::V6(ip) => &ip.octets(),
-        };
-
-        base32::encode(base32::Alphabet::Rfc4648 { padding: false }, ip_bytes)
     }
 
     fn ap_id(&self) -> &str {
