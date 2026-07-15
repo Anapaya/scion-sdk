@@ -300,13 +300,13 @@ impl<C: EdgeTunControlPlane + 'static> EdgeTunControlPlaneCrpcApi<C> {
 fn unregistered_metrics() -> Metrics {
     Metrics {
         establishing_connections_gauge: IntGauge::new(
-            "edgetun_ng_control_establishing_connections",
-            "Number of ng control plane connections currently being established.",
+            "edgetun_control_establishing_connections",
+            "Number of control plane connections currently being established.",
         )
         .expect("gauge name is valid"),
         routed_source_cids_gauge: IntGauge::new(
-            "edgetun_ng_control_registered_connections",
-            "Number of currently registered ng control plane connections.",
+            "edgetun_control_registered_connections",
+            "Number of currently registered control plane connections.",
         )
         .expect("gauge name is valid"),
     }
