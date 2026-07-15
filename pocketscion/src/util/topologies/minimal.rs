@@ -25,8 +25,12 @@ use crate::{
     util::topologies::{IA132, IA212, IA222, PsSetup, UnderlayType},
 };
 
-/// Sets up a minimal PocketSCION topology with two [IA132] and [IA212] ASes and a sing link between
-/// them. As well as either a SNAP or a UDP underlay, depending on the `underlay` parameter.
+/// Sets up a minimal PocketSCION topology with two [IA132] and [IA212] ASes and a single link
+/// between them. As well as either a SNAP or a UDP underlay, depending on the `underlay` parameter.
+///
+/// ```text
+///   1-ff00:0:132  #1 ───────── #3  2-ff00:0:212
+/// ```
 pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
     let mut pstate = PocketScionState::new(Utc::now());
 
@@ -84,10 +88,19 @@ pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
 
 /// Sets up a PocketSCION topology with three ASes, [IA132], [IA212] and [IA222].
 /// These ASes are connected in a triangle, with links between IA132-IA212, IA132-IA222 and
-/// IA212-IA222.
+/// IA212-IA222. This gives [IA132] two distinct paths to [IA212]: the direct link, or the
+/// detour via [IA222].
 ///
 /// As well as either a SNAP or a UDP underlay, in both [IA132] and [IA212], depending on the
 /// `underlay` parameter.
+///
+/// ```text
+///                     2-ff00:0:222
+///                 #1 /            \ #2
+///                   /              \
+///             #2   /                \  #4
+///   1-ff00:0:132  #1 ───────────── #3  2-ff00:0:212
+/// ```
 pub async fn two_path_topology(underlay: UnderlayType) -> PsSetup {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
 

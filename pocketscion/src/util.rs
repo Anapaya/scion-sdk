@@ -15,6 +15,16 @@
 //! Shared utility functions
 
 pub(crate) mod cert_tmp_dir;
+
+/// Returns a SNAP authentication token accepted by a PocketSCION simulation.
+///
+/// PocketSCION does not verify SNAP tokens, so any well-formed token is accepted. This helper
+/// returns one so that examples and quick experiments can build a `ScionStack` against the
+/// simulation without pulling in `snap-tokens` themselves. Do **not** use it against a real SCION
+/// network.
+pub fn dev_auth_token() -> String {
+    snap_tokens::v0::dummy_snap_token()
+}
 pub mod crpc;
 pub mod path_providers;
 pub mod serde_ext;

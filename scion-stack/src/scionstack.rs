@@ -469,6 +469,37 @@ impl ScionStack {
         MultiPathManager::new(MultiPathManagerConfig::default(), fetcher, strategy)
             .expect("should not fail with default configuration")
     }
+
+    /// Creates a path fetcher with default configuration.
+    ///
+    /// A [`PathFetcher`](crate::path::fetcher::traits::PathFetcher) exposes the *set* of paths to a
+    /// destination, whereas the socket (via the path manager returned by
+    /// [`create_path_manager`](Self::create_path_manager)) automatically selects one. Use this when
+    /// the application wants to inspect the available paths and choose one deliberately, then send
+    /// over it with [`send_to_via`](crate::scionstack::UdpScionSocket::send_to_via).
+    ///
+    /// ```no_run
+    /// use scion_stack::{path::fetcher::traits::PathFetcher, scionstack::ScionStackBuilder};
+    /// use sciparse::identifier::isd_asn::IsdAsn;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stack = ScionStackBuilder::new().build().await?;
+    /// let src: IsdAsn = "1-ff00:0:110".parse()?;
+    /// let dst: IsdAsn = "2-ff00:0:222".parse()?;
+    ///
+    /// let paths = stack.create_path_fetcher().fetch_paths(src, dst).await?;
+    /// for path in &paths {
+    ///     println!("{path}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_path_fetcher(&self) -> PathFetcherImpl {
+        PathFetcherImpl::new(
+            vec![("Endhost API".into(), self.default_segment_fetcher.clone())],
+            DEFAULT_SEGMENT_FETCHER_TIMEOUT,
+        )
+    }
 }
 
 /// Default timeout for creating a connected socket

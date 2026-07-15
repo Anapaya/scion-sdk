@@ -55,6 +55,16 @@ test-log = { workspace = true }
 [lints]
 workspace = true
 
+# `test = true` folds the examples' `#[cfg(test)]` smoke tests into the normal
+# `cargo test` run, so they are exercised end-to-end in CI (not just compiled).
+[[example]]
+name = "udp_echo"
+test = true
+
+[[example]]
+name = "udp_paths"
+test = true
+
 [target."cfg(windows)".dependencies]
 windows-sys = "0.61.2"
 
