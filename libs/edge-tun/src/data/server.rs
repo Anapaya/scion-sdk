@@ -34,7 +34,6 @@ use ana_gotatun::{
 };
 use chacha20::ChaCha8Rng;
 use rand::{Rng, SeedableRng};
-use scion_sdk_observability::metrics::registry::MetricsRegistry;
 
 use crate::{
     data::common::{
@@ -137,6 +136,10 @@ pub struct EdgeTunServerState<A, P, N, T> {
     static_private: x25519::StaticSecret,
     pool: EdgePacketBufPool,
     fragment_size: u16,
+    /// Metrics shared across every per-tunnel [`Fragmenter`].
+    fragmenter_metrics: FragmentMetrics,
+    /// Metrics shared across every per-tunnel [`Defragmenter`].
+    defragmenter_metrics: DefragmentMetrics,
 }
 
 impl<A: EdgeTunAuthz<T>, P, N, T> EdgeTunServerState<A, P, N, T>
@@ -146,6 +149,7 @@ where
     P: InboundTrafficPolicy<T>,
 {
     /// Create a new [`EdgeTunServerState`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         static_private: x25519::StaticSecret,
         rate_limiter: Arc<RateLimiter>,
@@ -153,6 +157,8 @@ where
         inbound_policy: Arc<P>,
         pool: EdgePacketBufPool,
         fragment_size: u16,
+        fragmenter_metrics: FragmentMetrics,
+        defragmenter_metrics: DefragmentMetrics,
     ) -> Self {
         let static_public = x25519::PublicKey::from(&static_private);
         Self {
@@ -164,6 +170,8 @@ where
             inbound_policy,
             pool,
             fragment_size,
+            fragmenter_metrics,
+            defragmenter_metrics,
         }
     }
 
@@ -258,18 +266,9 @@ where
                                 ),
                                 Fragmenter::new(
                                     self.fragment_size as usize,
-                                    // XXX(dsd): We instantiate a new registry
-                                    // here to avoid re-registering the same
-                                    // metrics (which panics) in the metrics
-                                    // registry.
-                                    // The latter happens because the fragmenter
-                                    // is designed to be a singleton.
-                                    FragmentMetrics::new(&MetricsRegistry::new()),
+                                    self.fragmenter_metrics.clone(),
                                 ),
-                                Defragmenter::new(
-                                    8,
-                                    DefragmentMetrics::new(&MetricsRegistry::new()),
-                                ),
+                                Defragmenter::new(8, self.defragmenter_metrics.clone()),
                             )
                         })
                 else {
@@ -739,7 +738,17 @@ mod tests {
         let pool = test_pool();
         let public = x25519::PublicKey::from(&server_secret);
         let rl = Arc::new(RateLimiter::new(&public, 100));
-        EdgeTunServerState::new(server_secret, rl, authz, policy, pool, 1420)
+        let metrics = MetricsRegistry::new();
+        EdgeTunServerState::new(
+            server_secret,
+            rl,
+            authz,
+            policy,
+            pool,
+            1420,
+            FragmentMetrics::new(&metrics),
+            DefragmentMetrics::new(&metrics),
+        )
     }
 
     fn make_client(

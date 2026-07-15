@@ -24,8 +24,6 @@ pub mod control;
 pub mod data;
 /// Packet fragmentation and reassembly for edge-tun tunnels.
 pub mod fragmenting;
-/// Prometheus metrics for edge-tun connections.
-pub mod metrics;
 /// Protobuf definitions
 pub mod proto;
 /// High-level edge-tun client tunnel orchestration.
