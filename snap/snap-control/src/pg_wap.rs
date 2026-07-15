@@ -85,7 +85,7 @@ impl PgWapSessionManager for WapControl {
         let valid_until = chrono::Utc::now()
             + chrono::Duration::from_std(auth_info.valid_until.saturating_duration_since(now))
                 .context("auth service returned out of bounds duration")?;
-        tracing::info!(%client_ip, %valid_until, "Granted IP access");
+        tracing::info!(%client_ip, %valid_until, ?target_domains, "Granted IP access");
 
         Ok(Session {
             ip: auth_info.ip,
