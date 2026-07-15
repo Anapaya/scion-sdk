@@ -198,6 +198,7 @@ pub mod socket;
 
 use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use futures::future::BoxFuture;
 use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
 use sciparse::{
@@ -672,45 +673,28 @@ pub enum SocketKind {
 /// The underlay stack is the underlying transport layer that is used to send and receive SCION
 /// packets. Sockets returned by the underlay stack have no path management but allow
 /// sending and receiving SCION packets.
-pub(crate) trait UnderlayStack: Send + Sync {
-    type Socket: UnderlaySocket + 'static;
-
-    fn bind_socket(
-        &self,
-        kind: SocketKind,
-        bind_addr: Option<ScionSocketIpAddr>,
-    ) -> BoxFuture<'_, Result<Self::Socket, ScionSocketBindError>>;
-
-    /// Get the list of local ISD-ASes available on the endhost.
-    fn local_ases(&self) -> Vec<IsdAsn>;
-}
-
-/// Dyn safe trait for an underlay stack.
 pub(crate) trait DynUnderlayStack: Send + Sync {
     fn bind_socket(
         &self,
         kind: SocketKind,
         bind_addr: Option<ScionSocketIpAddr>,
-    ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>>;
+    ) -> BoxFuture<'_, Result<BoundUnderlaySocket, ScionSocketBindError>>;
 
     fn local_ases(&self) -> Vec<IsdAsn>;
 }
 
-impl<U: UnderlayStack> DynUnderlayStack for U {
-    fn bind_socket(
-        &self,
-        kind: SocketKind,
-        bind_addr: Option<ScionSocketIpAddr>,
-    ) -> BoxFuture<'_, Result<Box<dyn UnderlaySocket>, ScionSocketBindError>> {
-        Box::pin(async move {
-            let socket = self.bind_socket(kind, bind_addr).await?;
-            Ok(Box::new(socket) as Box<dyn UnderlaySocket>)
-        })
-    }
-
-    fn local_ases(&self) -> Vec<IsdAsn> {
-        <Self as UnderlayStack>::local_ases(self)
-    }
+/// An underlay socket together with the metadata resolved when it was bound.
+///
+/// The [`local_addr`](Self::local_addr) and [`snap_data_plane`](Self::snap_data_plane) are fixed at
+/// bind time and are therefore carried here rather than being queried on every call through the
+/// [`UnderlaySocket`] trait.
+pub(crate) struct BoundUnderlaySocket {
+    /// The underlay socket.
+    pub socket: Box<dyn UnderlaySocket>,
+    /// The local SCION address the socket is bound to.
+    pub local_addr: ScionSocketIpAddr,
+    /// The SNAP data plane the socket is connected to, if a SNAP underlay is used.
+    pub snap_data_plane: Option<net::SocketAddr>,
 }
 
 /// SCION socket connect errors.
@@ -779,32 +763,104 @@ pub enum ScionSocketReceiveError {
     NotConnected,
 }
 
-/// A trait that defines an abstraction over an asynchronous underlay socket.
-/// The socket sends and receives raw SCION packets. Decoding of the next layer
-/// protocol or SCMP handling is left to the caller.
-pub(crate) trait UnderlaySocket: 'static + Send + Sync {
-    /// Send a raw packet. Takes a ScionPacketRaw because it needs to read the path
-    /// to resolve the underlay next hop.
-    fn send<'a>(
-        &'a self,
-        packet: &'a ScionRawPacketView,
-    ) -> BoxFuture<'a, Result<(), ScionSocketSendError>>;
+/// The maximum size in bytes of a raw SCION packet handled by the underlay.
+///
+/// This is large enough to hold any UDP datagram and can be used to size a receive buffer passed to
+/// [`UnderlaySocket::try_recv`].
+pub(crate) const MAX_UNDERLAY_PACKET_SIZE: usize = 65535;
 
-    /// Try to send a raw packet immediately. Takes a ScionPacketRaw because it needs to read the
-    /// path to resolve the underlay next hop.
+/// A trait that defines an abstraction over an underlay socket.
+///
+/// The socket sends and receives raw SCION packets. Decoding of the next layer protocol or SCMP
+/// handling is left to the caller.
+///
+/// The core operations [`try_send`](Self::try_send) and [`try_recv`](Self::try_recv) are
+/// synchronous and non-blocking, so the socket can be driven from non-`async` code. The
+/// [`writeable`](Self::writeable) and [`readable`](Self::readable) readiness notifications are
+/// `async`. Blocking-style `send`/`recv` helpers are layered on top by the [`UnderlaySocketExt`]
+/// extension trait, so implementors only provide the core primitives. Receiving is zero-copy into a
+/// caller-owned buffer: `try_recv` writes the packet into `buf` and returns its length, so the
+/// underlay never hides an allocation.
+#[async_trait]
+pub(crate) trait UnderlaySocket: 'static + Send + Sync {
+    /// Attempts to send the raw packet in its entirety.
+    ///
+    /// Returns an error if the underlying socket is not ready to send, or if another error occurs.
+    /// A socket that is not ready reports [`ScionSocketSendError::IoError`] with
+    /// [`std::io::ErrorKind::WouldBlock`].
+    ///
+    /// Takes a [`ScionRawPacketView`] because it needs to read the path to resolve the underlay
+    /// next hop.
     fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError>;
 
-    /// Receive a raw SCION packet.
-    // TODO: Currently this forces alloc per received packet. Since we now have the views, this
-    // should be changed to a zero-copy receive
-    fn recv<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<Box<ScionRawPacketView>, ScionSocketReceiveError>>;
-    /// Get the local socket address of this socket.
-    fn local_addr(&self) -> ScionSocketIpAddr;
+    /// Resolves once the underlying socket is ready to send.
+    ///
+    /// A wakeup does not guarantee that the next call to [`try_send`](Self::try_send) will succeed,
+    /// as the socket may have become not ready again in the meantime. The caller should call
+    /// `try_send` again after this future resolves.
+    async fn writeable(&self);
 
-    /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
-    fn snap_data_plane(&self) -> Option<net::SocketAddr>;
+    /// Attempts to receive a raw SCION packet into `buf`, returning the number of bytes written.
+    ///
+    /// On success the packet occupies `buf[..n]` and is guaranteed to decode with
+    /// [`ScionRawPacketView::try_from_slice`]. Returns an error if the underlying socket is not
+    /// ready to receive, or if another error occurs. A socket that is not ready reports
+    /// [`ScionSocketReceiveError::IoError`] with [`std::io::ErrorKind::WouldBlock`].
+    fn try_recv(&self, buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError>;
+
+    /// Resolves once the underlying socket is ready to receive.
+    ///
+    /// A wakeup does not guarantee that the next call to [`try_recv`](Self::try_recv) will succeed,
+    /// as the socket may have become not ready again in the meantime. The caller should call
+    /// `try_recv` again after this future resolves.
+    async fn readable(&self);
+}
+
+/// Blocking-style convenience methods layered on top of [`UnderlaySocket`].
+///
+/// This is blanket-implemented for every [`UnderlaySocket`], so implementors only ever provide the
+/// core primitives while callers get [`send`](Self::send)/[`recv`](Self::recv) built on top of
+/// them.
+#[async_trait]
+pub(crate) trait UnderlaySocketExt: UnderlaySocket {
+    /// Sends the raw packet, waiting for the socket to become writeable if necessary.
+    ///
+    /// Takes a [`ScionRawPacketView`] because it needs to read the path to resolve the underlay
+    /// next hop.
+    async fn send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError>;
+
+    /// Receives a raw SCION packet into `buf`, waiting for the socket to become readable if
+    /// necessary. Returns the number of bytes written; the packet occupies `buf[..n]`.
+    async fn recv(&self, buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError>;
+}
+
+#[async_trait]
+impl<T: UnderlaySocket + ?Sized> UnderlaySocketExt for T {
+    async fn send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
+        loop {
+            match self.try_send(packet) {
+                Err(ScionSocketSendError::IoError(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    self.writeable().await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn recv(&self, buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError> {
+        loop {
+            match self.try_recv(buf) {
+                Err(ScionSocketReceiveError::IoError(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    self.readable().await;
+                }
+                result => return result,
+            }
+        }
+    }
 }
 
 impl Drop for ScionStack {

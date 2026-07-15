@@ -480,6 +480,19 @@ impl SnapTunnel {
         }
     }
 
+    /// Try to receive a packet from the remote server without blocking.
+    ///
+    /// Returns `Ok(None)` if no packet is currently available.
+    pub fn try_recv(&self) -> Result<Option<Bytes>, SnapTunnelReceiveError> {
+        match self.receive_queue.try_recv() {
+            Ok(packet) => Ok(Some(packet.into())),
+            Err(async_channel::TryRecvError::Empty) => Ok(None),
+            Err(async_channel::TryRecvError::Closed) => {
+                Err(SnapTunnelReceiveError::ReceiveQueueClosed)
+            }
+        }
+    }
+
     /// Poll for a packet from the remote server.
     pub fn poll_recv(
         &self,

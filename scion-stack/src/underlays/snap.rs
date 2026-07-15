@@ -15,6 +15,8 @@
 use std::{io, net, sync::Arc};
 
 use ana_gotatun::packet::PacketBufPool;
+use async_trait::async_trait;
+use bytes::Bytes;
 use scion_sdk_reqwest_connect_rpc::token_source::TokenSource;
 use sciparse::{
     address::ip_socket_addr::ScionSocketIpAddr, core::view::View, packet::view::ScionRawPacketView,
@@ -38,12 +40,17 @@ impl Drop for SnapUnderlaySocketTaskHandle {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct SnapUnderlaySocket {
     pub inner: Arc<SnapTunnel>,
     local_addr: ScionSocketIpAddr,
     _task: Arc<SnapUnderlaySocketTaskHandle>,
     pub(crate) pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
+    /// A datagram received by [`readable`](UnderlaySocket::readable) but not yet returned by
+    /// [`try_recv`](UnderlaySocket::try_recv).
+    ///
+    /// The SNAP receive queue can only be observed by consuming from it, so `readable` pulls one
+    /// datagram into this slot and `try_recv` drains it before pulling further datagrams.
+    peeked: tokio::sync::Mutex<Option<Bytes>>,
 }
 
 impl SnapUnderlaySocket {
@@ -133,10 +140,22 @@ impl SnapUnderlaySocket {
             local_addr,
             _task: Arc::new(SnapUnderlaySocketTaskHandle(tokio::spawn(async {}))),
             pool,
+            peeked: tokio::sync::Mutex::new(None),
         })
+    }
+
+    /// The local SCION address the socket is bound to.
+    pub(crate) fn local_addr(&self) -> ScionSocketIpAddr {
+        self.local_addr
+    }
+
+    /// The SNAP data plane the socket is connected to.
+    pub(crate) fn snap_data_plane(&self) -> Option<net::SocketAddr> {
+        Some(self.inner.data_plane_address())
     }
 }
 
+#[async_trait]
 impl UnderlaySocket for SnapUnderlaySocket {
     fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
         // TODO: ana gotatun requires ownership of the buffer, so we need to copy the packet into a
@@ -157,81 +176,86 @@ impl UnderlaySocket for SnapUnderlaySocket {
             .map_err(ScionSocketSendError::IoError)
     }
 
-    fn send<'a>(
-        &'a self,
-        packet: &ScionRawPacketView,
-    ) -> futures::future::BoxFuture<'a, Result<(), crate::scionstack::ScionSocketSendError>> {
-        // TODO: ana gotatun requires ownership of the buffer, so we need to copy the packet into a
-        // new buffer. Should be looked into if it's possible to avoid this copy.
-
-        let mut buf = self.pool.get();
-        let pkt = packet.as_slice();
-        let packet_size = pkt.len();
-
-        {
-            let write = buf.buf_mut();
-            write.resize(packet_size, 0);
-            buf[..packet_size].copy_from_slice(pkt);
-        }
-
-        Box::pin(async move {
-            self.inner
-                .send(buf)
-                .await
-                .map_err(ScionSocketSendError::IoError)
-        })
+    async fn writeable(&self) {
+        // Ignore readiness errors; a subsequent `try_send` surfaces any real error.
+        let _ = self.inner.writable().await;
     }
 
-    fn recv<'a>(
-        &'a self,
-    ) -> futures::future::BoxFuture<'a, Result<Box<ScionRawPacketView>, ScionSocketReceiveError>>
-    {
-        Box::pin(async move {
-            loop {
-                let raw = self
-                    .inner
-                    .recv()
-                    .await
-                    // XXX(uniquefine) this error handling is awkward. But this will only happen
-                    // when the stack is dropped anyway.
-                    .map_err(|_| {
-                        ScionSocketReceiveError::IoError(io::Error::new(
-                            io::ErrorKind::ConnectionReset,
-                            "SNAP tunnel closed",
-                        ))
-                    })?;
-
-                let packet = match ScionRawPacketView::try_from_slice(&raw) {
-                    Ok((pkt, _rest)) => pkt,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Failed to decode SCION packet, skipping");
-                        continue;
-                    }
+    fn try_recv(&self, buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError> {
+        loop {
+            // Take a datagram staged by `readable`, or pull the next one without blocking.
+            let raw: Bytes = {
+                let Ok(mut peeked) = self.peeked.try_lock() else {
+                    // `readable` is currently staging a datagram; report not-ready for now.
+                    return Err(ScionSocketReceiveError::IoError(io::Error::from(
+                        io::ErrorKind::WouldBlock,
+                    )));
                 };
-
-                let dst = match packet.dst_scion_addr() {
-                    Ok(dst) => dst,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Received packet with invalid destination address, skipping");
-                        continue;
+                match peeked.take() {
+                    Some(raw) => raw,
+                    None => {
+                        match self.inner.try_recv() {
+                            Ok(Some(raw)) => raw,
+                            Ok(None) => {
+                                return Err(ScionSocketReceiveError::IoError(io::Error::from(
+                                    io::ErrorKind::WouldBlock,
+                                )));
+                            }
+                            // XXX(uniquefine) this error handling is awkward. But this will only
+                            // happen when the stack is dropped anyway.
+                            Err(_) => {
+                                return Err(ScionSocketReceiveError::IoError(io::Error::new(
+                                    io::ErrorKind::ConnectionReset,
+                                    "SNAP tunnel closed",
+                                )));
+                            }
+                        }
                     }
-                };
-
-                if dst != self.local_addr.scion_addr() {
-                    tracing::debug!(destination = ?dst, assigned_addr = %self.local_addr.scion_addr(), "Packet destination does not match assigned address, skipping");
-                    continue;
                 }
+            };
 
-                return Ok(packet.to_boxed());
+            let n = raw.len();
+            if n > buf.len() {
+                tracing::debug!(
+                    packet_size = n,
+                    buffer_size = buf.len(),
+                    "SNAP packet larger than receive buffer, skipping"
+                );
+                continue;
             }
-        })
+            buf[..n].copy_from_slice(&raw);
+
+            // Only accept packets that decode and are addressed to this socket; skip the rest.
+            match ScionRawPacketView::try_from_slice(&buf[..n]) {
+                Ok((packet, _rest)) => {
+                    match packet.dst_scion_addr() {
+                        Ok(dst) if dst == self.local_addr.scion_addr() => return Ok(n),
+                        Ok(_) => {
+                            tracing::debug!(
+                                "Packet destination does not match assigned address, skipping"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = %e, "Received packet with invalid destination address, skipping");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "Failed to decode SCION packet, skipping");
+                }
+            }
+        }
     }
 
-    fn local_addr(&self) -> ScionSocketIpAddr {
-        self.local_addr
-    }
-
-    fn snap_data_plane(&self) -> Option<net::SocketAddr> {
-        Some(self.inner.data_plane_address())
+    async fn readable(&self) {
+        let mut peeked = self.peeked.lock().await;
+        if peeked.is_some() {
+            return;
+        }
+        // Consume one datagram and stage it so the subsequent `try_recv` can return it. On error
+        // the tunnel is closed; leave the slot empty so `try_recv` surfaces the error.
+        if let Ok(raw) = self.inner.recv().await {
+            *peeked = Some(raw);
+        }
     }
 }

@@ -37,7 +37,7 @@ use sciparse::{
     },
 };
 
-use super::UnderlaySocket;
+use super::{BoundUnderlaySocket, MAX_UNDERLAY_PACKET_SIZE, UnderlaySocket, UnderlaySocketExt};
 use crate::{
     path::manager::{MultiPathManager, traits::PathManager},
     scionstack::{
@@ -49,7 +49,11 @@ use crate::{
 
 /// A path unaware UDP SCION socket.
 pub struct PathUnawareUdpScionSocket {
-    inner: Box<dyn UnderlaySocket + Sync + Send>,
+    inner: Box<dyn UnderlaySocket>,
+    /// The local SCION address the socket is bound to.
+    local_addr: ScionSocketIpAddr,
+    /// The SNAP data plane the socket is connected to (if a SNAP underlay is used).
+    snap_data_plane: Option<net::SocketAddr>,
     /// The SCMP handlers.
     scmp_handlers: Vec<Box<dyn ScmpHandler>>,
 }
@@ -57,18 +61,20 @@ pub struct PathUnawareUdpScionSocket {
 impl std::fmt::Debug for PathUnawareUdpScionSocket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PathUnawareUdpScionSocket")
-            .field("local_addr", &self.inner.local_addr())
+            .field("local_addr", &self.local_addr)
             .finish()
     }
 }
 
 impl PathUnawareUdpScionSocket {
     pub(crate) fn new(
-        socket: Box<dyn UnderlaySocket + Sync + Send>,
+        bound: BoundUnderlaySocket,
         scmp_handlers: Vec<Box<dyn ScmpHandler>>,
     ) -> Self {
         Self {
-            inner: socket,
+            inner: bound.socket,
+            local_addr: bound.local_addr,
+            snap_data_plane: bound.snap_data_plane,
             scmp_handlers,
         }
     }
@@ -87,7 +93,7 @@ impl PathUnawareUdpScionSocket {
     ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
         // TODO: Should look into a way to encode without cloning payload and parsing dp_path
         let packet = match ScionUdpPacket::new(
-            self.inner.local_addr().into(),
+            self.local_addr.into(),
             destination.into(),
             path.dp_path().to_model(),
             payload.to_vec(),
@@ -125,16 +131,19 @@ impl PathUnawareUdpScionSocket {
         _path_buffer: &'a mut [u8],
     ) -> BoxFuture<'a, Result<(usize, ScionSocketIpAddr, ScionPath), ScionSocketReceiveError>> {
         Box::pin(async move {
+            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
             loop {
-                let packet = self.inner.recv().await?;
+                let n = self.inner.recv(&mut scratch).await?;
+                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                    .expect("underlay recv returns a decoded packet");
 
-                let packet = match packet.header().next_header() {
-                    ProtocolNumber::Udp => packet,
+                match packet.header().next_header() {
+                    ProtocolNumber::Udp => {}
                     ProtocolNumber::Scmp => {
                         tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
                         for handler in &self.scmp_handlers {
                             // Check if the handler wants to send a reply and send it
-                            let Some(reply) = handler.handle(&packet) else {
+                            let Some(reply) = handler.handle(packet) else {
                                 continue;
                             };
 
@@ -156,9 +165,9 @@ impl PathUnawareUdpScionSocket {
                         tracing::debug!(%next_header, "Packet with unexpected next layer protocol, skipping");
                         continue;
                     }
-                };
+                }
 
-                let packet = match packet.try_into_udp() {
+                let packet = match packet.try_as_udp() {
                     Ok(packet) => packet,
                     Err(e) => {
                         tracing::debug!(error = %e, "Received invalid UDP packet, skipping");
@@ -218,16 +227,19 @@ impl PathUnawareUdpScionSocket {
         buffer: &'a mut [u8],
     ) -> BoxFuture<'a, Result<(usize, ScionSocketIpAddr), ScionSocketReceiveError>> {
         Box::pin(async move {
+            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
             loop {
-                let packet = self.inner.recv().await?;
+                let n = self.inner.recv(&mut scratch).await?;
+                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                    .expect("underlay recv returns a decoded packet");
 
-                let packet = match packet.header().next_header() {
-                    ProtocolNumber::Udp => packet,
+                match packet.header().next_header() {
+                    ProtocolNumber::Udp => {}
                     ProtocolNumber::Scmp => {
                         tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
                         for handler in &self.scmp_handlers {
                             // Check if the handler wants to send a reply and send it
-                            let Some(reply) = handler.handle(&packet) else {
+                            let Some(reply) = handler.handle(packet) else {
                                 continue;
                             };
 
@@ -249,9 +261,9 @@ impl PathUnawareUdpScionSocket {
                         tracing::debug!(%next_header, "Packet with unknown next layer protocol, skipping");
                         continue;
                     }
-                };
+                }
 
-                let packet = match packet.try_into_udp() {
+                let packet = match packet.try_as_udp() {
                     Ok(packet) => packet,
                     Err(e) => {
                         tracing::debug!(error = %e, "Received invalid UDP packet, dropping");
@@ -289,23 +301,31 @@ impl PathUnawareUdpScionSocket {
 
     /// The local address the socket is bound to.
     fn local_addr(&self) -> ScionSocketIpAddr {
-        self.inner.local_addr()
+        self.local_addr
     }
 
     /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
     pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
-        self.inner.snap_data_plane()
+        self.snap_data_plane
     }
 }
 
 /// A SCMP SCION socket.
 pub struct ScmpScionSocket {
-    inner: Box<dyn UnderlaySocket + Sync + Send>,
+    inner: Box<dyn UnderlaySocket>,
+    /// The local SCION address the socket is bound to.
+    local_addr: ScionSocketIpAddr,
+    /// The SNAP data plane the socket is connected to (if a SNAP underlay is used).
+    snap_data_plane: Option<net::SocketAddr>,
 }
 
 impl ScmpScionSocket {
-    pub(crate) fn new(socket: Box<dyn UnderlaySocket + Sync + Send>) -> Self {
-        Self { inner: socket }
+    pub(crate) fn new(bound: BoundUnderlaySocket) -> Self {
+        Self {
+            inner: bound.socket,
+            local_addr: bound.local_addr,
+            snap_data_plane: bound.snap_data_plane,
+        }
     }
 }
 
@@ -318,7 +338,7 @@ impl ScmpScionSocket {
         path: &ScionPath,
     ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
         let packet = match ScionScmpPacket::new(
-            self.inner.local_addr().scion_ip_addr().into(),
+            self.local_addr.scion_ip_addr().into(),
             destination,
             path.dp_path().to_model(),
             message,
@@ -345,9 +365,12 @@ impl ScmpScionSocket {
     ) -> BoxFuture<'a, Result<(Box<ScmpPayloadView>, ScionAddr, ScionPath), ScionSocketReceiveError>>
     {
         Box::pin(async move {
+            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
             loop {
-                let packet = self.inner.recv().await?;
-                let packet = match packet.try_into_scmp() {
+                let n = self.inner.recv(&mut scratch).await?;
+                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                    .expect("underlay recv returns a decoded packet");
+                let packet = match packet.try_as_scmp() {
                     Ok(packet) => packet,
                     Err(e) => {
                         tracing::debug!(error = %e, "Received invalid SCMP packet, dropping");
@@ -381,9 +404,12 @@ impl ScmpScionSocket {
         &'a self,
     ) -> BoxFuture<'a, Result<(Box<ScmpPayloadView>, ScionAddr), ScionSocketReceiveError>> {
         Box::pin(async move {
+            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
             loop {
-                let packet = self.inner.recv().await?;
-                let packet = match packet.try_into_scmp() {
+                let n = self.inner.recv(&mut scratch).await?;
+                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                    .expect("underlay recv returns a decoded packet");
+                let packet = match packet.try_as_scmp() {
                     Ok(packet) => packet,
                     Err(e) => {
                         tracing::debug!(error = %e, "Received invalid SCMP packet, skipping");
@@ -404,23 +430,31 @@ impl ScmpScionSocket {
 
     /// Return the local socket address.
     pub fn local_addr(&self) -> ScionSocketIpAddr {
-        self.inner.local_addr()
+        self.local_addr
     }
 
     /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
     pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
-        self.inner.snap_data_plane()
+        self.snap_data_plane
     }
 }
 
 /// A raw SCION socket.
 pub struct RawScionSocket {
     inner: Box<dyn UnderlaySocket>,
+    /// The local SCION address the socket is bound to.
+    local_addr: ScionSocketIpAddr,
+    /// The SNAP data plane the socket is connected to (if a SNAP underlay is used).
+    snap_data_plane: Option<net::SocketAddr>,
 }
 
 impl RawScionSocket {
-    pub(crate) fn new(socket: Box<dyn UnderlaySocket + Sync + Send>) -> Self {
-        Self { inner: socket }
+    pub(crate) fn new(bound: BoundUnderlaySocket) -> Self {
+        Self {
+            inner: bound.socket,
+            local_addr: bound.local_addr,
+            snap_data_plane: bound.snap_data_plane,
+        }
     }
 }
 
@@ -430,24 +464,30 @@ impl RawScionSocket {
         &'a self,
         packet: &'a ScionRawPacketView,
     ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
-        self.inner.send(packet)
+        Box::pin(self.inner.send(packet))
     }
 
     /// Receive a raw SCION packet.
     pub fn recv<'a>(
         &'a self,
     ) -> BoxFuture<'a, Result<Box<ScionRawPacketView>, ScionSocketReceiveError>> {
-        self.inner.recv()
+        Box::pin(async move {
+            let mut buf = [0u8; MAX_UNDERLAY_PACKET_SIZE];
+            let n = self.inner.recv(&mut buf).await?;
+            let (view, _rest) = ScionRawPacketView::try_from_slice(&buf[..n])
+                .expect("underlay recv returns a decoded packet");
+            Ok(view.to_boxed())
+        })
     }
 
     /// Return the local socket address.
     pub fn local_addr(&self) -> ScionSocketIpAddr {
-        self.inner.local_addr()
+        self.local_addr
     }
 
     /// The SNAP data plane the socket is connected to (if SNAP underlay is used).
     pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
-        self.inner.snap_data_plane()
+        self.snap_data_plane
     }
 }
 
@@ -745,8 +785,8 @@ mod cancel_safety_tests {
         sync::{Arc, Mutex},
     };
 
+    use async_trait::async_trait;
     use chrono::{DateTime, Utc};
-    use futures::future::BoxFuture;
     use sciparse::{
         identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
         util::test_builder::{TestPathBuilder, TestPathContext},
@@ -760,53 +800,77 @@ mod cancel_safety_tests {
     };
 
     struct ManualUnderlaySocket {
-        local: ScionSocketIpAddr,
         rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Box<ScionRawPacketView>>>,
+        /// A packet staged by `readable` and not yet returned by `try_recv` (see the SNAP
+        /// underlay for the same pattern).
+        peeked: tokio::sync::Mutex<Option<Box<ScionRawPacketView>>>,
     }
 
     impl ManualUnderlaySocket {
-        fn new(
-            local: ScionSocketIpAddr,
-        ) -> (Self, tokio::sync::mpsc::Sender<Box<ScionRawPacketView>>) {
+        fn new() -> (Self, tokio::sync::mpsc::Sender<Box<ScionRawPacketView>>) {
             // Use a large bounded channel so tests never block on send.
             let (inject_tx, recv_rx) = tokio::sync::mpsc::channel::<Box<ScionRawPacketView>>(64);
             let socket = Self {
-                local,
                 rx: tokio::sync::Mutex::new(recv_rx),
+                peeked: tokio::sync::Mutex::new(None),
             };
             (socket, inject_tx)
         }
     }
 
+    #[async_trait]
     impl UnderlaySocket for ManualUnderlaySocket {
-        fn send<'a>(
-            &'a self,
-            _packet: &ScionRawPacketView,
-        ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
-            Box::pin(async move { Ok(()) })
-        }
-
         fn try_send(&self, _packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
             Ok(())
         }
 
-        fn recv<'a>(
-            &'a self,
-        ) -> BoxFuture<'a, Result<Box<ScionRawPacketView>, ScionSocketReceiveError>> {
-            Box::pin(async move {
-                let packet = self.rx.lock().await.recv().await.ok_or_else(|| {
-                    ScionSocketReceiveError::IoError(io::Error::other("channel closed"))
-                })?;
-                Ok(packet)
-            })
+        async fn writeable(&self) {}
+
+        fn try_recv(&self, buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError> {
+            let would_block =
+                || ScionSocketReceiveError::IoError(io::Error::from(io::ErrorKind::WouldBlock));
+
+            let packet: Box<ScionRawPacketView> = {
+                let Ok(mut peeked) = self.peeked.try_lock() else {
+                    return Err(would_block());
+                };
+                match peeked.take() {
+                    Some(packet) => packet,
+                    None => {
+                        let Ok(mut rx) = self.rx.try_lock() else {
+                            return Err(would_block());
+                        };
+                        match rx.try_recv() {
+                            Ok(packet) => packet,
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                return Err(would_block());
+                            }
+                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                return Err(ScionSocketReceiveError::IoError(io::Error::other(
+                                    "channel closed",
+                                )));
+                            }
+                        }
+                    }
+                }
+            };
+
+            let bytes = packet.as_slice();
+            let n = bytes.len();
+            buf[..n].copy_from_slice(bytes);
+            Ok(n)
         }
 
-        fn local_addr(&self) -> ScionSocketIpAddr {
-            self.local
-        }
-
-        fn snap_data_plane(&self) -> Option<std::net::SocketAddr> {
-            None
+        async fn readable(&self) {
+            let mut peeked = self.peeked.lock().await;
+            if peeked.is_some() {
+                return;
+            }
+            // `tokio::sync::mpsc::Receiver::recv` is cancel-safe: if this future is dropped before
+            // a message arrives, the message stays in the channel.
+            if let Some(packet) = self.rx.lock().await.recv().await {
+                *peeked = Some(packet);
+            }
         }
     }
 
@@ -890,10 +954,14 @@ mod cancel_safety_tests {
         tokio::sync::mpsc::Sender<Box<ScionRawPacketView>>,
         Arc<ImmediatePathManager>,
     ) {
-        let (underlay, inject_tx) = ManualUnderlaySocket::new(local_addr());
+        let (underlay, inject_tx) = ManualUnderlaySocket::new();
         let pather = Arc::new(ImmediatePathManager::default());
         let path_unaware = PathUnawareUdpScionSocket::new(
-            Box::new(underlay),
+            BoundUnderlaySocket {
+                socket: Box::new(underlay),
+                local_addr: local_addr(),
+                snap_data_plane: None,
+            },
             vec![], // no SCMP handlers needed
         );
         let socket = UdpScionSocket::new(

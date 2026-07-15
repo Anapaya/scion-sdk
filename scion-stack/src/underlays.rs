@@ -26,8 +26,8 @@ use x25519_dalek::StaticSecret;
 
 use crate::{
     scionstack::{
-        DynUnderlayStack, InvalidBindAddressError, ScionSocketBindError, SnapConnectionError,
-        UnderlaySocket, builder::PreferredUnderlay,
+        BoundUnderlaySocket, DynUnderlayStack, InvalidBindAddressError, ScionSocketBindError,
+        SnapConnectionError, UnderlaySocket, builder::PreferredUnderlay,
     },
     underlays::{
         discovery::{UnderlayDiscovery, UnderlayInfo},
@@ -40,7 +40,7 @@ pub mod snap;
 pub mod udp;
 
 /// Configuration needed to create a SNAP socket(s).
-pub struct SnapSocketConfig {
+pub(crate) struct SnapSocketConfig {
     /// Custom CRPC client for reaching the SNAP control plane.
     pub crpc_client: Option<reqwest::Client>,
     /// Source for SNAP token. If this is None, no SNAP sockets
@@ -49,7 +49,7 @@ pub struct SnapSocketConfig {
 }
 
 /// Underlay stack.
-pub struct UnderlayStack {
+pub(crate) struct UnderlayStack {
     preferred_underlay: PreferredUnderlay,
     underlay_discovery: Arc<dyn UnderlayDiscovery>,
     /// Resolver for the outbound IP address for UDP underlay sockets.
@@ -250,35 +250,36 @@ impl DynUnderlayStack for UnderlayStack {
         &self,
         _kind: crate::scionstack::SocketKind,
         bind_addr: Option<ScionSocketIpAddr>,
-    ) -> futures::future::BoxFuture<
-        '_,
-        Result<Box<dyn crate::scionstack::UnderlaySocket>, crate::scionstack::ScionSocketBindError>,
-    > {
+    ) -> futures::future::BoxFuture<'_, Result<BoundUnderlaySocket, ScionSocketBindError>> {
         Box::pin(async move {
             let requested_isd_as = bind_addr
                 .map(|addr| addr.isd_asn())
                 .unwrap_or(IsdAsn::WILDCARD);
             match self.select_underlay(requested_isd_as) {
                 Some((isd_as, UnderlayInfo::Snap(cp_url))) => {
-                    Ok(
-                        Box::new(self.bind_snap_socket(bind_addr, isd_as, cp_url).await?)
-                            as Box<dyn UnderlaySocket>,
-                    )
+                    let socket = self.bind_snap_socket(bind_addr, isd_as, cp_url).await?;
+                    Ok(BoundUnderlaySocket {
+                        local_addr: socket.local_addr(),
+                        snap_data_plane: socket.snap_data_plane(),
+                        socket: Box::new(socket) as Box<dyn UnderlaySocket>,
+                    })
                 }
                 Some((isd_as, UnderlayInfo::Udp(_))) => {
                     let (bind_addr, socket) = self.bind_udp_socket(isd_as, bind_addr).await?;
-                    Ok(Box::new(UdpUnderlaySocket::new(
-                        socket,
-                        bind_addr,
-                        self.underlay_discovery.clone(),
-                    )) as Box<dyn UnderlaySocket>)
+                    Ok(BoundUnderlaySocket {
+                        local_addr: bind_addr,
+                        snap_data_plane: None,
+                        socket: Box::new(UdpUnderlaySocket::new(
+                            socket,
+                            bind_addr,
+                            self.underlay_discovery.clone(),
+                        )) as Box<dyn UnderlaySocket>,
+                    })
                 }
                 None => {
-                    Err(
-                        crate::scionstack::ScionSocketBindError::NoUnderlayAvailable(
-                            requested_isd_as.isd(),
-                        ),
-                    )
+                    Err(ScionSocketBindError::NoUnderlayAvailable(
+                        requested_isd_as.isd(),
+                    ))
                 }
             }
         })
