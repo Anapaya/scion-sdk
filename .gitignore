@@ -29,3 +29,6 @@ Desktop.ini
 
 # Nix
 .direnv/
+
+# Node / pnpm (documentation preview tooling)
+node_modules/

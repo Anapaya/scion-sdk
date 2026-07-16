@@ -55,23 +55,29 @@ async fn run() -> anyhow::Result<()> {
     // PocketSCION uses rustls for its control plane; pick a crypto backend.
     scion_sdk_utils::rustls::select_ring_crypto_provider();
 
+    // ANCHOR: start-pocketscion
     // Start a minimal SCION network: two ASes joined by a single link. The returned
     // handle owns the whole simulation.
     let ps = minimal_topology(UnderlayType::Snap).await;
+    // ANCHOR_END: start-pocketscion
 
+    // ANCHOR: server
     // Bring up the echo server in AS 2-ff00:0:212 and let it run in the background.
     let server_stack = common::build_stack(&ps, IA212).await?;
     let server_socket = server_stack.bind(None).await?;
     let server_addr = server_socket.local_addr();
     println!("echo server listening on {server_addr}");
     let server = tokio::spawn(echo_server(server_socket));
+    // ANCHOR_END: server
 
+    // ANCHOR: client
     // Bring up the client in AS 1-ff00:0:132 and send one datagram.
     let client_stack = common::build_stack(&ps, IA132).await?;
     let client_socket = client_stack.bind(None).await?;
 
     let reply = ping(&client_socket, server_addr, b"Hello, SCION!").await?;
     println!("client received echo: {}", String::from_utf8_lossy(&reply));
+    // ANCHOR_END: client
 
     server.abort();
     Ok(())
@@ -84,6 +90,7 @@ async fn run() -> anyhow::Result<()> {
 /// reply without the application ever touching path selection.
 ///
 /// [`send_to`]: UdpScionSocket::send_to
+// ANCHOR: echo-server
 async fn echo_server(socket: UdpScionSocket) -> anyhow::Result<()> {
     let mut buffer = [0u8; MAX_DATAGRAM];
     loop {
@@ -91,10 +98,12 @@ async fn echo_server(socket: UdpScionSocket) -> anyhow::Result<()> {
         socket.send_to(&buffer[..len], from).await?;
     }
 }
+// ANCHOR_END: echo-server
 
 /// Sends `payload` to `destination` and waits for the echoed reply.
 ///
 /// UDP datagrams can be dropped, so we resend a handful of times before giving up.
+// ANCHOR: ping
 async fn ping(
     socket: &UdpScionSocket,
     destination: ScionSocketIpAddr,
@@ -113,6 +122,7 @@ async fn ping(
     }
     anyhow::bail!("no echo received from {destination} after 5 attempts")
 }
+// ANCHOR_END: ping
 
 #[cfg(test)]
 mod tests {

@@ -31,6 +31,7 @@ use sciparse::identifier::isd_asn::IsdAsn;
 /// let stack = common::build_stack(&ps, IA132).await?;
 /// let socket = stack.bind(None).await?;
 /// ```
+// ANCHOR: build-stack
 pub async fn build_stack(ps: &PsSetup, isd_as: IsdAsn) -> anyhow::Result<ScionStack> {
     let endhost_api = ps
         .endhost_api(isd_as)
@@ -43,3 +44,4 @@ pub async fn build_stack(ps: &PsSetup, isd_as: IsdAsn) -> anyhow::Result<ScionSt
         .await
         .with_context(|| format!("building SCION stack for {isd_as}"))
 }
+// ANCHOR_END: build-stack

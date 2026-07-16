@@ -31,6 +31,13 @@ in rec {
       libbpf
       linuxHeaders
       openssl
+
+      # Documentation preview (docs-preview/). Pin pnpm to match the committed
+      # pnpm-lock.yaml and the `packageManager` field in package.json; an
+      # unpinned pnpm can rewrite the lockfile to an incompatible format. Use
+      # this pnpm, not `nix-shell -p pnpm` (which resolves to the latest major).
+      nodejs
+      pnpm_10
     ]
     ++ extraPackages;
 

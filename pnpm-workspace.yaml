@@ -1,0 +1,9 @@
+# pnpm workspace for the SCION SDK's documentation tooling.
+#
+# It groups the local Docusaurus preview app with the shared code-import plugin
+# package so the preview consumes the plugin via a `workspace:*` dependency. The
+# SDK itself is a Rust (Cargo) workspace; this file only covers the Node/pnpm
+# side used to preview the developer guide.
+packages:
+  - packages/*
+  - docs-preview

@@ -1,0 +1,12 @@
+/* Copyright 2026 Anapaya Systems */
+
+/* Minimal theme overrides for the standalone SDK guide preview. The production
+   look comes from learn.anapaya.net; this only needs to be legible locally. */
+:root {
+    --ifm-color-primary: #2b6cb0;
+    --ifm-code-font-size: 95%;
+}
+
+[data-theme='dark'] {
+    --ifm-color-primary: #63b3ed;
+}

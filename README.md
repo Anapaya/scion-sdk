@@ -16,6 +16,23 @@ This SDK is developed and maintained by [Anapaya](https://www.anapaya.net/), a l
 technology company. We thank our colleagues at [Mysten Labs](https://mystenlabs.com/) for publishing
 [scion-rs](https://github.com/mystenlabs/scion-rs) upon which parts of this SDK are based.
 
+## What SCION gives you as an application developer
+
+SCION is an inter-domain networking architecture — think of it as an alternative
+to today's BGP-routed Internet — with one property that matters most to
+application developers: **the application, not the network, chooses the path its
+packets take.**
+
+On the SCION network you can:
+
+- **See every path to a destination** and their properties (which ISDs and ASes
+  they cross, MTU, latency hints) instead of being handed one opaque route.
+- **Pick a path per packet** — steer traffic away from a provider, prefer a
+  low-latency route, or spread load across several paths — from application code.
+- **Fail over instantly** when a path breaks, because you already hold the
+  alternatives.
+- **Trust the source**, because SCION paths are cryptographically authenticated.
+
 ## Usage
 
 The main entry point for using the SCION endhost SDK is the [scion-stack](scion-stack/) crate. It
@@ -94,19 +111,19 @@ about `pocketscion`, please refer to the [documentation](pocketscion/README.md).
 
 The SCION endhost SDK is organized into several crates, each with a specific purpose:
 
-* [scion-stack](scion-stack/): The main entry point for creating SCION sockets. It provides the
+- [scion-stack](scion-stack/): The main entry point for creating SCION sockets. It provides the
   `ScionStack` and related components for building SCION applications. and related components for
   building SCION applications.
-* [scion-proto](scion-proto/): Contains the definitions for SCION data plane and control plane
+- [scion-proto](scion-proto/): Contains the definitions for SCION data plane and control plane
   entities, such as packet formats and control plane messages. The base for this crate is
   [scion-rs](https://github.com/mystenlabs/scion-rs), published by Mysten Labs.
-* [pocketscion](pocketscion/): A SCION simulator for local development and testing.
-* [snap](snap/): A client implementation for the SNAP (SCION Network Access Point) transport
+- [pocketscion](pocketscion/): A SCION simulator for local development and testing.
+- [snap](snap/): A client implementation for the SNAP (SCION Network Access Point) transport
   underlay.
-* [endhost-api](endhost-api/): A client for the SCION endhost API, which is used for discovering
+- [endhost-api](endhost-api/): A client for the SCION endhost API, which is used for discovering
   transport underlays and fetching path and certificate information.
-* [libs](libs/): Shared libraries and utilities that are used throughout the codebase.
-* [integration-tests](integration-tests/): A suite of integration tests that use `pocketscion` to
+- [libs](libs/): Shared libraries and utilities that are used throughout the codebase.
+- [integration-tests](integration-tests/): A suite of integration tests that use `pocketscion` to
   test the functionality of the `scion-stack`.
 
 ## Contributing
@@ -114,10 +131,10 @@ The SCION endhost SDK is organized into several crates, each with a specific pur
 We welcome contributions from the community! If you'd like to help improve the SCION endhost SDK,
 here's how you can get started:
 
-* **Bug reports and feature requests**: If you encounter a bug or have an idea for a new feature,
+- **Bug reports and feature requests**: If you encounter a bug or have an idea for a new feature,
   please open an issue using the appropriate issue template (bug report or feature request, once
   they are available).
-* **Pull requests**: We encourage you to contribute code! To submit a pull request, please follow
+- **Pull requests**: We encourage you to contribute code! To submit a pull request, please follow
   this workflow:
     1. Fork the repository.
     1. Create a new branch for your changes.

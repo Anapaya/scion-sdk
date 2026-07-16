@@ -85,6 +85,7 @@ async fn run() -> anyhow::Result<()> {
     let client_stack = common::build_stack(&ps, IA132).await?;
     let client_socket = client_stack.bind(None).await?;
 
+    // ANCHOR: fetch-paths
     // Ask the SDK for *every* path to the server's AS and inspect them ourselves,
     // rather than letting `send_to` silently pick one for us.
     let mut paths = client_stack
@@ -98,6 +99,7 @@ async fn run() -> anyhow::Result<()> {
 
     // Order shortest-first so the deliberate choice below is reproducible.
     paths.sort_by_key(hop_count);
+    // ANCHOR_END: fetch-paths
 
     println!(
         "found {} path(s) to {}:",
@@ -108,6 +110,7 @@ async fn run() -> anyhow::Result<()> {
         println!("  [{i}] {path}");
     }
 
+    // ANCHOR: send-each
     // Send over each path in turn, selecting it explicitly with `send_to_via`. The
     // payload carries the path index so we can confirm the echo we accept is the
     // reply to *this* send, not a delayed echo from an earlier path.
@@ -116,6 +119,7 @@ async fn run() -> anyhow::Result<()> {
         ping_via(&client_socket, server_addr, path, payload.as_bytes()).await?;
         println!("  [{i}] echo confirmed over this path");
     }
+    // ANCHOR_END: send-each
 
     // A real application would keep whichever path best fits its needs (shortest,
     // lowest-latency, avoiding some AS, ...). Here we deliberately keep the longest
