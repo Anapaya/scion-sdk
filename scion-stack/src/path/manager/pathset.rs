@@ -167,7 +167,7 @@ impl<F: PathFetcher> PathSet<F> {
                 let maintain = async {
                     // Update the managed path tuple on start
                     {
-                        let Some(manager) = self.manager.get() else {
+                        let Some(manager) = self.manager.upgrade() else {
                             return "manager dropped";
                         };
                         self.fetch_and_update(SystemTime::now(), &manager).await;
@@ -181,12 +181,12 @@ impl<F: PathFetcher> PathSet<F> {
                         select! {
                             biased;
                             // Cancellation
-                            _ = cancel_token.cancelled() => {
+                            () = cancel_token.cancelled() => {
                                 return "cancelled";
                             }
                             // Maintenance Tick
-                            _ = tokio::time::sleep(next_tick) => {
-                                let Some(manager) = self.manager.get() else {
+                            () = tokio::time::sleep(next_tick) => {
+                                let Some(manager) = self.manager.upgrade() else {
                                     return "manager dropped";
                                 };
 
@@ -196,7 +196,7 @@ impl<F: PathFetcher> PathSet<F> {
                             }
                             // Issue Notifications
                             issue = self.internal.issue_rx.recv() => {
-                                let Some(manager) = self.manager.get() else {
+                                let Some(manager) = self.manager.upgrade() else {
                                     return "manager dropped";
                                 };
 
@@ -211,7 +211,7 @@ impl<F: PathFetcher> PathSet<F> {
                 let exit_reason = maintain.await;
 
                 // If manager still exists, drop the PathSet entry
-                if let Some(mgr) = self.manager.get() {
+                if let Some(mgr) = self.manager.upgrade() {
                     mgr.stop_managing_paths(self.src, self.dst);
                 }
 
@@ -236,7 +236,7 @@ impl<F: PathFetcher> PathSet<F> {
         (
             PathSetHandle { shared },
             PathSetTask {
-                _task: tokio::spawn(task.in_current_span()),
+                task: tokio::spawn(task.in_current_span()),
                 cancel_token,
             },
         )
@@ -308,8 +308,9 @@ impl<F: PathFetcher> PathSet<F> {
                     tracing::warn!("Missed path issue notifications during issue drain");
                     continue;
                 }
-                Err(broadcast::error::TryRecvError::Empty)
-                | Err(broadcast::error::TryRecvError::Closed) => break,
+                Err(
+                    broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed,
+                ) => break,
             };
 
             // We can ignore errors here, Closed will be handled on next recv, lagged should be
@@ -343,7 +344,7 @@ impl<F: PathFetcher> PathSet<F> {
         now: SystemTime,
         manager: &MultiPathManager<F>,
     ) -> Option<&'static str> {
-        if now >= self.internal.next_idle_check && self.idle_check(now).await {
+        if now >= self.internal.next_idle_check && self.idle_check(now) {
             return Some("idle");
         }
 
@@ -358,7 +359,7 @@ impl<F: PathFetcher> PathSet<F> {
 // Internal
 impl<F: PathFetcher> PathSet<F> {
     /// Checks if the path tuple is idle and should be removed.
-    async fn idle_check(&mut self, now: SystemTime) -> bool {
+    fn idle_check(&mut self, now: SystemTime) -> bool {
         // Was called before idle timeout, do nothing
         if now < self.internal.next_idle_check {
             return false;
@@ -488,7 +489,7 @@ impl<F: PathFetcher> PathSet<F> {
             .filter_map(|entry| entry.path.expiration())
             .min()?;
 
-        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(min_timestamp as u64);
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(min_timestamp));
 
         Some(time)
     }
@@ -526,11 +527,13 @@ impl<F: PathFetcher> PathSet<F> {
         now: SystemTime,
         manager: &MultiPathManager<F>,
     ) {
-        let mut fetched_paths: HashMap<DpPathFingerprint, ScionPath, RandomState> =
-            HashMap::from_iter(fetched_paths.into_iter().map(|path| {
+        let mut fetched_paths: HashMap<DpPathFingerprint, ScionPath, RandomState> = fetched_paths
+            .into_iter()
+            .map(|path| {
                 let fingerprint = path.fingerprint();
                 (fingerprint, path)
-            }));
+            })
+            .collect();
 
         let active_path_fp = self.shared.active_path.load().as_ref().map(|p| p.1);
 
@@ -541,8 +544,8 @@ impl<F: PathFetcher> PathSet<F> {
 
             // Update existing path if it exists
             if let Some(matching_path) = fetched_paths.remove(&fp) {
-                cached_path.path = matching_path
-            };
+                cached_path.path = matching_path;
+            }
 
             // Don't keep expired paths
             if check_path_expiry(&cached_path.path, now, self.config.min_expiry_threshold)
@@ -554,22 +557,19 @@ impl<F: PathFetcher> PathSet<F> {
 
             // Maintain active path reference
             if Some(fp) == active_path_fp {
-                match keep {
-                    true => {
-                        tracing::trace!(fp = format!("{fp:#}"), "Keeping updated active path");
-                        self.shared
-                            .active_path
-                            .store(Some(Arc::new((cached_path.path.clone(), fp))));
-                    }
-                    false => {
-                        tracing::info!(
-                            fp = format!("{fp:#}"),
-                            "Active path is expired, clearing active path"
-                        );
-                        self.shared.active_path.store(None);
-                    }
+                if keep {
+                    tracing::trace!(fp = format!("{fp:#}"), "Keeping updated active path");
+                    self.shared
+                        .active_path
+                        .store(Some(Arc::new((cached_path.path.clone(), fp))));
+                } else {
+                    tracing::info!(
+                        fp = format!("{fp:#}"),
+                        "Active path is expired, clearing active path"
+                    );
+                    self.shared.active_path.store(None);
                 }
-            };
+            }
 
             keep
         });
@@ -683,30 +683,27 @@ impl<F: PathFetcher> PathSet<F> {
         if ActivePathDecision::NoChange == decision
             && let Some(best_path) = best_path
         {
-            match self.active_path_entry() {
-                Some(active_entry) => {
-                    let active_score = manager.0.path_strategy.scoring.score(active_entry, now);
-                    let best_score = manager.0.path_strategy.scoring.score(best_path, now);
-                    let diff = best_score - active_score;
+            if let Some(active_entry) = self.active_path_entry() {
+                let active_score = manager.0.path_strategy.scoring.score(active_entry, now);
+                let best_score = manager.0.path_strategy.scoring.score(best_path, now);
+                let diff = best_score - active_score;
 
-                    tracing::trace!(
-                        active_score = %active_score,
-                        best_score = %best_score,
-                        score_diff = %diff,
-                        "Active path score comparison"
-                    );
+                tracing::trace!(
+                    active_score = %active_score,
+                    best_score = %best_score,
+                    score_diff = %diff,
+                    "Active path score comparison"
+                );
 
-                    if diff > self.config.path_swap_score_threshold {
-                        decision = ActivePathDecision::Replace("swap threshold reached")
-                    }
+                if diff > self.config.path_swap_score_threshold {
+                    decision = ActivePathDecision::Replace("swap threshold reached");
                 }
-                None => {
-                    debug_assert!(
-                        false,
-                        "failed to find active path entry, but active path is set"
-                    );
-                    tracing::warn!("no active path entry, but active path is set, unexpected")
-                }
+            } else {
+                debug_assert!(
+                    false,
+                    "failed to find active path entry, but active path is set"
+                );
+                tracing::warn!("no active path entry, but active path is set, unexpected");
             }
         }
 
@@ -841,7 +838,7 @@ pub struct PathIssueIngestResult {
 }
 
 impl PathIssueIngestResult {
-    /// Combines two PathIssueIngestResults into one.
+    /// Combines two `PathIssueIngestResults` into one.
     pub fn combine(&mut self, other: &PathIssueIngestResult) {
         self.active_path_affected |= other.active_path_affected;
         self.total_paths_affected += other.total_paths_affected;
@@ -862,32 +859,14 @@ impl<F: PathFetcher> PathSet<F> {
             total_paths_affected: 0,
         };
 
-        match scan_all {
-            // Scan all cached paths and update those that match
-            true => {
-                for entry in self.internal.cached_paths.iter_mut() {
-                    // TODO: matches_path_checked can be used to optimize matching with e.g. a
-                    // bloom filter
-                    if issue
-                        .target
-                        .matches_path(&entry.path, &entry.path.fingerprint())
-                    {
-                        res.total_paths_affected += 1;
-                        entry.reliability.update(issue.penalty, now);
-
-                        if Some(entry.path.fingerprint()) == active_path_fp {
-                            res.active_path_affected = true;
-                        }
-                    }
-                }
-            }
-            // Only update the first matching path
-            false => {
-                if let Some(entry) = self.internal.cached_paths.iter_mut().find(|entry| {
-                    issue
-                        .target
-                        .matches_path(&entry.path, &entry.path.fingerprint())
-                }) {
+        if scan_all {
+            for entry in &mut self.internal.cached_paths {
+                // TODO: matches_path_checked can be used to optimize matching with e.g. a
+                // bloom filter
+                if issue
+                    .target
+                    .matches_path(&entry.path, &entry.path.fingerprint())
+                {
                     res.total_paths_affected += 1;
                     entry.reliability.update(issue.penalty, now);
 
@@ -895,6 +874,17 @@ impl<F: PathFetcher> PathSet<F> {
                         res.active_path_affected = true;
                     }
                 }
+            }
+        } else if let Some(entry) = self.internal.cached_paths.iter_mut().find(|entry| {
+            issue
+                .target
+                .matches_path(&entry.path, &entry.path.fingerprint())
+        }) {
+            res.total_paths_affected += 1;
+            entry.reliability.update(issue.penalty, now);
+
+            if Some(entry.path.fingerprint()) == active_path_fp {
+                res.active_path_affected = true;
             }
         }
 
@@ -978,7 +968,10 @@ impl PathSetHandle {
 }
 
 pub struct PathSetTask {
-    pub _task: JoinHandle<()>,
+    /// Held to keep the background task's join handle alive for the lifetime of the task entry;
+    /// it is not otherwise read outside of tests.
+    #[allow(dead_code)]
+    pub task: JoinHandle<()>,
     pub cancel_token: tokio_util::sync::CancellationToken,
 }
 
@@ -993,11 +986,11 @@ impl Drop for PathSetTask {
 /// The active path, if provided, is always retained in `existing_paths`.
 ///
 /// Both path vectors should be in ranked order (best first).
-/// No paths from new_paths should be present in existing_paths.
+/// No paths from `new_paths` should be present in `existing_paths`.
 ///
 /// Total number of paths after merge will be at most `target_path_count`.
 ///
-/// Returns (kept_existing_count, kept_new_count)
+/// Returns (`kept_existing_count`, `kept_new_count`)
 fn merge_new_paths_algo(
     existing_paths: &mut Vec<PathManagerPath>,
     new_paths: &mut Vec<PathManagerPath>,
@@ -1069,7 +1062,7 @@ enum ExpiryState {
 
 fn check_path_expiry(path: &ScionPath, now: SystemTime, threshold: Duration) -> ExpiryState {
     let expiry = path.expiration().unwrap_or(0);
-    let expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(expiry as u64);
+    let expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(expiry));
 
     match expiry.duration_since(now) {
         Err(_) => ExpiryState::Expired,
@@ -1346,7 +1339,7 @@ mod tests {
 
                 // Check decisions
                 let expiry = path.expiration().expect("Path should have expiry");
-                let expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(expiry as u64);
+                let expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(expiry));
 
                 let near_expiry_time = expiry - cfg.min_expiry_threshold;
                 let not_near_expiry_time =
@@ -1534,9 +1527,7 @@ mod tests {
                 let expected_refetch_deadline = earliest_expiry - cfg.min_expiry_threshold;
                 assert!(
                     next_refetch <= expected_refetch_deadline,
-                    "Next refetch should be before expiry threshold. next_refetch: {:?}, deadline: {:?}",
-                    next_refetch,
-                    expected_refetch_deadline
+                    "Next refetch should be before expiry threshold. next_refetch: {next_refetch:?}, deadline: {expected_refetch_deadline:?}"
                 );
             }
 
@@ -1562,7 +1553,7 @@ mod tests {
                         .unwrap()
                         .current_error
                         .as_ref()
-                        .map(|e| e.to_string())
+                        .map(std::string::ToString::to_string)
                         .unwrap()
                         .contains("Fetch failed")
                 );
@@ -1785,7 +1776,7 @@ mod tests {
                 println!("Polling active_path future, should be pending");
                 tokio::pin!(wait_future);
                 let poll_result = poll!(&mut wait_future);
-                println!("Poll result: {:?}", poll_result);
+                println!("Poll result: {poll_result:?}");
                 assert!(
                     poll_result.is_pending(),
                     "Should be pending while waiting for update"
@@ -1935,7 +1926,7 @@ mod tests {
                 // Check it's the right error type
                 match error.as_ref().unwrap().as_ref() {
                     PathFetchError::NoPathsFound => {} // Expected
-                    other => panic!("Expected NoPathsFound error, got: {:?}", other),
+                    other => panic!("Expected NoPathsFound error, got: {other:?}"),
                 }
             }
         }
@@ -1947,7 +1938,7 @@ mod tests {
             fn make_path_vec(fpr_base: u16, count: u16) -> Vec<PathManagerPath> {
                 (0..count)
                     .map(|i| {
-                        let path = dummy_path(i + 2, 0, 100, (fpr_base + i) as u32);
+                        let path = dummy_path(i + 2, 0, 100, u32::from(fpr_base + i));
                         PathManagerPath {
                             path,
                             reliability: ReliabilityScore::new_with_time(BASE_TIME),

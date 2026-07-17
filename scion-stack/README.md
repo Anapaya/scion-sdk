@@ -17,23 +17,24 @@ This type of socket automatically manages path selection, simplifying the proces
 receiving data over the SCION network.
 
 ```rust
-use scion_proto::address::SocketAddr;
 use scion_stack::resolver::{ScionDnsResolver, txt::ScionTxtDnsResolver};
-use scion_stack::scionstack::{ScionStack, ScionStackBuilder};
-use url::Url;
+use scion_stack::{ScionStack, ScionStackBuilder};
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 
 async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
     let endhost_api: url::Url = "http://127.0.0.1:1234".parse()?;
-    let builder = ScionStackBuilder::new(endhost_api);
-
-    let scion_stack = builder.build().await?;
+    let scion_stack = ScionStackBuilder::new()
+        .with_endhost_api(endhost_api)
+        .with_auth_token("SNAP token".to_string())
+        .build()
+        .await?;
     let socket = scion_stack.bind(None).await?;
 
     let resolver = ScionTxtDnsResolver::new()?;
     let addresses = resolver.resolve("example.com").await?;
-    let address = addresses.first().expect("no addresses resolved");
+    let address = *addresses.first().expect("no addresses resolved");
 
-    let destination = SocketAddr::new(*address, 8080);
+    let destination = ScionSocketIpAddr::new(address.isd_asn(), address.ip(), 8080);
 
     socket.send_to(b"hello", destination).await?;
     let mut buffer = [0u8; 1024];
@@ -43,3 +44,6 @@ async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+See [`API_CONVENTIONS.md`](API_CONVENTIONS.md) for the crate's public-API conventions (naming,
+errors, builders, `#[non_exhaustive]`, and linting).

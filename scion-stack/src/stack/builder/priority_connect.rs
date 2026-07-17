@@ -76,7 +76,7 @@ where
                 // be fully exhausted — whichever fires first.
                 if let Some(ref mut rx) = prev_done_rx {
                     tokio::select! {
-                        _ = tokio::time::sleep(delay) => {}
+                        () = tokio::time::sleep(delay) => {}
                         _ = rx.wait_for(|&done| done) => {}
                     }
                 }

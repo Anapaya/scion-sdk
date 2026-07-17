@@ -25,7 +25,7 @@ use pocketscion::util::topologies::{
 };
 use scion_stack::{
     path::manager::traits::PathManager,
-    scionstack::{ScionSocketBindError, ScionStackBuilder},
+    stack::{ScionSocketBindError, ScionStackBuilder},
 };
 use sciparse::{
     address::{

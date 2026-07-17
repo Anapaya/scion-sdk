@@ -23,7 +23,7 @@ use pocketscion::{
     network::scion::util::test_helper::test_topology, runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
 };
-use scion_stack::{ea_source::StaticEndhostApiDiscovery, scionstack::ScionStackBuilder};
+use scion_stack::{ea_source::StaticEndhostApiDiscovery, stack::ScionStackBuilder};
 use sciparse::identifier::isd_asn::IsdAsn;
 use snap_tokens::v0::dummy_snap_token;
 use url::Url;

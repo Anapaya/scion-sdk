@@ -40,7 +40,10 @@ pub trait ScionDnsResolver: Send + Sync {
 }
 
 /// Errors returned by SCION DNS resolution.
+// Derives `PartialEq` for testability; as a consequence, `DnsLookup` carries a formatted message
+// rather than the underlying (non-`PartialEq`) DNS error. See API_CONVENTIONS.md.
 #[derive(Debug, Error, PartialEq)]
+#[non_exhaustive]
 pub enum ResolveError {
     /// DNS lookup failed.
     #[error("dns lookup failed: {0}")]

@@ -71,7 +71,7 @@ impl PathScoring for PathLengthScorer {
         const MIN_SCORE: f32 = 0.0;
         const HOP_COUNT_FOR_MIN_SCORE: f32 = 50.0;
         const PER_HOP_PENALTY: f32 = (MAX_SCORE - MIN_SCORE) / HOP_COUNT_FOR_MIN_SCORE;
-        let score_value = MAX_SCORE - (length as f32 * PER_HOP_PENALTY);
+        let score_value = MAX_SCORE - (f32::from(length) * PER_HOP_PENALTY);
         Score::new_clamped(score_value)
     }
 }
@@ -104,11 +104,14 @@ impl Default for PathScorer {
 }
 
 impl PathScorer {
-    fn new() -> Self {
+    /// Creates an empty path scorer with no scorers configured.
+    #[must_use]
+    pub fn new() -> Self {
         Self { scorers: vec![] }
     }
 
-    /// Returns false if no scorers are configured.
+    /// Returns `true` if no scorers are configured.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.scorers.is_empty()
     }
@@ -120,10 +123,10 @@ impl PathScorer {
 
     /// Uses default path scorers
     ///
-    /// - [PathReliabilityScorer] with weight [PathScorer::DEFAULT_RELIABILITY_IMPACT]
-    /// - [PathLengthScorer] with weight [PathScorer::DEFAULT_LENGTH_IMPACT]
+    /// - [`PathReliabilityScorer`] with weight [`PathScorer::DEFAULT_RELIABILITY_IMPACT`]
+    /// - [`PathLengthScorer`] with weight [`PathScorer::DEFAULT_LENGTH_IMPACT`]
     ///
-    /// The PathLengthScorer's impact on path decision is minimal, to avoid ignoring reliability.
+    /// The `PathLengthScorer`'s impact on path decision is minimal, to avoid ignoring reliability.
     pub(crate) fn use_default_scorers(&mut self) {
         self.scorers.push((
             Arc::new(PathReliabilityScorer),
@@ -141,6 +144,7 @@ impl PathScorer {
     ///
     /// Note:
     /// The impact weight does not need to sum to 1.0 across all scorers.
+    #[must_use]
     pub fn with_scorer(mut self, scorer: impl PathScoring + 'static, impact: f32) -> Self {
         self.scorers.push((Arc::new(scorer), impact));
         self
@@ -174,11 +178,17 @@ impl PathScorer {
 ///
 /// Used for debugging path scoring decisions.
 #[derive(Default, Debug)]
-pub struct ScoreReport(pub BTreeMap<&'static str, f32>);
+pub struct ScoreReport(BTreeMap<&'static str, f32>);
 
 impl ScoreReport {
     fn add_score(&mut self, metric: &'static str, score: f32) {
         self.0.insert(metric, score);
+    }
+
+    /// The per-metric weighted score contributions, keyed by metric name.
+    #[must_use]
+    pub fn scores(&self) -> &BTreeMap<&'static str, f32> {
+        &self.0
     }
 }
 
@@ -186,9 +196,9 @@ impl Display for ScoreReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let total: f32 = self.0.values().sum();
         for (metric, score) in &self.0 {
-            write!(f, "{}: {:.3} ", metric, score)?;
+            write!(f, "{metric}: {score:.3} ")?;
         }
-        write!(f, "Total: {:.3}", total)?;
+        write!(f, "Total: {total:.3}")?;
 
         Ok(())
     }
@@ -212,10 +222,8 @@ mod tests {
     use super::*;
     use crate::path::types::PathManagerPath;
 
-    pub const SRC_ADDR: ScionIpAddr = ScionIpAddr::new(
-        IsdAsn::new(Isd(1), Asn(1)),
-        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-    );
+    pub const SRC_ADDR: ScionIpAddr =
+        ScionIpAddr::new(IsdAsn::new(Isd(1), Asn(1)), IpAddr::V4(Ipv4Addr::LOCALHOST));
     pub const DST_ADDR: ScionIpAddr = ScionIpAddr::new(
         IsdAsn::new(Isd(2), Asn(1)),
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
@@ -281,8 +289,8 @@ mod tests {
         fn run(&mut self) {
             let actions = std::mem::take(&mut self.actions);
             const BASE_TIME: SystemTime = SystemTime::UNIX_EPOCH;
-            for (time_delta, action) in actions.into_iter() {
-                println!("(Time +{}s) -------------------", time_delta);
+            for (time_delta, action) in actions {
+                println!("(Time +{time_delta}s) -------------------");
                 let timestamp = BASE_TIME + std::time::Duration::from_secs(time_delta as u64);
                 match action {
                     SimulationAction::UpdateReliability { path_index, score } => {
@@ -354,7 +362,7 @@ mod tests {
                 score_b.partial_cmp(&score_a).unwrap_or(Ordering::Equal)
             });
 
-            for (idx, path) in sorted.iter() {
+            for (idx, path) in &sorted {
                 println!("Path {}: {}", idx, self.scoring.score_report(path, now));
             }
         }
@@ -382,7 +390,7 @@ mod tests {
 
         let paths: Vec<_> = (1..=10)
             .map(|len| {
-                let path = path(len, 1000, 100, len as u32);
+                let path = path(len, 1000, 100, u32::from(len));
                 PathManagerPath::new(path)
             })
             .collect();

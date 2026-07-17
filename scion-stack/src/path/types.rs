@@ -77,10 +77,7 @@ impl PartialOrd for Score {
 impl Score {
     /// Creates a new Score, clamping the value between -1.0 and 1.0.
     pub fn new_clamped(value: f32) -> Self {
-        let value = match value.is_nan() {
-            true => 0.0,
-            false => value,
-        };
+        let value = if value.is_nan() { 0.0 } else { value };
         Score(value.clamp(-1.0, 1.0))
     }
 

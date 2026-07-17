@@ -154,9 +154,6 @@ where
         let resp = self.list_segments(src, dst).await?;
 
         let (core_segments, non_core_segments) = resp.split_parts();
-        Ok(Segments {
-            core_segments,
-            non_core_segments,
-        })
+        Ok(Segments::new(core_segments, non_core_segments))
     }
 }

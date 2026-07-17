@@ -30,7 +30,7 @@ use sciparse::{
 use tokio::net::UdpSocket;
 
 use crate::{
-    scionstack::{ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket},
+    stack::{ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket},
     underlays::{discovery::UnderlayDiscovery, outbound_ip_towards},
 };
 
@@ -143,18 +143,18 @@ impl UdpUnderlaySocket {
             .header()
             .dst_host_addr()
             .map_err(|e| {
-                crate::scionstack::ScionSocketSendError::InvalidPacket(
+                crate::stack::ScionSocketSendError::InvalidPacket(
                     format!("Packet for local dispatch had invalid destination address: {e}")
                         .into(),
                 )
             })?
             .ip()
-            .ok_or(crate::scionstack::ScionSocketSendError::InvalidPacket(
+            .ok_or(crate::stack::ScionSocketSendError::InvalidPacket(
                 "Packet for local dispatch dst was not an IP address".into(),
             ))?;
 
         let classified = packet.try_classify().map_err(|e| {
-            crate::scionstack::ScionSocketSendError::InvalidPacket(
+            crate::stack::ScionSocketSendError::InvalidPacket(
                 format!("Failed to classify packet for local dispatch: {e}").into(),
             )
         })?;
@@ -162,7 +162,7 @@ impl UdpUnderlaySocket {
         let dst_port =
             classified
                 .dst_port()
-                .ok_or(crate::scionstack::ScionSocketSendError::InvalidPacket(
+                .ok_or(crate::stack::ScionSocketSendError::InvalidPacket(
                     "Coulldn't determine destination port in packet for local dispatch".into(),
                 ))?;
 
@@ -184,7 +184,9 @@ impl UdpUnderlaySocket {
         interface_id: u16,
         next_hop: net::SocketAddr,
     ) -> ScionSocketSendError {
-        use std::io::ErrorKind::*;
+        use std::io::ErrorKind::{
+            BrokenPipe, ConnectionAborted, ConnectionReset, HostUnreachable, NetworkUnreachable,
+        };
         match e.kind() {
             HostUnreachable | NetworkUnreachable => {
                 ScionSocketSendError::UnderlayNextHopUnreachable {
@@ -202,7 +204,7 @@ impl UdpUnderlaySocket {
 
 #[async_trait]
 impl UnderlaySocket for UdpUnderlaySocket {
-    /// Try to send a raw packet immediately. Takes a ScionPacketRaw because it needs to read the
+    /// Try to send a raw packet immediately. Takes a `ScionPacketRaw` because it needs to read the
     /// path to resolve the underlay next hop.
     fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
         let source_ia = packet.header().src_ia();

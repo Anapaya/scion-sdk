@@ -42,7 +42,7 @@ impl ReliabilityScore {
         ))
     }
 
-    /// Creates a new ReliabilityScore with initial score of 0.0
+    /// Creates a new `ReliabilityScore` with initial score of 0.0
     ///
     /// `now` is the current time for initialization, used for decay calculations.
     pub fn new_with_time(now: SystemTime) -> Self {

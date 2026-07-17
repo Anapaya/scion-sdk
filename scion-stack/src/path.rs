@@ -18,4 +18,5 @@ pub mod manager;
 pub mod types;
 
 mod strategy;
-pub use strategy::*;
+// Explicit re-exports (no glob) so additions to `strategy` do not silently widen the public API.
+pub use strategy::{PathStrategy, policy, scoring};

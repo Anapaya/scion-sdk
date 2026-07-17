@@ -14,10 +14,8 @@
 //! Integration tests for error SCION stack error handling.
 
 use pocketscion::util::topologies::{IA132, UnderlayType, minimal::two_path_topology};
-use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
-use scion_stack::scionstack::{
-    ScionSocketBindError, ScionStackBuilder, SnapConnectionError,
-    builder::{AllEndhostApisFailed, ApiAttemptError, BuildScionStackError},
+use scion_stack::stack::{
+    ScionSocketBindError, ScionStackBuilder, SnapConnectionError, builder::BuildScionStackError,
 };
 use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
@@ -39,17 +37,13 @@ async fn endhost_api_unreachable_should_error() {
         .await;
 
     match result {
-        Err(BuildScionStackError::AllEndhostApisFailed(AllEndhostApisFailed(errs)))
-            if matches!(
-                errs.as_slice(),
-                [(
-                    _,
-                    ApiAttemptError::UnderlayDiscovery(CrpcClientError::ConnectionError { .. })
-                )]
-            ) => {}
+        // An unreachable server fails with transient connection errors on every attempt.
+        Err(BuildScionStackError::AllEndhostApisFailed(failed))
+            if failed.is_transient()
+                && failed.failures().iter().all(|(_, err)| err.is_transient()) => {}
         _ => {
             panic!(
-                "expected BuildScionStackError::AllEndhostApisFailed for unreachable server, got {result:?}"
+                "expected transient BuildScionStackError::AllEndhostApisFailed for unreachable server, got {result:?}"
             )
         }
     };
@@ -75,9 +69,9 @@ async fn test_invalid_snap_token() {
         matches!(
             result,
             Err(ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::DataPlaneDiscoveryError(_)
+                SnapConnectionError::DataPlaneDiscovery(_)
             ))
         ),
-        "expected Snap::DataPlaneDiscoveryError::CrpcError with Unauthenticated code for invalid token, got {result:?}"
+        "expected Snap::DataPlaneDiscovery with Unauthenticated code for invalid token, got {result:?}"
     );
 }

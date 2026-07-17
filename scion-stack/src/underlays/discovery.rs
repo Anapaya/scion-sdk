@@ -43,6 +43,7 @@ pub trait UnderlayDiscovery: Send + Sync {
 
 /// Underlay discovery information for a SCION router.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ScionRouter {
     /// The internal interface socket address of the SCION router.
     internal_interface: net::SocketAddr,
@@ -50,8 +51,32 @@ pub struct ScionRouter {
     interfaces: Vec<u16>,
 }
 
+impl ScionRouter {
+    /// Creates a new SCION router entry.
+    #[must_use]
+    pub fn new(internal_interface: net::SocketAddr, interfaces: Vec<u16>) -> Self {
+        Self {
+            internal_interface,
+            interfaces,
+        }
+    }
+
+    /// The internal interface socket address of the SCION router (the UDP next hop).
+    #[must_use]
+    pub fn internal_interface(&self) -> net::SocketAddr {
+        self.internal_interface
+    }
+
+    /// The SCION interface IDs reachable via this router.
+    #[must_use]
+    pub fn interfaces(&self) -> &[u16] {
+        &self.interfaces
+    }
+}
+
 /// Information about a discovered underlay.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum UnderlayInfo {
     /// A snap control plane API address.
     Snap(Url),
@@ -59,7 +84,7 @@ pub enum UnderlayInfo {
     Udp(Vec<ScionRouter>),
 }
 
-/// A single SCION router entry used to build a [StaticUnderlayDiscovery].
+/// A single SCION router entry used to build a [`StaticUnderlayDiscovery`].
 #[derive(Clone, Debug)]
 pub struct StaticUdpRouter {
     /// The ISD-AS the router belongs to.
@@ -70,11 +95,14 @@ pub struct StaticUdpRouter {
     pub interfaces: Vec<u16>,
 }
 
-/// Implementation of the [UnderlayDiscovery] trait backed by a static, in-memory topology.
+/// Implementation of the [`UnderlayDiscovery`] trait backed by a static, in-memory topology.
 ///
-/// Unlike [PeriodicUnderlayDiscovery], this does not contact an endhost API and runs no background
-/// task. It is intended for fully-local UDP stacks where the topology (SCION routers and the
-/// interfaces they serve) is known up front, e.g. from configuration.
+/// Unlike the endhost-API-backed discovery used by [`ScionStackBuilder::build`], this does not
+/// contact an endhost API and runs no background task. It is intended for fully-local UDP stacks
+/// where the topology (SCION routers and the interfaces they serve) is known up front, e.g. from
+/// configuration.
+///
+/// [`ScionStackBuilder::build`]: crate::ScionStackBuilder::build
 pub struct StaticUnderlayDiscovery {
     underlays: Vec<(IsdAsn, UnderlayInfo)>,
     udp_underlay_next_hops: HashMap<PathInterface, net::SocketAddr>,
@@ -83,14 +111,14 @@ pub struct StaticUnderlayDiscovery {
 impl StaticUnderlayDiscovery {
     /// Creates a new static underlay discovery from the given SCION routers.
     ///
-    /// Routers are grouped by ISD-AS into a single [UnderlayInfo::Udp] entry per ISD-AS, and a
-    /// direct next-hop lookup is built mapping each served [PathInterface] to the router's internal
-    /// interface.
+    /// Routers are grouped by ISD-AS into a single [`UnderlayInfo::Udp`] entry per ISD-AS, and a
+    /// direct next-hop lookup is built mapping each served [`PathInterface`] to the router's
+    /// internal interface.
     pub fn new(routers: impl IntoIterator<Item = StaticUdpRouter>) -> Self {
         let mut grouped: HashMap<IsdAsn, Vec<ScionRouter>> = HashMap::new();
         let mut udp_underlay_next_hops = HashMap::new();
         for router in routers {
-            for interface_id in router.interfaces.iter() {
+            for interface_id in &router.interfaces {
                 udp_underlay_next_hops.insert(
                     PathInterface::new(router.isd_as, *interface_id),
                     router.internal_interface,
@@ -124,11 +152,11 @@ impl UnderlayDiscovery for StaticUnderlayDiscovery {
     }
 
     fn isd_ases(&self) -> HashSet<IsdAsn> {
-        HashSet::from_iter(self.underlays.iter().map(|(ia, _)| *ia))
+        self.underlays.iter().map(|(ia, _)| *ia).collect()
     }
 
     fn resolve_udp_underlay_next_hop(&self, interface: PathInterface) -> Option<net::SocketAddr> {
-        self.udp_underlay_next_hops.get(&interface).cloned()
+        self.udp_underlay_next_hops.get(&interface).copied()
     }
 }
 
@@ -138,10 +166,10 @@ struct PeriodicUnderlayDiscoveryInner {
     pub udp_underlay_next_hops: ArcSwap<HashMap<PathInterface, net::SocketAddr>>,
 }
 
-/// Implementation of the UnderlayDiscovery trait that periodically discovers underlays.
+/// Implementation of the `UnderlayDiscovery` trait that periodically discovers underlays.
 /// When created starts a background task that periodically discovers underlays
 /// and updates the underlays.
-pub struct PeriodicUnderlayDiscovery {
+pub(crate) struct PeriodicUnderlayDiscovery {
     inner: Arc<PeriodicUnderlayDiscoveryInner>,
     task: JoinHandle<()>,
 }
@@ -164,7 +192,12 @@ impl UnderlayDiscovery for PeriodicUnderlayDiscovery {
     }
 
     fn isd_ases(&self) -> HashSet<IsdAsn> {
-        HashSet::from_iter(self.inner.underlays.load().iter().map(|(ia, _)| *ia))
+        self.inner
+            .underlays
+            .load()
+            .iter()
+            .map(|(ia, _)| *ia)
+            .collect()
     }
 
     fn resolve_udp_underlay_next_hop(&self, interface: PathInterface) -> Option<net::SocketAddr> {
@@ -172,14 +205,14 @@ impl UnderlayDiscovery for PeriodicUnderlayDiscovery {
             .udp_underlay_next_hops
             .load()
             .get(&interface)
-            .cloned()
+            .copied()
     }
 }
 
 impl PeriodicUnderlayDiscovery {
     /// Creates a new periodic underlay discovery.
     /// Does an initial underlay discovery and returns an error if it fails.
-    pub async fn new(
+    pub(crate) async fn new(
         api_client: Arc<dyn EndhostApiClient>,
         fetch_interval: Duration,
         backoff: ExponentialBackoff,
@@ -238,7 +271,7 @@ async fn discover_underlays(
 > {
     let res = api_client.list_underlays(IsdAsn::WILDCARD).await?;
     let mut udp_underlays = HashMap::new();
-    for underlay in res.udp_underlay.into_iter() {
+    for underlay in res.udp_underlay {
         let entry = udp_underlays.entry(underlay.isd_as).or_insert(vec![]);
         entry.push(ScionRouter {
             internal_interface: underlay.internal_interface,
@@ -248,9 +281,9 @@ async fn discover_underlays(
 
     // Create a direct lookup map for the UDP underlay next hops.
     let mut udp_underlay_next_hops = HashMap::new();
-    for (isd_as, routers) in udp_underlays.iter() {
-        for router in routers.iter() {
-            for interface_id in router.interfaces.iter() {
+    for (isd_as, routers) in &udp_underlays {
+        for router in routers {
+            for interface_id in &router.interfaces {
                 udp_underlay_next_hops.insert(
                     PathInterface {
                         isd_asn: (*isd_as),
@@ -267,8 +300,8 @@ async fn discover_underlays(
         .into_iter()
         .map(|(isd_as, routers)| (isd_as, UnderlayInfo::Udp(routers)))
         .collect();
-    for underlay in res.snap_underlay.iter() {
-        for isd_as in underlay.isd_ases.iter() {
+    for underlay in &res.snap_underlay {
+        for isd_as in &underlay.isd_ases {
             underlays.push(((*isd_as), UnderlayInfo::Snap(underlay.address.clone())));
         }
     }

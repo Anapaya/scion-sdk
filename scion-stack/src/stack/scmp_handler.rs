@@ -20,7 +20,7 @@ pub mod echo;
 pub mod error;
 
 pub use echo::DefaultEchoHandler;
-pub use error::ScmpErrorHandler;
+pub(crate) use error::ScmpErrorHandler;
 use sciparse::{
     dataplane_path::view::ScionDpPathViewRef,
     packet::{model::ScionRawPacket, view::ScionRawPacketView},
@@ -29,7 +29,7 @@ use sciparse::{
 
 /// Trait for SCMP handlers that can process incoming raw SCION packets and optionally return a
 /// reply packet.
-/// Sending of the reply is best effort (try_send).
+/// Sending of the reply is best effort (`try_send`).
 pub trait ScmpHandler: Send + Sync {
     /// Handles an incoming SCMP packet and returns a reply packet if applicable.
     fn handle(&self, pkt: &ScionRawPacketView) -> Option<ScionRawPacket>;
@@ -44,6 +44,8 @@ pub trait ScmpErrorReceiver: Send + Sync {
     ///
     /// * `scmp_error` - The SCMP error to report.
     /// * `path` - The path that the SCMP error was received on (not reversed).
+    // The explicit lifetime is required by `mockall`'s `automock` code generation.
+    #[allow(clippy::needless_lifetimes, clippy::elidable_lifetime_names)]
     fn report_scmp_error<'a>(&self, scmp_error: ScmpErrorMessage, path: ScionDpPathViewRef<'a>);
 }
 

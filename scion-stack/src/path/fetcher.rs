@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A [PathFetcher] is responsible for providing paths between two ISD-ASes.
+//! A [`PathFetcher`] is responsible for providing paths between two ISD-ASes.
 //!
-//! The default implementation [PathFetcherImpl] uses a [SegmentFetcher] to fetch path segments and
-//! combine them into end-to-end paths.
+//! The default implementation [`PathFetcherImpl`] uses a [`SegmentFetcher`] to fetch path segments
+//! and combine them into end-to-end paths.
 
 use std::sync::Arc;
 
@@ -28,11 +28,9 @@ use crate::path::fetcher::traits::{
 
 /// Path fetcher traits and types.
 pub mod traits {
-    use std::borrow::Cow;
+    use std::{borrow::Cow, future::Future};
 
     use sciparse::{identifier::isd_asn::IsdAsn, path::ScionPath, segment::SignedPathSegment};
-
-    use crate::types::ResFut;
 
     /// Path fetcher trait.
     pub trait PathFetcher: Send + Sync + 'static {
@@ -41,11 +39,12 @@ pub mod traits {
             &self,
             src: IsdAsn,
             dst: IsdAsn,
-        ) -> impl ResFut<'_, Vec<ScionPath>, PathFetchError>;
+        ) -> impl Future<Output = Result<Vec<ScionPath>, PathFetchError>> + Send + '_;
     }
 
     /// Path fetch errors.
     #[derive(Debug, thiserror::Error)]
+    #[non_exhaustive]
     pub enum PathFetchError {
         /// Segment fetch failed.
         #[error("failed to fetch segments: {0}")]
@@ -71,16 +70,36 @@ pub mod traits {
         ) -> Result<Segments, SegmentFetchError>;
     }
 
-    /// Segment fetch error.
+    /// Error type returned by a [`SegmentFetcher`].
+    ///
+    /// A boxed error so each implementor can return its own error type; it is threaded through
+    /// [`PathFetchError::FetchSegments`], preserving the source chain.
+    // Deliberately a boxed trait object rather than a concrete enum: `SegmentFetcher` is
+    // user-implemented, so the crate does not dictate the error type. See API_CONVENTIONS.md.
     pub type SegmentFetchError = Box<dyn std::error::Error + Send + Sync>;
 
     /// Path segments.
     #[derive(Debug)]
+    #[non_exhaustive]
     pub struct Segments {
         /// Core segments.
         pub core_segments: Vec<SignedPathSegment>,
         /// Non-core segments.
         pub non_core_segments: Vec<SignedPathSegment>,
+    }
+
+    impl Segments {
+        /// Creates a new set of path segments.
+        #[must_use]
+        pub fn new(
+            core_segments: Vec<SignedPathSegment>,
+            non_core_segments: Vec<SignedPathSegment>,
+        ) -> Self {
+            Self {
+                core_segments,
+                non_core_segments,
+            }
+        }
     }
 }
 
@@ -162,7 +181,7 @@ impl PathFetcher for PathFetcherImpl {
         let paths =
             sciparse::path::combinator::combine(src, dst, all_core_segments, all_non_core_segments);
 
-        for (fetcher_name, error) in errors.iter() {
+        for (fetcher_name, error) in &errors {
             tracing::warn!(
                 name = %fetcher_name,
                 %error,
@@ -205,7 +224,7 @@ impl SegmentFetcher for EndhostApiSegmentFetcher {
     ) -> Result<Segments, SegmentFetchError> {
         let resp = self
             .client
-            .list_segments(src, dst, 128, "".to_string())
+            .list_segments(src, dst, 128, String::new())
             .await?;
 
         tracing::trace!(

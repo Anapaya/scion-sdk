@@ -20,7 +20,6 @@ use std::{
 };
 
 use chrono::Utc;
-use futures::future::BoxFuture;
 use scion_sdk_quic_scion::socket::{BoxedSocketError, GenericScionUdpSocket};
 use sciparse::{
     address::{addr::ScionAddr, ip_socket_addr::ScionSocketIpAddr},
@@ -39,12 +38,12 @@ use sciparse::{
 
 use super::{BoundUnderlaySocket, MAX_UNDERLAY_PACKET_SIZE, UnderlaySocket, UnderlaySocketExt};
 use crate::{
+    internal::Subscribers,
     path::manager::{MultiPathManager, traits::PathManager},
-    scionstack::{
-        MIN_PATH_BUFFER_SIZE, ScionSocketConnectError, ScionSocketReceiveError,
-        ScionSocketSendError, scmp_handler::ScmpHandler,
+    stack::{
+        ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError,
+        scmp_handler::ScmpHandler,
     },
-    types::Subscribers,
 };
 
 /// A path unaware UDP SCION socket.
@@ -58,6 +57,8 @@ pub struct PathUnawareUdpScionSocket {
     scmp_handlers: Vec<Box<dyn ScmpHandler>>,
 }
 
+// Intentionally shows only the local address; the inner socket/handlers are not `Debug`.
+#[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for PathUnawareUdpScionSocket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PathUnawareUdpScionSocket")
@@ -85,32 +86,26 @@ impl PathUnawareUdpScionSocket {
     ///
     /// This method is cancel-safe. If the future is dropped before completion, the packet may
     /// be silently lost, but no socket state is corrupted and the socket remains usable.
-    pub fn send_to_via<'a>(
-        &'a self,
+    pub async fn send_to_via(
+        &self,
         payload: &[u8],
         destination: ScionSocketIpAddr,
         path: &ScionPath,
-    ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
+    ) -> Result<(), ScionSocketSendError> {
         // TODO: Should look into a way to encode without cloning payload and parsing dp_path
-        let packet = match ScionUdpPacket::new(
+        let packet = ScionUdpPacket::new(
             self.local_addr.into(),
             destination.into(),
             path.dp_path().to_model(),
             payload.to_vec(),
         )
         .try_encode_to_owned_view()
-        {
-            Ok(packet) => packet.into_raw(),
-            Err(e) => {
-                return Box::pin(async move {
-                    Err(ScionSocketSendError::InvalidPacket(
-                        format!("error encoding packet: {e}").into(),
-                    ))
-                });
-            }
-        };
+        .map_err(|e| {
+            ScionSocketSendError::InvalidPacket(format!("error encoding packet: {e}").into())
+        })?
+        .into_raw();
 
-        Box::pin(async move { self.inner.send(&packet).await })
+        self.inner.send(&packet).await
     }
 
     /// Receive a SCION packet with the sender and path.
@@ -123,96 +118,91 @@ impl PathUnawareUdpScionSocket {
     /// future is dropped after data has been written into the buffers), this cannot occur in
     /// practice because those steps run synchronously within a single `poll` invocation.
     #[allow(clippy::type_complexity)]
-    pub fn recv_from_with_path<'a>(
-        &'a self,
-        buffer: &'a mut [u8],
-        // XXX(ake): we don't need the path buffer here anymore, but not changing the signature in
-        // this PR
-        _path_buffer: &'a mut [u8],
-    ) -> BoxFuture<'a, Result<(usize, ScionSocketIpAddr, ScionPath), ScionSocketReceiveError>> {
-        Box::pin(async move {
-            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
-            loop {
-                let n = self.inner.recv(&mut scratch).await?;
-                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
-                    .expect("underlay recv returns a decoded packet");
+    pub async fn recv_from_with_path(
+        &self,
+        buffer: &mut [u8],
+    ) -> Result<(usize, ScionSocketIpAddr, ScionPath), ScionSocketReceiveError> {
+        let mut scratch = vec![0u8; MAX_UNDERLAY_PACKET_SIZE];
+        loop {
+            let n = self.inner.recv(&mut scratch).await?;
+            let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                .expect("underlay recv returns a decoded packet");
 
-                match packet.header().next_header() {
-                    ProtocolNumber::Udp => {}
-                    ProtocolNumber::Scmp => {
-                        tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
-                        for handler in &self.scmp_handlers {
-                            // Check if the handler wants to send a reply and send it
-                            let Some(reply) = handler.handle(packet) else {
+            match packet.header().next_header() {
+                ProtocolNumber::Udp => {}
+                ProtocolNumber::Scmp => {
+                    tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
+                    for handler in &self.scmp_handlers {
+                        // Check if the handler wants to send a reply and send it
+                        let Some(reply) = handler.handle(packet) else {
+                            continue;
+                        };
+
+                        let reply = match reply.try_encode_to_owned_view() {
+                            Ok(reply) => reply,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "failed to encode SCMP reply");
                                 continue;
-                            };
-
-                            let reply = match reply.try_encode_to_owned_view() {
-                                Ok(reply) => reply,
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to encode SCMP reply");
-                                    continue;
-                                }
-                            };
-
-                            if let Err(e) = self.inner.try_send(&reply) {
-                                tracing::warn!(error = %e, "failed to send SCMP reply");
                             }
+                        };
+
+                        if let Err(e) = self.inner.try_send(&reply) {
+                            tracing::warn!(error = %e, "failed to send SCMP reply");
                         }
-                        continue;
                     }
-                    next_header => {
-                        tracing::debug!(%next_header, "Packet with unexpected next layer protocol, skipping");
-                        continue;
-                    }
-                }
-
-                let packet = match packet.try_as_udp() {
-                    Ok(packet) => packet,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Received invalid UDP packet, skipping");
-                        continue;
-                    }
-                };
-                let src_addr = match packet.src_socket_addr() {
-                    Ok(src_addr) => src_addr,
-                    Err(err) => {
-                        tracing::debug!(
-                            %err,
-                            "Failed to decode packet source address, skipping"
-                        );
-                        continue;
-                    }
-                };
-
-                tracing::trace!(
-                    src = %src_addr,
-                    length = packet.udp().payload().len(),
-                    "received packet",
-                );
-
-                let Some(src_addr) = src_addr.try_to_scion_sock_ip_addr() else {
-                    tracing::debug!("Received packet with non-IP source address, skipping");
                     continue;
-                };
-
-                let max_read = std::cmp::min(buffer.len(), packet.udp().payload().len());
-                buffer[..max_read].copy_from_slice(&packet.udp().payload()[..max_read]);
-
-                // Note, that we do not have the next hop address of the path.
-                // A socket that uses more than one tunnel will need to distinguish between
-                // packets received on different tunnels.
-                let path = ScionPath::new(
-                    src_addr.isd_asn(),
-                    packet.header().dst_ia(),
-                    packet.header().path().to_owned_view(),
-                    None,
-                    None,
-                );
-
-                return Ok((packet.udp().payload().len(), src_addr, path));
+                }
+                next_header => {
+                    tracing::debug!(%next_header, "Packet with unexpected next layer protocol, skipping");
+                    continue;
+                }
             }
-        })
+
+            let packet = match packet.try_as_udp() {
+                Ok(packet) => packet,
+                Err(e) => {
+                    tracing::debug!(error = %e, "Received invalid UDP packet, skipping");
+                    continue;
+                }
+            };
+            let src_addr = match packet.src_socket_addr() {
+                Ok(src_addr) => src_addr,
+                Err(err) => {
+                    tracing::debug!(
+                        %err,
+                        "Failed to decode packet source address, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            tracing::trace!(
+                src = %src_addr,
+                length = packet.udp().payload().len(),
+                "received packet",
+            );
+
+            let Some(src_addr) = src_addr.try_to_scion_sock_ip_addr() else {
+                tracing::debug!("Received packet with non-IP source address, skipping");
+                continue;
+            };
+
+            let max_read = std::cmp::min(buffer.len(), packet.udp().payload().len());
+            buffer[..max_read].copy_from_slice(&packet.udp().payload()[..max_read]);
+
+            // Note, that we do not have the next hop address of the path.
+            // A socket that uses more than one tunnel will need to distinguish between
+            // packets received on different tunnels.
+            let path = ScionPath::new(
+                src_addr.isd_asn(),
+                packet.header().dst_ia(),
+                packet.header().path().to_owned_view(),
+                None,
+                None,
+            );
+
+            return Ok((packet.udp().payload().len(), src_addr, path));
+        }
     }
 
     /// Receive a SCION packet with the sender.
@@ -222,85 +212,83 @@ impl PathUnawareUdpScionSocket {
     /// This method is cancel-safe. If the future is dropped while waiting for a packet, no
     /// packet is consumed and `buffer` is left unmodified. The contents of `buffer` are only
     /// valid after the method returns `Ok`.
-    pub fn recv_from<'a>(
-        &'a self,
-        buffer: &'a mut [u8],
-    ) -> BoxFuture<'a, Result<(usize, ScionSocketIpAddr), ScionSocketReceiveError>> {
-        Box::pin(async move {
-            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
-            loop {
-                let n = self.inner.recv(&mut scratch).await?;
-                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
-                    .expect("underlay recv returns a decoded packet");
+    pub async fn recv_from(
+        &self,
+        buffer: &mut [u8],
+    ) -> Result<(usize, ScionSocketIpAddr), ScionSocketReceiveError> {
+        let mut scratch = vec![0u8; MAX_UNDERLAY_PACKET_SIZE];
+        loop {
+            let n = self.inner.recv(&mut scratch).await?;
+            let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                .expect("underlay recv returns a decoded packet");
 
-                match packet.header().next_header() {
-                    ProtocolNumber::Udp => {}
-                    ProtocolNumber::Scmp => {
-                        tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
-                        for handler in &self.scmp_handlers {
-                            // Check if the handler wants to send a reply and send it
-                            let Some(reply) = handler.handle(packet) else {
+            match packet.header().next_header() {
+                ProtocolNumber::Udp => {}
+                ProtocolNumber::Scmp => {
+                    tracing::debug!("SCMP packet received, forwarding to SCMP handlers");
+                    for handler in &self.scmp_handlers {
+                        // Check if the handler wants to send a reply and send it
+                        let Some(reply) = handler.handle(packet) else {
+                            continue;
+                        };
+
+                        let reply = match reply.try_encode_to_owned_view() {
+                            Ok(reply) => reply,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "failed to encode SCMP reply");
                                 continue;
-                            };
-
-                            let reply = match reply.try_encode_to_owned_view() {
-                                Ok(reply) => reply,
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to encode SCMP reply");
-                                    continue;
-                                }
-                            };
-
-                            if let Err(e) = self.inner.try_send(&reply) {
-                                tracing::warn!(error = %e, "failed to send SCMP reply");
                             }
+                        };
+
+                        if let Err(e) = self.inner.try_send(&reply) {
+                            tracing::warn!(error = %e, "failed to send SCMP reply");
                         }
-                        continue;
                     }
-                    next_header => {
-                        tracing::debug!(%next_header, "Packet with unknown next layer protocol, skipping");
-                        continue;
-                    }
-                }
-
-                let packet = match packet.try_as_udp() {
-                    Ok(packet) => packet,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Received invalid UDP packet, dropping");
-                        continue;
-                    }
-                };
-
-                let src_addr = match packet.src_socket_addr() {
-                    Ok(src_addr) => src_addr,
-                    Err(err) => {
-                        tracing::debug!(%err, "Failed to decode packet source address, skipping");
-                        continue;
-                    }
-                };
-
-                tracing::trace!(
-                    src = %src_addr,
-                    length = packet.udp().payload().len(),
-                    buffer_size = buffer.len(),
-                    "received packet",
-                );
-
-                let Some(src_addr) = src_addr.try_to_scion_sock_ip_addr() else {
-                    tracing::debug!("Received packet with non-IP source address, skipping");
                     continue;
-                };
-
-                let max_read = std::cmp::min(buffer.len(), packet.udp().payload().len());
-                buffer[..max_read].copy_from_slice(&packet.udp().payload()[..max_read]);
-
-                return Ok((packet.udp().payload().len(), src_addr));
+                }
+                next_header => {
+                    tracing::debug!(%next_header, "Packet with unknown next layer protocol, skipping");
+                    continue;
+                }
             }
-        })
+
+            let packet = match packet.try_as_udp() {
+                Ok(packet) => packet,
+                Err(e) => {
+                    tracing::debug!(error = %e, "Received invalid UDP packet, dropping");
+                    continue;
+                }
+            };
+
+            let src_addr = match packet.src_socket_addr() {
+                Ok(src_addr) => src_addr,
+                Err(err) => {
+                    tracing::debug!(%err, "Failed to decode packet source address, skipping");
+                    continue;
+                }
+            };
+
+            tracing::trace!(
+                src = %src_addr,
+                length = packet.udp().payload().len(),
+                buffer_size = buffer.len(),
+                "received packet",
+            );
+
+            let Some(src_addr) = src_addr.try_to_scion_sock_ip_addr() else {
+                tracing::debug!("Received packet with non-IP source address, skipping");
+                continue;
+            };
+
+            let max_read = std::cmp::min(buffer.len(), packet.udp().payload().len());
+            buffer[..max_read].copy_from_slice(&packet.udp().payload()[..max_read]);
+
+            return Ok((packet.udp().payload().len(), src_addr));
+        }
     }
 
     /// The local address the socket is bound to.
-    fn local_addr(&self) -> ScionSocketIpAddr {
+    pub fn local_addr(&self) -> ScionSocketIpAddr {
         self.local_addr
     }
 
@@ -331,101 +319,89 @@ impl ScmpScionSocket {
 
 impl ScmpScionSocket {
     /// Send a SCMP message to the destination via the given path.
-    pub fn send_to_via<'a>(
-        &'a self,
+    pub async fn send_to_via(
+        &self,
         message: ScmpMessage,
         destination: ScionAddr,
         path: &ScionPath,
-    ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
-        let packet = match ScionScmpPacket::new(
+    ) -> Result<(), ScionSocketSendError> {
+        let packet = ScionScmpPacket::new(
             self.local_addr.scion_ip_addr().into(),
             destination,
             path.dp_path().to_model(),
             message,
         )
         .try_encode_to_owned_view()
-        {
-            Ok(packet) => packet.into_raw(),
-            Err(e) => {
-                return Box::pin(async move {
-                    Err(ScionSocketSendError::InvalidPacket(
-                        format!("error encoding packet: {e}").into(),
-                    ))
-                });
-            }
-        };
-        Box::pin(async move { self.inner.send(&packet).await })
+        .map_err(|e| {
+            ScionSocketSendError::InvalidPacket(format!("error encoding packet: {e}").into())
+        })?
+        .into_raw();
+        self.inner.send(&packet).await
     }
 
     /// Receive a SCMP message with the sender and path.
     #[allow(clippy::type_complexity)]
-    pub fn recv_from_with_path<'a>(
-        &'a self,
-        _path_buffer: &'a mut [u8],
-    ) -> BoxFuture<'a, Result<(Box<ScmpPayloadView>, ScionAddr, ScionPath), ScionSocketReceiveError>>
-    {
-        Box::pin(async move {
-            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
-            loop {
-                let n = self.inner.recv(&mut scratch).await?;
-                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
-                    .expect("underlay recv returns a decoded packet");
-                let packet = match packet.try_as_scmp() {
-                    Ok(packet) => packet,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Received invalid SCMP packet, dropping");
-                        continue;
-                    }
-                };
+    pub async fn recv_from_with_path(
+        &self,
+    ) -> Result<(Box<ScmpPayloadView>, ScionAddr, ScionPath), ScionSocketReceiveError> {
+        let mut scratch = vec![0u8; MAX_UNDERLAY_PACKET_SIZE];
+        loop {
+            let n = self.inner.recv(&mut scratch).await?;
+            let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                .expect("underlay recv returns a decoded packet");
+            let packet = match packet.try_as_scmp() {
+                Ok(packet) => packet,
+                Err(e) => {
+                    tracing::debug!(error = %e, "Received invalid SCMP packet, dropping");
+                    continue;
+                }
+            };
 
-                let src_addr = match packet.src_scion_addr() {
-                    Ok(source) => source,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Failed to decode packet source address, skipping");
-                        continue;
-                    }
-                };
+            let src_addr = match packet.src_scion_addr() {
+                Ok(source) => source,
+                Err(e) => {
+                    tracing::debug!(error = %e, "Failed to decode packet source address, skipping");
+                    continue;
+                }
+            };
 
-                let path = ScionPath::new(
-                    packet.header().src_ia(),
-                    packet.header().dst_ia(),
-                    packet.header().path().to_owned_view(),
-                    None,
-                    None,
-                );
+            let path = ScionPath::new(
+                packet.header().src_ia(),
+                packet.header().dst_ia(),
+                packet.header().path().to_owned_view(),
+                None,
+                None,
+            );
 
-                return Ok((packet.scmp().to_boxed(), src_addr, path));
-            }
-        })
+            return Ok((packet.scmp().to_boxed(), src_addr, path));
+        }
     }
 
     /// Receive a SCMP message with the sender.
-    pub fn recv_from<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<(Box<ScmpPayloadView>, ScionAddr), ScionSocketReceiveError>> {
-        Box::pin(async move {
-            let mut scratch = [0u8; MAX_UNDERLAY_PACKET_SIZE];
-            loop {
-                let n = self.inner.recv(&mut scratch).await?;
-                let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
-                    .expect("underlay recv returns a decoded packet");
-                let packet = match packet.try_as_scmp() {
-                    Ok(packet) => packet,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Received invalid SCMP packet, skipping");
-                        continue;
-                    }
-                };
-                let src_addr = match packet.src_scion_addr() {
-                    Ok(source) => source,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "Failed to decode packet source address, skipping");
-                        continue;
-                    }
-                };
-                return Ok((packet.scmp().to_boxed(), src_addr));
-            }
-        })
+    pub async fn recv_from(
+        &self,
+    ) -> Result<(Box<ScmpPayloadView>, ScionAddr), ScionSocketReceiveError> {
+        let mut scratch = vec![0u8; MAX_UNDERLAY_PACKET_SIZE];
+        loop {
+            let n = self.inner.recv(&mut scratch).await?;
+            let (packet, _rest) = ScionRawPacketView::try_from_slice(&scratch[..n])
+                .expect("underlay recv returns a decoded packet");
+            let packet = match packet.try_as_scmp() {
+                Ok(packet) => packet,
+                Err(e) => {
+                    tracing::debug!(error = %e, "Received invalid SCMP packet, skipping");
+                    continue;
+                }
+            };
+            let src_addr = match packet.src_scion_addr() {
+                Ok(source) => source,
+                Err(e) => {
+                    tracing::debug!(error = %e, "Failed to decode packet source address, skipping");
+                    continue;
+                }
+            };
+            return Ok((packet.scmp().to_boxed(), src_addr));
+        }
     }
 
     /// Return the local socket address.
@@ -460,24 +436,17 @@ impl RawScionSocket {
 
 impl RawScionSocket {
     /// Send a raw SCION packet.
-    pub fn send<'a>(
-        &'a self,
-        packet: &'a ScionRawPacketView,
-    ) -> BoxFuture<'a, Result<(), ScionSocketSendError>> {
-        Box::pin(self.inner.send(packet))
+    pub async fn send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
+        self.inner.send(packet).await
     }
 
     /// Receive a raw SCION packet.
-    pub fn recv<'a>(
-        &'a self,
-    ) -> BoxFuture<'a, Result<Box<ScionRawPacketView>, ScionSocketReceiveError>> {
-        Box::pin(async move {
-            let mut buf = [0u8; MAX_UNDERLAY_PACKET_SIZE];
-            let n = self.inner.recv(&mut buf).await?;
-            let (view, _rest) = ScionRawPacketView::try_from_slice(&buf[..n])
-                .expect("underlay recv returns a decoded packet");
-            Ok(view.to_boxed())
-        })
+    pub async fn recv(&self) -> Result<Box<ScionRawPacketView>, ScionSocketReceiveError> {
+        let mut buf = vec![0u8; MAX_UNDERLAY_PACKET_SIZE];
+        let n = self.inner.recv(&mut buf).await?;
+        let (view, _rest) = ScionRawPacketView::try_from_slice(&buf[..n])
+            .expect("underlay recv returns a decoded packet");
+        Ok(view.to_boxed())
     }
 
     /// Return the local socket address.
@@ -498,7 +467,13 @@ pub trait SendErrorReceiver: Send + Sync {
     fn report_send_error(&self, error: &ScionSocketSendError);
 }
 
-/// A path aware UDP socket generic over the underlay socket and path manager.
+/// A path aware UDP socket generic over the path manager.
+///
+/// The `P` type parameter is a **deferred extension point** for custom path management. Today the
+/// only way to obtain a socket is through [`ScionStack`](crate::ScionStack), which always yields a
+/// `UdpScionSocket<MultiPathManager>`; a public constructor for a caller-supplied `P` will be added
+/// once the path-manager trait surface is finalized. The parameter is kept now so that addition is
+/// not itself a breaking change.
 pub struct UdpScionSocket<P: PathManager = MultiPathManager> {
     socket: PathUnawareUdpScionSocket,
     pather: Arc<P>,
@@ -507,6 +482,8 @@ pub struct UdpScionSocket<P: PathManager = MultiPathManager> {
     send_error_receivers: Subscribers<dyn SendErrorReceiver>,
 }
 
+// Intentionally shows only the addresses; the path manager and receivers are not `Debug`.
+#[allow(clippy::missing_fields_in_debug)]
 impl<P: PathManager> std::fmt::Debug for UdpScionSocket<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UdpScionSocket")
@@ -518,7 +495,7 @@ impl<P: PathManager> std::fmt::Debug for UdpScionSocket<P> {
 
 impl<P: PathManager> UdpScionSocket<P> {
     /// Creates a new path aware UDP SCION socket.
-    pub fn new(
+    pub(crate) fn new(
         socket: PathUnawareUdpScionSocket,
         pather: Arc<P>,
         connect_timeout: Duration,
@@ -622,18 +599,17 @@ impl<P: PathManager> UdpScionSocket<P> {
     /// # Cancel safety
     ///
     /// This method is cancel-safe. The only await point is the inner underlay receive. If the
-    /// future is dropped while waiting for a packet, no packet data is consumed and `buffer`
-    /// and `path_buffer` are left unmodified.
+    /// future is dropped while waiting for a packet, no packet data is consumed and `buffer` is
+    /// left unmodified.
     ///
     /// Path registration via the path manager runs synchronously within the same `poll`
     /// invocation that delivers the received data, so it cannot be independently cancelled.
-    pub async fn recv_from_with_path<'a>(
-        &'a self,
-        buffer: &'a mut [u8],
-        path_buffer: &'a mut [u8],
+    pub async fn recv_from_with_path(
+        &self,
+        buffer: &mut [u8],
     ) -> Result<(usize, ScionSocketIpAddr, ScionPath), ScionSocketReceiveError> {
         let (len, sender_addr, path): (usize, ScionSocketIpAddr, ScionPath) =
-            self.socket.recv_from_with_path(buffer, path_buffer).await?;
+            self.socket.recv_from_with_path(buffer).await?;
 
         match path.clone().try_into_reversed() {
             Ok(reversed_path) => {
@@ -646,7 +622,7 @@ impl<P: PathManager> UdpScionSocket<P> {
                 );
             }
             Err((_, e)) => {
-                tracing::trace!(error = ?e, "Failed to reverse path for registration")
+                tracing::trace!(error = ?e, "Failed to reverse path for registration");
             }
         }
 
@@ -674,8 +650,7 @@ impl<P: PathManager> UdpScionSocket<P> {
         &self,
         buffer: &mut [u8],
     ) -> Result<(usize, ScionSocketIpAddr), ScionSocketReceiveError> {
-        let mut path_buffer = [0u8; MIN_PATH_BUFFER_SIZE];
-        let (len, sender_addr, _) = self.recv_from_with_path(buffer, &mut path_buffer).await?;
+        let (len, sender_addr, _) = self.recv_from_with_path(buffer).await?;
         Ok((len, sender_addr))
     }
 
@@ -794,9 +769,9 @@ mod cancel_safety_tests {
 
     use super::*;
     use crate::{
+        internal::Subscribers,
         path::manager::traits::{PathWaitError, SyncPathManager},
-        scionstack::{ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket},
-        types::{ResFut, Subscribers},
+        stack::{ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket},
     };
 
     struct ManualUnderlaySocket {
@@ -902,7 +877,8 @@ mod cancel_safety_tests {
             src: IsdAsn,
             _dst: IsdAsn,
             _now: DateTime<Utc>,
-        ) -> impl ResFut<'_, ScionPath, PathWaitError> {
+        ) -> impl std::future::Future<Output = Result<ScionPath, PathWaitError>> + Send + '_
+        {
             async move { Ok(ScionPath::local(src).expect("src is not a wildcard IA")) }
         }
     }
@@ -912,7 +888,7 @@ mod cancel_safety_tests {
     const OTHER_ISD_ASN: IsdAsn = IsdAsn::new(Isd(1), Asn(3));
 
     fn local_addr() -> ScionSocketIpAddr {
-        ScionSocketIpAddr::new(LOCAL_ISD_ASN, Ipv4Addr::new(127, 0, 0, 1).into(), 8080)
+        ScionSocketIpAddr::new(LOCAL_ISD_ASN, Ipv4Addr::LOCALHOST.into(), 8080)
     }
 
     fn remote_addr() -> ScionSocketIpAddr {
@@ -986,8 +962,8 @@ mod cancel_safety_tests {
 
         // Poll once — returns Pending because the channel is empty.
         {
-            let (mut buf, mut pbuf) = ([0u8; 64], [0u8; 1024]);
-            let mut fut = std::pin::pin!(socket.recv_from_with_path(&mut buf, &mut pbuf));
+            let mut buf = [0u8; 64];
+            let mut fut = std::pin::pin!(socket.recv_from_with_path(&mut buf));
             let waker = futures::task::noop_waker();
             let mut cx = std::task::Context::from_waker(&waker);
             // The future must be Pending (no packet injected yet).
@@ -1002,11 +978,8 @@ mod cancel_safety_tests {
             .unwrap();
 
         // The packet must be available to the next future.
-        let (mut buf2, mut pbuf2) = (vec![0u8; 64], vec![0u8; 1024]);
-        let (len, sender, _path) = socket
-            .recv_from_with_path(&mut buf2, &mut pbuf2)
-            .await
-            .unwrap();
+        let mut buf2 = vec![0u8; 64];
+        let (len, sender, _path) = socket.recv_from_with_path(&mut buf2).await.unwrap();
 
         assert_eq!(len, payload.len());
         assert_eq!(&buf2[..len], payload);

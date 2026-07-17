@@ -83,9 +83,7 @@ use crate::{
         },
         types::PathManagerPath,
     },
-    scionstack::{
-        ScionSocketSendError, scmp_handler::ScmpErrorReceiver, socket::SendErrorReceiver,
-    },
+    stack::{ScionSocketSendError, scmp_handler::ScmpErrorReceiver, socket::SendErrorReceiver},
 };
 
 mod algo;
@@ -99,7 +97,7 @@ pub mod reliability;
 /// Path fetcher traits and types.
 pub mod traits;
 
-/// Configuration for the MultiPathManager.
+/// Configuration for the `MultiPathManager`.
 #[derive(Debug, Clone, Copy)]
 pub struct MultiPathManagerConfig {
     /// Maximum number of cached paths per src-dst pair.
@@ -148,21 +146,80 @@ impl Default for MultiPathManagerConfig {
 }
 
 impl MultiPathManagerConfig {
+    /// Sets the maximum number of cached paths per src-dst pair.
+    #[must_use]
+    pub fn with_max_cached_paths_per_pair(mut self, max: usize) -> Self {
+        self.max_cached_paths_per_pair = max;
+        self
+    }
+
+    /// Sets the interval between path refetches.
+    #[must_use]
+    pub fn with_refetch_interval(mut self, interval: Duration) -> Self {
+        self.refetch_interval = interval;
+        self
+    }
+
+    /// Sets the minimum duration between path refetches.
+    #[must_use]
+    pub fn with_min_refetch_delay(mut self, delay: Duration) -> Self {
+        self.min_refetch_delay = delay;
+        self
+    }
+
+    /// Sets the minimum remaining expiry before refetching paths.
+    #[must_use]
+    pub fn with_min_expiry_threshold(mut self, threshold: Duration) -> Self {
+        self.min_expiry_threshold = threshold;
+        self
+    }
+
+    /// Sets the maximum idle period before managed paths are removed.
+    #[must_use]
+    pub fn with_max_idle_period(mut self, period: Duration) -> Self {
+        self.max_idle_period = period;
+        self
+    }
+
+    /// Sets the time window during which duplicate issues are ignored.
+    #[must_use]
+    pub fn with_issue_deduplication_window(mut self, window: Duration) -> Self {
+        self.issue_deduplication_window = window;
+        self
+    }
+
+    /// Sets the score difference after which the active path should be replaced.
+    #[must_use]
+    pub fn with_path_swap_score_threshold(mut self, threshold: f32) -> Self {
+        self.path_swap_score_threshold = threshold;
+        self
+    }
+
     /// Validates the configuration.
-    fn validate(&self) -> Result<(), &'static str> {
+    fn validate(&self) -> Result<(), MultiPathManagerConfigError> {
         if self.min_refetch_delay > self.refetch_interval {
-            return Err("min_refetch_delay must be smaller than refetch_interval");
-            // Otherwise, refetch interval makes no sense
+            // Otherwise, refetch interval makes no sense.
+            return Err(MultiPathManagerConfigError(
+                "min_refetch_delay must be smaller than refetch_interval",
+            ));
         }
 
         if self.min_refetch_delay > self.min_expiry_threshold {
-            return Err("min_refetch_delay must be smaller than min_expiry_threshold");
-            // Otherwise, very unlikely, we have paths expiring before we can refetch
+            // Otherwise, very unlikely, we have paths expiring before we can refetch.
+            return Err(MultiPathManagerConfigError(
+                "min_refetch_delay must be smaller than min_expiry_threshold",
+            ));
         }
 
         Ok(())
     }
 }
+
+/// Error returned when a [`MultiPathManagerConfig`] is invalid.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid path manager configuration: {0}")]
+#[non_exhaustive]
+pub struct MultiPathManagerConfigError(&'static str);
 
 /// Path manager managing multiple paths per src-dst pair.
 pub struct MultiPathManager<F: PathFetcher = PathFetcherImpl>(Arc<MultiPathManagerInner<F>>);
@@ -186,11 +243,15 @@ struct MultiPathManagerInner<F: PathFetcher> {
 
 impl<F: PathFetcher> MultiPathManager<F> {
     /// Creates a new [`MultiPathManager`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MultiPathManagerConfigError`] if `config` is invalid.
     pub fn new(
         config: MultiPathManagerConfig,
         fetcher: F,
         path_strategy: PathStrategy,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, MultiPathManagerConfigError> {
         config.validate()?;
 
         let issue_manager = Mutex::new(PathIssueManager::new(
@@ -208,12 +269,12 @@ impl<F: PathFetcher> MultiPathManager<F> {
         })))
     }
 
-    /// Tries to get the active path for the given src-dst pair.
+    /// Returns the cached active path for the given src-dst pair, if one is available.
     ///
-    /// If no active path is set, returns None.
+    /// If no active path is cached, returns `None`.
     ///
     /// If the src-dst pair is not yet managed, starts managing it.
-    pub fn try_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime) -> Option<ScionPath> {
+    pub fn cached_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime) -> Option<ScionPath> {
         let try_path = self
             .0
             .managed_paths
@@ -319,7 +380,9 @@ impl<F: PathFetcher> MultiPathManager<F> {
         res
     }
 
-    /// Creates a weak reference to this MultiPathManager.
+    /// Creates a weak reference to this [`MultiPathManager`].
+    ///
+    /// Upgrade it back to a strong handle with [`MultiPathManagerRef::upgrade`].
     pub fn weak_ref(&self) -> MultiPathManagerRef<F> {
         MultiPathManagerRef(Arc::downgrade(&self.0))
     }
@@ -372,8 +435,8 @@ impl<F: PathFetcher> MultiPathManager<F> {
         }
     }
 
-    /// report error
-    pub fn report_path_issue(&self, timestamp: SystemTime, issue: IssueKind) {
+    /// Reports a path issue to the issue manager.
+    pub(crate) fn report_path_issue(&self, timestamp: SystemTime, issue: IssueKind) {
         let Some(applies_to) = issue.target_type() else {
             // Not a path issue we care about
             return;
@@ -433,7 +496,7 @@ impl<F: PathFetcher> SyncPathManager for MultiPathManager<F> {
         dst: IsdAsn,
         now: chrono::DateTime<chrono::Utc>,
     ) -> std::io::Result<Option<ScionPath>> {
-        Ok(self.try_path(src, dst, now.into()))
+        Ok(self.cached_path(src, dst, now.into()))
     }
 }
 
@@ -443,19 +506,14 @@ impl<F: PathFetcher> PathManager for MultiPathManager<F> {
         src: IsdAsn,
         dst: IsdAsn,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> impl crate::types::ResFut<'_, ScionPath, PathWaitError> {
+    ) -> impl std::future::Future<Output = Result<ScionPath, PathWaitError>> + Send + '_ {
         async move {
             match self.path(src, dst, now.into()).await {
                 Ok(path) => Ok(path),
                 Err(e) => {
                     match &*e {
-                        PathFetchError::FetchSegments(error) => {
-                            Err(PathWaitError::FetchFailed(format!("{error}")))
-                        }
-                        PathFetchError::InternalError(msg) => {
-                            Err(PathWaitError::FetchFailed(msg.to_string()))
-                        }
                         PathFetchError::NoPathsFound => Err(PathWaitError::NoPathFound),
+                        _ => Err(PathWaitError::FetchFailed(e)),
                     }
                 }
             }
@@ -469,9 +527,10 @@ impl<F: PathFetcher> PathPrefetcher for MultiPathManager<F> {
     }
 }
 
-/// Weak reference to a MultiPathManager.
+/// Weak reference to a [`MultiPathManager`].
 ///
-/// Can be upgraded to a strong reference using [`get`](Self::get).
+/// Can be upgraded to a strong reference using [`upgrade`](Self::upgrade), mirroring
+/// [`std::sync::Weak::upgrade`].
 pub struct MultiPathManagerRef<F: PathFetcher>(Weak<MultiPathManagerInner<F>>);
 
 impl<F: PathFetcher> Clone for MultiPathManagerRef<F> {
@@ -482,8 +541,9 @@ impl<F: PathFetcher> Clone for MultiPathManagerRef<F> {
 
 impl<F: PathFetcher> MultiPathManagerRef<F> {
     /// Attempts to upgrade the weak reference to a strong reference.
-    pub fn get(&self) -> Option<MultiPathManager<F>> {
-        self.0.upgrade().map(|arc| MultiPathManager(arc))
+    #[must_use]
+    pub fn upgrade(&self) -> Option<MultiPathManager<F>> {
+        self.0.upgrade().map(MultiPathManager)
     }
 }
 
@@ -587,9 +647,10 @@ impl PathIssueManager {
         match self.cache.entry(issue_id) {
             hash_map::Entry::Occupied(occupied_entry) => {
                 // Only remove if timestamps match
-                match occupied_entry.get().timestamp == timestamp {
-                    true => Some(occupied_entry.remove()),
-                    false => None, // Entry was updated, do not remove
+                if occupied_entry.get().timestamp == timestamp {
+                    Some(occupied_entry.remove())
+                } else {
+                    None
                 }
             }
             hash_map::Entry::Vacant(_) => {
@@ -621,7 +682,7 @@ mod tests {
         assert!(mgr.0.managed_paths.is_empty());
 
         // Request a path - should create path set
-        let path = mgr.try_path(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn(), BASE_TIME);
+        let path = mgr.cached_path(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn(), BASE_TIME);
         // First call returns None (not yet initialized)
         assert!(path.is_none());
 
@@ -630,6 +691,25 @@ mod tests {
             mgr.0
                 .managed_paths
                 .contains(&(SRC_ADDR.isd_asn(), DST_ADDR.isd_asn()))
+        );
+    }
+
+    // An invalid configuration is rejected by `MultiPathManager::new`.
+    #[tokio::test]
+    #[test_log::test]
+    async fn new_rejects_invalid_config() {
+        let mut cfg = base_config();
+        // `min_refetch_delay` must not exceed `refetch_interval`; violate that invariant.
+        cfg.min_refetch_delay = cfg.refetch_interval + Duration::from_secs(1);
+        let fetcher = MockFetcher::new(generate_responses(1, 0, BASE_TIME, DEFAULT_EXP_UNITS));
+
+        let err = match MultiPathManager::new(cfg, fetcher, PathStrategy::default()) {
+            Ok(_) => panic!("invalid config should be rejected"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("min_refetch_delay"),
+            "unexpected error message: {err}"
         );
     }
 
@@ -671,7 +751,7 @@ mod tests {
             err.is_some(),
             "Handle should report error after path set removal"
         );
-        println!("Error after idle removal: {:?}", err);
+        println!("Error after idle removal: {err:?}");
         assert!(
             err.unwrap().to_string().contains("idle"),
             "Error message should indicate idle removal"
@@ -702,7 +782,7 @@ mod tests {
             // swap join handle with a fake one, only possible since the manager doesn't use
             // the handle
             let swap_handle = tokio::spawn(async {});
-            std::mem::replace(&mut set_entry.get_mut().1._task, swap_handle)
+            std::mem::replace(&mut set_entry.get_mut().1.task, swap_handle)
         };
 
         let cancel_token = set_entry.get().1.cancel_token.clone();
@@ -816,9 +896,7 @@ mod tests {
             let decayed_score = updated_path.reliability.score(later_time).value();
             assert!(
                 decayed_score > updated_score,
-                "Path score should recover over time. Updated: {}, Decayed: {}",
-                updated_score,
-                decayed_score
+                "Path score should recover over time. Updated: {updated_score}, Decayed: {decayed_score}"
             );
         }
 
@@ -968,8 +1046,7 @@ mod tests {
                 .value();
             assert!(
                 score < 0.0,
-                "Newly fetched path should have cached issue applied. Score: {}",
-                score
+                "Newly fetched path should have cached issue applied. Score: {score}"
             );
         }
 
@@ -1129,7 +1206,7 @@ mod tests {
                         isd_asn: IsdAsn::new(Isd(1), Asn(1)),
                         egress_interface: i,
                     },
-                    timestamp: BASE_TIME + Duration::from_secs(i as u64),
+                    timestamp: BASE_TIME + Duration::from_secs(u64::from(i)),
                     penalty: Score::new_clamped(-0.1),
                 };
 
@@ -1176,10 +1253,8 @@ mod tests {
         use super::*;
         use crate::path::manager::{MultiPathManagerInner, PathIssueManager, pathset::PathSet};
 
-        pub const SRC_ADDR: ScionIpAddr = ScionIpAddr::new(
-            IsdAsn::new(Isd(1), Asn(1)),
-            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-        );
+        pub const SRC_ADDR: ScionIpAddr =
+            ScionIpAddr::new(IsdAsn::new(Isd(1), Asn(1)), IpAddr::V4(Ipv4Addr::LOCALHOST));
         pub const DST_ADDR: ScionIpAddr = ScionIpAddr::new(
             IsdAsn::new(Isd(2), Asn(1)),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)),
@@ -1246,7 +1321,7 @@ mod tests {
                         .unwrap()
                         .as_secs() as u32,
                     exp_units,
-                    path_seed + resp_id as u32,
+                    path_seed + u32::from(resp_id),
                 ));
             }
 

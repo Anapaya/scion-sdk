@@ -25,7 +25,7 @@ use url::Url;
 use x25519_dalek::StaticSecret;
 
 use crate::{
-    scionstack::{
+    stack::{
         BoundUnderlaySocket, DynUnderlayStack, InvalidBindAddressError, ScionSocketBindError,
         SnapConnectionError, UnderlaySocket, builder::PreferredUnderlay,
     },
@@ -132,7 +132,7 @@ impl UnderlayStack {
                 if let Some(cp_addr) = cp_url
                     .socket_addrs(|| None)
                     .ok()
-                    .and_then(|addrs| addrs.first().cloned())
+                    .and_then(|addrs| addrs.first().copied())
                     && let Some(ip) = outbound_ip_towards(cp_addr).await
                 {
                     Ok(net::SocketAddr::new(ip, 0))
@@ -176,8 +176,8 @@ impl UnderlayStack {
         {
             // IsdAsns must match
 
-            return Err(crate::scionstack::ScionSocketBindError::InvalidBindAddress(
-                crate::scionstack::InvalidBindAddressError::AddressMismatch {
+            return Err(crate::stack::ScionSocketBindError::InvalidBindAddress(
+                crate::stack::InvalidBindAddressError::AddressMismatch {
                     assigned_addr: ScionSocketIpAddr::new(
                         bind_addr.isd_asn(),
                         requested_socket_addr.ip(),
@@ -248,13 +248,11 @@ impl UnderlayStack {
 impl DynUnderlayStack for UnderlayStack {
     fn bind_socket(
         &self,
-        _kind: crate::scionstack::SocketKind,
+        _kind: crate::stack::SocketKind,
         bind_addr: Option<ScionSocketIpAddr>,
     ) -> futures::future::BoxFuture<'_, Result<BoundUnderlaySocket, ScionSocketBindError>> {
         Box::pin(async move {
-            let requested_isd_as = bind_addr
-                .map(|addr| addr.isd_asn())
-                .unwrap_or(IsdAsn::WILDCARD);
+            let requested_isd_as = bind_addr.map_or(IsdAsn::WILDCARD, |addr| addr.isd_asn());
             match self.select_underlay(requested_isd_as) {
                 Some((isd_as, UnderlayInfo::Snap(cp_url))) => {
                     let socket = self.bind_snap_socket(bind_addr, isd_as, cp_url).await?;
@@ -318,7 +316,7 @@ fn set_exclusive_addr_use(sock: &Socket, enable: bool) -> std::io::Result<()> {
     }
 }
 
-/// This is equivalent to tokio::net::UdpSocket::bind(addr) but with the exclusive address use set
+/// This is equivalent to `tokio::net::UdpSocket::bind(addr)` but with the exclusive address use set
 /// to true on windows.
 /// This is because on windows, by default, multiple sockets can bind to the same address:port
 /// if one binds to wildcard address.

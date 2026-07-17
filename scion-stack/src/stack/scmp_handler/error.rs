@@ -19,16 +19,16 @@ use sciparse::{
 };
 
 use super::ScmpHandler;
-use crate::{scionstack::scmp_handler::ScmpErrorReceiver, types::Subscribers};
+use crate::{internal::Subscribers, stack::scmp_handler::ScmpErrorReceiver};
 
 /// A SCMP handler that forwards SCMP messages to SCMP error receivers.
-pub struct ScmpErrorHandler {
+pub(crate) struct ScmpErrorHandler {
     receivers: Subscribers<dyn ScmpErrorReceiver>,
 }
 
 impl ScmpErrorHandler {
     /// Creates a new forwarding SCMP handler.
-    pub fn new(receivers: Subscribers<dyn ScmpErrorReceiver>) -> Self {
+    pub(crate) fn new(receivers: Subscribers<dyn ScmpErrorReceiver>) -> Self {
         Self { receivers }
     }
 }
@@ -110,7 +110,7 @@ mod scmp_error_handler_tests {
 
         let expected_path = packet.header().path().to_owned_view();
 
-        let mut mock_receiver = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
+        let mut mock_receiver = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver
             .expect_report_scmp_error()
             .withf(move |error: &ScmpErrorMessage, path: &ScionDpPathViewRef| {
@@ -134,7 +134,7 @@ mod scmp_error_handler_tests {
     #[test]
     fn ignores_non_error_scmp_messages() {
         let ctx = test_context();
-        let mut mock_receiver = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
+        let mut mock_receiver = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver.expect_report_scmp_error().times(0);
 
         let receiver_arc: Arc<dyn ScmpErrorReceiver> = Arc::new(mock_receiver);
@@ -166,7 +166,7 @@ mod scmp_error_handler_tests {
     #[test]
     fn ignores_invalid_packets() {
         let ctx = test_context();
-        let mut mock_receiver = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
+        let mut mock_receiver = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver.expect_report_scmp_error().times(0);
 
         let receiver_arc: Arc<dyn ScmpErrorReceiver> = Arc::new(mock_receiver);
@@ -204,7 +204,7 @@ mod scmp_error_handler_tests {
 
         let expected_path_clone1 = expected_path.clone();
         let expected_path_clone2 = expected_path.clone();
-        let mut mock_receiver1 = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
+        let mut mock_receiver1 = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver1
             .expect_report_scmp_error()
             .withf(move |error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
@@ -214,7 +214,7 @@ mod scmp_error_handler_tests {
             .times(1)
             .returning(|_, _| {});
 
-        let mut mock_receiver2 = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
+        let mut mock_receiver2 = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver2
             .expect_report_scmp_error()
             .withf(move |error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
@@ -253,7 +253,7 @@ mod scmp_error_handler_tests {
             .try_encode_to_owned_view()
             .expect("should encode");
 
-        let mut mock_receiver = crate::scionstack::scmp_handler::MockScmpErrorReceiver::new();
+        let mut mock_receiver = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         // When the strong reference is dropped, the weak reference won't upgrade,
         // so report_scmp_error should not be called
         mock_receiver.expect_report_scmp_error().times(0);

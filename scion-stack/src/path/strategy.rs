@@ -27,7 +27,7 @@ use crate::path::{
 pub mod policy;
 pub mod scoring;
 
-/// PathStrategy combines multiple path operations into a single strategy.
+/// `PathStrategy` combines multiple path operations into a single strategy.
 #[derive(Default)]
 pub struct PathStrategy {
     /// The path policies to apply.
@@ -52,7 +52,7 @@ impl PathStrategy {
     /// Note:
     /// The impact weight does not need to sum to 1.0 across all scorers.
     pub fn add_scoring(&mut self, scoring: impl PathScoring, impact: f32) {
-        self.scoring = self.scoring.clone().with_scorer(scoring, impact);
+        self.scoring = std::mem::take(&mut self.scoring).with_scorer(scoring, impact);
     }
 
     /// Ranks the order of two paths based on preference.
@@ -90,7 +90,7 @@ impl PathStrategy {
     }
 
     /// Filters the given paths based on all policies, removing paths that are not accepted.
-    pub fn filter_inplace<'path: 'iter, 'iter>(&self, paths: &mut Vec<ScionPath>) {
+    pub fn filter_inplace(&self, paths: &mut Vec<ScionPath>) {
         paths.retain(|p| self.predicate(p));
     }
 }

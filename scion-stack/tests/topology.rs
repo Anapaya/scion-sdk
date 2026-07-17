@@ -24,7 +24,7 @@ use pocketscion::{
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
 };
-use scion_stack::scionstack::ScionStackBuilder;
+use scion_stack::stack::ScionStackBuilder;
 use sciparse::identifier::isd_asn::IsdAsn;
 use snap_tokens::v0::dummy_snap_token;
 use url::Url;

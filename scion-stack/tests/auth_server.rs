@@ -24,7 +24,7 @@ use pocketscion::{
     util::addr_to_http_url,
 };
 use scion_sdk_token_validator::validator::insecure_const_ed25519_key_pair_pem;
-use scion_stack::scionstack::ScionStackBuilder;
+use scion_stack::stack::ScionStackBuilder;
 use test_log::test;
 use url::Url;
 

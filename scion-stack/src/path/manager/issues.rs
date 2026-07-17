@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Path issue classification (internal).
+
 use std::{
     borrow::Cow,
     fmt::Display,
@@ -32,7 +34,7 @@ use sciparse::{
 
 use crate::{
     path::{manager::algo::exponential_decay, types::Score},
-    scionstack::ScionSocketSendError,
+    stack::ScionSocketSendError,
 };
 
 /// Marker for a path issue
@@ -63,9 +65,9 @@ impl IssueMarker {
 /// This is global and only applies to SCION paths, and is not specific to any specific endhost.
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 pub enum IssueMarkerTarget {
-    FullPath {
-        fingerprint: DpPathFingerprint,
-    },
+    // Placeholder target that is matched but not yet produced by any issue source.
+    #[allow(dead_code)]
+    FullPath { fingerprint: DpPathFingerprint },
     Interface {
         isd_asn: IsdAsn,
         /// Optionally only applies when arriving on this ingress interface
@@ -77,6 +79,8 @@ pub enum IssueMarkerTarget {
         isd_asn: IsdAsn,
         egress_interface: u16,
     },
+    // Placeholder target that is matched but not yet produced by any issue source.
+    #[allow(dead_code)]
     LastHop {
         isd_asn: IsdAsn,
         ingress_interface: u16,
@@ -233,16 +237,18 @@ pub enum IssueKind {
     /// Path received SCMP error
     Scmp { error: ScmpErrorMessage },
     /// ICMP error
-    Icmp {/* icmp error details */}, //TODO: details
+    // Placeholder variant; ICMP issues are recognized but not yet produced. TODO: details.
+    #[allow(dead_code)]
+    Icmp {/* icmp error details */},
     /// Socket error
     Socket { err: SendError },
 }
 impl Display for IssueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IssueKind::Scmp { error } => write!(f, "SCMP Error: {:?}", error),
+            IssueKind::Scmp { error } => write!(f, "SCMP Error: {error:?}"),
             IssueKind::Icmp { .. } => write!(f, "ICMP Error"),
-            IssueKind::Socket { err } => write!(f, "Socket Error: {:?}", err),
+            IssueKind::Socket { err } => write!(f, "Socket Error: {err:?}"),
         }
     }
 }
@@ -255,7 +261,7 @@ impl IssueKind {
         marker.hash(&mut hasher);
         // And issue kind
         // TODO: Took shortcut here, need to properly implement
-        let error_str = format!("{}", self);
+        let error_str = format!("{self}");
         error_str.hash(&mut hasher);
 
         hasher.finish()
@@ -269,7 +275,12 @@ impl IssueKind {
                     ScmpErrorMessage::DestinationUnreachable(scmp_destination_unreachable) => {
                         // XXX(ake): Destination Unreachable depend on the destination host,
                         // thus they can't be applied globally
-                        use sciparse::payload::scmp::types::ScmpDestinationUnreachableCode::*;
+                        use sciparse::payload::scmp::types::ScmpDestinationUnreachableCode::{
+                            AddressUnreachable, BeyondScopeOfSourceAddress,
+                            CommunicationAdministrativelyDenied, NoRouteToDestination,
+                            PortUnreachable, RejectRouteToDestination,
+                            SourceAddressFailedIngressEgressPolicy, Unassigned,
+                        };
                         match scmp_destination_unreachable.code {
                             NoRouteToDestination
                             | AddressUnreachable
@@ -385,15 +396,18 @@ impl IssueKind {
     }
 }
 
-/// Classification of a ScionSocketSendError send error that includes the necessary
+/// Classification of a `ScionSocketSendError` send error that includes the necessary
 /// information for the path manager to handle the error.
-/// This type is necessary because ScionSocketSendError is not Clone.
+/// This type is necessary because `ScionSocketSendError` is not Clone.
 #[derive(Debug, Clone)]
 pub enum SendError {
     FirstHopUnreachable {
         isd_asn: IsdAsn,
         interface_id: u16,
+        // Carried for diagnostics/future use; not read while classifying the issue.
+        #[allow(dead_code)]
         address: Option<net::SocketAddr>,
+        #[allow(dead_code)]
         msg: Cow<'static, str>,
     },
 }

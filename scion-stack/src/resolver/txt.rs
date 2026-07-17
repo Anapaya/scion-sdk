@@ -77,11 +77,13 @@ impl ScionTxtDnsResolver {
     }
 
     /// Override DNS resolution for a specific domain.
+    #[must_use]
     pub fn with_override(self, domain: &str, addrs: Vec<ScionIpAddr>) -> Self {
         self.with_overrides(vec![(domain, addrs)])
     }
 
     /// Override DNS resolution for multiple domains at once.
+    #[must_use]
     pub fn with_overrides<D, I>(mut self, overrides: I) -> Self
     where
         D: Into<String>,
@@ -93,15 +95,17 @@ impl ScionTxtDnsResolver {
         self
     }
 
-    /// Construct a resolver from a pre-configured hickory `ResolverBuilder`.
+    /// Constructs a resolver from a pre-configured hickory `ResolverBuilder`.
     ///
-    /// This allows callers to customize resolver options (timeouts, retries,
-    /// name servers) via hickory-dns before constructing the resolver.
+    /// This allows callers to customize resolver options (timeouts, retries, name servers) via
+    /// hickory-dns before constructing the resolver.
     ///
     /// # Errors
     ///
-    /// This function is currently infallible, but returns `Result` for future
-    /// compatibility with hickory-dns builder changes.
+    /// This function is currently infallible, but returns `Result` for future compatibility with
+    /// hickory-dns builder changes.
+    // Intentionally exposes hickory-dns's builder type as the escape hatch for full control over
+    // DNS resolution. See API_CONVENTIONS.md.
     pub fn from_builder(
         builder: ResolverBuilder<TokioConnectionProvider>,
     ) -> Result<Self, TxtResolverError> {
@@ -111,19 +115,19 @@ impl ScionTxtDnsResolver {
         })
     }
 
-    /// Create a builder for configuring resolver options.
+    /// Creates a builder for configuring resolver options.
     ///
     /// On Linux/macOS the builder is initialized from the system DNS
     /// configuration (`/etc/resolv.conf`). On Android and iOS, which do not
     /// expose `/etc/resolv.conf`, Google Public DNS is used as a fallback.
     ///
     /// The returned builder can be adjusted before calling
-    /// `ScionTxtDnsResolver::from_builder`.
+    /// [`ScionTxtDnsResolver::from_builder`].
     ///
     /// # Errors
     ///
-    /// Returns `TxtResolverError` if system configuration cannot be loaded
-    /// (non-Android/iOS platforms only).
+    /// Returns [`TxtResolverError`] if system configuration cannot be loaded (non-Android/iOS
+    /// platforms only).
     pub fn builder() -> Result<ResolverBuilder<TokioConnectionProvider>, TxtResolverError> {
         #[cfg(any(target_os = "android", target_os = "ios"))]
         {
@@ -169,17 +173,37 @@ impl ScionDnsResolver for ScionTxtDnsResolver {
 }
 
 /// Errors returned while constructing a TXT resolver.
+///
+/// The underlying cause is available through [`std::error::Error::source`]; the concrete source
+/// type is intentionally not exposed, so the DNS backend can change without breaking the public
+/// API.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TxtResolverError {
     /// DNS resolver configuration failed.
-    #[error("dns resolver configuration failed: {0}")]
-    DnsConfig(#[from] hickory_resolver::ResolveError),
+    #[error("dns resolver configuration failed: {message}")]
+    DnsConfig {
+        /// Human-readable description of the configuration failure.
+        message: String,
+        /// The underlying cause.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+impl From<hickory_resolver::ResolveError> for TxtResolverError {
+    fn from(error: hickory_resolver::ResolveError) -> Self {
+        Self::DnsConfig {
+            message: error.to_string(),
+            source: Box::new(error),
+        }
+    }
 }
 
 impl PartialEq for TxtResolverError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::DnsConfig(a), Self::DnsConfig(b)) => a.to_string() == b.to_string(),
+            (Self::DnsConfig { message: a, .. }, Self::DnsConfig { message: b, .. }) => a == b,
         }
     }
 }

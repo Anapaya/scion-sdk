@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{io, time::Duration};
+use std::{future::Future, io, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use sciparse::{identifier::isd_asn::IsdAsn, path::ScionPath};
 use thiserror::Error;
 
-use crate::types::ResFut;
+use crate::path::fetcher::traits::PathFetchError;
 
 /// Trait for active path management with async interface.
 pub trait PathManager: SyncPathManager {
@@ -29,7 +29,7 @@ pub trait PathManager: SyncPathManager {
         src: IsdAsn,
         dst: IsdAsn,
         now: DateTime<Utc>,
-    ) -> impl ResFut<'_, ScionPath, PathWaitError>;
+    ) -> impl Future<Output = Result<ScionPath, PathWaitError>> + Send + '_;
 
     /// Returns a path to the destination from the path cache or requests a new path from the
     /// SCION Control Plane, with a maximum wait time.
@@ -39,15 +39,15 @@ pub trait PathManager: SyncPathManager {
         dst: IsdAsn,
         now: DateTime<Utc>,
         timeout: Duration,
-    ) -> impl ResFut<'_, ScionPath, PathWaitTimeoutError> {
+    ) -> impl Future<Output = Result<ScionPath, PathWaitTimeoutError>> + Send + '_ {
         let fut = self.path_wait(src, dst, now);
         async move {
             match tokio::time::timeout(timeout, fut).await {
                 Ok(result) => {
                     result.map_err(|e| {
                         match e {
-                            PathWaitError::FetchFailed(msg) => {
-                                PathWaitTimeoutError::FetchFailed(msg)
+                            PathWaitError::FetchFailed(source) => {
+                                PathWaitTimeoutError::FetchFailed(source)
                             }
                             PathWaitError::NoPathFound => PathWaitTimeoutError::NoPathFound,
                         }
@@ -59,27 +59,35 @@ pub trait PathManager: SyncPathManager {
     }
 }
 
-/// Path wait errors.
+/// Errors returned when waiting for a path to a destination.
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum PathWaitError {
-    /// Path fetch failed.
+    /// Fetching a path from the configured segment sources failed.
+    ///
+    /// The error is shared (`Arc`) because a single fetch failure may be reported to multiple
+    /// concurrent waiters.
     #[error("path fetch failed: {0}")]
-    FetchFailed(String),
-    /// No path found.
+    FetchFailed(#[source] Arc<PathFetchError>),
+    /// No path to the destination was found.
     #[error("no path found")]
     NoPathFound,
 }
 
-/// Path wait errors.
+/// Errors returned when waiting for a path to a destination with a timeout.
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum PathWaitTimeoutError {
-    /// Path fetch failed.
+    /// Fetching a path from the configured segment sources failed.
+    ///
+    /// The error is shared (`Arc`) because a single fetch failure may be reported to multiple
+    /// concurrent waiters.
     #[error("path fetch failed: {0}")]
-    FetchFailed(String),
-    /// No path found.
+    FetchFailed(#[source] Arc<PathFetchError>),
+    /// No path to the destination was found.
     #[error("no path found")]
     NoPathFound,
-    /// Waiting for path timed out
+    /// Waiting for a path timed out.
     #[error("waiting for path timed out")]
     Timeout,
 }
@@ -92,7 +100,7 @@ pub trait SyncPathManager {
 
     /// Returns a path to the destination from the path cache.
     /// If the path is not in the cache, it returns Ok(None), possibly causing the path to be
-    /// fetched in the background. If the cache is locked an io error WouldBlock is
+    /// fetched in the background. If the cache is locked an io error `WouldBlock` is
     /// returned.
     fn try_cached_path(
         &self,
@@ -104,6 +112,6 @@ pub trait SyncPathManager {
 
 /// Trait for prefetching paths in the path manager.
 pub trait PathPrefetcher {
-    /// Prefetch a paths for the given source and destination.
+    /// Prefetch a path for the given source and destination.
     fn prefetch_path(&self, src: IsdAsn, dst: IsdAsn);
 }

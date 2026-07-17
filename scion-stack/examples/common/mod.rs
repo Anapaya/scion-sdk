@@ -19,7 +19,7 @@
 
 use anyhow::Context;
 use pocketscion::util::{dev_auth_token, topologies::PsSetup};
-use scion_stack::scionstack::{ScionStack, ScionStackBuilder};
+use scion_stack::stack::{ScionStack, ScionStackBuilder};
 use sciparse::identifier::isd_asn::IsdAsn;
 
 /// Builds a [`ScionStack`] attached to the given AS of a running PocketSCION topology.

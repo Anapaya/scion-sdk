@@ -26,7 +26,7 @@ use snap_tun::client::{PACKET_BUF_POOL_SIZE, SnapTunEndpoint, SnapTunnel};
 use tokio::{net::UdpSocket, task::JoinHandle};
 use url::Url;
 
-use crate::scionstack::{
+use crate::stack::{
     ScionSocketReceiveError, ScionSocketSendError, SnapConnectionError, UnderlaySocket,
 };
 
@@ -63,20 +63,20 @@ impl SnapUnderlaySocket {
         receive_queue_capacity: usize,
         pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
         crpc_client: Option<reqwest::Client>,
-    ) -> Result<Self, crate::scionstack::ScionSocketBindError> {
+    ) -> Result<Self, crate::stack::ScionSocketBindError> {
         // Establish the initial tunnel.
         let mut snap_cp_client = match crpc_client.clone() {
             Some(client) => {
                 CrpcSnapControlClient::new_with_client(&snap_cp, client).map_err(|e| {
-                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    crate::stack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
                     )
                 })?
             }
             None => {
                 CrpcSnapControlClient::new(&snap_cp).map_err(|e| {
-                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    crate::stack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
                     )
                 })?
             }
@@ -84,14 +84,14 @@ impl SnapUnderlaySocket {
         snap_cp_client.use_token_source(snap_token_source.clone());
 
         let data_plane = snap_cp_client.get_data_plane_address().await.map_err(|e| {
-            crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::DataPlaneDiscoveryError(e),
+            crate::stack::ScionSocketBindError::SnapConnectionError(
+                SnapConnectionError::DataPlaneDiscovery(Box::new(e)),
             )
         })?;
 
         tracing::debug!(%data_plane.address, "Connecting to dataplane");
         let snaptun_cp_addr = data_plane.snap_tun_control_address.ok_or(
-            crate::scionstack::ScionSocketBindError::Other(
+            crate::stack::ScionSocketBindError::Other(
                 anyhow::anyhow!(
                     "the snap-tun control address is missing, the snap needs to be updated."
                 )
@@ -101,15 +101,15 @@ impl SnapUnderlaySocket {
         let mut snaptun_cp_client = match crpc_client {
             Some(client) => {
                 CrpcSnapControlClient::new_with_client(&snaptun_cp_addr, client).map_err(|e| {
-                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    crate::stack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
                     )
                 })?
             }
             None => {
                 CrpcSnapControlClient::new(&snaptun_cp_addr).map_err(|e| {
-                    crate::scionstack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreationError(e),
+                    crate::stack::ScionSocketBindError::SnapConnectionError(
+                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
                     )
                 })?
             }
@@ -117,7 +117,7 @@ impl SnapUnderlaySocket {
         snaptun_cp_client.use_token_source(snap_token_source.clone());
 
         let tunnel = snaptunnel_manager.connect_tunnel(
-            data_plane.snap_static_x25519.ok_or(crate::scionstack::ScionSocketBindError::Other(
+            data_plane.snap_static_x25519.ok_or(crate::stack::ScionSocketBindError::Other(
                 anyhow::anyhow!(
                     "data plane did not provide static public key, the snap needs to be updated."
                 )
@@ -129,7 +129,7 @@ impl SnapUnderlaySocket {
             Arc::new(socket),
             receive_queue_capacity,
             pool.clone(),
-        ).await.map_err(|e| crate::scionstack::ScionSocketBindError::SnapConnectionError(e.into()))?;
+        ).await.map_err(|e| crate::stack::ScionSocketBindError::SnapConnectionError(SnapConnectionError::TunnelEstablishment(Box::new(e))))?;
 
         let tunnel_addr = tunnel.local_addr();
         let local_addr =

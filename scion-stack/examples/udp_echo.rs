@@ -38,7 +38,7 @@ mod common;
 use std::time::Duration;
 
 use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
-use scion_stack::scionstack::UdpScionSocket;
+use scion_stack::stack::UdpScionSocket;
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::time::timeout;
 

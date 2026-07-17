@@ -19,8 +19,10 @@ use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 
 use endhost_api_client::client::CrpcEndhostApiClient;
 use rand::seq::IndexedRandom;
-pub use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
-use scion_sdk_reqwest_connect_rpc::token_source::{TokenSource, static_token::StaticTokenSource};
+use scion_sdk_reqwest_connect_rpc::{
+    client::CrpcClientError,
+    token_source::{TokenSource, static_token::StaticTokenSource},
+};
 use scion_sdk_utils::backoff::ExponentialBackoff;
 use url::Url;
 use x25519_dalek::StaticSecret;
@@ -31,7 +33,7 @@ use crate::{
         EndhostApiSource, EndhostApiSourceError, StaticEndhostApiDiscovery, StaticEndhostApis,
     },
     path::fetcher::{EndhostApiSegmentFetcher, traits::SegmentFetcher},
-    scionstack::ScionStack,
+    stack::ScionStack,
     underlays::{
         SnapSocketConfig, UnderlayStack,
         discovery::{PeriodicUnderlayDiscovery, UnderlayDiscovery},
@@ -46,12 +48,12 @@ const DEFAULT_ENDHOST_API_DISCOVERY_PER_GROUP_DELAY: Duration = Duration::from_m
 /// Factory that builds the UDP underlay's outbound IP resolver from the selected endhost API URL.
 type OutboundIpResolverFactory = Box<dyn FnOnce(Url) -> Arc<dyn OutboundIpResolver> + Send>;
 
-/// Builder for creating a [ScionStack].
+/// Builder for creating a [`ScionStack`].
 ///
 /// # Example
 ///
 /// ```no_run
-/// use scion_stack::scionstack::builder::ScionStackBuilder;
+/// use scion_stack::stack::builder::ScionStackBuilder;
 /// use url::Url;
 ///
 /// async fn setup_scion_stack() {
@@ -77,10 +79,11 @@ pub struct ScionStackBuilder {
 }
 
 impl ScionStackBuilder {
-    /// Create a new [ScionStackBuilder].
+    /// Create a new [`ScionStackBuilder`].
     ///
     /// The stack uses the the endhost API to discover the available data planes.
     /// By default, udp dataplanes are preferred over snap dataplanes.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             crpc_client: None,
@@ -94,15 +97,12 @@ impl ScionStackBuilder {
         }
     }
 
-    /// When discovering data planes, prefer SNAP data planes if available.
-    pub fn with_prefer_snap(mut self) -> Self {
-        self.preferred_underlay = PreferredUnderlay::Snap;
-        self
-    }
-
-    /// When discovering data planes, prefer UDP data planes if available.
-    pub fn with_prefer_udp(mut self) -> Self {
-        self.preferred_underlay = PreferredUnderlay::Udp;
+    /// Sets which underlay to prefer when discovering data planes, if both are available.
+    ///
+    /// Defaults to [`PreferredUnderlay::Udp`].
+    #[must_use]
+    pub fn with_preferred_underlay(mut self, preferred: PreferredUnderlay) -> Self {
+        self.preferred_underlay = preferred;
         self
     }
 
@@ -110,6 +110,7 @@ impl ScionStackBuilder {
     ///
     /// Can be useful if no DNS resolution is possible, so the client can be configured with custom
     /// name resolution or with IP addresses directly.
+    #[must_use]
     pub fn with_crpc_client(mut self, crpc_client: reqwest::Client) -> Self {
         self.crpc_client = Some(crpc_client);
         self
@@ -119,7 +120,8 @@ impl ScionStackBuilder {
     ///
     /// Replaces existing endhost API source.
     ///
-    /// See [Self::with_endhost_api_discovery_source] for more flexible configuration
+    /// See [`Self::with_endhost_api_discovery_source`] for more flexible configuration
+    #[must_use]
     pub fn with_endhost_api(mut self, endhost_api_url: Url) -> Self {
         let source = StaticEndhostApis::new().add_group(vec![endhost_api_url]);
         self.endhost_api_source = Arc::new(source);
@@ -130,18 +132,21 @@ impl ScionStackBuilder {
     /// Sets how the client will find its endhost APIs.
     ///
     /// If none is set, the stack will fall back to using the global discovery API.
+    #[must_use]
     pub fn with_endhost_api_discovery_source(mut self, source: impl EndhostApiSource) -> Self {
         self.endhost_api_source = Arc::new(source);
         self
     }
 
     /// Set a token source to use for authentication with the endhost API.
+    #[must_use]
     pub fn with_endhost_api_auth_token_source(mut self, source: impl TokenSource) -> Self {
         self.endhost_api_token_source = Some(Arc::new(source));
         self
     }
 
     /// Set a static token to use for authentication with the endhost API.
+    #[must_use]
     pub fn with_endhost_api_auth_token(mut self, token: String) -> Self {
         self.endhost_api_token_source = Some(Arc::new(StaticTokenSource::from(token)));
         self
@@ -150,6 +155,7 @@ impl ScionStackBuilder {
     /// Set a token source to use for authentication both with the endhost API and the SNAP control
     /// plane.
     /// If a more specific token source is set, it takes precedence over this token source.
+    #[must_use]
     pub fn with_auth_token_source(mut self, source: impl TokenSource) -> Self {
         self.auth_token_source = Some(Arc::new(source));
         self
@@ -158,6 +164,7 @@ impl ScionStackBuilder {
     /// Set a static token to use for authentication both with the endhost API and the SNAP control
     /// plane.
     /// If a more specific token is set, it takes precedence over this token.
+    #[must_use]
     pub fn with_auth_token(mut self, token: String) -> Self {
         self.auth_token_source = Some(Arc::new(StaticTokenSource::from(token)));
         self
@@ -168,6 +175,7 @@ impl ScionStackBuilder {
     ///
     /// Groups are ordered by priority; only the first `max_groups` non-empty
     /// groups returned by the discovery source are considered. Defaults to 5.
+    #[must_use]
     pub fn with_endhost_api_discovery_max_groups(mut self, max_groups: usize) -> Self {
         self.endhost_api_discovery.max_groups = max_groups;
         self
@@ -179,6 +187,7 @@ impl ScionStackBuilder {
     /// APIs are selected at random within each group. Setting this to a higher
     /// value increases redundancy at the cost of additional concurrent
     /// connections. Defaults to 2.
+    #[must_use]
     pub fn with_endhost_api_discovery_apis_per_group(mut self, apis_per_group: usize) -> Self {
         self.endhost_api_discovery.apis_per_group = apis_per_group;
         self
@@ -192,18 +201,21 @@ impl ScionStackBuilder {
     /// time-to-connect when a high-priority group is slow, at the cost of
     /// additional concurrent connections to lower-priority groups. Defaults to
     /// 500 ms.
+    #[must_use]
     pub fn with_endhost_api_discovery_per_group_delay(mut self, per_group_delay: Duration) -> Self {
         self.endhost_api_discovery.per_group_delay = per_group_delay;
         self
     }
 
     /// Set SNAP underlay specific configuration for the SCION stack.
+    #[must_use]
     pub fn with_snap_underlay_config(mut self, config: SnapUnderlayConfig) -> Self {
         self.snap = config;
         self
     }
 
     /// Set UDP underlay specific configuration for the SCION stack.
+    #[must_use]
     pub fn with_udp_underlay_config(mut self, config: UdpUnderlayConfig) -> Self {
         self.udp = config;
         self
@@ -248,13 +260,9 @@ impl ScionStackBuilder {
         };
 
         if api_groups.is_empty() {
+            // Likely not transient, since it indicates a misconfiguration on client or server side.
             return Err(BuildScionStackError::EndhostApiSourceError(
-                EndhostApiSourceError {
-                    error: anyhow::anyhow!("Endhost API discovery returned no APIs"),
-                    // Likely not transient, since it indicates a misconfiguration on client or
-                    // server side.
-                    transient: false,
-                },
+                EndhostApiSourceError::new("endhost API discovery returned no APIs", false),
             ));
         }
 
@@ -269,10 +277,10 @@ impl ScionStackBuilder {
                 let mut client = match crpc_c {
                     Some(client) => {
                         CrpcEndhostApiClient::new_with_client(&url, client)
-                            .map_err(ApiAttemptError::ClientSetup)?
+                            .map_err(ApiAttemptError::client_setup)?
                     }
                     None => {
-                        CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::ClientSetup)?
+                        CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::client_setup)?
                     }
                 };
                 if let Some(token_source) = &token_source {
@@ -285,7 +293,7 @@ impl ScionStackBuilder {
                     ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
                 )
                 .await
-                .map_err(ApiAttemptError::UnderlayDiscovery)?;
+                .map_err(ApiAttemptError::underlay_discovery)?;
                 Ok((client, discovery))
             }
         };
@@ -298,7 +306,7 @@ impl ScionStackBuilder {
             )
             .await
             .map_err(|errors| {
-                BuildScionStackError::AllEndhostApisFailed(AllEndhostApisFailed(errors))
+                BuildScionStackError::AllEndhostApisFailed(AllEndhostApisFailed::new(errors))
             })?;
         tracing::info!(url=%api_url, "Selected endhost API");
 
@@ -328,19 +336,19 @@ impl ScionStackBuilder {
 
     /// Build a UDP-underlay SCION stack without endhost API.
     ///
-    /// Unlike [Self::build], this performs no endhost-API discovery and contacts no endhost API at
-    /// runtime. The caller supplies everything the stack would otherwise obtain from an endhost
-    /// API:
+    /// Unlike [`Self::build`], this performs no endhost-API discovery and contacts no endhost API
+    /// at runtime. The caller supplies everything the stack would otherwise obtain from an
+    /// endhost API:
     ///
     /// * `underlay_discovery` — the underlay topology, only UDP underlay is supported.
     /// * `outbound_ip_resolver` — the outbound IP resolver.
     /// * `default_segment_fetcher` — the path-segment source registered as the stack's default
     ///   [`SegmentFetcher`]. It is consulted by every socket unless that socket opts out via
-    ///   [`crate::scionstack::SocketConfig::disable_default_segment_fetcher`].
+    ///   [`crate::stack::SocketConfig::disable_default_segment_fetcher`].
     ///
     /// The resulting stack uses the UDP underlay only (no SNAP) and a freshly generated static
     /// identity.
-    pub fn build_static_udp_underlay(
+    fn build_static_udp_underlay(
         underlay_discovery: Arc<dyn UnderlayDiscovery>,
         outbound_ip_resolver: Arc<dyn OutboundIpResolver>,
         default_segment_fetcher: Arc<dyn SegmentFetcher>,
@@ -366,8 +374,38 @@ impl Default for ScionStackBuilder {
     }
 }
 
+impl ScionStack {
+    /// Builds a UDP-underlay SCION stack without an endhost API.
+    ///
+    /// Unlike [`ScionStackBuilder::build`], this performs no endhost-API discovery and contacts no
+    /// endhost API at runtime. The caller supplies everything the stack would otherwise obtain from
+    /// an endhost API:
+    ///
+    /// * `underlay_discovery` — the underlay topology, only UDP underlay is supported.
+    /// * `outbound_ip_resolver` — the outbound IP resolver.
+    /// * `default_segment_fetcher` — the path-segment source registered as the stack's default
+    ///   [`SegmentFetcher`]. It is consulted by every socket unless that socket opts out via
+    ///   [`crate::stack::SocketConfig::disable_default_segment_fetcher`].
+    ///
+    /// The resulting stack uses the UDP underlay only (no SNAP) and a freshly generated static
+    /// identity.
+    #[must_use]
+    pub fn static_udp_underlay(
+        underlay_discovery: Arc<dyn UnderlayDiscovery>,
+        outbound_ip_resolver: Arc<dyn OutboundIpResolver>,
+        default_segment_fetcher: Arc<dyn SegmentFetcher>,
+    ) -> ScionStack {
+        ScionStackBuilder::build_static_udp_underlay(
+            underlay_discovery,
+            outbound_ip_resolver,
+            default_segment_fetcher,
+        )
+    }
+}
+
 /// Build SCION stack errors.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum BuildScionStackError {
     /// Discovery returned no underlay or no underlay was provided.
     #[error("no underlay available: {0}")]
@@ -376,42 +414,67 @@ pub enum BuildScionStackError {
     #[error(transparent)]
     AllEndhostApisFailed(#[from] AllEndhostApisFailed),
     /// Failed to retrieve any endhost APIs from the discovery source.
-    #[error("endhost api source error: {0:#}")]
+    #[error(transparent)]
     EndhostApiSourceError(#[from] EndhostApiSourceError),
     /// Error building the SNAP SCION stack.
     /// This error is only returned if a SNAP underlay is used.
     #[error(transparent)]
     Snap(#[from] BuildSnapScionStackError),
     /// Internal error, this should never happen.
-    #[error("internal error: {0:#}")]
-    Internal(anyhow::Error),
+    #[error("internal error")]
+    Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Build SNAP SCION stack errors.
+///
+/// The underlying cause of the client/discovery variants is available through
+/// [`std::error::Error::source`]; the concrete source types are intentionally not exposed.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum BuildSnapScionStackError {
     /// Discovery returned no SNAP data plane.
     #[error("no SNAP data plane available: {0}")]
     DataPlaneUnavailable(Cow<'static, str>),
     /// Error setting up the SNAP control plane client.
-    #[error("control plane client setup error: {0:#}")]
-    ControlPlaneClientSetupError(anyhow::Error),
+    #[error("control plane client setup error")]
+    ControlPlaneClientSetup(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// Error making the data plane discovery request to the SNAP control plane.
-    #[error("data plane discovery request error: {0:#}")]
-    DataPlaneDiscoveryError(CrpcClientError),
+    #[error("data plane discovery request error")]
+    DataPlaneDiscovery(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Error returned when every attempted endhost API fails.
 ///
 /// Formats as a single-line summary suitable for use in structured logs.
 #[derive(Debug)]
-pub struct AllEndhostApisFailed(pub Vec<(Url, ApiAttemptError)>);
+pub struct AllEndhostApisFailed {
+    failures: Vec<(Url, ApiAttemptError)>,
+}
+
+impl AllEndhostApisFailed {
+    pub(crate) fn new(failures: Vec<(Url, ApiAttemptError)>) -> Self {
+        Self { failures }
+    }
+
+    /// The per-API failures, in the order the APIs were attempted.
+    #[must_use]
+    pub fn failures(&self) -> &[(Url, ApiAttemptError)] {
+        &self.failures
+    }
+
+    /// Returns whether every attempt failed for a transient reason (e.g. a connection error), so
+    /// building the stack may succeed on retry.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        !self.failures.is_empty() && self.failures.iter().all(|(_, err)| err.is_transient())
+    }
+}
 
 impl fmt::Display for AllEndhostApisFailed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "all {} endhost API(s) failed", self.0.len())?;
+        write!(f, "all {} endhost API(s) failed", self.failures.len())?;
         let mut sep = ": ";
-        for (url, err) in &self.0 {
+        for (url, err) in &self.failures {
             write!(f, "{sep}{url} ({err})")?;
             sep = "; ";
         }
@@ -422,14 +485,65 @@ impl fmt::Display for AllEndhostApisFailed {
 impl std::error::Error for AllEndhostApisFailed {}
 
 /// Error for a single endhost API connection attempt.
+///
+/// The underlying cause is available through [`std::error::Error::source`]; the concrete source
+/// type is intentionally not exposed. Use [`is_transient`](ApiAttemptError::is_transient) to decide
+/// whether a retry may help.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum ApiAttemptError {
     /// The API client could not be instantiated (e.g. invalid URL scheme).
-    #[error("client setup: {0:#}")]
-    ClientSetup(anyhow::Error),
+    #[error("client setup")]
+    ClientSetup {
+        /// Whether the failure is transient and a retry may help.
+        transient: bool,
+        /// The underlying cause.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// Underlay discovery against the API failed (e.g. server unreachable).
-    #[error("underlay discovery: {0:#}")]
-    UnderlayDiscovery(CrpcClientError),
+    #[error("underlay discovery")]
+    UnderlayDiscovery {
+        /// Whether the failure is transient and a retry may help.
+        transient: bool,
+        /// The underlying cause.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+impl ApiAttemptError {
+    pub(crate) fn client_setup(error: anyhow::Error) -> Self {
+        // Client setup failures (e.g. an invalid URL scheme) are configuration errors, not
+        // transient.
+        Self::ClientSetup {
+            transient: false,
+            source: error.into_boxed_dyn_error(),
+        }
+    }
+
+    pub(crate) fn underlay_discovery(error: CrpcClientError) -> Self {
+        Self::UnderlayDiscovery {
+            transient: is_transient_crpc_error(&error),
+            source: Box::new(error),
+        }
+    }
+
+    /// Returns whether the failure is transient and a retry may help.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::ClientSetup { transient, .. } | Self::UnderlayDiscovery { transient, .. } => {
+                *transient
+            }
+        }
+    }
+}
+
+/// A CRPC error is considered transient if it stems from a connection-level failure that may
+/// succeed on retry.
+fn is_transient_crpc_error(error: &CrpcClientError) -> bool {
+    matches!(error, CrpcClientError::ConnectionError { .. })
 }
 
 /// Configuration for endhost API discovery during stack building.
@@ -457,6 +571,8 @@ impl Default for EndhostApiDiscoveryConfig {
 }
 
 /// Preferred underlay type (if available).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PreferredUnderlay {
     /// SNAP underlay.
     Snap,
@@ -465,6 +581,9 @@ pub enum PreferredUnderlay {
 }
 
 /// SNAP underlay configuration.
+///
+/// Construct with [`SnapUnderlayConfig::default`] and customize with the consuming `with_*`
+/// methods, then pass to [`ScionStackBuilder::with_snap_underlay_config`].
 #[derive(Default)]
 pub struct SnapUnderlayConfig {
     crpc_client: Option<reqwest::Client>,
@@ -475,62 +594,48 @@ pub struct SnapUnderlayConfig {
 }
 
 impl SnapUnderlayConfig {
-    /// Create a new [SnapUnderlayConfigBuilder] to configure the SNAP underlay.
-    pub fn builder() -> SnapUnderlayConfigBuilder {
-        SnapUnderlayConfigBuilder(Self::default())
-    }
-}
-
-/// SNAP underlay configuration builder.
-pub struct SnapUnderlayConfigBuilder(SnapUnderlayConfig);
-
-impl SnapUnderlayConfigBuilder {
-    /// Set a static token to use for authentication with the SNAP control plane.
+    /// Sets a static token to use for authentication with the SNAP control plane.
+    #[must_use]
     pub fn with_auth_token(mut self, token: String) -> Self {
-        self.0.snap_token_source = Some(Arc::new(StaticTokenSource::from(token)));
+        self.snap_token_source = Some(Arc::new(StaticTokenSource::from(token)));
         self
     }
 
-    /// Set a token source to use for authentication with the SNAP control plane.
+    /// Sets a token source to use for authentication with the SNAP control plane.
+    #[must_use]
     pub fn with_auth_token_source(mut self, source: impl TokenSource) -> Self {
-        self.0.snap_token_source = Some(Arc::new(source));
+        self.snap_token_source = Some(Arc::new(source));
         self
     }
 
-    /// Set a custom CRPC client for discovering and connecting to data planes.
+    /// Sets a custom CRPC client for discovering and connecting to data planes.
+    #[must_use]
     pub fn with_crpc_client(mut self, client: reqwest::Client) -> Self {
-        self.0.crpc_client = Some(client);
+        self.crpc_client = Some(client);
         self
     }
 
-    /// Set the index of the SNAP data plane to use.
-    ///
-    /// # Arguments
-    ///
-    /// * `dp_index` - The index of the SNAP data plane to use.
+    /// Sets the index of the SNAP data plane to use.
+    #[must_use]
     pub fn with_snap_dp_index(mut self, dp_index: usize) -> Self {
-        self.0.snap_dp_index = dp_index;
+        self.snap_dp_index = dp_index;
         self
     }
 
-    /// Set the static identity to use for snap-tun connections.
+    /// Sets the static identity to use for snap-tun connections.
+    ///
     /// If unset, a random static identity is generated.
+    #[must_use]
     pub fn with_static_identity(mut self, identity: StaticSecret) -> Self {
-        self.0.static_identity = Some(identity);
+        self.static_identity = Some(identity);
         self
-    }
-
-    /// Build the SNAP stack configuration.
-    ///
-    /// # Returns
-    ///
-    /// A new SNAP stack configuration.
-    pub fn build(self) -> SnapUnderlayConfig {
-        self.0
     }
 }
 
 /// UDP underlay configuration.
+///
+/// Construct with [`UdpUnderlayConfig::default`] and customize with the consuming `with_*` methods,
+/// then pass to [`ScionStackBuilder::with_udp_underlay_config`].
 pub struct UdpUnderlayConfig {
     udp_next_hop_resolver_fetch_interval: Duration,
     outbound_ip_resolver_factory: OutboundIpResolverFactory,
@@ -548,74 +653,130 @@ impl Default for UdpUnderlayConfig {
 }
 
 impl UdpUnderlayConfig {
-    /// Create a new [UdpUnderlayConfigBuilder] to configure the UDP underlay.
-    pub fn builder() -> UdpUnderlayConfigBuilder {
-        UdpUnderlayConfigBuilder(Self::default())
-    }
-}
-
-/// UDP underlay configuration builder.
-pub struct UdpUnderlayConfigBuilder(UdpUnderlayConfig);
-
-impl UdpUnderlayConfigBuilder {
-    /// Set the outbound IP addresses to use for the UDP underlay.
+    /// Sets the outbound IP addresses to use for the UDP underlay.
     ///
     /// If not set, the UDP underlay will use the local IP that can reach the endhost API.
-    /// This is a convenience wrapper around [Self::with_outbound_ip_resolver] for a fixed set of
+    /// This is a convenience wrapper around [`Self::with_outbound_ip_resolver`] for a fixed set of
     /// addresses.
+    #[must_use]
     pub fn with_outbound_ips(mut self, outbound_ips: Vec<net::IpAddr>) -> Self {
-        self.0.outbound_ip_resolver_factory =
+        self.outbound_ip_resolver_factory =
             Box::new(move |_url| Arc::new(outbound_ips) as Arc<dyn OutboundIpResolver>);
         self
     }
 
-    /// Set a custom outbound IP resolver for the UDP underlay.
+    /// Sets a custom outbound IP resolver for the UDP underlay.
     ///
     /// Use this method when outbound IP resolution does not depend on the selected endhost API URL.
-    /// If the resolver needs the endhost API URL, use [Self::with_outbound_ip_resolver_factory]
+    /// If the resolver needs the endhost API URL, use [`Self::with_outbound_ip_resolver_factory`]
     /// instead.
     ///
-    /// By default, [TargetAddrOutboundIpResolver] is used, which resolves the endhost API hostname
-    /// via OS DNS.
+    /// By default, [`TargetAddrOutboundIpResolver`] is used, which resolves the endhost API
+    /// hostname via OS DNS.
+    #[must_use]
     pub fn with_outbound_ip_resolver(
         mut self,
         resolver: impl OutboundIpResolver + 'static,
     ) -> Self {
         let resolver = Arc::new(resolver) as Arc<dyn OutboundIpResolver>;
-        self.0.outbound_ip_resolver_factory = Box::new(move |_url| resolver.clone());
+        self.outbound_ip_resolver_factory = Box::new(move |_url| resolver.clone());
         self
     }
 
-    /// Set a factory that builds the UDP underlay's outbound IP resolver from the selected endhost
+    /// Sets a factory that builds the UDP underlay's outbound IP resolver from the selected endhost
     /// API URL.
     ///
     /// The winning endhost API URL is only known once the stack connects during
-    /// [ScionStackBuilder::build], so resolvers that depend on it must be constructed via this
+    /// [`ScionStackBuilder::build`], so resolvers that depend on it must be constructed via this
     /// factory. The factory is invoked once with the selected URL.
     ///
     /// Use this when the hostname is only resolvable through a custom DNS override that is
     /// invisible to the OS resolver, or to provide a fully custom URL-aware resolution
-    /// strategy. If the resolver does not need the URL, use [Self::with_outbound_ip_resolver]
+    /// strategy. If the resolver does not need the URL, use [`Self::with_outbound_ip_resolver`]
     /// instead.
+    #[must_use]
     pub fn with_outbound_ip_resolver_factory<F, R>(mut self, factory: F) -> Self
     where
         F: FnOnce(Url) -> R + Send + 'static,
         R: OutboundIpResolver + 'static,
     {
-        self.0.outbound_ip_resolver_factory =
+        self.outbound_ip_resolver_factory =
             Box::new(move |url| Arc::new(factory(url)) as Arc<dyn OutboundIpResolver>);
         self
     }
 
-    /// Set the interval at which the UDP next hop resolver fetches the next hops
-    /// from the endhost API.
+    /// Sets the interval at which the UDP next hop resolver fetches the next hops from the endhost
+    /// API.
+    #[must_use]
     pub fn with_udp_next_hop_resolver_fetch_interval(mut self, fetch_interval: Duration) -> Self {
-        self.0.udp_next_hop_resolver_fetch_interval = fetch_interval;
+        self.udp_next_hop_resolver_fetch_interval = fetch_interval;
         self
     }
+}
 
-    /// Build the UDP underlay configuration.
-    pub fn build(self) -> UdpUnderlayConfig {
-        self.0
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use scion_sdk_reqwest_connect_rpc::client::CrpcClientError;
+    use url::Url;
+
+    use super::*;
+
+    fn connection_error() -> CrpcClientError {
+        CrpcClientError::ConnectionError {
+            context: Cow::Borrowed("test"),
+            source: Box::new(std::io::Error::other("boom")),
+        }
+    }
+
+    fn non_connection_error() -> CrpcClientError {
+        CrpcClientError::DecodeError {
+            context: Cow::Borrowed("test"),
+            source: Some(Box::new(std::io::Error::other("boom"))),
+            body: None,
+        }
+    }
+
+    #[test]
+    fn api_attempt_error_transient_classification() {
+        // A connection-level discovery failure is transient.
+        assert!(ApiAttemptError::underlay_discovery(connection_error()).is_transient());
+        // Any other discovery failure is not.
+        assert!(!ApiAttemptError::underlay_discovery(non_connection_error()).is_transient());
+        // Client setup failures are configuration errors, never transient.
+        assert!(!ApiAttemptError::client_setup(anyhow::anyhow!("invalid url")).is_transient());
+    }
+
+    #[test]
+    fn all_endhost_apis_failed_transient_classification() {
+        let url: Url = "http://example.com".parse().expect("valid url");
+
+        // An empty failure set is not transient (there was nothing to retry).
+        assert!(!AllEndhostApisFailed::new(vec![]).is_transient());
+
+        // All-transient failures are transient.
+        assert!(
+            AllEndhostApisFailed::new(vec![(
+                url.clone(),
+                ApiAttemptError::underlay_discovery(connection_error()),
+            )])
+            .is_transient()
+        );
+
+        // A single non-transient failure makes the whole set non-transient.
+        assert!(
+            !AllEndhostApisFailed::new(vec![
+                (
+                    url.clone(),
+                    ApiAttemptError::underlay_discovery(connection_error()),
+                ),
+                (
+                    url,
+                    ApiAttemptError::underlay_discovery(non_connection_error())
+                ),
+            ])
+            .is_transient()
+        );
     }
 }

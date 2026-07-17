@@ -25,7 +25,7 @@ use pocketscion::{
     state::PocketScionState,
     util::addr_to_http_url,
 };
-use scion_stack::{path::manager::traits::PathManager as _, scionstack::ScionStackBuilder};
+use scion_stack::{path::manager::traits::PathManager as _, stack::ScionStackBuilder};
 use sciparse::{
     address::socket_addr::ScionSocketAddr,
     core::model::Model,

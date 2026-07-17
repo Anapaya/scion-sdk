@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 /// Exponential decay: value halves every `half_life`.
-/// Formula: N(t) = N0 * 2^(-t / half_life)
+/// Formula: N(t) = N0 * 2^(-t / `half_life`)
 pub fn exponential_decay(base: f32, time_delta: Duration, half_life: Duration) -> f32 {
     if base == 0.0 {
         return 0.0;

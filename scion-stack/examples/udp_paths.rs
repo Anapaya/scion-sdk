@@ -45,18 +45,18 @@
 //! ```
 //!
 //! [PocketSCION]: pocketscion
-//! [`send_to_via`]: scion_stack::scionstack::UdpScionSocket::send_to_via
-//! [`send_to`]: scion_stack::scionstack::UdpScionSocket::send_to
-//! [`bind_with_config`]: scion_stack::scionstack::ScionStack::bind_with_config
-//! [`SocketConfig::with_path_policy`]: scion_stack::scionstack::SocketConfig::with_path_policy
-//! [`with_path_scoring`]: scion_stack::scionstack::SocketConfig::with_path_scoring
+//! [`send_to_via`]: scion_stack::stack::UdpScionSocket::send_to_via
+//! [`send_to`]: scion_stack::stack::UdpScionSocket::send_to
+//! [`bind_with_config`]: scion_stack::stack::ScionStack::bind_with_config
+//! [`SocketConfig::with_path_policy`]: scion_stack::stack::SocketConfig::with_path_policy
+//! [`with_path_scoring`]: scion_stack::stack::SocketConfig::with_path_scoring
 
 mod common;
 
 use std::time::Duration;
 
 use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::two_path_topology};
-use scion_stack::{path::fetcher::traits::PathFetcher, scionstack::UdpScionSocket};
+use scion_stack::{path::fetcher::traits::PathFetcher, stack::UdpScionSocket};
 use sciparse::{address::ip_socket_addr::ScionSocketIpAddr, path::ScionPath};
 use tokio::time::timeout;
 

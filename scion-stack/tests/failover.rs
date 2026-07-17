@@ -17,7 +17,7 @@ use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::two_path_topology};
-use scion_stack::scionstack::ScionStackBuilder;
+use scion_stack::stack::ScionStackBuilder;
 use snap_tokens::v0::dummy_snap_token;
 use test_log::test;
 use tokio::{
@@ -106,9 +106,8 @@ async fn should_failover_on_link_error() {
     });
 
     // Send and receive should work
-    let mut path_buffer = vec![0u8; 1500];
     let (_, source, path) = receiver_socket
-        .recv_from_with_path(&mut recv_buffer, &mut path_buffer)
+        .recv_from_with_path(&mut recv_buffer)
         .await
         .unwrap();
 
@@ -131,11 +130,10 @@ async fn should_failover_on_link_error() {
     failover_send_barrier.wait().await;
 
     // Should now failover to the other link and we should be able to receive again
-    let mut path_buffer = vec![0u8; 1500];
     let mut recv_buffer = [0u8; 1024];
     let (_size, _addr, new_path) = timeout(
         Duration::from_millis(500),
-        receiver_socket.recv_from_with_path(&mut recv_buffer, &mut path_buffer),
+        receiver_socket.recv_from_with_path(&mut recv_buffer),
     )
     .await
     .expect("should not time out waiting for packet after failover")

@@ -16,7 +16,7 @@
 
 use bytes::{Bytes, BytesMut};
 use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
-use scion_stack::scionstack::{ScionStackBuilder, UdpScionSocket};
+use scion_stack::stack::{ScionStackBuilder, UdpScionSocket};
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use snap_tokens::v0::{dummy_snap_token, seeded_dummy_snap_token};
 use test_log::test;
@@ -84,8 +84,7 @@ async fn multi_client() {
             _ = async {
                 loop {
                     let mut rdata = BytesMut::zeroed(1024);
-                    let mut path_buffer = BytesMut::zeroed(1024);
-                    let (received_len, sender_addr, path) = server_socket.recv_from_with_path(&mut rdata, &mut path_buffer).await.unwrap();
+                    let (received_len, sender_addr, path) = server_socket.recv_from_with_path(&mut rdata).await.unwrap();
                     tracing::info!("Server received packet from {}", sender_addr);
                     let reversed_path = path.try_into_reversed().unwrap();
                     rdata.resize(received_len, 0);

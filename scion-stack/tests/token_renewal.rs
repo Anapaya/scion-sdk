@@ -18,7 +18,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use pocketscion::util::topologies::{IA132, IA212, UnderlayType, minimal::minimal_topology};
 use scion_sdk_reqwest_connect_rpc::token_source::mock::MockTokenSource;
-use scion_stack::scionstack::{ScionStackBuilder, builder::SnapUnderlayConfig};
+use scion_stack::stack::{ScionStackBuilder, builder::SnapUnderlayConfig};
 use snap_tokens::v0::{dummy_snap_token, dummy_snap_token_with_validity};
 use test_log::test;
 
@@ -36,7 +36,7 @@ async fn token_expiry_causes_send_failure() {
     let sender_stack = ScionStackBuilder::new()
         .with_endhost_api(ps_handle.endhost_api(IA132).unwrap())
         .with_auth_token_source(mock_token_source)
-        .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
+        .with_snap_underlay_config(SnapUnderlayConfig::default())
         .build()
         .await
         .unwrap();
@@ -110,7 +110,7 @@ async fn updated_token_extends_session() {
     let sender_stack = ScionStackBuilder::new()
         .with_endhost_api(ps_handle.endhost_api(IA132).unwrap())
         .with_auth_token_source(mock_token_source.clone())
-        .with_snap_underlay_config(SnapUnderlayConfig::builder().build())
+        .with_snap_underlay_config(SnapUnderlayConfig::default())
         .build()
         .await
         .unwrap();
