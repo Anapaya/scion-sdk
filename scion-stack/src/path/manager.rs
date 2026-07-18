@@ -478,13 +478,7 @@ impl<F: PathFetcher> SendErrorReceiver for MultiPathManager<F> {
 }
 
 impl<F: PathFetcher> SyncPathManager for MultiPathManager<F> {
-    fn register_path(
-        &self,
-        _src: IsdAsn,
-        _dst: IsdAsn,
-        _now: chrono::DateTime<chrono::Utc>,
-        _path: ScionPath,
-    ) {
+    fn register_path(&self, _src: IsdAsn, _dst: IsdAsn, _now: SystemTime, _path: ScionPath) {
         // No-op
         // Based on discussions we do not support externally registered paths in the PathManager
         // Likely we will handle path mirroring in Connection Based Protocols instead
@@ -494,9 +488,9 @@ impl<F: PathFetcher> SyncPathManager for MultiPathManager<F> {
         &self,
         src: IsdAsn,
         dst: IsdAsn,
-        now: chrono::DateTime<chrono::Utc>,
+        now: SystemTime,
     ) -> std::io::Result<Option<ScionPath>> {
-        Ok(self.cached_path(src, dst, now.into()))
+        Ok(self.cached_path(src, dst, now))
     }
 }
 
@@ -505,10 +499,10 @@ impl<F: PathFetcher> PathManager for MultiPathManager<F> {
         &self,
         src: IsdAsn,
         dst: IsdAsn,
-        now: chrono::DateTime<chrono::Utc>,
+        now: SystemTime,
     ) -> impl std::future::Future<Output = Result<ScionPath, PathWaitError>> + Send + '_ {
         async move {
-            match self.path(src, dst, now.into()).await {
+            match self.path(src, dst, now).await {
                 Ok(path) => Ok(path),
                 Err(e) => {
                     match &*e {

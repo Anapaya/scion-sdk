@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{future::Future, io, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    io,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
-use chrono::{DateTime, Utc};
 use sciparse::{identifier::isd_asn::IsdAsn, path::ScionPath};
 use thiserror::Error;
 
@@ -28,7 +32,7 @@ pub trait PathManager: SyncPathManager {
         &self,
         src: IsdAsn,
         dst: IsdAsn,
-        now: DateTime<Utc>,
+        now: SystemTime,
     ) -> impl Future<Output = Result<ScionPath, PathWaitError>> + Send + '_;
 
     /// Returns a path to the destination from the path cache or requests a new path from the
@@ -37,7 +41,7 @@ pub trait PathManager: SyncPathManager {
         &self,
         src: IsdAsn,
         dst: IsdAsn,
-        now: DateTime<Utc>,
+        now: SystemTime,
         timeout: Duration,
     ) -> impl Future<Output = Result<ScionPath, PathWaitTimeoutError>> + Send + '_ {
         let fut = self.path_wait(src, dst, now);
@@ -96,7 +100,7 @@ pub enum PathWaitTimeoutError {
 /// able to be used in sync and async context. The functions must not block.
 pub trait SyncPathManager {
     /// Add a path to the path cache. This can be used to register reverse paths.
-    fn register_path(&self, src: IsdAsn, dst: IsdAsn, now: DateTime<Utc>, path: ScionPath);
+    fn register_path(&self, src: IsdAsn, dst: IsdAsn, now: SystemTime, path: ScionPath);
 
     /// Returns a path to the destination from the path cache.
     /// If the path is not in the cache, it returns Ok(None), possibly causing the path to be
@@ -106,7 +110,7 @@ pub trait SyncPathManager {
         &self,
         src: IsdAsn,
         dst: IsdAsn,
-        now: DateTime<Utc>,
+        now: SystemTime,
     ) -> io::Result<Option<ScionPath>>;
 }
 

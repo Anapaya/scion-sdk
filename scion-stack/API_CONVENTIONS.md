@@ -50,6 +50,36 @@ changing anything `pub`. Deviations are listed at the end.
 
 Derive `Debug`/`Clone`/`Copy`/`PartialEq`/`Eq` on public value types where they apply.
 
+## Dependency exposure
+
+Which foreign types appear in the public API is a deliberate choice:
+
+- Every crate whose types appear in a public signature is re-exported from the crate root
+  (`scion_stack::<crate>::...`), so clients need no direct dependency to name/construct those types.
+  See the "Re-exported dependencies" block in `src/lib.rs`.
+- Re-export the whole crate, not just the leaked type. Callers usually need sibling/helper types
+  to construct the value.
+- A foreign type that is *not* re-exported is a leak to hide (prefer a `std` equivalent) or wrap.
+- Re-exporting is a semver commitment: a breaking release of a re-exported crate breaks
+  `scion-stack`.
+
+`std`/`core`/`alloc` are exempt. Blanket trait impls that `rustdoc` attributes to our types from
+transitive deps (e.g., `zerocopy` pointer invariants, `tonic::IntoRequest::into_request`,
+`tower_http`/`tower_layer` redirect-policy combinators, `crossbeam-epoch`) are unavoidable artifacts
+of depending on those crates, not types we place in our own signatures. They are not re-exported.
+
+### Enforcement
+
+Unfortunately, there is no fully automated way to check for foreign types in public signatures.
+We use a combination of compile-time and code-review checks:
+
+- `tests/public_api_reexports.rs` pins the intentional re-exports: dropping or renaming one is a
+  compile error. This catches the common regression but not a brand-new leak.
+- New leaks must be caught in **code review**. When a `pub` signature gains a foreign type, decide
+  keep-and-re-export or hide/wrap per the rules above. To diff the API surface, reviewers can run
+  [`cargo public-api`](https://crates.io/crates/cargo-public-api) ad hoc. Anything it reports from a
+  crate not in the re-export list (and not a blanket-impl artifact) is a leak to classify.
+
 ## Linting
 
 `#![warn(clippy::pedantic)]` with a documented allow-list in `src/lib.rs`; enforced in CI

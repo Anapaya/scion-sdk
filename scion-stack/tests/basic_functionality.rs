@@ -15,11 +15,10 @@
 
 use std::{
     net::{self, IpAddr},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use bytes::Bytes;
-use chrono::Utc;
 use pocketscion::util::topologies::{
     IA132, IA212, PsSetup, UnderlayType, minimal::two_path_topology,
 };
@@ -234,7 +233,7 @@ async fn test_scmp_with_port_is_received_scmp_impl(ps: PsSetup) {
         .path_wait(
             sender.local_addr().isd_asn(),
             receiver_addr.isd_asn(),
-            Utc::now(),
+            SystemTime::now(),
         )
         .await
         .unwrap();
@@ -318,7 +317,7 @@ async fn test_scmp_with_port_is_received_raw_impl(ps: PsSetup) {
         .path_wait(
             sender.local_addr().isd_asn(),
             receiver_addr.isd_asn(),
-            Utc::now(),
+            SystemTime::now(),
         )
         .await
         .unwrap();

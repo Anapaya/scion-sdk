@@ -16,10 +16,9 @@
 use std::{
     net::{self},
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
-use chrono::Utc;
 use scion_sdk_quic_scion::socket::{BoxedSocketError, GenericScionUdpSocket};
 use sciparse::{
     address::{addr::ScionAddr, ip_socket_addr::ScionSocketIpAddr},
@@ -525,7 +524,7 @@ impl<P: PathManager> UdpScionSocket<P> {
             .path_timeout(
                 self.socket.local_addr().isd_asn(),
                 remote_addr.isd_asn(),
-                Utc::now(),
+                SystemTime::now(),
                 self.connect_timeout,
             )
             .await?;
@@ -567,7 +566,7 @@ impl<P: PathManager> UdpScionSocket<P> {
             .path_wait(
                 self.socket.local_addr().isd_asn(),
                 destination.isd_asn(),
-                Utc::now(),
+                SystemTime::now(),
             )
             .await?;
         self.socket.send_to_via(payload, destination, path).await
@@ -617,7 +616,7 @@ impl<P: PathManager> UdpScionSocket<P> {
                 self.pather.register_path(
                     self.socket.local_addr().isd_asn(),
                     sender_addr.isd_asn(),
-                    Utc::now(),
+                    SystemTime::now(),
                     reversed_path,
                 );
             }
@@ -758,10 +757,10 @@ mod cancel_safety_tests {
         io,
         net::Ipv4Addr,
         sync::{Arc, Mutex},
+        time::SystemTime,
     };
 
     use async_trait::async_trait;
-    use chrono::{DateTime, Utc};
     use sciparse::{
         identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
         util::test_builder::{TestPathBuilder, TestPathContext},
@@ -855,7 +854,7 @@ mod cancel_safety_tests {
     }
 
     impl SyncPathManager for ImmediatePathManager {
-        fn register_path(&self, _src: IsdAsn, _dst: IsdAsn, _now: DateTime<Utc>, path: ScionPath) {
+        fn register_path(&self, _src: IsdAsn, _dst: IsdAsn, _now: SystemTime, path: ScionPath) {
             self.registered_paths.lock().expect("poisoned").push(path);
         }
 
@@ -863,7 +862,7 @@ mod cancel_safety_tests {
             &self,
             src: IsdAsn,
             _dst: IsdAsn,
-            _now: DateTime<Utc>,
+            _now: SystemTime,
         ) -> io::Result<Option<ScionPath>> {
             Ok(Some(
                 ScionPath::local(src).expect("src is not a wildcard IA"),
@@ -876,7 +875,7 @@ mod cancel_safety_tests {
             &self,
             src: IsdAsn,
             _dst: IsdAsn,
-            _now: DateTime<Utc>,
+            _now: SystemTime,
         ) -> impl std::future::Future<Output = Result<ScionPath, PathWaitError>> + Send + '_
         {
             async move { Ok(ScionPath::local(src).expect("src is not a wildcard IA")) }

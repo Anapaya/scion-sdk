@@ -14,7 +14,7 @@
 
 //! Simple end-to-end test for PocketScion utilizing a topology
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Ok};
 use chrono::Utc;
@@ -100,7 +100,7 @@ async fn should_receive_scmp_messages() -> anyhow::Result<()> {
         "[1-2,10.0.0.1]:12345".parse::<ScionSocketAddr>().unwrap(),
     );
     let path = client_path_manager
-        .path_wait(src.isd_asn(), dst.isd_asn(), Utc::now())
+        .path_wait(src.isd_asn(), dst.isd_asn(), SystemTime::now())
         .await
         .expect("error getting path");
     let random_message = b"test message".to_vec();
