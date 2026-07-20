@@ -15,8 +15,10 @@
 
 pub mod fetcher;
 pub mod manager;
-pub mod types;
+pub(crate) mod types;
 
 mod strategy;
 // Explicit re-exports (no glob) so additions to `strategy` do not silently widen the public API.
-pub use strategy::{PathStrategy, policy, scoring};
+// Scoring is an internal concern of the stack; re-exported crate-internally only.
+pub(crate) use strategy::scoring;
+pub use strategy::{PathStrategy, policy};

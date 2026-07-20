@@ -18,14 +18,10 @@ use std::{cmp::Ordering, sync::Arc, time::SystemTime};
 
 use sciparse::path::ScionPath;
 
-use crate::path::{
-    policy::PathPolicy,
-    scoring::{PathScorer, PathScoring},
-    types::PathManagerPath,
-};
+use crate::path::{policy::PathPolicy, scoring::PathScorer, types::PathManagerPath};
 
 pub mod policy;
-pub mod scoring;
+pub(crate) mod scoring;
 
 /// `PathStrategy` combines multiple path operations into a single strategy.
 #[derive(Default)]
@@ -33,7 +29,10 @@ pub struct PathStrategy {
     /// The path policies to apply.
     pub policies: Vec<Arc<dyn PathPolicy>>,
     /// The path ranking functions to apply.
-    pub scoring: PathScorer,
+    ///
+    /// Path scoring is an internal concern of the stack: it is populated with default scorers
+    /// and is not part of the public API.
+    pub(crate) scoring: PathScorer,
 }
 impl PathStrategy {
     /// Appends a path policy to the list of policies.
@@ -51,7 +50,12 @@ impl PathStrategy {
     ///
     /// Note:
     /// The impact weight does not need to sum to 1.0 across all scorers.
-    pub fn add_scoring(&mut self, scoring: impl PathScoring, impact: f32) {
+    #[cfg(test)]
+    pub(crate) fn add_scoring(
+        &mut self,
+        scoring: impl crate::path::scoring::PathScoring,
+        impact: f32,
+    ) {
         self.scoring = std::mem::take(&mut self.scoring).with_scorer(scoring, impact);
     }
 
@@ -63,7 +67,7 @@ impl PathStrategy {
     /// - `Ordering::Less` if `this` is preferred over `other`
     /// - `Ordering::Greater` if `other` is preferred over `this`
     /// - `Ordering::Equal` if both paths are equally preferred
-    pub fn rank_order(
+    pub(crate) fn rank_order(
         &self,
         this: &PathManagerPath,
         other: &PathManagerPath,
@@ -78,7 +82,7 @@ impl PathStrategy {
     /// Sorts the given paths in place, placing the most preferred paths first.
     ///
     /// If no ranking functions are added, the paths are not modified.
-    pub fn rank_inplace(&self, path: &mut [PathManagerPath], now: SystemTime) {
+    pub(crate) fn rank_inplace(&self, path: &mut [PathManagerPath], now: SystemTime) {
         path.sort_by(|a, b| self.rank_order(a, b, now));
     }
 

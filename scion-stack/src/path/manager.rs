@@ -93,7 +93,7 @@ mod issues;
 /// Pathsets manage paths for a specific src-dst pair.
 mod pathset;
 /// Path reliability tracking
-pub mod reliability;
+pub(crate) mod reliability;
 /// Path fetcher traits and types.
 pub mod traits;
 

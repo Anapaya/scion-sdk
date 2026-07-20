@@ -39,7 +39,7 @@ use crate::{
 
 /// Marker for a path issue
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IssueMarker {
+pub(crate) struct IssueMarker {
     pub target: IssueMarkerTarget,
     pub timestamp: SystemTime,
     pub penalty: Score,
@@ -343,7 +343,7 @@ impl IssueKind {
 
     /// Calculates the penalty based on the severity of the issue.
     /// Returns a negative score (penalty).
-    pub fn penalty(&self) -> Score {
+    pub(crate) fn penalty(&self) -> Score {
         let magnitude = match self {
             IssueKind::Scmp { error } => {
                 match error {

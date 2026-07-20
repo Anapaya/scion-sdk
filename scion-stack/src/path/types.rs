@@ -22,7 +22,7 @@ use crate::path::manager::reliability::ReliabilityScore;
 
 /// Entry in the path set cache.
 #[derive(Debug)]
-pub struct PathManagerPath {
+pub(crate) struct PathManagerPath {
     /// The underlying SCION path.
     pub path: ScionPath,
     /// The reliability score of the path.
@@ -57,7 +57,7 @@ impl From<&ScionPath> for PathManagerPath {
 ///
 /// Scores are clamped between -1.0 and 1.0.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Score(f32);
+pub(crate) struct Score(f32);
 
 impl Eq for Score {}
 
@@ -82,7 +82,7 @@ impl Score {
     }
 
     /// Returns the inner floating point value of the score.
-    pub fn value(&self) -> f32 {
+    pub fn value(self) -> f32 {
         self.0
     }
 }

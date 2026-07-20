@@ -26,7 +26,7 @@ const EXPONENTIAL_DECAY_HALFLIFE: Duration = Duration::from_secs(90); // Full de
 /// The score decays over time, allowing paths to recover over time if no further issues are
 /// reported.
 #[derive(Debug, Clone)]
-pub struct ReliabilityScore {
+pub(crate) struct ReliabilityScore {
     score: f32,
     last_updated: SystemTime,
 }

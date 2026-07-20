@@ -186,7 +186,6 @@ use crate::{
             traits::{PathWaitError, PathWaitTimeoutError},
         },
         policy::PathPolicy,
-        scoring::PathScoring,
     },
     stack::{
         scmp_handler::{ScmpErrorHandler, ScmpErrorReceiver},
@@ -514,21 +513,6 @@ impl SocketConfig {
     #[must_use]
     pub fn with_path_policy(mut self, policy: impl PathPolicy) -> Self {
         self.path_strategy.add_policy(policy);
-        self
-    }
-
-    /// Add a path scoring strategy.
-    ///
-    /// Path scores signal which paths to prioritize based on their characteristics.
-    ///
-    /// `scoring` - The path scoring strategy to add.
-    /// `impact` - The impact weight of the scoring strategy. Higher values increase the influence
-    ///
-    /// If no scoring strategies are added, scoring defaults to preferring shorter and more reliable
-    /// paths.
-    #[must_use]
-    pub fn with_path_scoring(mut self, scoring: impl PathScoring, impact: f32) -> Self {
-        self.path_strategy.scoring = self.path_strategy.scoring.with_scorer(scoring, impact);
         self
     }
 

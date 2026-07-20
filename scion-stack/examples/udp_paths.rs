@@ -35,8 +35,8 @@
 //!
 //! A real application would instead keep whichever path best fits its needs. That
 //! preference can also be expressed declaratively per socket, via
-//! [`SocketConfig::with_path_policy`] and [`with_path_scoring`] passed to
-//! [`bind_with_config`], in which case [`send_to`] applies it automatically.
+//! [`SocketConfig::with_path_policy`] passed to [`bind_with_config`], in which case
+//! [`send_to`] applies it automatically.
 //!
 //! Run it with:
 //!
@@ -49,7 +49,6 @@
 //! [`send_to`]: scion_stack::stack::UdpScionSocket::send_to
 //! [`bind_with_config`]: scion_stack::stack::ScionStack::bind_with_config
 //! [`SocketConfig::with_path_policy`]: scion_stack::stack::SocketConfig::with_path_policy
-//! [`with_path_scoring`]: scion_stack::stack::SocketConfig::with_path_scoring
 
 mod common;
 

@@ -34,7 +34,7 @@ use crate::path::types::{PathManagerPath, Score};
 ///
 /// Scores from multiple implementations are aggregated to form a composite path score, which is
 /// used for selecting a preferred path.
-pub trait PathScoring: 'static + Send + Sync {
+pub(crate) trait PathScoring: 'static + Send + Sync {
     /// Name of the metric being scored.
     /// Used for debugging path scoring decisions.
     fn metric_name(&self) -> &'static str;
@@ -79,7 +79,7 @@ impl PathScoring for PathLengthScorer {
 /// Scores paths based on their reliability metric.
 ///
 /// Without this scorer, path issues will be ignored in path selection.
-pub struct PathReliabilityScorer;
+pub(crate) struct PathReliabilityScorer;
 
 impl PathScoring for PathReliabilityScorer {
     fn metric_name(&self) -> &'static str {
@@ -93,7 +93,7 @@ impl PathScoring for PathReliabilityScorer {
 
 /// Aggregates multiple path scorers into a single scoring function.
 #[derive(Clone)]
-pub struct PathScorer {
+pub(crate) struct PathScorer {
     scorers: Vec<(Arc<dyn PathScoring>, f32)>,
 }
 
@@ -144,6 +144,7 @@ impl PathScorer {
     ///
     /// Note:
     /// The impact weight does not need to sum to 1.0 across all scorers.
+    #[cfg(test)]
     #[must_use]
     pub fn with_scorer(mut self, scorer: impl PathScoring + 'static, impact: f32) -> Self {
         self.scorers.push((Arc::new(scorer), impact));
@@ -178,17 +179,11 @@ impl PathScorer {
 ///
 /// Used for debugging path scoring decisions.
 #[derive(Default, Debug)]
-pub struct ScoreReport(BTreeMap<&'static str, f32>);
+pub(crate) struct ScoreReport(BTreeMap<&'static str, f32>);
 
 impl ScoreReport {
     fn add_score(&mut self, metric: &'static str, score: f32) {
         self.0.insert(metric, score);
-    }
-
-    /// The per-metric weighted score contributions, keyed by metric name.
-    #[must_use]
-    pub fn scores(&self) -> &BTreeMap<&'static str, f32> {
-        &self.0
     }
 }
 
