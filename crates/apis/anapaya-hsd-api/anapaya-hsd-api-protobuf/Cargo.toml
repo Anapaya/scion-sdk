@@ -1,0 +1,20 @@
+[package]
+name = "anapaya-hsd-api-protobuf"
+version = "0.5.2"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Protobuf definitions for the HSD API"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+
+[dependencies]
+# Local Dependencies
+scion-protobuf = { workspace = true }
+sciparse = { workspace = true }
+
+# Global Dependencies
+prost = { workspace = true }
+
+[lints]
+workspace = true

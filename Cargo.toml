@@ -2,16 +2,14 @@
 resolver = "2"
 
 members = [
-    "endhost-api/*",
-    "endhost-api-discovery/*",
-    "anapaya-aa/*",
-    "hsd-api/*",
-    "libs/*",
-    "pocketscion",
-    "sciparse",
-    "scion-protobuf",
-    "scion-stack",
-    "snap/*",
+    "crates/apis/anapaya-aa/*",
+    "crates/apis/anapaya-ead/*",
+    "crates/apis/anapaya-hsd-api/*",
+    "crates/apis/endhost-api/*",
+    "crates/libs/*",
+    "crates/pocketscion",
+    "crates/scion-stack",
+    "crates/snap/*",
     "tools/proto-gen",
 ]
 
@@ -20,47 +18,47 @@ edition = "2024"
 
 [workspace.dependencies]
 # Local Crates
-dhsd = { path = "libs/dhsd", version = "0.5.2" }
+dhsd = { path = "crates/libs/dhsd", version = "0.5.2" }
 
-endhost-api-client = { path = "endhost-api/endhost-api-client", version = "0.5.2" }
-endhost-api = { path = "endhost-api/endhost-api", version = "0.5.2" }
-endhost-api-models = { path = "endhost-api/endhost-api-models", version = "0.5.2" }
-endhost-api-protobuf = { path = "endhost-api/endhost-api-protobuf", version = "0.5.2" }
+endhost-api-client = { path = "crates/apis/endhost-api/endhost-api-client", version = "0.5.2" }
+endhost-api = { path = "crates/apis/endhost-api/endhost-api", version = "0.5.2" }
+endhost-api-models = { path = "crates/apis/endhost-api/endhost-api-models", version = "0.5.2" }
+endhost-api-protobuf = { path = "crates/apis/endhost-api/endhost-api-protobuf", version = "0.5.2" }
 
-endhost-api-discovery-client = { path = "endhost-api-discovery/ead-client", version = "0.5.2" }
-endhost-api-discovery-api = { path = "endhost-api-discovery/ead-api", version = "0.5.2" }
-endhost-api-discovery-models = { path = "endhost-api-discovery/ead-models", version = "0.5.2" }
+anapaya-ead-client = { path = "crates/apis/anapaya-ead/anapaya-ead-client", version = "0.5.2" }
+anapaya-ead-api = { path = "crates/apis/anapaya-ead/anapaya-ead-api", version = "0.5.2" }
+anapaya-ead-models = { path = "crates/apis/anapaya-ead/anapaya-ead-models", version = "0.5.2" }
 
 
-# hsd-api = { path = "hsd-api/hsd-api", version = "0.2" }
-# hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.2" }
-# hsd-api-client = { path = "hsd-api/hsd-api-client", version = "0.3" }
-hsd-api-protobuf = { path = "hsd-api/hsd-api-protobuf", version = "0.5.2" }
+# hsd-api = { path = "crates/apis/anapaya-hsd-api/hsd-api", version = "0.2" }
+# anapaya-hsd-api-protobuf = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf", version = "0.2" }
+# anapaya-hsd-api-client = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api-client", version = "0.3" }
+anapaya-hsd-api-protobuf = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf", version = "0.5.2" }
 
-anapaya-aa-protobuf = { path = "anapaya-aa/anapaya-aa-protobuf", version = "0.5.2" }
+anapaya-aa-protobuf = { path = "crates/apis/anapaya-aa/anapaya-aa-protobuf", version = "0.5.2" }
 
-scion-sdk-axum-connect-rpc = { path = "libs/axum-connect-rpc", version = "0.5.2" }
-scion-sdk-scion-h3-axum = { path = "libs/scion-h3-axum", version = "0.5.2" }
-# scion-sdk-common-types = { path = "libs/common-types", version = "0.2" }
-scion-sdk-observability = { path = "libs/observability", version = "0.5.2" }
-scion-sdk-quic-scion = { path = "libs/quic-scion", version = "0.5.2" }
-scion-sdk-reqwest-connect-rpc = { path = "libs/reqwest-connect-rpc", version = "0.5.2" }
-scion-sdk-scion-connect-rpc = { path = "libs/scion-connect-rpc", version = "0.5.2" }
-scion-sdk-trc = { path = "libs/trc", version = "0.5.2" }
-scion-sdk-token-validator = { path = "libs/token-validator", version = "0.5.2" }
-scion-sdk-utils = { path = "libs/utils", version = "0.5.2" }
+axum-connect-rpc = { path = "crates/libs/axum-connect-rpc", version = "0.5.2" }
+scion-h3-axum = { path = "crates/libs/scion-h3-axum", version = "0.5.2" }
+# scion-sdk-common-types = { path = "crates/libs/scion-sdk-common-types", version = "0.2" }
+scion-sdk-observability = { path = "crates/libs/scion-sdk-observability", version = "0.5.2" }
+scion-quic = { path = "crates/libs/scion-quic", version = "0.5.2" }
+reqwest-connect-rpc = { path = "crates/libs/reqwest-connect-rpc", version = "0.5.2" }
+scion-connect-rpc = { path = "crates/libs/scion-connect-rpc", version = "0.5.2" }
+scion-trc = { path = "crates/libs/scion-trc", version = "0.5.2" }
+scion-sdk-token-validator = { path = "crates/libs/scion-sdk-token-validator", version = "0.5.2" }
+scion-sdk-utils = { path = "crates/libs/scion-sdk-utils", version = "0.5.2" }
 
-pocketscion = { path = "pocketscion", version = "0.5.2" }
+pocketscion = { path = "crates/pocketscion", version = "0.5.2" }
 
-scion-protobuf = { path = "scion-protobuf", version = "0.5.2" }
-sciparse = { path = "sciparse", version = "0.5.2" }
+scion-protobuf = { path = "crates/libs/scion-protobuf", version = "0.5.2" }
+sciparse = { path = "crates/libs/sciparse", version = "0.5.2" }
 
-snap-control = { path = "snap/snap-control", version = "0.5.2" }
-snap-dataplane = { path = "snap/snap-dataplane", version = "0.5.2" }
-snap-tun = { path = "snap/snap-tun", version = "0.5.2" }
-snap-tokens = { path = "snap/snap-tokens", version = "0.5.2" }
+snap-control = { path = "crates/snap/snap-control", version = "0.5.2" }
+snap-dataplane = { path = "crates/snap/snap-dataplane", version = "0.5.2" }
+snap-tun = { path = "crates/snap/snap-tun", version = "0.5.2" }
+snap-tokens = { path = "crates/snap/snap-tokens", version = "0.5.2" }
 
-scion-stack = { path = "scion-stack", version = "0.5.2" }
+scion-stack = { path = "crates/scion-stack", version = "0.5.2" }
 
 # General Dependencies
 aes = "0.8"
@@ -182,8 +180,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 [workspace.metadata.cargo-shear]
 ignored = [
     "foldhash",
-    "endhost-api-discovery-api",
-    "endhost-api-discovery-client",
+    "anapaya-ead-api",
+    "anapaya-ead-client",
     "serde_yaml_ng"
 ]
 

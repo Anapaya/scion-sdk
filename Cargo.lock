@@ -141,7 +141,7 @@ dependencies = [
  "jsonwebtoken",
  "mockall",
  "reqwest",
- "scion-sdk-reqwest-connect-rpc",
+ "reqwest-connect-rpc",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -154,6 +154,98 @@ name = "anapaya-aa-protobuf"
 version = "0.5.2"
 dependencies = [
  "prost",
+]
+
+[[package]]
+name = "anapaya-ead-api"
+version = "0.5.2"
+dependencies = [
+ "anapaya-ead-models",
+ "async-trait",
+ "axum",
+ "axum-client-ip",
+ "axum-connect-rpc",
+ "tokio",
+]
+
+[[package]]
+name = "anapaya-ead-client"
+version = "0.5.2"
+dependencies = [
+ "anapaya-ead-models",
+ "anyhow",
+ "async-trait",
+ "reqwest",
+ "reqwest-connect-rpc",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "anapaya-ead-models"
+version = "0.5.2"
+dependencies = [
+ "async-trait",
+ "prost",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
+name = "anapaya-edge-tun"
+version = "0.5.2"
+dependencies = [
+ "ana-gotatun",
+ "async-channel",
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "chacha20 0.10.1",
+ "http",
+ "http-body",
+ "ipnet",
+ "ntest",
+ "prometheus",
+ "prost",
+ "rand 0.10.2",
+ "rand_xorshift 0.5.0",
+ "rcgen",
+ "scion-connect-rpc",
+ "scion-quic",
+ "scion-sdk-observability",
+ "scion-sdk-utils",
+ "sciparse",
+ "serde_json",
+ "squiche",
+ "tempfile",
+ "test-log",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "zerocopy",
+]
+
+[[package]]
+name = "anapaya-hsd-api-client"
+version = "0.5.2"
+dependencies = [
+ "anapaya-hsd-api-protobuf",
+ "async-trait",
+ "scion-connect-rpc",
+ "scion-stack",
+ "sciparse",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "anapaya-hsd-api-protobuf"
+version = "0.5.2"
+dependencies = [
+ "prost",
+ "scion-protobuf",
+ "sciparse",
 ]
 
 [[package]]
@@ -376,6 +468,18 @@ dependencies = [
  "axum",
  "client-ip",
  "serde",
+]
+
+[[package]]
+name = "axum-connect-rpc"
+version = "0.5.2"
+dependencies = [
+ "axum",
+ "bytes",
+ "prost",
+ "serde",
+ "serde_json",
+ "utoipa",
 ]
 
 [[package]]
@@ -1521,9 +1625,9 @@ version = "0.5.2"
 dependencies = [
  "async-trait",
  "axum",
+ "axum-connect-rpc",
  "endhost-api-models",
  "endhost-api-protobuf",
- "scion-sdk-axum-connect-rpc",
  "sciparse",
  "tokio",
  "tracing",
@@ -1539,44 +1643,9 @@ dependencies = [
  "endhost-api-models",
  "endhost-api-protobuf",
  "reqwest",
- "scion-sdk-reqwest-connect-rpc",
+ "reqwest-connect-rpc",
  "sciparse",
  "tracing",
- "url",
-]
-
-[[package]]
-name = "endhost-api-discovery-api"
-version = "0.5.2"
-dependencies = [
- "async-trait",
- "axum",
- "axum-client-ip",
- "endhost-api-discovery-models",
- "scion-sdk-axum-connect-rpc",
- "tokio",
-]
-
-[[package]]
-name = "endhost-api-discovery-client"
-version = "0.5.2"
-dependencies = [
- "anyhow",
- "async-trait",
- "endhost-api-discovery-models",
- "reqwest",
- "scion-sdk-reqwest-connect-rpc",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "endhost-api-discovery-models"
-version = "0.5.2"
-dependencies = [
- "async-trait",
- "prost",
- "thiserror 2.0.18",
  "url",
 ]
 
@@ -2318,27 +2387,6 @@ dependencies = [
  "cfg-if",
  "libc",
  "windows-link",
-]
-
-[[package]]
-name = "hsd-api-client"
-version = "0.5.2"
-dependencies = [
- "async-trait",
- "hsd-api-protobuf",
- "scion-sdk-scion-connect-rpc",
- "scion-stack",
- "sciparse",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "hsd-api-protobuf"
-version = "0.5.2"
-dependencies = [
- "prost",
- "scion-protobuf",
- "sciparse",
 ]
 
 [[package]]
@@ -3581,9 +3629,12 @@ dependencies = [
 name = "pocketscion"
 version = "0.5.2"
 dependencies = [
+ "anapaya-ead-api",
+ "anapaya-ead-models",
  "anyhow",
  "async-trait",
  "axum",
+ "axum-connect-rpc",
  "axum-server",
  "base64 0.22.1",
  "chrono",
@@ -3593,8 +3644,6 @@ dependencies = [
  "ed25519-dalek",
  "endhost-api",
  "endhost-api-client",
- "endhost-api-discovery-api",
- "endhost-api-discovery-models",
  "endhost-api-models",
  "http",
  "ipnet",
@@ -3608,15 +3657,14 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rustls",
+ "scion-connect-rpc",
+ "scion-h3-axum",
  "scion-protobuf",
- "scion-sdk-axum-connect-rpc",
+ "scion-quic",
  "scion-sdk-observability",
- "scion-sdk-quic-scion",
- "scion-sdk-scion-connect-rpc",
- "scion-sdk-scion-h3-axum",
  "scion-sdk-token-validator",
- "scion-sdk-trc",
  "scion-sdk-utils",
+ "scion-trc",
  "sciparse",
  "serde",
  "serde_json",
@@ -4310,6 +4358,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "reqwest-connect-rpc"
+version = "0.5.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "prost",
+ "rand 0.10.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "resolv-conf"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4575,6 +4641,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "scion-connect-rpc"
+version = "0.5.2"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "http",
+ "http-body",
+ "ntest",
+ "prost",
+ "rcgen",
+ "scion-quic",
+ "sciparse",
+ "serde",
+ "serde_json",
+ "squiche",
+ "tempfile",
+ "test-log",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "scion-h3-axum"
+version = "0.5.2"
+dependencies = [
+ "axum",
+ "scion-quic",
+ "tokio-util",
+ "tower",
+]
+
+[[package]]
 name = "scion-protobuf"
 version = "0.5.2"
 dependencies = [
@@ -4585,15 +4687,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "scion-sdk-axum-connect-rpc"
+name = "scion-quic"
 version = "0.5.2"
 dependencies = [
- "axum",
+ "async-trait",
  "bytes",
- "prost",
- "serde",
- "serde_json",
- "utoipa",
+ "chacha20 0.10.1",
+ "futures",
+ "http",
+ "http-body",
+ "ntest",
+ "prometheus",
+ "rcgen",
+ "ring",
+ "sciparse",
+ "squiche",
+ "tempfile",
+ "test-log",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-quiche",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -4604,42 +4719,6 @@ dependencies = [
  "jsonwebtoken",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "scion-sdk-edge-tun"
-version = "0.5.2"
-dependencies = [
- "ana-gotatun",
- "async-channel",
- "async-trait",
- "byteorder",
- "bytes",
- "chacha20 0.10.1",
- "http",
- "http-body",
- "ipnet",
- "ntest",
- "prometheus",
- "prost",
- "rand 0.10.2",
- "rand_xorshift 0.5.0",
- "rcgen",
- "scion-sdk-observability",
- "scion-sdk-quic-scion",
- "scion-sdk-scion-connect-rpc",
- "scion-sdk-utils",
- "sciparse",
- "serde_json",
- "squiche",
- "tempfile",
- "test-log",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
- "zerocopy",
 ]
 
 [[package]]
@@ -4665,85 +4744,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scion-sdk-quic-scion"
-version = "0.5.2"
-dependencies = [
- "async-trait",
- "bytes",
- "chacha20 0.10.1",
- "futures",
- "http",
- "http-body",
- "ntest",
- "prometheus",
- "rcgen",
- "ring",
- "sciparse",
- "squiche",
- "tempfile",
- "test-log",
- "thiserror 2.0.18",
- "tokio",
- "tokio-quiche",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "scion-sdk-reqwest-connect-rpc"
-version = "0.5.2"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "prost",
- "rand 0.10.2",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "scion-sdk-scion-connect-rpc"
-version = "0.5.2"
-dependencies = [
- "async-trait",
- "bytes",
- "futures",
- "http",
- "http-body",
- "ntest",
- "prost",
- "rcgen",
- "scion-sdk-quic-scion",
- "sciparse",
- "serde",
- "serde_json",
- "squiche",
- "tempfile",
- "test-log",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "scion-sdk-scion-h3-axum"
-version = "0.5.2"
-dependencies = [
- "axum",
- "scion-sdk-quic-scion",
- "tokio-util",
- "tower",
-]
-
-[[package]]
 name = "scion-sdk-token-validator"
 version = "0.5.2"
 dependencies = [
@@ -4752,17 +4752,6 @@ dependencies = [
  "pem",
  "serde",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "scion-sdk-trc"
-version = "0.5.2"
-dependencies = [
- "cms",
- "der",
- "sciparse",
- "thiserror 2.0.18",
- "x509-cert",
 ]
 
 [[package]]
@@ -4786,14 +4775,14 @@ name = "scion-stack"
 version = "0.5.2"
 dependencies = [
  "ana-gotatun",
+ "anapaya-ead-client",
+ "anapaya-ead-models",
  "anyhow",
  "arc-swap",
  "async-trait",
  "bytes",
  "chrono",
  "endhost-api-client",
- "endhost-api-discovery-client",
- "endhost-api-discovery-models",
  "foldhash 0.2.0",
  "futures",
  "hickory-resolver",
@@ -4804,9 +4793,9 @@ dependencies = [
  "prost",
  "rand 0.10.2",
  "reqwest",
+ "reqwest-connect-rpc",
  "scc",
- "scion-sdk-quic-scion",
- "scion-sdk-reqwest-connect-rpc",
+ "scion-quic",
  "scion-sdk-token-validator",
  "scion-sdk-utils",
  "sciparse",
@@ -4822,6 +4811,17 @@ dependencies = [
  "url",
  "windows-sys 0.61.2",
  "x25519-dalek",
+]
+
+[[package]]
+name = "scion-trc"
+version = "0.5.2"
+dependencies = [
+ "cms",
+ "der",
+ "sciparse",
+ "thiserror 2.0.18",
+ "x509-cert",
 ]
 
 [[package]]
@@ -5241,6 +5241,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "axum",
+ "axum-connect-rpc",
  "base32",
  "base64 0.22.1",
  "chrono",
@@ -5254,9 +5255,8 @@ dependencies = [
  "prometheus",
  "prost",
  "reqwest",
- "scion-sdk-axum-connect-rpc",
+ "reqwest-connect-rpc",
  "scion-sdk-observability",
- "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-token-validator",
  "scion-sdk-utils",
  "sciparse",
@@ -5326,8 +5326,8 @@ dependencies = [
  "pem",
  "quinn-udp",
  "rcgen",
+ "reqwest-connect-rpc",
  "rustls",
- "scion-sdk-reqwest-connect-rpc",
  "scion-sdk-utils",
  "sciparse",
  "socket2",

@@ -35,9 +35,9 @@ On the SCION network you can:
 
 ## Usage
 
-The main entry point for using the SCION endhost SDK is the [scion-stack](scion-stack/) crate. It
-provides the `ScionStack` type - a stateful object that is the conceptual equivalent of the
-UDP/TCP/IP networking stack found in typical operating systems.
+The main entry point for using the SCION endhost SDK is the [scion-stack](crates/scion-stack/)
+crate. It provides the `ScionStack` type - a stateful object that is the conceptual equivalent of
+the UDP/TCP/IP networking stack found in typical operating systems.
 
 To use the SCION endhost SDK in your Rust project, add the `scion-stack` crate as a dependency in
 your `Cargo.toml`:
@@ -53,18 +53,19 @@ This type of socket automatically manages path selection, simplifying the proces
 receiving data over the SCION network.
 
 ```rust
-use scion_proto::address::SocketAddr;
-use scion_stack::scionstack::{ScionStack, ScionStackBuilder};
+use scion_stack::stack::{ScionStack, ScionStackBuilder};
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use url::Url;
 
 async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
-    let endhost_api: url::Url = "http://127.0.0.1:1234".parse()?;
-    let builder = ScionStackBuilder::new(endhost_api);
+    // Point the stack at your local SCION endhost API.
+    let endhost_api: Url = "http://127.0.0.1:1234".parse()?;
+    let builder = ScionStackBuilder::new().with_endhost_api(endhost_api);
 
     let scion_stack = builder.build().await?;
     let socket = scion_stack.bind(None).await?;
 
-    let destination: SocketAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
+    let destination: ScionSocketIpAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
 
     socket.send_to(b"hello", destination).await?;
     let mut buffer = [0u8; 1024];
@@ -96,7 +97,7 @@ The SCION endhost SDK supports two different transport underlays:
 
 ### Local development and testing with PocketSCION
 
-For local development and testing, [pocketscion](pocketscion/) provides a lightweight SCION network
+For local development and testing, [pocketscion](crates/pocketscion/) provides a lightweight SCION network
 simulator. It allows you to create and manage local SCION topologies, making it an invaluable tool
 for testing your applications without needing a full-fledged SCION network.
 
@@ -104,28 +105,29 @@ for testing your applications without needing a full-fledged SCION network.
 variety of network scenarios.
 
 You can find examples on how to use `pocketscion` for local testing in
-[examples/](pocketscion/examples/) and [integration-tests/](integration-tests/). For more details
-about `pocketscion`, please refer to the [documentation](pocketscion/README.md).
+[examples/](crates/scion-stack/examples/) and [integration-tests/](crates/pocketscion/tests/). For
+more details about `pocketscion`, please refer to the [documentation](crates/pocketscion/README.md).
 
 ## Code structure
 
-The SCION endhost SDK is organized into several crates, each with a specific purpose:
+The SCION endhost SDK lives under [crates/](crates/), organized into building-block libraries
+([crates/libs/](crates/libs/)) and API/RPC binding families ([crates/apis/](crates/apis/)), with
+the main components at the top level. The most relevant crates are:
 
-- [scion-stack](scion-stack/): The main entry point for creating SCION sockets. It provides the
-  `ScionStack` and related components for building SCION applications. and related components for
-  building SCION applications.
-- [sciparse](sciparse/): Contains the definitions for SCION data plane and control plane
-  entities, such as packet formats and control plane messages.
-- [scion-protobuf](scion-protobuf/): Contains the protobuf definitions used in the SCION control
-  plane.
-- [pocketscion](pocketscion/): A SCION simulator for local development and testing.
-- [snap](snap/): A client implementation for the SNAP (SCION Network Access Point) transport
+- [scion-stack](crates/scion-stack/): The main entry point for creating SCION sockets. It provides
+  the `ScionStack` and related components for building SCION applications.
+- [pocketscion](crates/pocketscion/): A SCION simulator for local development and testing.
+- [snap](crates/snap/): A client implementation for the SNAP (SCION Network Access Point) transport
   underlay.
-- [endhost-api](endhost-api/): A client for the SCION endhost API, which is used for discovering
-  transport underlays and fetching path and certificate information.
-- [libs](libs/): Shared libraries and utilities that are used throughout the codebase.
-- [integration-tests](integration-tests/): A suite of integration tests that use `pocketscion` to
-  test the functionality of the `scion-stack`.
+- [endhost-api](crates/apis/endhost-api/): A client for the SCION endhost API, which is used for
+  discovering transport underlays and fetching path and certificate information.
+- [sciparse](crates/libs/sciparse/): Contains the definitions for SCION data plane and control plane
+  entities, such as packet formats and control plane messages.
+- [scion-protobuf](crates/libs/scion-protobuf/): Contains the protobuf definitions used in the SCION
+  control plane.
+- [crates/libs](crates/libs/): Shared libraries and utilities that are used throughout the codebase.
+- [crates/pocketscion/tests](crates/pocketscion/tests/): A suite of integration tests that use
+  `pocketscion` to test the functionality of the `scion-stack`.
 
 ## Contributing
 

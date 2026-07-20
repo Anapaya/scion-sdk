@@ -5,5 +5,5 @@
 # SDK itself is a Rust (Cargo) workspace; this file only covers the Node/pnpm
 # side used to preview the developer guide.
 packages:
-  - packages/*
-  - docs-preview
+  - docs/plugins/*
+  - docs/preview

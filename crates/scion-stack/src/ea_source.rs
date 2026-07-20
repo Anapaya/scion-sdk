@@ -1,0 +1,266 @@
+// Copyright 2026 Anapaya Systems
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Endhost API Source.
+//!
+//! This module defines the `EndhostApiSource` trait, which is responsible for discovering and
+//! providing access to the Endhost API. Implementations of this trait can be used to discover the
+//! API in different environments, such as through environment variables, configuration files, or
+//! network discovery.
+
+use std::{borrow::Cow, sync::Arc};
+
+use anapaya_ead_client::client::{CrpcEndhostApiDiscoveryClient, EndhostApiDiscoveryClient};
+use anapaya_ead_models::{EndhostApiGroup, EndhostApiInfo};
+use snap_control::reexport::TokenSource;
+use url::Url;
+
+/// Explicit re-exports of the Endhost API discovery models used by this module's public API.
+pub mod models {
+    pub use anapaya_ead_models::{EndhostApiGroup, EndhostApiInfo};
+}
+
+/// Error type for failures to retrieve Endhost APIs from an [`EndhostApiSource`].
+///
+/// The underlying cause (if any) is available through [`std::error::Error::source`]; the concrete
+/// source type is intentionally not exposed, so it can change without breaking the public API.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to retrieve endhost APIs: {message}")]
+#[non_exhaustive]
+pub struct EndhostApiSourceError {
+    message: Cow<'static, str>,
+    transient: bool,
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+impl EndhostApiSourceError {
+    /// Creates an error with a human-readable message.
+    ///
+    /// `transient` indicates whether the operation may succeed on retry.
+    #[must_use]
+    pub fn new(message: impl Into<Cow<'static, str>>, transient: bool) -> Self {
+        Self {
+            message: message.into(),
+            transient,
+            source: None,
+        }
+    }
+
+    /// Creates an error wrapping an underlying `source`.
+    ///
+    /// `transient` indicates whether the operation may succeed on retry.
+    #[must_use]
+    pub fn with_source(
+        message: impl Into<Cow<'static, str>>,
+        transient: bool,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            transient,
+            source: Some(source.into()),
+        }
+    }
+
+    /// Returns whether the error is transient and the operation may be retried.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        self.transient
+    }
+}
+
+/// Returns available Endhost APIs for the client to use
+///
+/// Endhost APIs are grouped into `EndhostApiGroup`s.
+/// The client should attempt to use the first Group
+#[async_trait::async_trait]
+pub trait EndhostApiSource: Send + Sync + 'static {
+    /// Returns the available Endhost APIs.
+    async fn endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError>;
+}
+
+/// A static list of Endhost API discovery services which the stack can use to discover Endhost
+/// APIs.
+pub struct StaticEndhostApiDiscovery {
+    discovery_apis: Vec<Url>,
+}
+
+impl StaticEndhostApiDiscovery {
+    const GLOBAL_DISCOVERY_APIS: &[&'static str] = &["https://discovery.scion.anapaya.net"];
+
+    /// Creates a new `StaticEndhostApiDiscovery` with the given list of discovery API URLs.
+    #[must_use]
+    pub fn new(discovery_apis: Vec<Url>) -> Self {
+        Self { discovery_apis }
+    }
+
+    /// Creates a new `StaticEndhostApiDiscovery` with the global list of discovery API URLs.
+    #[must_use]
+    pub fn global() -> Self {
+        let discovery_apis = Self::GLOBAL_DISCOVERY_APIS
+            .iter()
+            .map(|url_str| Url::parse(url_str).expect("Invalid URL in GLOBAL_DISCOVERY_APIS"))
+            .collect();
+
+        Self { discovery_apis }
+    }
+}
+
+#[async_trait::async_trait]
+impl EndhostApiSource for StaticEndhostApiDiscovery {
+    /// Returns the available Endhost APIs.
+    async fn endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError> {
+        if self.discovery_apis.is_empty() {
+            return Err(EndhostApiSourceError::new(
+                "no endhost API discovery APIs configured in StaticEndhostApiDiscovery",
+                false,
+            ));
+        }
+
+        discover_endhost_apis(self.discovery_apis.clone(), None).await
+    }
+}
+
+/// A static list of Endhost APIs which the stack can use.
+#[derive(Default)]
+pub struct StaticEndhostApis {
+    /// List of Endhost API groups to use
+    groups: Vec<EndhostApiGroup>,
+}
+
+impl StaticEndhostApis {
+    /// Creates a new empty `StaticEndhostApis`
+    #[must_use]
+    pub fn new() -> Self {
+        Self { groups: Vec::new() }
+    }
+
+    /// Adds a group of Endhost APIs to the list of available APIs.
+    ///
+    /// Endhost APIs in one group must offer the same data when queried. Meaning they should know
+    /// the same set of underlays and segments.
+    ///
+    /// The client can freely failover between APIs in the same group.
+    ///
+    /// Endhost APIs in different groups can differ in the data they offer, however the client must
+    /// close all open connections to failover between groups.
+    #[must_use]
+    pub fn add_group(mut self, group: Vec<Url>) -> Self {
+        self.groups.push(EndhostApiGroup {
+            apis: group
+                .into_iter()
+                .map(|url| EndhostApiInfo { address: url })
+                .collect(),
+        });
+
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl EndhostApiSource for StaticEndhostApis {
+    /// Returns the available Endhost APIs.
+    async fn endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError> {
+        Ok(self.groups.clone())
+    }
+}
+
+/// Attempts to discover Endhost APIs using all provided discovery API URLs, returning the first
+/// successful result or an error if all discovery APIs fail.
+///
+/// On failure, returns the last error encountered or a generic error if no discovery APIs were
+/// provided.
+async fn discover_endhost_apis(
+    discovery_apis: Vec<Url>,
+    token_source: Option<Arc<dyn TokenSource>>,
+) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError> {
+    let mut last_error = None;
+    for discovery_api in &discovery_apis {
+        // Try all apis in order, return the first successful one
+        let client = {
+            let mut client = match CrpcEndhostApiDiscoveryClient::new(discovery_api) {
+                Ok(client) => client,
+                Err(e) => {
+                    tracing::warn!(%discovery_api, error = ?e, "Failed to create Endhost API discovery client");
+                    // Track last error so we can return it if all discovery APIs fail
+                    last_error = Some(EndhostApiSourceError::with_source(
+                        format!(
+                            "failed to create endhost API discovery client for {discovery_api}"
+                        ),
+                        false,
+                        e,
+                    ));
+                    continue;
+                }
+            };
+
+            if let Some(token_source) = token_source.clone() {
+                client.use_token_source(token_source);
+            }
+
+            client
+        };
+
+        match client.discover_endhost_apis().await {
+            Ok(discovered_apis) => {
+                tracing::debug!(%discovery_api, "Successfully discovered Endhost APIs");
+                return Ok(discovered_apis);
+            }
+            Err(e) => {
+                tracing::warn!(%discovery_api, error = ?e, "Failed to discover Endhost APIs");
+                // Track last error so we can return it if all discovery APIs fail
+                last_error = Some(EndhostApiSourceError::with_source(
+                    format!("failed to discover endhost APIs via {discovery_api}"),
+                    true,
+                    e,
+                ));
+            }
+        }
+    }
+
+    // If we exhausted all discovery APIs, return the last error we encountered or a generic
+    // error if we had no discovery APIs configured
+    match last_error {
+        Some(e) => {
+            let transient = e.is_transient();
+            Err(EndhostApiSourceError::with_source(
+                "failed to discover endhost APIs using any configured discovery API",
+                transient,
+                e,
+            ))
+        }
+        None => {
+            Err(EndhostApiSourceError::new(
+                "attempted to discover endhost APIs with empty list of discovery APIs",
+                false,
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endhost_api_source_error_transient_classification() {
+        assert!(EndhostApiSourceError::new("boom", true).is_transient());
+        assert!(!EndhostApiSourceError::new("boom", false).is_transient());
+
+        let src = || std::io::Error::other("cause");
+        assert!(EndhostApiSourceError::with_source("boom", true, src()).is_transient());
+        assert!(!EndhostApiSourceError::with_source("boom", false, src()).is_transient());
+    }
+}

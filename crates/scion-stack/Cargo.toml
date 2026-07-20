@@ -1,0 +1,75 @@
+[package]
+name = "scion-stack"
+version = "0.5.2"
+edition.workspace = true
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "SCION endhost network stack"
+readme = "README.md"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking"]
+categories = ["network-programming"]
+
+[dependencies]
+ana-gotatun = { workspace = true }
+anyhow = { workspace = true }
+arc-swap = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+endhost-api-client = { workspace = true }
+anapaya-ead-client = { workspace = true }
+anapaya-ead-models = { workspace = true }
+foldhash = { workspace = true }
+futures = { workspace = true }
+hickory-resolver = { workspace = true }
+prost = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+scc = { workspace = true }
+scion-quic = { workspace = true }
+reqwest-connect-rpc = { workspace = true }
+scion-sdk-utils = { workspace = true }
+sciparse = { workspace = true }
+snap-control = { workspace = true }
+snap-tun = { workspace = true }
+socket2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+x25519-dalek = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+chrono = { workspace = true }
+hickory-server = { workspace = true }
+mockall = { workspace = true }
+ntest = { workspace = true }
+pocketscion = { workspace = true }
+rand = { workspace = true }
+scion-sdk-token-validator = { workspace = true }
+snap-tokens = { workspace = true }
+test-log = { workspace = true }
+
+[lints]
+workspace = true
+
+# `test = true` folds the examples' `#[cfg(test)]` smoke tests into the normal
+# `cargo test` run, so they are exercised end-to-end in CI (not just compiled).
+[[example]]
+name = "udp_echo"
+test = true
+
+[[example]]
+name = "udp_paths"
+test = true
+
+[target."cfg(windows)".dependencies]
+windows-sys = "0.61.2"
+
+# If you believe cargo-machete has detected an unused dependency incorrectly,
+# you can add the dependency to the list of dependencies to ignore in the
+# `[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.
+[package.metadata.cargo-shear]
+ignored = ["prost"]
