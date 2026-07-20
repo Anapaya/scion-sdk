@@ -19,7 +19,7 @@
 //!
 //! This module contains a minimal definition of the SCION packet structure
 //! following the conventions used by Anapaya/gotatun. It is primarily used for
-//! testing purposes as in production code, scion-proto/sciparse is used.
+//! testing purposes as in production code, sciparse is used.
 
 #![allow(clippy::doc_markdown)]
 #![allow(unused)]

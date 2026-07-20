@@ -38,7 +38,13 @@ fuzz = []
 
 [dev-dependencies]
 base64 = { workspace = true }
+bytes = { workspace = true }
+criterion = { workspace = true }
 sciparse = { path = ".", features = ["fuzz"] }
+
+[[bench]]
+name = "bench"
+harness = false
 
 [lints]
 workspace = true

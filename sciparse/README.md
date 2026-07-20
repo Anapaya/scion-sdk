@@ -109,7 +109,7 @@ fn build_udp_packet(
 
 ## Performance
 
-Benchmarks are available in the `sciparse-interop` crate (`cargo bench -p sciparse-interop`).
+Benchmarks are available in this crate (`cargo bench -p sciparse`).
 Results are in clock time and may vary based on hardware and software environment.
 These measurements are intended for indicative comparison only, not as definitive performance guarantees.
 
@@ -119,34 +119,29 @@ Ran on Intel(R) Core(TM) i7-14700K @~5.5 GHz P-core (last update 23-Apr-2026)
 
 Parsing the same set of 10,000 packets using different methods:
 
-| Benchmark                         | Total     | Per Packet | vs Sciparse View |
-| --------------------------------- | --------- | ---------- | ---------------- |
-| sciparse/view_parse_unsafe        | 5.63 µs   | 0.56 ns    | 0.03x            |
-| sciparse/view_parse               | 200.44 µs | 20.04 ns   | 1.00x            |
-| scion_proto/model_parse           | 991.52 µs | 99.15 ns   | 4.95x            |
-| sciparse/model_parse_with_path    | 2.17 ms   | 217.00 ns  | 10.85x           |
-| scion_proto/model_parse_with_path | 6.44 ms   | 644.00 ns  | 32.20x           |
+| Benchmark                      | Total     | Per Packet | vs Sciparse View |
+| ------------------------------ | --------- | ---------- | ---------------- |
+| sciparse/view_parse_unsafe     | 5.63 µs   | 0.56 ns    | 0.03x            |
+| sciparse/view_parse            | 200.44 µs | 20.04 ns   | 1.00x            |
+| sciparse/model_parse_with_path | 2.17 ms   | 217.00 ns  | 10.85x           |
 
 ### Encode (10,000 packets)
 
 Encoding the same set of 10,000 packets using different methods:
 
-| Benchmark                          | Total   | Per Packet | vs Sciparse Model |
-| ---------------------------------- | ------- | ---------- | ----------------- |
-| sciparse/view_as_slice             | 4.27 µs | 0.43 ns    | 0.01x             |
-| sciparse/model_encode_with_path    | 1.56 ms | 156.00 ns  | 1.00x             |
-| scion_proto/model_encode           | 1.60 ms | 160.00 ns  | 1.03x             |
-| scion_proto/model_encode_with_path | 4.47 ms | 446.00 ns  | 2.86x             |
+| Benchmark                       | Total   | Per Packet | vs Sciparse Model |
+| ------------------------------- | ------- | ---------- | ----------------- |
+| sciparse/view_as_slice          | 4.27 µs | 0.43 ns    | 0.01x             |
+| sciparse/model_encode_with_path | 1.56 ms | 156.00 ns  | 1.00x             |
 
 ### Access – Sum Hops (10,000 packets)
 
 Summing the number of hops in the same set of 10,000 packets using different methods:
 
-| Benchmark                      | Total     | Per Packet | vs Sciparse View |
-| ------------------------------ | --------- | ---------- | ---------------- |
-| sciparse/model_sum_hops        | 280.72 µs | 28.07 ns   | 0.84x            |
-| sciparse/view_sum_hops         | 335.59 µs | 33.56 ns   | 1.00x            |
-| scion_proto/lazy_path_sum_hops | 435.51 µs | 43.55 ns   | 1.30x            |
+| Benchmark               | Total     | Per Packet | vs Sciparse View |
+| ----------------------- | --------- | ---------- | ---------------- |
+| sciparse/model_sum_hops | 280.72 µs | 28.07 ns   | 0.84x            |
+| sciparse/view_sum_hops  | 335.59 µs | 33.56 ns   | 1.00x            |
 
 ## Design
 

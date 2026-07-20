@@ -1597,7 +1597,7 @@ version = "0.5.2"
 dependencies = [
  "endhost-api-models",
  "prost",
- "scion-protobuf 0.5.2",
+ "scion-protobuf",
  "sciparse",
  "url",
 ]
@@ -2337,7 +2337,7 @@ name = "hsd-api-protobuf"
 version = "0.5.2"
 dependencies = [
  "prost",
- "scion-protobuf 0.5.2",
+ "scion-protobuf",
  "sciparse",
 ]
 
@@ -3608,7 +3608,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rustls",
- "scion-protobuf 0.5.2",
+ "scion-protobuf",
  "scion-sdk-axum-connect-rpc",
  "scion-sdk-observability",
  "scion-sdk-quic-scion",
@@ -4575,39 +4575,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scion-proto"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6048b88e48ac17b9f63c2b488f50d30fb0887a66dfe62e19ec4b54a2083476f"
-dependencies = [
- "aes",
- "bytes",
- "chrono",
- "cmac",
- "prost",
- "rand 0.9.5",
- "scion-protobuf 0.4.0",
- "serde",
- "serde_yaml_ng",
- "sha2",
- "thiserror 2.0.18",
- "tracing",
- "utoipa",
-]
-
-[[package]]
-name = "scion-protobuf"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5a05aa5f5ddde1379d95946d0fdeedb8a7231ad316e8cdbfe1e99f21e5aef34"
-dependencies = [
- "prost",
- "prost-types",
- "tonic",
- "tonic-prost",
-]
-
-[[package]]
 name = "scion-protobuf"
 version = "0.5.2"
 dependencies = [
@@ -4864,14 +4831,16 @@ dependencies = [
  "aes",
  "base64 0.22.1",
  "bitflags",
+ "bytes",
  "cmac",
+ "criterion",
  "ecdsa",
  "p256",
  "proptest",
  "proptest-derive",
  "prost",
  "prost-types",
- "scion-protobuf 0.5.2",
+ "scion-protobuf",
  "sciparse",
  "serde",
  "serde_with",
@@ -4879,17 +4848,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tinyvec",
  "utoipa",
-]
-
-[[package]]
-name = "sciparse-interop"
-version = "0.0.0"
-dependencies = [
- "bytes",
- "criterion",
- "proptest",
- "scion-proto",
- "sciparse",
 ]
 
 [[package]]

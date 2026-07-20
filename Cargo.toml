@@ -8,7 +8,8 @@ members = [
     "hsd-api/*",
     "libs/*",
     "pocketscion",
-    "scion-proto/*",
+    "sciparse",
+    "scion-protobuf",
     "scion-stack",
     "snap/*",
     "tools/proto-gen",
@@ -51,8 +52,8 @@ scion-sdk-utils = { path = "libs/utils", version = "0.5.2" }
 
 pocketscion = { path = "pocketscion", version = "0.5.2" }
 
-scion-protobuf = { path = "scion-proto/scion-protobuf", version = "0.5.2" }
-sciparse = { path = "scion-proto/sciparse" , version = "0.5.2" }
+scion-protobuf = { path = "scion-protobuf", version = "0.5.2" }
+sciparse = { path = "sciparse", version = "0.5.2" }
 
 snap-control = { path = "snap/snap-control", version = "0.5.2" }
 snap-dataplane = { path = "snap/snap-dataplane", version = "0.5.2" }
@@ -174,11 +175,13 @@ mem_forget = "deny"
 
 [workspace.lints.rust]
 missing_docs = "warn"
+# `fuzzing` is set by cargo-fuzz; declare it so builds enabling the `fuzz`
+# feature outside cargo-fuzz (e.g. `cargo bench`) don't trip unexpected_cfgs.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [workspace.metadata.cargo-shear]
 ignored = [
     "foldhash",
-    "scion-proto",
     "endhost-api-discovery-api",
     "endhost-api-discovery-client",
     "serde_yaml_ng"

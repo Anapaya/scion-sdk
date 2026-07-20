@@ -24,8 +24,11 @@
 // the exercisers are *not* optimized away even though cargo-fuzz compiles this
 // crate with optimizations enabled. We still require debug assertions to stay
 // enabled so the views' internal `debug_assert!`s and overflow checks remain
-// active while fuzzing; refuse to build otherwise.
-#[cfg(not(debug_assertions))]
+// active while fuzzing; refuse to build otherwise. This is gated on `cfg(fuzzing)`
+// (set by cargo-fuzz) so that release builds enabling the `fuzz` feature for other
+// reasons — e.g. `cargo bench`, whose dev-dependency graph turns the feature on —
+// still compile.
+#[cfg(all(fuzzing, not(debug_assertions)))]
 compile_error!("view function exercisers must be compiled with debug assertions enabled");
 
 pub mod header;

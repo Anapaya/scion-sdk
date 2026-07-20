@@ -114,9 +114,10 @@ The SCION endhost SDK is organized into several crates, each with a specific pur
 - [scion-stack](scion-stack/): The main entry point for creating SCION sockets. It provides the
   `ScionStack` and related components for building SCION applications. and related components for
   building SCION applications.
-- [scion-proto](scion-proto/): Contains the definitions for SCION data plane and control plane
-  entities, such as packet formats and control plane messages. The base for this crate is
-  [scion-rs](https://github.com/mystenlabs/scion-rs), published by Mysten Labs.
+- [sciparse](sciparse/): Contains the definitions for SCION data plane and control plane
+  entities, such as packet formats and control plane messages.
+- [scion-protobuf](scion-protobuf/): Contains the protobuf definitions used in the SCION control
+  plane.
 - [pocketscion](pocketscion/): A SCION simulator for local development and testing.
 - [snap](snap/): A client implementation for the SNAP (SCION Network Access Point) transport
   underlay.

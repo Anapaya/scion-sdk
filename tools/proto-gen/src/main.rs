@@ -45,15 +45,15 @@ fn main() -> anyhow::Result<()> {
     //
     // When depending on scion-protobuf, add as extern_includes.
     let scion_proto_externs = ExternIncludes {
-        proto_dirs: vec!["scion-proto/scion-protobuf"],
+        proto_dirs: vec!["scion-protobuf"],
         extern_paths: vec![(".proto", "scion_protobuf")],
     };
 
     let targets = vec![
         CompileConfig {
-            name: "scion-proto",
-            out_dir: "scion-proto/scion-protobuf/src/proto",
-            proto_dirs: vec!["scion-proto/scion-protobuf/"],
+            name: "scion-protobuf",
+            out_dir: "scion-protobuf/src/proto",
+            proto_dirs: vec!["scion-protobuf/"],
             extern_includes: vec![],
             protoc_args: vec![],
             use_tonic: true,
