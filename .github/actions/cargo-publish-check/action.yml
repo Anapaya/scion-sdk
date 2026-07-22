@@ -22,7 +22,12 @@ runs:
 
         cargo package --no-verify 2>&1 | tee "$output"
 
-        if grep -qE "warning:" "$output"; then
+        # `cargo package` retries transient crates.io index fetches and emits a
+        # `warning: spurious network error ...` line per attempt. Those recover
+        # on retry and say nothing about publishability, so they must not fail
+        # the check; scan only for the real warnings (missing description or
+        # license, excluded files, manifest issues) after dropping them.
+        if grep -E "warning:" "$output" | grep -qvE "spurious network error"; then
           echo "cargo package produced warnings that may prevent publishing to crates.io"
           exit 1
         fi
