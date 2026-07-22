@@ -21,7 +21,7 @@ use endhost_api_models::{
     SegmentsDiscovery,
     underlays::{ScionRouter, Underlays},
 };
-use http::{HeaderValue, StatusCode};
+use http::StatusCode;
 use scion_sdk_observability::info_trace_layer;
 use sciparse::identifier::isd_asn::IsdAsn;
 use tower::{ServiceBuilder, timeout::TimeoutLayer};
@@ -62,7 +62,6 @@ pub fn build_router<UD, SL, SR, IR>(
     snap_resolver: SR,
     identity_registry: Arc<IR>,
     pg_wap_session_manager: Option<Arc<dyn PgWapSessionManager>>,
-    pg_wap_cors_origins: Option<Vec<HeaderValue>>,
     token_verifier: SnapTokenVerifier,
     metrics: Metrics,
 ) -> std::io::Result<Router>
@@ -91,15 +90,16 @@ where
     // XXX(bunert): For now the pathguard WAP HTTP API is unauthenticated. This will change in the
     // future.
     if let Some(pg_wap_session_manager) = pg_wap_session_manager {
-        let mut http_api_router = nest_http_api(Router::new(), pg_wap_session_manager);
-        if let Some(origins) = pg_wap_cors_origins {
-            http_api_router = http_api_router.layer(
-                CorsLayer::new()
-                    .allow_methods(tower_http::cors::Any)
-                    .allow_headers(tower_http::cors::Any)
-                    .allow_origin(origins),
-            );
-        }
+        // The WAP control API is called cross-origin from the webscion browser SDK. CORS is not a
+        // security boundary here so we reflect any request Origin. Reflection (instead of a literal
+        // `*`) keeps this valid should the endpoint ever gain credentialed auth, where
+        // `Access-Control-Allow-Credentials` is incompatible with `*`.
+        let http_api_router = nest_http_api(Router::new(), pg_wap_session_manager).layer(
+            CorsLayer::new()
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any)
+                .allow_origin(tower_http::cors::AllowOrigin::mirror_request()),
+        );
         router = router.merge(http_api_router);
     }
 
