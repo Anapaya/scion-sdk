@@ -1,0 +1,9 @@
+{
+  "label": "Concepts",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "title": "Concepts",
+    "description": "The ideas behind the SCION SDK: the ScionStack you build everything on, how SCION addresses work, path awareness and path policies, and how your traffic reaches the network through a transport underlay (and authorizes to a SNAP)."
+  }
+}
