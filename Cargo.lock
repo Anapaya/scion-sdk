@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-aa-client"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anapaya-aa-protobuf",
  "anyhow",
@@ -151,14 +151,14 @@ dependencies = [
 
 [[package]]
 name = "anapaya-aa-protobuf"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "prost",
 ]
 
 [[package]]
 name = "anapaya-ead-api"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anapaya-ead-models",
  "async-trait",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-ead-client"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anapaya-ead-models",
  "anyhow",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-ead-models"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "prost",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-edge-tun"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ana-gotatun",
  "async-channel",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-hsd-api-client"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anapaya-hsd-api-protobuf",
  "async-trait",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-hsd-api-protobuf"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "prost",
  "scion-protobuf",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "axum-connect-rpc"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1480,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "dhsd"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ring",
  "zeroize",
@@ -1615,7 +1615,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api-client"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api-models"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "sciparse",
@@ -1656,7 +1656,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api-protobuf"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "endhost-api-models",
  "prost",
@@ -3621,7 +3621,7 @@ dependencies = [
 
 [[package]]
 name = "pocketscion"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anapaya-ead-api",
  "anapaya-ead-models",
@@ -4353,7 +4353,7 @@ dependencies = [
 
 [[package]]
 name = "reqwest-connect-rpc"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4636,7 +4636,7 @@ dependencies = [
 
 [[package]]
 name = "scion-connect-rpc"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4662,7 +4662,7 @@ dependencies = [
 
 [[package]]
 name = "scion-h3-axum"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "axum",
  "scion-quic",
@@ -4672,7 +4672,7 @@ dependencies = [
 
 [[package]]
 name = "scion-protobuf"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -4682,7 +4682,7 @@ dependencies = [
 
 [[package]]
 name = "scion-quic"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4707,7 +4707,7 @@ dependencies = [
 
 [[package]]
 name = "scion-sdk-common-types"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ed25519-dalek",
  "jsonwebtoken",
@@ -4717,7 +4717,7 @@ dependencies = [
 
 [[package]]
 name = "scion-sdk-observability"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "axum",
  "chacha20 0.10.1",
@@ -4739,7 +4739,7 @@ dependencies = [
 
 [[package]]
 name = "scion-sdk-token-validator"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ed25519-dalek",
  "jsonwebtoken",
@@ -4750,7 +4750,7 @@ dependencies = [
 
 [[package]]
 name = "scion-sdk-utils"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "chacha20 0.10.1",
  "num-traits",
@@ -4766,7 +4766,7 @@ dependencies = [
 
 [[package]]
 name = "scion-stack"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ana-gotatun",
  "anapaya-ead-client",
@@ -4809,7 +4809,7 @@ dependencies = [
 
 [[package]]
 name = "scion-trc"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "cms",
  "der",
@@ -4820,7 +4820,7 @@ dependencies = [
 
 [[package]]
 name = "sciparse"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -5229,7 +5229,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "snap-control"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -5271,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "snap-dataplane"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ana-gotatun",
  "anyhow",
@@ -5293,7 +5293,7 @@ dependencies = [
 
 [[package]]
 name = "snap-tokens"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "jsonwebtoken",
@@ -5307,7 +5307,7 @@ dependencies = [
 
 [[package]]
 name = "snap-tun"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ana-gotatun",
  "async-channel",

@@ -1,6 +1,6 @@
 [package]
 name = "endhost-api"
-version = "0.5.2"
+version = "0.6.0"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
