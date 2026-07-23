@@ -14,7 +14,6 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
-base32 = { workspace = true }
 chrono = { workspace = true }
 http = { workspace = true }
 jsonwebtoken = { workspace = true }

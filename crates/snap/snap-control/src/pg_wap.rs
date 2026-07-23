@@ -27,23 +27,13 @@ pub mod session_manager;
 
 pub use auth::AuthInfo;
 
-/// Encode the WAP IP address as base32 encoded WAP ID.
-pub fn encode_ap_id(ip: IpAddr) -> String {
-    let ip_bytes: &[u8] = match ip {
-        IpAddr::V4(ip) => &ip.octets(),
-        IpAddr::V6(ip) => &ip.octets(),
-    };
-
-    base32::encode(base32::Alphabet::Rfc4648 { padding: false }, ip_bytes)
-}
-
 /// Handles WAP control plane interactions
 #[derive(Clone)]
 pub struct WapControl {
     auth_service: AuthService,
     session_manager: WapSessionManager,
     data_plane_port: u16,
-    encoded_local_ip: String,
+    ap_id: String,
 }
 
 impl WapControl {
@@ -51,7 +41,7 @@ impl WapControl {
     pub fn new(
         session_manager: WapSessionManager,
         auth_duration: std::time::Duration,
-        local_ip: IpAddr,
+        ap_id: String,
         data_plane_port: u16,
     ) -> Self {
         let auth_service = AuthService::new(auth_duration);
@@ -59,13 +49,13 @@ impl WapControl {
         Self {
             session_manager,
             auth_service,
-            encoded_local_ip: encode_ap_id(local_ip),
+            ap_id,
             data_plane_port,
         }
     }
 
     fn ap_id(&self) -> &str {
-        &self.encoded_local_ip
+        &self.ap_id
     }
 }
 
@@ -107,7 +97,7 @@ mod tests {
         WapControl::new(
             WapSessionManager::new(),
             Duration::from_secs(60),
-            IpAddr::from([127, 0, 0, 1]),
+            "test-wap".to_string(),
             8443,
         )
     }
