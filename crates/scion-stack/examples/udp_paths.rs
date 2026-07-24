@@ -18,17 +18,12 @@
 //! about the other half of SCION: an application that wants to *see* the available
 //! paths and decide which one to use.
 //!
-//! It starts a [PocketSCION] network shaped like a triangle, so the client has two
-//! distinct paths to the server — the direct link, or the detour via 2-ff00:0:222:
-//!
-//! ```text
-//!                     2-ff00:0:222
-//!                 #1 /            \ #2
-//!                   /              \
-//!             #2   /                \  #4
-//!   1-ff00:0:132  #1 ───────────── #3  2-ff00:0:212
-//!     (client)                           (server)
-//! ```
+//! It starts a [PocketSCION] network shaped like a triangle, so the client
+//! (1-ff00:0:132) has two distinct paths to the server (2-ff00:0:212) — the direct
+//! link, or the detour via 2-ff00:0:222. The diagram is generated from the
+//! `two_path_topology` definition, so it cannot drift from the network the example
+//! actually starts:
+#![doc = simple_mermaid::mermaid!("../../pocketscion/src/util/topologies/diagrams/two_path.mmd")]
 //!
 //! The example lists both paths and sends over each one explicitly with
 //! [`send_to_via`].

@@ -49,6 +49,7 @@ ntest = { workspace = true }
 pocketscion = { workspace = true }
 rand = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
+simple-mermaid = { workspace = true }
 snap-tokens = { workspace = true }
 test-log = { workspace = true }
 

@@ -411,62 +411,43 @@ impl ScionTopology {
 }
 // Visualization
 impl ScionTopology {
-    /// Generate a mermaid graph representation of the topology.
+    /// Generates a [Mermaid](https://mermaid.js.org/) `flowchart` representation of the topology.
+    ///
+    /// Each AS becomes a labelled node and each link an edge labelled `#iface (link type) #iface`,
+    /// so each interface ID sits on the side of the AS it belongs to. The output is deterministic:
+    /// nodes follow `as_map` order and edges follow `link_map` order, both of which are
+    /// `BTreeMap`s keyed by ISD-AS.
     pub fn format_mermaid(&self) -> String {
-        let mut isd_maps: HashMap<Isd, Vec<IsdAsn>> = HashMap::new();
-        let mut isd_core_maps: HashMap<Isd, Vec<IsdAsn>> = HashMap::new();
+        /// Turns an ISD-AS into a Mermaid-safe node identifier (bare node IDs may not contain the
+        /// `-`, `:` or `#` that appear in an ISD-AS string).
+        fn node_id(isd_as: IsdAsn) -> String {
+            let sanitized: String = isd_as
+                .to_string()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            format!("as_{sanitized}")
+        }
 
-        // Group ASes by ISD
+        let mut result = String::from("flowchart LR\n");
+
+        // Nodes: one per AS, with the ISD-AS string as the (quoted) label.
         for scion_as in self.as_map.values() {
-            let isd = scion_as.isd_as().isd();
-
-            isd_maps.entry(isd).or_default().push(scion_as.isd_as());
-
-            if scion_as.is_core() {
-                isd_core_maps
-                    .entry(isd)
-                    .or_default()
-                    .push(scion_as.isd_as());
-            };
+            let isd_as = scion_as.isd_as();
+            result.push_str(&format!("    {}[\"{isd_as}\"]\n", node_id(isd_as)));
         }
 
-        let mut result = String::new();
-        result.push_str("graph TD\n");
-
-        // Add ISD subgraphs
-        for (isd, as_numbers) in isd_maps.iter() {
-            result.push_str(&format!("subgraph ISD{isd} \n"));
-            result.push_str(" direction BT\n");
-            // Add Core ASes as additional subgraph
-            if let Some(core_asns) = isd_core_maps.get(isd) {
-                result.push_str(&format!(" subgraph CORE{isd} \n"));
-                result.push_str("  direction LR\n");
-                for core_asn in core_asns {
-                    result.push_str(&format!("  {core_asn}{{{{\"{core_asn}\"}}}}\n"));
-                }
-                result.push_str(" end\n");
-            }
-
-            for asn in as_numbers {
-                result.push_str(&format!(" {asn}\n"));
-            }
-
-            result.push_str("end\n");
-        }
-
-        // Add links
+        // Edges: one per link, labelled with each interface ID next to its own AS and the link type
+        // in the middle. Links are bidirectional, so an undirected connector is used.
         for link in self.link_map.values() {
             let (uplink, downlink) = link.get_up_and_downlink();
-
-            let connector = match link.link_type {
-                ScionLinkType::Peer => format!("-.->|{} Peer {}|", uplink.if_id, downlink.if_id),
-                ScionLinkType::Core => format!("==>|{} Core {}|", uplink.if_id, downlink.if_id),
-                _ => format!("-->|{} Up {}|", uplink.if_id, downlink.if_id),
-            };
-
+            let link_type = link.link_type.to_string().to_lowercase();
             result.push_str(&format!(
-                "{} {} {}\n",
-                uplink.isd_as, connector, downlink.isd_as
+                "    {} ---|\"#{} ({link_type}) #{}\"| {}\n",
+                node_id(uplink.isd_as),
+                uplink.if_id,
+                downlink.if_id,
+                node_id(downlink.isd_as),
             ));
         }
 

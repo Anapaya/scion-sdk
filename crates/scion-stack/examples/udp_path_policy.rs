@@ -14,28 +14,19 @@
 
 //! Filtering SCION paths with a path policy.
 //!
-//! The `udp_paths` example picks a path by hand. Most applications instead have a
-//! *standing rule* ("never leave this ISD", "avoid AS X") that the stack should
-//! apply to every send. This example expresses such a rule as a [`PathPolicy`] and
-//! attaches it to the socket with [`SocketConfig::with_path_policy`], after which
-//! [`send_to`] only ever routes over paths that satisfy it.
+//! The `udp_paths` example picks a path by hand. Most applications instead have a *standing rule*
+//! ("never leave this ISD", "avoid AS X") that the stack should apply to every send. This example
+//! expresses such a rule as a [`PathPolicy`] and attaches it to the socket with
+//! [`SocketConfig::with_path_policy`], after which [`send_to`] only ever routes over paths that
+//! satisfy it.
 //!
-//! For common cases, prefer a built-in policy: `sciparse` ships hop-pattern and
-//! ACL matchers that implement [`PathPolicy`]. This example writes a small custom
-//! policy to show how the trait works.
+//! For common cases, prefer a built-in policy: `sciparse` ships hop-pattern and ACL matchers that
+//! implement [`PathPolicy`]. This example writes a small custom policy to show how the trait works.
 //!
-//! It uses the same triangular topology as `udp_paths`: the client reaches the
-//! server either directly or via the detour AS 2-ff00:0:222. The policy below
-//! forbids the detour, so the stack is left with the direct path.
-//!
-//! ```text
-//!                     2-ff00:0:222   (forbidden by the policy)
-//!                 #1 /            \ #2
-//!                   /              \
-//!             #2   /                \  #4
-//!   1-ff00:0:132  #1 ───────────── #3  2-ff00:0:212
-//!     (client)                           (server)
-//! ```
+//! It uses the same triangular topology as `udp_paths`: the client (1-ff00:0:132) reaches the
+//! server (2-ff00:0:212) either directly or via the detour AS 2-ff00:0:222. The policy below
+//! forbids that detour, so the stack is left with the direct path.
+#![doc = simple_mermaid::mermaid!("../../pocketscion/src/util/topologies/diagrams/two_path.mmd")]
 //!
 //! Run it with:
 //!

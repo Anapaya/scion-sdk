@@ -75,9 +75,7 @@ started itself, and read back the echo.
 The example builds this two-AS network in PocketSCION — a client AS and a server
 AS joined by one link:
 
-```mermaid
-flowchart LR
-    client["1-ff00:0:132<br/>(client)"] ---|link| server["2-ff00:0:212<br/>(server)"]
+```mermaid reference="@sdk/crates/pocketscion/src/util/topologies/diagrams/minimal.mmd"
 ```
 
 Here is the whole program. We'll walk through it step by step below.

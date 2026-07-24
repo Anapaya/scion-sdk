@@ -19,11 +19,7 @@
 //! starts itself.
 //!
 //! The network is two ASes joined by a single link:
-//!
-//! ```text
-//!   1-ff00:0:132  #1 ───────── #3  2-ff00:0:212
-//!     (client)                       (server)
-//! ```
+#![doc = simple_mermaid::mermaid!("../../pocketscion/src/util/topologies/diagrams/minimal.mmd")]
 //!
 //! Run it with:
 //!

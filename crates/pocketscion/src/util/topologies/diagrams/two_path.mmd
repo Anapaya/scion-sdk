@@ -1,0 +1,9 @@
+%% Generated from minimal.rs; do not edit by hand.
+%% Regenerate with `UPDATE_TOPO_DIAGRAMS=1 cargo test -p pocketscion topology_diagrams`.
+flowchart LR
+    as_1_ff00_0_132["1-ff00:0:132"]
+    as_2_ff00_0_212["2-ff00:0:212"]
+    as_2_ff00_0_222["2-ff00:0:222"]
+    as_1_ff00_0_132 ---|"#1 (core) #3"| as_2_ff00_0_212
+    as_1_ff00_0_132 ---|"#2 (core) #1"| as_2_ff00_0_222
+    as_2_ff00_0_212 ---|"#4 (core) #2"| as_2_ff00_0_222
