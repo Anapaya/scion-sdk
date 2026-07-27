@@ -408,6 +408,11 @@ impl ScionTopology {
 
         fallback
     }
+
+    /// Returns the ScionAs for the given AS. If none exists, returns None.
+    pub fn get_as(&self, isd_as: &IsdAsn) -> Option<&ScionAs> {
+        self.as_map.get(isd_as)
+    }
 }
 // Visualization
 impl ScionTopology {
@@ -874,10 +879,12 @@ impl ScionLink {
 /// Directed Variant of a [ScionLink]
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub struct DirectedScionLink {
-    pub(crate) from: ScionGlobalInterfaceId,
+    /// The interface ID of the AS that is the source of the link.
+    pub from: ScionGlobalInterfaceId,
     /// Link Type - from is `{link_type}` of to
-    pub(crate) link_type: ScionLinkType,
-    pub(crate) to: ScionGlobalInterfaceId,
+    pub link_type: ScionLinkType,
+    /// The interface ID of the AS that is the destination of the link.
+    pub to: ScionGlobalInterfaceId,
 }
 
 /// Link type of a SCION link

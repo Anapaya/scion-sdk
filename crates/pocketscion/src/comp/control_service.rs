@@ -433,8 +433,8 @@ impl PocketScionState {
     }
 
     /// Mutates the Control Service state for the given ISD-AS, returning an error if no state for
-    /// the
-    fn mutate_control_service_state<F>(&self, isd_asn: IsdAsn, f: F) -> anyhow::Result<()>
+    /// the ISD-AS exists.
+    pub fn mutate_control_service_state<F>(&self, isd_asn: IsdAsn, f: F) -> anyhow::Result<()>
     where
         F: FnOnce(&mut ControlServiceState) -> anyhow::Result<()>,
     {

@@ -83,7 +83,7 @@ impl ScionNetworkSim {
 
         Ok(ScionNetworkSimOutput {
             at_as: iter_result.at_as,
-            at_ingress_interface: iter_result.at_ingress_interface,
+            at_interface: iter_result.at_interface,
             action: local_action,
         })
     }
@@ -203,7 +203,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
         }
 
         let processing_as = self.current_as;
-        let processing_ingress_interface_id = self.current_ingress_interface_id;
+        let mut handling_interface = self.current_ingress_interface_id;
 
         // Process the packet at the current AS and interface
         let processing_result = AsRoutingImpl::route(
@@ -242,6 +242,9 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
             egress_interface_id,
         } = processing_result
         {
+            // Egress interface handles forwarding
+            handling_interface = egress_interface_id;
+
             let uplink = self
                 .topology
                 .scion_link(&self.current_as, egress_interface_id)
@@ -274,7 +277,7 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
 
                 return Ok(Some(ScionNetworkSimIterOutput {
                     at_as: self.current_as,
-                    at_ingress_interface: self.current_ingress_interface_id,
+                    at_interface: self.current_ingress_interface_id,
                     action: AsRoutingAction::Local(LocalAsRoutingAction::ForwardExternal {
                         sim_egress_interface_id: egress_interface_id,
                         extern_ingress_interface_id: link_partner.if_id,
@@ -294,12 +297,21 @@ impl<'input, AsRoutingImpl: RoutingLogic> ScionNetworkSimIter<'input, AsRoutingI
         } else {
             // If the decision is not to forward to the next hop, we can finalize the iteration
             self.finished = true;
+
+            // If the decision is an egress SCMP request, the action will be handled at the egress
+            // interface
+            if let AsRoutingAction::Local(LocalAsRoutingAction::EgressSCMPHandleRequest {
+                interface_id,
+            }) = processing_result
+            {
+                handling_interface = interface_id;
+            }
         }
 
         // Return the result of processing
         Ok(Some(ScionNetworkSimIterOutput {
             at_as: processing_as,
-            at_ingress_interface: processing_ingress_interface_id,
+            at_interface: handling_interface,
             action: processing_result,
             finished: self.finished,
         }))
@@ -318,8 +330,8 @@ impl<'input, AsRoutingImpl: RoutingLogic> Iterator for ScionNetworkSimIter<'inpu
 pub struct ScionNetworkSimIterOutput {
     /// The ISD-ASN at which the result was produced
     pub at_as: IsdAsn,
-    /// The ingress interface ID at which the ASN received the packet
-    pub at_ingress_interface: u16,
+    /// The interface handling the action
+    pub at_interface: u16,
     /// Action which should be taken for the packet at this step
     pub action: AsRoutingAction,
     /// Iteration is finished, next call to `next()` will return None
@@ -331,8 +343,8 @@ pub struct ScionNetworkSimIterOutput {
 pub struct ScionNetworkSimOutput {
     /// The ISD-ASN at which the result was produced
     pub at_as: IsdAsn,
-    /// The ingress interface ID at which the ASN received the packet
-    pub at_ingress_interface: u16,
+    /// The interface handling the action
+    pub at_interface: u16,
     /// The decision made for the packet
     pub action: LocalAsRoutingAction,
 }
@@ -404,7 +416,7 @@ mod tests {
 
         assert_eq!(result.at_as, dst_addr.isd_asn(), "Final ISD-ASN mismatch");
         assert_eq!(
-            result.at_ingress_interface, 6,
+            result.at_interface, 6,
             "Final ingress interface ID mismatch"
         );
     }
@@ -461,7 +473,7 @@ mod tests {
 
         assert!(result.at_as == failing_as, "Final ISD-ASN mismatch");
         assert!(
-            result.at_ingress_interface == 2,
+            result.at_interface == 2,
             "Final ingress interface ID mismatch"
         );
 
@@ -521,7 +533,7 @@ mod tests {
 
         check_step(
             &mut iter,
-            0,
+            1,
             src_addr.isd_asn(),
             AsRoutingAction::ForwardNextHop {
                 egress_interface_id: 1,
@@ -530,7 +542,7 @@ mod tests {
         );
         check_step(
             &mut iter,
-            2,
+            3,
             as2.isd_as(),
             AsRoutingAction::ForwardNextHop {
                 egress_interface_id: 3,
@@ -539,7 +551,7 @@ mod tests {
         );
         check_step(
             &mut iter,
-            4,
+            5,
             as3.isd_as(),
             AsRoutingAction::ForwardNextHop {
                 egress_interface_id: 5,
@@ -556,15 +568,15 @@ mod tests {
 
         fn check_step(
             iter: &mut ScionNetworkSimIter<MockScionPacketProcessor>,
-            expected_ingress_interface: u16,
+            handling_interface: u16,
             expected_isd_asn: IsdAsn,
             expected_action: AsRoutingAction,
             expected_finished: bool,
         ) {
             let res = iter.next().expect("Step").expect("No error");
             assert_eq!(
-                res.at_ingress_interface, expected_ingress_interface,
-                "ingress interface should match expected value at this step"
+                res.at_interface, handling_interface,
+                "The handling interface should match expected interface at this step"
             );
             assert_eq!(
                 res.at_as, expected_isd_asn,

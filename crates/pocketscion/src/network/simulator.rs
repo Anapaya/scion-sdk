@@ -102,7 +102,7 @@ impl NetworkSimulator<'_> {
 
             let router = self
                 .topology
-                .get_router(&routing_output.at_as, routing_output.at_ingress_interface);
+                .get_router(&routing_output.at_as, routing_output.at_interface);
 
             // Add dst AS to span for better observability of routing results
             tracing::Span::current().record("eas", tracing::field::display(&routing_output.at_as));
@@ -115,7 +115,7 @@ impl NetworkSimulator<'_> {
             // Simulate Local Handling
             if let Some(reply) = LocalNetworkSimulation::new(
                 routing_output.at_as,
-                routing_output.at_ingress_interface,
+                routing_output.at_interface,
                 self.network_receivers,
                 self.external_ases,
                 router,
