@@ -31,9 +31,9 @@ On the SCION network you can:
 
 The SDK's [`scion-stack`](https://crates.io/crates/scion-stack) crate exposes
 this through an API deliberately shaped like the sockets you already know:
-[`bind`](https://docs.rs/scion-stack/latest/scion_stack/scionstack/struct.ScionStack.html#method.bind),
-[`send_to`](https://docs.rs/scion-stack/latest/scion_stack/scionstack/socket/struct.UdpScionSocket.html#method.send_to),
-[`recv_from`](https://docs.rs/scion-stack/latest/scion_stack/scionstack/socket/struct.UdpScionSocket.html#method.recv_from).
+[`bind`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.bind),
+[`send_to`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.send_to),
+[`recv_from`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.recv_from).
 Path awareness is opt-in — the simplest programs ignore it and let the stack
 choose, and you reach for explicit path selection only when you want it (see
 [Going further: let your app pick the path](#going-further)).
@@ -78,10 +78,8 @@ AS joined by one link:
 ```mermaid reference="@sdk/crates/pocketscion/src/util/topologies/diagrams/minimal.mmd"
 ```
 
-Here is the whole program. We'll walk through it step by step below.
-
-```rust reference="@sdk/crates/scion-stack/examples/udp_echo.rs" title="scion-stack/examples/udp_echo.rs"
-```
+We'll walk through it step by step below; the [full program](#full-example) is listed at the end of
+this guide.
 
 ### 1. Start a SCION network
 
@@ -142,7 +140,7 @@ path fetcher for every path to the destination:
 Each `ScionPath` carries metadata — the interfaces it traverses, MTU, latency
 hints — which is exactly what you'd base a routing decision on. Once you hold a
 path, send a datagram on the path with
-[`send_to_via`](https://docs.rs/scion-stack/latest/scion_stack/scionstack/socket/struct.UdpScionSocket.html#method.send_to_via)
+[`send_to_via`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.send_to_via)
 instead of `send_to`:
 
 ```rust reference="@sdk/crates/scion-stack/examples/udp_paths.rs#send-each" title="udp_paths.rs"
@@ -179,10 +177,17 @@ socket, and `send_to` / `recv_from`.
 
 - **Browse the examples** — every example under
   [`scion-stack/examples/`](https://github.com/Anapaya/scion-sdk/tree/main/scion-stack/examples)
-  is runnable with `cargo run -p scion-stack --example <name>` and is compiled
-  and tested in CI.
+  is runnable with `cargo run -p scion-stack --example <name>`.
 - **API reference** — the full API for the stack is on
   [docs.rs/scion-stack](https://docs.rs/scion-stack).
 - **PocketSCION** — see
   [`pocketscion/README.md`](https://github.com/Anapaya/scion-sdk/tree/main/pocketscion)
   for the other topologies and underlays you can simulate.
+
+## Full example
+
+The complete program, for reference. It lives in the SDK repo at
+[`scion-stack/examples/udp_echo.rs`](https://github.com/Anapaya/scion-sdk/tree/main/scion-stack/examples/udp_echo.rs).
+
+```rust reference="@sdk/crates/scion-stack/examples/udp_echo.rs#full-program" title="scion-stack/examples/udp_echo.rs"
+```

@@ -76,37 +76,19 @@ async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Transport underlays
+## Documentation
 
-The `ScionStack` automatically discovers the available transports by querying the local SCION
-endhost API.
+The full developer guide is published at **<https://learn.anapaya.net/docs/academy/scion-sdk>**.
+That site tracks the latest *released* version of the SDK.
 
-The SCION endhost SDK supports two different transport underlays:
+To preview the documentation for the current `HEAD` of this repository instead, use the standalone
+preview app in [docs/preview/](docs/preview/):
 
-1. **UDP Underlay**: The UDP underlay is the default transport mechanism for SCION packets. SCION
-   applications send and receive SCION packets directly to and from the SCION routers using UDP
-   sockets. While simple and efficient, the UDP underlay does not support changing network types
-   (e.g. switching from WiFi to cellular), deal with NAT traversal, or provide authorization
-   mechanisms.
-1. **SNAP Underlay**: The SCION Network Access Point (SNAP) transport underlay uses QUIC datagrams
-   over a SNAP tunnel to send and receive SCION packets. With the SNAP underlay, applications do not
-   interact directly with the SCION routers. Instead, a SNAP provides a frontend that authorizes
-   users that are allowed to use the SCION infrastructure of a given SCION AS. Due to its use of
-   QUIC, the SNAP underlay supports NAT traversal and can seamlessly switch between different
-   network types.
-
-### Local development and testing with PocketSCION
-
-For local development and testing, [pocketscion](crates/pocketscion/) provides a lightweight SCION network
-simulator. It allows you to create and manage local SCION topologies, making it an invaluable tool
-for testing your applications without needing a full-fledged SCION network.
-
-`pocketscion` supports both the UDP and SNAP underlays, allowing you to test your applications in a
-variety of network scenarios.
-
-You can find examples on how to use `pocketscion` for local testing in
-[examples/](crates/scion-stack/examples/) and [integration-tests/](crates/pocketscion/tests/). For
-more details about `pocketscion`, please refer to the [documentation](crates/pocketscion/README.md).
+```bash
+cd docs/preview
+pnpm install
+pnpm start          # http://localhost:3000 (live reload)
+```
 
 ## Code structure
 
@@ -119,15 +101,8 @@ the main components at the top level. The most relevant crates are:
 - [pocketscion](crates/pocketscion/): A SCION simulator for local development and testing.
 - [snap](crates/snap/): A client implementation for the SNAP (SCION Network Access Point) transport
   underlay.
-- [endhost-api](crates/apis/endhost-api/): A client for the SCION endhost API, which is used for
-  discovering transport underlays and fetching path and certificate information.
 - [sciparse](crates/libs/sciparse/): Contains the definitions for SCION data plane and control plane
   entities, such as packet formats and control plane messages.
-- [scion-protobuf](crates/libs/scion-protobuf/): Contains the protobuf definitions used in the SCION
-  control plane.
-- [crates/libs](crates/libs/): Shared libraries and utilities that are used throughout the codebase.
-- [crates/pocketscion/tests](crates/pocketscion/tests/): A suite of integration tests that use
-  `pocketscion` to test the functionality of the `scion-stack`.
 
 ## Contributing
 

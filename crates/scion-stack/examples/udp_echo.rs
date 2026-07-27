@@ -29,6 +29,7 @@
 //!
 //! [PocketSCION]: pocketscion
 
+// ANCHOR: full-program
 mod common;
 
 use std::time::Duration;
@@ -119,6 +120,7 @@ async fn ping(
     anyhow::bail!("no echo received from {destination} after 5 attempts")
 }
 // ANCHOR_END: ping
+// ANCHOR_END: full-program
 
 #[cfg(test)]
 mod tests {
