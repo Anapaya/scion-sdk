@@ -21,7 +21,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
+use http::HeaderMap;
 use http_body::{Body, Frame};
 
 use super::StreamRef;
@@ -119,6 +120,142 @@ impl H3ResponseBody {
             read_guard,
         }
     }
+
+    /// Returns a future that resolves to the next frame of the response body, or
+    /// `None` if the body has finished (EOF, trailers, or an error already observed).
+    pub async fn next_frame(&mut self) -> Option<Result<Frame<Bytes>, H3Error>> {
+        futures::future::poll_fn(|cx| poll_read_frame(&self.handle, self.stream_id, cx)).await
+    }
+
+    /// Copies the entire response body into `buffer`, returning the collected data and any trailing
+    /// headers.
+    ///
+    /// `max_size`, if set, caps the total body size accepted; a body exceeding it is rejected
+    /// rather than partially copied.
+    ///
+    /// Returns Ok((written, trailers)) if the body was successfully collected, where `written` is
+    /// the number of bytes written to the buffer and `trailers` is an optional `HeaderMap`
+    /// containing any trailing headers.
+    ///
+    /// Returns [`CollectError::BufferTooSmall`] if `buffer` runs out of spare capacity,
+    /// [`CollectError::TooLarge`] if the body exceeds `max_size`, or [`CollectError::H3`] if the
+    /// underlying connection encounters an error.
+    pub async fn collect_to_buf(
+        mut self,
+        buffer: &mut impl BufMut,
+        max_size: Option<usize>,
+    ) -> Result<(usize, Option<HeaderMap>), CollectError> {
+        let mut written = 0;
+
+        while let Some(frame) = self.next_frame().await {
+            let frame = frame?;
+
+            if frame.is_data() {
+                let chunk = frame.into_data().expect("frame is data");
+                if chunk.len() > buffer.remaining_mut() {
+                    return Err(CollectError::BufferTooSmall);
+                }
+
+                if let Some(max) = max_size
+                    && written + chunk.len() > max
+                {
+                    return Err(CollectError::TooLarge);
+                }
+
+                buffer.put_slice(&chunk);
+                written += chunk.len();
+            } else if frame.is_trailers() {
+                let trailers = frame.into_trailers().expect("frame is trailers");
+                // Got trailers, well-formed response body is complete. Return the collected data
+                // and the trailers.
+                return Ok((written, Some(trailers)));
+            } else {
+                // There are no other frame types as of now, but if there are in the future, we
+                // should handle them appropriately.
+                debug_assert!(false, "Unexpected frame type in response body: {:?}", frame);
+            }
+        }
+
+        Ok((written, None))
+    }
+
+    /// Collects the entire response body into a `BytesMut` buffer, returning the collected data and
+    /// any trailing headers.
+    ///
+    /// Returns Ok((data, trailers)) if the body was successfully collected, where `data` is a
+    /// `BytesMut` buffer containing the collected data and `trailers` is an optional `HeaderMap`
+    /// containing any trailing headers.
+    ///
+    /// Returns an error if the body exceeds the given `max_size` or the underlying connection
+    /// encounters an error.
+    pub async fn bytes(
+        self,
+        max_size: Option<usize>,
+    ) -> Result<(BytesMut, Option<HeaderMap>), CollectError> {
+        let mut buffer = BytesMut::new();
+        let (_written, trailers) = self.collect_to_buf(&mut buffer, max_size).await?;
+        Ok((buffer, trailers))
+    }
+
+    /// Collects the entire response body into a `String`, returning the collected data and any
+    /// trailing headers.
+    ///
+    /// Returns Ok((data, trailers)) if the body was successfully collected, where `data` is a
+    /// `String` containing the collected data and `trailers` is an optional `HeaderMap` containing
+    /// any trailing headers.
+    ///
+    /// Returns an error if the body exceeds the given `max_size`, the underlying connection
+    /// encounters an error, or if the collected data is not valid UTF-8.
+    pub async fn text(
+        self,
+        max_size: Option<usize>,
+    ) -> Result<(String, Option<HeaderMap>), CollectToStringError> {
+        let (bytes, trailers) = match self.bytes(max_size).await {
+            Ok(result) => result,
+            Err(e) => {
+                match e {
+                    CollectError::H3(h3_err) => return Err(CollectToStringError::H3(h3_err)),
+                    CollectError::TooLarge => return Err(CollectToStringError::TooLarge),
+                    CollectError::BufferTooSmall => {
+                        unreachable!(
+                            "BytesMut grows automatically, cannot be BufferTooSmall in collect_to_bytes"
+                        )
+                    }
+                }
+            }
+        };
+        let string = String::from_utf8(bytes.into())?;
+
+        Ok((string, trailers))
+    }
+}
+
+/// An error that can occur while collecting the response body into a buffer.
+#[derive(Debug, thiserror::Error)]
+pub enum CollectError {
+    /// An error that occurred while reading the response body.
+    #[error(transparent)]
+    H3(#[from] H3Error),
+    /// The provided buffer was too small to hold the response body.
+    #[error("the provided buffer was too small to hold the response body")]
+    BufferTooSmall,
+    /// The response body exceeded the maximum size specified.
+    #[error("response body exceeded maximum size")]
+    TooLarge,
+}
+
+/// An error that can occur while collecting the response body into a string.
+#[derive(Debug, thiserror::Error)]
+pub enum CollectToStringError {
+    /// An error that occurred while reading the response body.
+    #[error(transparent)]
+    H3(#[from] H3Error),
+    /// The response body exceeded the maximum size specified.
+    #[error("response body exceeded maximum size")]
+    TooLarge,
+    /// The response body did not contain valid UTF-8.
+    #[error("response body did not contain valid UTF-8")]
+    Utf8(#[from] std::string::FromUtf8Error),
 }
 
 impl Body for H3ResponseBody {

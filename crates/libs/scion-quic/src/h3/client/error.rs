@@ -20,7 +20,7 @@
 //! client-specific failures — connection *establishment* and *request*
 //! initiation/routing — are captured here.
 
-use crate::socket::BoxedSocketError;
+use crate::{h3::common::H3Error, socket::BoxedSocketError};
 
 /// An error establishing an HTTP/3 connection (the `connect()` bootstrap).
 #[derive(Debug, thiserror::Error)]
@@ -67,4 +67,16 @@ pub enum RequestError {
     /// concurrent-stream limit is exhausted.
     #[error("request blocked: concurrent stream limit reached")]
     StreamBlocked,
+}
+
+/// A failure while streaming a request body
+#[derive(Debug, thiserror::Error)]
+pub enum UploadError {
+    /// The request body yielded an error while being read.
+    #[error("request body error: {0}")]
+    Body(Box<dyn std::error::Error + Send + Sync>),
+    /// Sending request-body bytes to the peer failed (the stream was reset or the
+    /// connection went away).
+    #[error("send failed: {0}")]
+    Send(#[from] H3Error),
 }

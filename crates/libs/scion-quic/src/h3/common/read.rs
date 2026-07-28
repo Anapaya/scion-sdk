@@ -40,6 +40,12 @@ const READ_CHUNK: usize = 16 * 1024;
 /// backpressure is the QUIC stream's flow-control window (no intermediate
 /// buffer). This is the single read step shared by the server's request body,
 /// the client's response body, and the client's `CONNECT` tunnel reader.
+///
+/// Returns `Poll::Ready(None)` if the connection has been dropped, or if the stream has reached EOF
+/// or has been reset.
+///
+/// Otherwise, returns `Poll::Ready(Some(Ok(frame)))` if a frame was read, or
+/// `Poll::Ready(Some(Err(err)))` if an error occurred.
 pub(crate) fn poll_read_frame<A: H3App>(
     handle: &WeakConnectionHandle<A>,
     stream_id: u64,

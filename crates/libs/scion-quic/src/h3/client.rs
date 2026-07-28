@@ -15,17 +15,21 @@
 //! The HTTP/3-over-SCION client.
 //!
 //! [`Http3Client`] is the entry point: a cheap-to-construct handle that lazily
-//! establishes a connection on the first
-//! [`request`](Http3Client::request) and transparently
+//! establishes a connection on the first request and transparently
 //! re-establishes it if it breaks (**lazy reconnect**).
-//! [`request`](Http3Client::request) sends the request headers
-//! and returns a [`RequestBodyWriter`] the caller drives to stream the request
-//! body, plus a [`ResponseFut`] that resolves to an `http::Response` whose body
-//! is a streaming [`H3ResponseBody`] once the response head arrives.
 //!
-//! HTTP/3 places no ordering between the request and response bodies, the caller
-//! must drive the two concurrently (typically by sending the body from a spawned
-//! task while awaiting/reading the response).
+//! There are two ways to issue a request:
+//! - [`request`](Http3Client::request) to send a request body on a background task and await the
+//!   response.
+//! - [`request_with_writer`](Http3Client::request_with_writer) allowing custom streaming of the
+//!   request body. It returns a [`RequestBodyWriter`] the caller drives to stream the request body,
+//!   plus a [`ResponseFut`] that resolves to an `http::Response` whose body is a streaming
+//!   [`H3ResponseBody`].
+//!
+//! HTTP/3 places no ordering between the request and response bodies; both entry
+//! points make the two progress concurrently ([`request`](Http3Client::request)
+//! on a spawned task, [`request_with_writer`](Http3Client::request_with_writer) under caller
+//! control).
 //!
 //! This is the client counterpart of
 //! [`Http3Server`](crate::h3::server::Http3Server), built on the same
@@ -43,13 +47,15 @@ mod stream;
 
 use std::sync::Arc;
 
+use bytes::Buf;
+use http_body::Body;
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::sync::Mutex;
 
 use self::{app::Http3ClientApp, connect::connect};
 pub use self::{
-    error::{EstablishError, RequestError},
-    stream::{H3DuplexStream, H3ResponseBody, RequestBodyWriter, ResponseFut},
+    error::{EstablishError, RequestError, UploadError},
+    stream::{CollectError, H3DuplexStream, H3ResponseBody, RequestBodyWriter, ResponseFut},
 };
 pub use crate::h3::common::H3Error;
 use crate::{
@@ -113,7 +119,7 @@ impl Http3Client {
     /// awaiting and reading the response:
     ///
     /// ```ignore
-    /// let (response, mut writer) = client.request(req).await?;
+    /// let (response, mut writer) = client.request_with_writer(req).await?;
     /// tokio::spawn(async move {
     ///     writer.write_chunk(chunk).await?;
     ///     writer.finish().await
@@ -123,12 +129,47 @@ impl Http3Client {
     ///
     /// Dropping `writer` before [`finish`](RequestBodyWriter::finish) resets the
     /// request's write side without disturbing the response (read) side.
-    pub async fn request(
+    pub async fn request_with_writer(
         &self,
         req: http::Request<()>,
     ) -> Result<(ResponseFut, RequestBodyWriter), RequestError> {
         let handle = self.get_connection().await?;
-        stream::initiate_request(&handle, req)
+        let (parts, ()) = req.into_parts();
+
+        stream::initiate_request(&handle, parts)
+    }
+
+    /// Issues a request, returning its response.
+    ///
+    /// The request body is an [`http_body::Body`] that is streamed to the server on a background
+    /// task, concurrently with the response.
+    ///
+    /// The response is returned once the response head arrives. The response body is a streaming
+    /// [`H3ResponseBody`] that can be read from it as it arrives.
+    ///
+    /// For more complex use cases, requiring precise control over writing the body, use
+    /// [`request_with_writer`](Self::request_with_writer).
+    pub async fn request<B>(
+        &self,
+        req: http::Request<B>,
+    ) -> Result<http::Response<H3ResponseBody>, RequestError>
+    where
+        B: Body + Send + 'static,
+        B::Data: Send,
+        B::Error: Send + Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let handle = self.get_connection().await?;
+        let (parts, body) = req.into_parts();
+        let (response, writer) = stream::initiate_request(&handle, parts)?;
+
+        // Drive the request body on a background task, concurrently with the response.
+        tokio::spawn(async move {
+            if let Err(e) = pump_request_body(body, writer).await {
+                tracing::debug!(?e, "request body upload failed")
+            }
+        });
+
+        response.await
     }
 
     /// Eagerly establishes the connection if none is currently up.
@@ -190,4 +231,42 @@ impl Http3Client {
         let conn = handle.lock();
         conn.app.streams.len() + conn.app.response_heads.len()
     }
+}
+
+/// Streams `body` into `writer` and finishes the request when the body ends.
+async fn pump_request_body<B>(body: B, mut writer: RequestBodyWriter) -> Result<(), UploadError>
+where
+    B: Body,
+    B::Error: Send + Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let mut body = std::pin::pin!(body);
+    let mut trailers: Option<http::HeaderMap> = None;
+
+    while let Some(frame) = std::future::poll_fn(|cx| body.as_mut().poll_frame(cx)).await {
+        let frame = frame.map_err(|e| UploadError::Body(e.into()))?;
+        match frame.into_data() {
+            Ok(mut data) => {
+                let chunk = data.copy_to_bytes(data.remaining());
+                writer.write_chunk(chunk).await.map_err(UploadError::Send)?;
+            }
+            // A non-data frame is the trailing header section (a well-formed body
+            // yields nothing after it).
+            Err(frame) => {
+                if let Ok(t) = frame.into_trailers() {
+                    trailers = Some(t);
+                }
+            }
+        }
+    }
+
+    match trailers {
+        Some(trailers) => {
+            writer
+                .write_trailers(trailers)
+                .await
+                .map_err(UploadError::Send)?
+        }
+        None => writer.finish().await.map_err(UploadError::Send)?,
+    }
+    Ok(())
 }

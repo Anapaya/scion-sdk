@@ -28,7 +28,7 @@ pub use duplex::H3DuplexStream;
 pub use request::RequestBodyWriter;
 use request::{WriteGuard, request_headers};
 use response::ReadGuard;
-pub use response::{H3ResponseBody, ResponseFut};
+pub use response::{CollectError, H3ResponseBody, ResponseFut};
 
 use crate::{
     h3::client::{
@@ -43,14 +43,13 @@ use crate::{
 /// Sends the request head on a fresh stream (without a FIN), registers the
 /// per-stream read/write and head-routing state, and returns a [`ResponseFut`]
 /// that resolves once the response head arrives plus a [`RequestBodyWriter`] that
-/// streams the request body. The write side is never finished implicitly — the
+/// streams the request body. The write side is never finished implicitly, the
 /// caller drives the body and finishes it explicitly.
 pub(crate) fn initiate_request(
     handle: &ConnectionHandle<Http3ClientApp>,
-    req: http::Request<()>,
+    request_parts: http::request::Parts,
 ) -> Result<(ResponseFut, RequestBodyWriter), RequestError> {
-    let (parts, ()) = req.into_parts();
-    let headers = request_headers(&parts);
+    let headers = request_headers(&request_parts);
 
     let stream_id = {
         let mut guard = handle.lock();
@@ -72,6 +71,7 @@ pub(crate) fn initiate_request(
     let stream_ref = StreamRef::new(handle.downgrade(), stream_id);
     let response = ResponseFut::new(ReadGuard::new(stream_ref.clone()));
     let writer = RequestBodyWriter::new(WriteGuard::new(stream_ref));
+
     Ok((response, writer))
 }
 

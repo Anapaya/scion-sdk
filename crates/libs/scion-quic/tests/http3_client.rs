@@ -38,7 +38,7 @@ use bytes::Bytes;
 use http_body::{Body, Frame};
 use scion_quic::{
     h3::{
-        client::{H3DuplexStream, H3ResponseBody, Http3Client, RequestError},
+        client::{CollectError, H3DuplexStream, H3ResponseBody, Http3Client, RequestError},
         server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
     },
     quic::{
@@ -477,48 +477,43 @@ fn head_request(method: http::Method, path: &str) -> http::Request<()> {
         .unwrap()
 }
 
-/// Issues a GET over `request`, finishing the (empty) request body
-/// before awaiting the response. The empty FIN never blocks on flow control, so
-/// finishing inline is safe.
+/// Issues a GET, letting [`Http3Client::request`] stream the (empty) body and
+/// resolve to the response.
 async fn get(
     client: &Http3Client,
     path: &str,
 ) -> Result<http::Response<H3ResponseBody>, RequestError> {
-    let (response, writer) = client
-        .request(head_request(http::Method::GET, path))
-        .await?;
-    // Finishing the empty body errors only if the connection is already gone, in
-    // which case the response future surfaces the fault.
-    let _ = writer.finish().await;
-    response.await
+    let req = http::Request::builder()
+        .method(http::Method::GET)
+        .uri(format!("https://example.com{path}"))
+        .body(FullBody::new(Bytes::new()))
+        .unwrap();
+
+    client.request(req).await
 }
 
-/// Issues a POST with a fixed body over `request`, driving the body on a
-/// spawned task — the pattern callers use now that the client only exposes the
-/// streamed API — while the response is awaited concurrently. This avoids the
-/// request-vs-response deadlock that a synchronous "send then await" would hit
-/// against a server that streams its response while reading the request.
+/// Issues a POST with a fixed body, letting [`Http3Client::request`] stream the
+/// body on its own task and resolve to the response. This exercises the
+/// convenience entry point that hides the request-vs-response concurrency HTTP/3
+/// requires.
 async fn post(
     client: &Http3Client,
     path: &str,
     body: impl Into<Bytes>,
 ) -> Result<http::Response<H3ResponseBody>, RequestError> {
-    let body = body.into();
-    let (response, mut writer) = client
-        .request(head_request(http::Method::POST, path))
-        .await?;
-    tokio::spawn(async move {
-        if !body.is_empty() {
-            let _ = writer.write_chunk(body).await;
-        }
-        let _ = writer.finish().await;
-    });
-    response.await
+    let req = http::Request::builder()
+        .method(http::Method::POST)
+        .uri(format!("https://example.com{path}"))
+        .body(FullBody::new(body))
+        .unwrap();
+
+    client.request(req).await
 }
 
 /// Opens a full-duplex byte stream over a `CONNECT` request issued through
-/// `request`, returning the response head and an [`H3DuplexStream`].
-/// Does not enforce a 2xx status; the caller inspects `parts.status`.
+/// [`Http3Client::request_with_writer`], returning the response head and an
+/// [`H3DuplexStream`]. Does not enforce a 2xx status; the caller inspects
+/// `parts.status`.
 async fn connect_tunnel(
     client: &Http3Client,
     authority: &str,
@@ -528,7 +523,7 @@ async fn connect_tunnel(
         .uri(format!("https://{authority}"))
         .body(())
         .unwrap();
-    let (response, writer) = client.request(req).await?;
+    let (response, writer) = client.request_with_writer(req).await?;
     let response = response.await?;
     let (parts, body) = response.into_parts();
     Ok((parts, H3DuplexStream::new(writer, body)))
@@ -585,7 +580,7 @@ async fn streamed_request_body_echo_and_bodyless() {
     // Large body: comfortably beyond the 1 MiB per-stream window, sent in chunks.
     let payload: Vec<u8> = (0..(2 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
     let (response, mut writer) = client
-        .request(head_request(http::Method::POST, "/echo"))
+        .request_with_writer(head_request(http::Method::POST, "/echo"))
         .await
         .expect("request");
     let upload = {
@@ -627,7 +622,7 @@ async fn streamed_response_observed_before_body_finished() {
     let client = make_client(socket, LONG_IDLE);
 
     let (response, mut writer) = client
-        .request(head_request(http::Method::POST, "/echo"))
+        .request_with_writer(head_request(http::Method::POST, "/echo"))
         .await
         .expect("request");
 
@@ -656,7 +651,7 @@ async fn streamed_writer_drop_resets_write_side_only() {
     let client = make_client(socket, LONG_IDLE);
 
     let (response, mut writer) = client
-        .request(head_request(http::Method::POST, "/stream"))
+        .request_with_writer(head_request(http::Method::POST, "/stream"))
         .await
         .expect("request");
 
@@ -692,7 +687,7 @@ async fn streamed_request_with_body_releases_stream_state() {
     const REQUESTS: usize = 150;
     for i in 0..REQUESTS {
         let (response, mut writer) = client
-            .request(head_request(http::Method::POST, "/echo"))
+            .request_with_writer(head_request(http::Method::POST, "/echo"))
             .await
             .unwrap_or_else(|err| panic!("request {i} failed (streams leaked?): {err:?}"));
         let payload = format!("body-{i}");
@@ -1132,7 +1127,7 @@ async fn request_trailers_are_sent() {
     trailers.insert("x-trailer", http::HeaderValue::from_static("trailer-value"));
 
     let (response, mut writer) = client
-        .request(head_request(http::Method::POST, "/with-trailers"))
+        .request_with_writer(head_request(http::Method::POST, "/with-trailers"))
         .await
         .expect("request");
     tokio::spawn(async move {
@@ -1182,4 +1177,193 @@ async fn error_status_surfaced_without_fault() {
     assert_eq!(response.status(), http::StatusCode::OK);
     let (body, _) = read_body(response.into_body()).await;
     assert_eq!(body, b"hello");
+}
+
+// --------------------------------------------------------------------------
+// H3ResponseBody::collect_to_buf / bytes
+// --------------------------------------------------------------------------
+
+/// The full body of [`StreamingService`], for sizing collect buffers in the
+/// tests below.
+const STREAM_BODY: &[u8] = b"chunk-1;chunk-2;chunk-3";
+
+/// `bytes` copies out the entire body and returns the trailing header
+/// section: the collected bytes and the `x-trailer` trailer both arrive.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn bytes_returns_body_and_trailers() {
+    let (_server, socket) = spawn_server(StreamingService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = get(&client, "/stream").await.expect("request");
+    let (data, trailers) = response
+        .into_body()
+        .bytes(None)
+        .await
+        .expect("collect body");
+
+    assert_eq!(data, STREAM_BODY);
+    let trailers = trailers.expect("response should carry trailers");
+    assert_eq!(
+        trailers.get("x-trailer").map(|v| v.as_bytes()),
+        Some(b"done".as_slice())
+    );
+}
+
+/// A body that ends at EOF rather than trailers collects with `None` trailers;
+/// an empty body collects to zero bytes.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn bytes_without_trailers_and_empty() {
+    let (_server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = post(&client, "/echo", "echo-body").await.expect("request");
+    let (data, trailers) = response
+        .into_body()
+        .bytes(None)
+        .await
+        .expect("collect body");
+    assert_eq!(data, b"echo-body".as_slice());
+    assert!(trailers.is_none(), "an EOF-terminated body has no trailers");
+
+    // A bodyless request collects to an empty buffer, still with no trailers.
+    let response = post(&client, "/echo", Bytes::new())
+        .await
+        .expect("bodyless request");
+    let (data, trailers) = response
+        .into_body()
+        .bytes(None)
+        .await
+        .expect("collect empty body");
+    assert!(data.is_empty(), "empty body should collect to zero bytes");
+    assert!(trailers.is_none());
+}
+
+/// `collect_to_buf` writes the body into a caller-provided `BufMut`, returning the
+/// number of bytes written; the buffer holds exactly the body prefix.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn collect_to_buf_writes_into_provided_buffer() {
+    let (_server, socket) = spawn_server(StreamingService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let body = get(&client, "/stream").await.expect("request").into_body();
+
+    let mut buf = [0u8; 64];
+    let mut slice = &mut buf[..];
+    let (written, trailers) = body
+        .collect_to_buf(&mut slice, None)
+        .await
+        .expect("collect into buffer");
+
+    assert_eq!(written, STREAM_BODY.len());
+    assert_eq!(&buf[..written], STREAM_BODY);
+    assert!(trailers.is_some(), "trailers should still be returned");
+}
+
+/// A buffer whose spare capacity cannot hold the body fails with `TooLarge`
+/// (driven by `BufMut::remaining_mut`, independent of any `max_size`).
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn collect_to_buf_buffer_too_small() {
+    let (_server, socket) = spawn_server(StreamingService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let body = get(&client, "/stream").await.expect("request").into_body();
+
+    // Room for only part of the 23-byte body.
+    let mut buf = [0u8; 10];
+    let mut slice = &mut buf[..];
+    let err = body
+        .collect_to_buf(&mut slice, None)
+        .await
+        .expect_err("a body larger than the buffer must fail");
+    assert!(
+        matches!(err, CollectError::BufferTooSmall),
+        "expected BufferTooSmall, got {err:?}"
+    );
+}
+
+/// A body exceeding `max_size` fails with `TooLarge` even when the buffer itself
+/// has room; a `max_size` at least the body length succeeds.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn bytes_respects_max_size() {
+    let (_server, socket) = spawn_server(StreamingService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    // A cap below the body length is exceeded.
+    let response = get(&client, "/stream").await.expect("request");
+    let err = response
+        .into_body()
+        .bytes(Some(STREAM_BODY.len() - 1))
+        .await
+        .expect_err("a body over max_size must fail");
+    assert!(
+        matches!(err, CollectError::TooLarge),
+        "expected TooLarge, got {err:?}"
+    );
+
+    // A cap exactly at the body length is accepted (the check is a strict `>`).
+    let response = get(&client, "/stream").await.expect("request");
+    let (data, _) = response
+        .into_body()
+        .bytes(Some(STREAM_BODY.len()))
+        .await
+        .expect("a body exactly at max_size must succeed");
+    assert_eq!(data, STREAM_BODY);
+}
+
+/// `GET /reset` returns `200`, one body chunk, then a stream reset once the test
+/// releases the gate.
+///
+/// Gating the reset until the head has been observed keeps it from racing the head delivery
+/// (mirrors [`ConnectResetService`]). Used to check that collecting a body surfaces a mid-stream
+/// reset as an error.
+#[derive(Clone)]
+struct ResettingService {
+    gate: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+}
+
+impl HttpService for ResettingService {
+    type Body = H3RequestBody;
+    type ResponseBody = ResetBody;
+
+    async fn call(&self, _req: http::Request<H3RequestBody>) -> http::Response<ResetBody> {
+        let gate = self.gate.lock().await.take();
+        http::Response::builder()
+            .status(http::StatusCode::OK)
+            .body(ResetBody { sent: false, gate })
+            .unwrap()
+    }
+}
+
+/// A reset that lands mid-body surfaces as a `CollectError::H3` rather than a
+/// silently truncated success.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn bytes_surfaces_reset_as_error() {
+    let (gate_tx, gate_rx) = oneshot::channel();
+    let service = ResettingService {
+        gate: Arc::new(Mutex::new(Some(gate_rx))),
+    };
+    let (_server, socket) = spawn_server(service, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = get(&client, "/reset").await.expect("request head");
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    // The head has arrived; release the reset so it lands mid-body, not on the head.
+    let _ = gate_tx.send(());
+
+    let err = response
+        .into_body()
+        .bytes(None)
+        .await
+        .expect_err("a mid-body reset must surface as an error");
+    assert!(
+        matches!(err, CollectError::H3(_)),
+        "expected an H3 error, got {err:?}"
+    );
 }

@@ -304,7 +304,7 @@ impl CrpcClient {
         })?;
 
         // Send the request head and obtain the response future and body writer.
-        let (response, mut writer) = client.request(request).await.map_err(|e| {
+        let (response, mut writer) = client.request_with_writer(request).await.map_err(|e| {
             RequestError::ConnectionError {
                 context: Cow::Borrowed("initiating Connect-RPC request"),
                 source: Box::new(e),
