@@ -7,3 +7,10 @@
 packages:
   - docs/plugins/*
   - docs/preview
+
+# pnpm 10 refuses to run dependency lifecycle scripts unless they are listed
+# here. core-js' postinstall only prints a funding banner, so nothing needs it
+# to run; listing it keeps that a recorded decision instead of a warning on
+# every install.
+ignoredBuiltDependencies:
+  - core-js

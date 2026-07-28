@@ -1,0 +1,47 @@
+# Copyright 2026 Anapaya Systems
+# Builds the developer guide with the standalone Docusaurus preview in
+# docs/preview.
+#
+# The guide pulls its snippets and topology diagrams out of real source files
+# with the code-import remark plugin, and a reference the plugin cannot resolve
+# fails only at Docusaurus build time.
+name: Docs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      # The guide prose, the preview app, and the code-import plugin: every
+      # input to the build below.
+      - docs/**
+      # The sources the guide references. Renaming one, or editing an
+      # `ANCHOR:` marker inside it, breaks the guide without touching a single
+      # Markdown file, so those changes have to run this build too.
+      - crates/**
+      - .github/workflows/docs.yml
+jobs:
+  build:
+    name: docs/build
+    defaults:
+      run:
+        shell: bash
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the developer guide
+        run: pnpm -C docs/preview build
