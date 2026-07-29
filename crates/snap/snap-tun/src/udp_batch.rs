@@ -22,13 +22,48 @@
 //! batch-sized scratch state alive so repeated calls can reuse packet buffers and
 //! socket state instead of rebuilding that state for every receive or flush cycle.
 
-use std::{collections::VecDeque, io, io::IoSliceMut, net::SocketAddr};
+use std::{
+    collections::VecDeque,
+    io,
+    io::IoSliceMut,
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use ana_gotatun::packet::{Packet, PacketBufPool};
 use quinn_udp::{RecvMeta, Transmit, UdpSockRef, UdpSocketState};
 use tokio::{io::Interest, net::UdpSocket};
 
 const MAX_BATCH_SIZE: usize = 64;
+
+/// Maximum payload of a single UDP datagram, i.e. 64 KiB minus the IPv4 and UDP headers.
+///
+/// The kernel rejects larger sends with `EMSGSIZE`, so this also bounds how many equally
+/// sized datagrams may be coalesced into one segmentation-offloaded transmit. IPv6 without
+/// extension headers would allow 20 bytes more, which this bound conservatively gives up.
+const MAX_UDP_PAYLOAD_SIZE: usize = u16::MAX as usize - 20 - 8;
+
+/// How often a discarded datagram is reported at warning level.
+///
+/// A peer whose datagrams the socket keeps refusing would otherwise produce one warning per
+/// datagram. Matches what `quinn-udp` does for its own send errors.
+const DISCARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The socket was not writable, so the queued datagrams were left in place.
+///
+/// This is the only way [`UdpBatchSender::try_flush_best_effort`] can fail. Datagrams the
+/// socket refuses are discarded by the flush itself, so back pressure is all that remains for
+/// the caller to handle: retry the flush once the socket signals writability again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocketNotWritable;
+
+impl std::fmt::Display for SocketNotWritable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("socket not writable, queued datagrams were left in place")
+    }
+}
+
+impl std::error::Error for SocketNotWritable {}
 
 /// Errors returned while receiving and processing a UDP batch.
 pub enum RecvBatchError<E> {
@@ -207,6 +242,12 @@ pub struct UdpBatchSender<const BATCH_SIZE: usize, const MAX_PACKET_SIZE: usize 
     state: UdpSocketState,
     queued_packets: VecDeque<(SocketAddr, Packet)>,
     scratch: Vec<u8>,
+    /// Datagrams discarded since [`UdpBatchSender::take_discarded_datagrams`] was last called.
+    discarded_datagrams: u64,
+    /// When a discarded datagram was last reported at warning level.
+    last_discard_log: Option<Instant>,
+    /// Datagrams discarded since the last warning, reported with the next one.
+    discards_since_log: u64,
 }
 
 impl<const BATCH_SIZE: usize, const MAX_PACKET_SIZE: usize>
@@ -229,6 +270,9 @@ impl<const BATCH_SIZE: usize, const MAX_PACKET_SIZE: usize>
             state: UdpSocketState::new(UdpSockRef::from(socket))?,
             queued_packets: VecDeque::with_capacity(BATCH_SIZE),
             scratch: Vec::with_capacity(MAX_PACKET_SIZE * BATCH_SIZE),
+            discarded_datagrams: 0,
+            last_discard_log: None,
+            discards_since_log: 0,
         })
     }
 
@@ -246,6 +290,9 @@ impl<const BATCH_SIZE: usize, const MAX_PACKET_SIZE: usize>
     ///
     /// Returns an error when the sender queue is full or when `packet` exceeds
     /// `MAX_PACKET_SIZE`, which would otherwise force the scratch buffer to grow.
+    ///
+    /// Accepting a packet here does not guarantee that it can be delivered: datagrams above
+    /// the egress path MTU are rejected by the kernel and are discarded when flushing.
     pub fn try_queue_packet(
         &mut self,
         packet: Packet,
@@ -268,44 +315,143 @@ impl<const BATCH_SIZE: usize, const MAX_PACKET_SIZE: usize>
     }
 
     /// Attempts to flush queued packets without waiting for the socket to become writable.
-    pub fn try_flush_best_effort(&mut self, socket: &UdpSocket) -> io::Result<()> {
+    ///
+    /// A datagram the socket refuses is discarded rather than retried forever: it would
+    /// otherwise stay at the head of the queue and block every packet behind it for good.
+    /// This applies to a datagram that can never be sent, such as one above the egress MTU
+    /// which fails with `EMSGSIZE` because `quinn-udp` sets the don't-fragment bit, but also
+    /// costs a datagram on transient conditions like a full qdisc reporting `ENOBUFS`.
+    ///
+    /// Discards are counted in [`Self::take_discarded_datagrams`] and reported at warning
+    /// level at most once per minute, so callers that want to observe every discard should
+    /// consume that counter rather than rely on the log.
+    ///
+    /// Fails only with [`SocketNotWritable`], which leaves the queue intact.
+    pub fn try_flush_best_effort(&mut self, socket: &UdpSocket) -> Result<(), SocketNotWritable> {
+        // Cleared once a coalesced transmit failed so the remaining datagrams of this flush
+        // are sent one by one. That tells a datagram which is undeliverable on its own apart
+        // from a transmit that only failed because it was coalesced with others.
+        let mut coalesce = true;
+
         while !self.is_empty() {
-            match socket.try_io(Interest::WRITABLE, || self.try_send_next(socket)) {
-                Ok(sent) => self.drop_prefix(sent),
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Err(err),
-                Err(err) => return Err(err),
+            let (target, segment_size, segments) = self.fill_scratch_from_front(coalesce);
+            let result = socket.try_io(Interest::WRITABLE, || {
+                let transmit = Transmit {
+                    destination: target,
+                    ecn: None,
+                    contents: &self.scratch,
+                    segment_size: (segments > 1).then_some(segment_size),
+                    src_ip: None,
+                };
+                self.state.try_send(UdpSockRef::from(socket), &transmit)
+            });
+
+            match result {
+                Ok(()) => self.drop_prefix(segments),
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    return Err(SocketNotWritable);
+                }
+                Err(err) if segments > 1 => {
+                    tracing::debug!(
+                        ?target,
+                        segments,
+                        segment_size,
+                        err = ?err,
+                        "coalesced transmit failed, retrying datagrams individually"
+                    );
+                    coalesce = false;
+                }
+                Err(err) => {
+                    self.drop_prefix(segments);
+                    self.discarded_datagrams += 1;
+                    self.log_discard(target, segment_size, &err);
+                }
             }
         }
         Ok(())
     }
 
     /// Flushes queued packets, waiting asynchronously until the socket becomes writable.
+    ///
+    /// Refused datagrams are discarded as described on [`Self::try_flush_best_effort`], so the
+    /// only error this returns comes from waiting for writability.
     pub async fn flush(&mut self, socket: &UdpSocket) -> io::Result<()> {
         while !self.is_empty() {
             socket.writable().await?;
-            match socket.try_io(Interest::WRITABLE, || self.try_send_next(socket)) {
-                Ok(sent) => self.drop_prefix(sent),
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
-                Err(err) => return Err(err),
+            if self.try_flush_best_effort(socket).is_ok() {
+                break;
             }
         }
         Ok(())
+    }
+
+    /// Returns how many datagrams were discarded since this was last called, and resets the
+    /// count.
+    ///
+    /// Discarding keeps the queue draining but loses the datagram, so callers should export
+    /// this as a metric: a rising count means outbound traffic is being dropped.
+    pub fn take_discarded_datagrams(&mut self) -> u64 {
+        std::mem::take(&mut self.discarded_datagrams)
+    }
+
+    /// Reports a discarded datagram, at warning level at most once per
+    /// [`DISCARD_LOG_INTERVAL`] so that a peer producing undeliverable datagrams at line rate
+    /// cannot flood the log.
+    fn log_discard(&mut self, target: SocketAddr, datagram_len: usize, err: &io::Error) {
+        let now = Instant::now();
+        let due = self
+            .last_discard_log
+            .is_none_or(|last| now.duration_since(last) >= DISCARD_LOG_INTERVAL);
+
+        if !due {
+            self.discards_since_log += 1;
+            tracing::debug!(?target, datagram_len, err = ?err, "discarding refused datagram");
+            return;
+        }
+
+        tracing::warn!(
+            ?target,
+            datagram_len,
+            err = ?err,
+            suppressed_discards = self.discards_since_log,
+            "discarding refused datagram"
+        );
+        self.last_discard_log = Some(now);
+        self.discards_since_log = 0;
     }
 
     fn drop_prefix(&mut self, count: usize) {
         self.queued_packets.drain(..count);
     }
 
-    fn try_send_next(&mut self, socket: &UdpSocket) -> io::Result<usize> {
+    /// Copies the datagrams at the front of the queue into the scratch buffer.
+    ///
+    /// Returns their common destination, their segment size and how many of them were
+    /// copied. The datagrams stay queued until the transmit is known to have left the queue.
+    fn fill_scratch_from_front(&mut self, coalesce: bool) -> (SocketAddr, usize, usize) {
         self.scratch.clear();
         let (target, first_packet) = self
             .queued_packets
             .front()
-            .expect("try_send_next requires a non-empty queue");
+            .expect("filling the scratch buffer requires a non-empty queue");
         let target = *target;
         let segment_size = first_packet.len();
         let mut segments = 0;
-        let max_segments = self.state.max_gso_segments().min(BATCH_SIZE);
+        // A coalesced transmit is one datagram towards the kernel, so it must respect the
+        // maximum UDP payload size on top of the offload and batch limits.
+        //
+        // Zero-length datagrams are excluded from coalescing entirely: the kernel reads a
+        // segment size of zero as "no segmentation" and delivers a single datagram for the
+        // whole group, which would retire every queue entry while sending only one of them.
+        let max_segments = if coalesce && segment_size > 0 {
+            self.state
+                .max_gso_segments()
+                .min(BATCH_SIZE)
+                .min(MAX_UDP_PAYLOAD_SIZE / segment_size)
+                .max(1)
+        } else {
+            1
+        };
 
         // Only coalesce the segments at the front with matching destination and
         // segment size so queue order stays intact and we can drop exactly the
@@ -318,26 +464,18 @@ impl<const BATCH_SIZE: usize, const MAX_PACKET_SIZE: usize>
             segments += 1;
         }
 
-        let transmit = Transmit {
-            destination: target,
-            ecn: None,
-            contents: &self.scratch,
-            segment_size: (segments > 1).then_some(segment_size),
-            src_ip: None,
-        };
-        self.state.try_send(UdpSockRef::from(socket), &transmit)?;
-        Ok(segments)
+        (target, segment_size, segments)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{net::SocketAddr, time::Duration};
 
     use ana_gotatun::packet::PacketBufPool;
     use tokio::net::UdpSocket;
 
-    use super::{MAX_BATCH_SIZE, UdpBatchReceiver, UdpBatchSender};
+    use super::{MAX_BATCH_SIZE, MAX_UDP_PAYLOAD_SIZE, UdpBatchReceiver, UdpBatchSender};
 
     const TEST_PACKET_SIZE: usize = 128;
 
@@ -433,6 +571,168 @@ mod tests {
         assert_eq!(first_a, b"alpha".to_vec());
         assert_eq!(second, b"beta".to_vec());
         assert_eq!(first_b, b"gamma".to_vec());
+    }
+
+    /// A datagram above the maximum UDP payload size can never be sent. It must not keep the
+    /// packets queued behind it from being flushed.
+    #[tokio::test]
+    async fn flush_discards_undeliverable_datagram_and_drains_the_rest() {
+        const OVERSIZED_PACKET_SIZE: usize = MAX_UDP_PAYLOAD_SIZE + 1;
+
+        let sender_socket = bound_socket().await;
+        let receiver_socket = bound_socket().await;
+        let target = receiver_socket.local_addr().unwrap();
+        let pool = PacketBufPool::<OVERSIZED_PACKET_SIZE>::new(2);
+        let mut sender =
+            UdpBatchSender::<MAX_BATCH_SIZE, OVERSIZED_PACKET_SIZE>::new(&sender_socket).unwrap();
+
+        let mut oversized = pool.get();
+        oversized.truncate(OVERSIZED_PACKET_SIZE);
+        sender.try_queue_packet(oversized, target).unwrap();
+
+        let mut deliverable = pool.get();
+        deliverable[..5].copy_from_slice(b"after");
+        deliverable.truncate(5);
+        sender.try_queue_packet(deliverable, target).unwrap();
+
+        sender.flush(&sender_socket).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let (len, _) = receiver_socket.recv_from(&mut buf).await.unwrap();
+
+        assert!(sender.is_empty(), "the queue must not retain the discard");
+        assert_eq!(&buf[..len], b"after");
+        assert_eq!(
+            sender.take_discarded_datagrams(),
+            1,
+            "the discard must be accountable, the log is only sampled"
+        );
+        assert_eq!(
+            sender.take_discarded_datagrams(),
+            0,
+            "taking the count must reset it"
+        );
+    }
+
+    /// Coalescing must stay within the maximum UDP payload size, which the kernel would
+    /// otherwise reject with `EMSGSIZE`.
+    #[tokio::test]
+    async fn coalescing_respects_the_maximum_udp_payload_size() {
+        const LARGE_PACKET_SIZE: usize = 2048;
+
+        let sender_socket = bound_socket().await;
+        let target = bound_socket().await.local_addr().unwrap();
+        let pool = PacketBufPool::<LARGE_PACKET_SIZE>::new(MAX_BATCH_SIZE);
+        let mut sender =
+            UdpBatchSender::<MAX_BATCH_SIZE, LARGE_PACKET_SIZE>::new(&sender_socket).unwrap();
+
+        for _ in 0..MAX_BATCH_SIZE {
+            let mut packet = pool.get();
+            packet.truncate(LARGE_PACKET_SIZE);
+            sender.try_queue_packet(packet, target).unwrap();
+        }
+
+        let (_, segment_size, segments) = sender.fill_scratch_from_front(true);
+
+        assert_eq!(segment_size, LARGE_PACKET_SIZE);
+        assert!(segments >= 1);
+        assert!(
+            segments * segment_size <= MAX_UDP_PAYLOAD_SIZE,
+            "coalesced {segments} segments of {segment_size} bytes exceed the maximum UDP payload"
+        );
+    }
+
+    /// Zero-length datagrams are legal and must each reach the peer.
+    ///
+    /// They must not be coalesced: a segment size of zero reads as "no segmentation" to the
+    /// kernel, which accepts the transmit and delivers a single datagram for the whole group.
+    /// The queue entries would all be retired, losing every datagram but the first without
+    /// any error to account for.
+    #[tokio::test]
+    async fn flush_delivers_every_zero_length_datagram() {
+        const PACKETS: usize = 3;
+
+        let sender_socket = bound_socket().await;
+        let receiver_socket = bound_socket().await;
+        let target = receiver_socket.local_addr().unwrap();
+        let pool = packet_pool();
+        let mut sender =
+            UdpBatchSender::<MAX_BATCH_SIZE, TEST_PACKET_SIZE>::new(&sender_socket).unwrap();
+
+        for _ in 0..PACKETS {
+            sender
+                .try_queue_packet(packet_from_bytes(&pool, b""), target)
+                .unwrap();
+        }
+
+        let (_, segment_size, segments) = sender.fill_scratch_from_front(true);
+        assert_eq!(segment_size, 0);
+        assert_eq!(segments, 1, "zero-length datagrams must be sent one by one");
+
+        sender.flush(&sender_socket).await.unwrap();
+
+        assert!(sender.is_empty());
+        assert_eq!(sender.take_discarded_datagrams(), 0);
+
+        let mut buf = [0u8; TEST_PACKET_SIZE];
+        for index in 0..PACKETS {
+            let received =
+                tokio::time::timeout(Duration::from_secs(5), receiver_socket.recv_from(&mut buf))
+                    .await
+                    .unwrap_or_else(|_| panic!("zero-length datagram {index} never arrived"))
+                    .unwrap();
+
+            assert_eq!(received.0, 0);
+        }
+    }
+
+    /// All queued datagrams must reach the peer even when their total exceeds what fits into a
+    /// single coalesced transmit.
+    #[tokio::test]
+    async fn flush_delivers_more_datagrams_than_one_transmit_can_carry() {
+        const LARGE_PACKET_SIZE: usize = 2048;
+        const PACKETS: usize = MAX_BATCH_SIZE;
+
+        let sender_socket = bound_socket().await;
+        let receiver_socket = bound_socket().await;
+        let target = receiver_socket.local_addr().unwrap();
+        let pool = PacketBufPool::<LARGE_PACKET_SIZE>::new(PACKETS);
+        let mut sender =
+            UdpBatchSender::<MAX_BATCH_SIZE, LARGE_PACKET_SIZE>::new(&sender_socket).unwrap();
+
+        for index in 0..PACKETS {
+            let mut packet = pool.get();
+            packet.truncate(LARGE_PACKET_SIZE);
+            packet[0] = index as u8;
+            sender.try_queue_packet(packet, target).unwrap();
+        }
+
+        // Receive concurrently with the flush: the datagrams together exceed the receive
+        // buffer, and a lost one has to fail the test rather than block it forever.
+        let receive = tokio::spawn(async move {
+            let mut buf = [0u8; LARGE_PACKET_SIZE];
+            let mut received = Vec::with_capacity(PACKETS);
+            for _ in 0..PACKETS {
+                let (len, _) = receiver_socket.recv_from(&mut buf).await.unwrap();
+                assert_eq!(len, LARGE_PACKET_SIZE);
+                received.push(buf[0]);
+            }
+            received
+        });
+
+        sender.flush(&sender_socket).await.unwrap();
+
+        let received = tokio::time::timeout(Duration::from_secs(10), receive)
+            .await
+            .expect("all datagrams should arrive")
+            .unwrap();
+
+        assert!(sender.is_empty());
+        assert_eq!(
+            received,
+            (0..PACKETS).map(|index| index as u8).collect::<Vec<_>>(),
+            "datagrams arrived out of order or were lost"
+        );
     }
 
     #[tokio::test]

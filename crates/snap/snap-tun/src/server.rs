@@ -387,7 +387,15 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
     ///
     /// As a result of this call, all expired tunnels are removed. Note that
     /// this is not the same as unauthorized tunnels.
+    ///
+    /// Callers are expected to invoke this periodically; it is also where the rate limiter's
+    /// under-load counter is reset. Without that reset the counter only ever grows and the
+    /// server eventually treats itself as permanently under load.
     pub fn update_timers(&mut self) -> Vec<(SocketAddr, WgKind)> {
+        // Self-throttled to the rate limiter's own reset period, so calling this more often
+        // than once per second is harmless.
+        self.rate_limiter.try_reset_count();
+
         let mut res = vec![];
         self.active_tunnels.retain(|k, active_tunnel| {
             match active_tunnel.tunn.update_timers() {
@@ -437,6 +445,7 @@ mod tests {
         collections::{HashMap, VecDeque},
         net::SocketAddr,
         sync::{Arc, Mutex},
+        time::Duration,
     };
 
     use ana_gotatun::{
@@ -829,6 +838,87 @@ mod tests {
                     sockaddr_client
                 )
                 .is_none()
+        );
+    }
+
+    /// The rate limiter counts every handshake it verifies and demands a cookie once its limit
+    /// is reached, so the counter has to be reset periodically.
+    ///
+    /// [`Tunn::update_timers`] resets the shared limiter, which covers a server that has
+    /// tunnels to iterate over. This pins the case with no tunnel to piggyback on: handshakes
+    /// from unauthorized peers are counted but establish nothing, so without the reset in
+    /// [`SnapTunServer::update_timers`] the counter only ever grows and an idle server keeps
+    /// demanding cookies from every peer.
+    #[test]
+    fn update_timers_resets_the_rate_limiter_without_active_tunnels() {
+        let static_server = x25519::StaticSecret::from([2u8; 32]);
+        let static_server_public = x25519::PublicKey::from(&static_server);
+        let sockaddr_server: SocketAddr = "10.0.0.1:5001".parse().unwrap();
+
+        // A limit of one means the second handshake the server verifies is already under load.
+        // The empty `MutableAuthz` authorizes nobody, so no handshake creates a tunnel.
+        let mut snaptun_server = SnapTunServer::new(
+            static_server,
+            Arc::new(RateLimiter::new(&static_server_public, 1)),
+            Arc::new(MutableAuthz::default()),
+        );
+        // The clients get their own limiter so that only server-side handshakes are counted
+        // against the limit under test.
+        let client_rate_limiter = Arc::new(RateLimiter::new(&static_server_public, u64::MAX));
+
+        let handshake_from_new_client = |server: &mut SnapTunServer<MutableAuthz>, index: u8| {
+            let mut client = Tunn::new(
+                x25519::StaticSecret::from([index; 32]),
+                static_server_public,
+                None,
+                None,
+                0,
+                client_rate_limiter.clone(),
+                sockaddr_server,
+            );
+            let Some(WgKind::HandshakeInit(hs_init)) =
+                client.handle_outgoing_packet(test_packet([index]))
+            else {
+                panic!("expected handshake init")
+            };
+
+            // Each client uses its own address so every handshake is a fresh one rather than
+            // a repeat handshake on an existing tunnel.
+            let mut send_to_network = VecDeque::<WgKind>::new();
+            server.handle_incoming_packet(
+                Packet::copy_from(hs_init.as_bytes()),
+                SocketAddr::new("192.168.1.1".parse().unwrap(), 1234 + u16::from(index)),
+                &mut send_to_network,
+            );
+            send_to_network.pop_front()
+        };
+
+        // Below the limit the handshake reaches the authorization check, which rejects it
+        // without a reply. At the limit the rate limiter answers with a cookie first.
+        assert!(
+            handshake_from_new_client(&mut snaptun_server, 1).is_none(),
+            "the first handshake is below the limit and must reach authorization"
+        );
+        assert!(
+            matches!(
+                handshake_from_new_client(&mut snaptun_server, 2),
+                Some(WgKind::CookieReply(_))
+            ),
+            "the second handshake reaches the limit and must be answered with a cookie"
+        );
+        assert!(
+            snaptun_server.active_tunnels.is_empty(),
+            "no tunnel may exist, otherwise its timers would reset the limiter"
+        );
+
+        // The rate limiter resets against the monotonic clock, which neither tokio's paused
+        // time nor a mocked instant reaches from here, so this waits out the reset period.
+        std::thread::sleep(Duration::from_millis(1_100));
+        snaptun_server.update_timers();
+
+        assert!(
+            handshake_from_new_client(&mut snaptun_server, 3).is_none(),
+            "after the reset period an idle server must stop demanding cookies"
         );
     }
 

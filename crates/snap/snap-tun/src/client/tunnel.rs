@@ -17,7 +17,10 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -72,6 +75,8 @@ struct SnapTunnelDriver {
     pub pool: PacketBufPool<PACKET_BUF_POOL_SIZE>,
     pub receiver: UdpBatchReceiver<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
     pub sender: UdpBatchSender<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
+    /// Shared with the [`SnapTunnel`] handle, which exposes it to the application.
+    pub discarded_datagrams: Arc<AtomicU64>,
 }
 
 impl SnapTunnelDriver {
@@ -113,7 +118,49 @@ impl SnapTunnelDriver {
             receiver,
             sender,
             pool,
+            discarded_datagrams: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// Flushes the send queue as far as the socket allows right now.
+    ///
+    /// Back pressure needs no handling here: the datagrams stay queued and the next flush
+    /// picks them up.
+    ///
+    /// Takes the fields it needs one by one instead of `&mut self` so that it stays callable
+    /// from the receive closure, which borrows the driver field by field.
+    fn try_flush(
+        socket: &tokio::net::UdpSocket,
+        sender: &mut UdpBatchSender<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
+        discarded_datagrams: &AtomicU64,
+    ) {
+        let _ = sender.try_flush_best_effort(socket);
+        Self::account_discarded_datagrams(sender, discarded_datagrams);
+    }
+
+    /// Flushes the send queue, waiting for the socket to become writable.
+    async fn flush(
+        socket: &tokio::net::UdpSocket,
+        sender: &mut UdpBatchSender<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
+        discarded_datagrams: &AtomicU64,
+    ) -> io::Result<()> {
+        let result = sender.flush(socket).await;
+        Self::account_discarded_datagrams(sender, discarded_datagrams);
+        result
+    }
+
+    /// Publishes the datagrams the sender had to discard to the shared counter.
+    ///
+    /// Every flush goes through [`Self::try_flush`] or [`Self::flush`] so that no discard
+    /// escapes this accounting.
+    fn account_discarded_datagrams(
+        sender: &mut UdpBatchSender<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
+        discarded_datagrams: &AtomicU64,
+    ) {
+        let discarded = sender.take_discarded_datagrams();
+        if discarded > 0 {
+            discarded_datagrams.fetch_add(discarded, Ordering::Relaxed);
+        }
     }
 
     #[instrument(name = "st-client", skip(self), fields(socket_addr= ?self.local_sockaddr))]
@@ -228,15 +275,11 @@ impl SnapTunnelDriver {
                         {
                             match error {
                                 QueuePacketError::Full { packet, target } => {
-                                    let err = self.sender.try_flush_best_effort(&self.underlay_socket);
-                                    if let Err(ref flush_err) = err
-                                        && flush_err.kind() != io::ErrorKind::WouldBlock
-                                    {
-                                        return Err(SnapTunnelDriverError::SendIoError(io::Error::new(
-                                            flush_err.kind(),
-                                            flush_err.to_string(),
-                                        )));
-                                    }
+                                    Self::try_flush(
+                                        &self.underlay_socket,
+                                        &mut self.sender,
+                                        &self.discarded_datagrams,
+                                    );
                                     if self.sender.try_queue_packet(packet, target).is_err() {
                                         tracing::debug!(?target, "dropping outbound packet because batched sender remains full");
                                     }
@@ -262,15 +305,11 @@ impl SnapTunnelDriver {
                             {
                                 match error {
                                     QueuePacketError::Full { packet, target } => {
-                                        let err = self.sender.try_flush_best_effort(&self.underlay_socket);
-                                        if let Err(ref flush_err) = err
-                                            && flush_err.kind() != io::ErrorKind::WouldBlock
-                                        {
-                                            return Err(SnapTunnelDriverError::SendIoError(io::Error::new(
-                                                flush_err.kind(),
-                                                flush_err.to_string(),
-                                            )));
-                                        }
+                                        Self::try_flush(
+                                            &self.underlay_socket,
+                                            &mut self.sender,
+                                            &self.discarded_datagrams,
+                                        );
                                         if self.sender.try_queue_packet(packet, target).is_err() {
                                             tracing::debug!(?target, "dropping queued outbound packet because batched sender remains full");
                                         }
@@ -310,7 +349,12 @@ impl SnapTunnelDriver {
             }) => {
                 match recv {
                     Ok(()) => {
-                        self.sender.flush(&self.underlay_socket).await?;
+                        Self::flush(
+                            &self.underlay_socket,
+                            &mut self.sender,
+                            &self.discarded_datagrams,
+                        )
+                        .await?;
                     }
                     Err(RecvBatchError::Io(e)) => {
                         return Err(SnapTunnelDriverError::ReceiveIoError(e));
@@ -366,6 +410,7 @@ pub struct SnapTunnel {
     /// Tasks that drives the SNAP tunnel.
     /// Cancelled when the socket is dropped.
     driver_task: JoinHandle<()>,
+    discarded_datagrams: Arc<AtomicU64>,
 }
 
 impl Drop for SnapTunnel {
@@ -409,6 +454,7 @@ impl SnapTunnel {
         Ok(Self {
             _guard: guard,
             tunn: driver.tunn.clone(),
+            discarded_datagrams: driver.discarded_datagrams.clone(),
             underlay_socket,
             dataplane_address,
             local_sockaddr: socket_addr,
@@ -537,6 +583,17 @@ impl SnapTunnel {
     /// The data plane the tunnel is connected to.
     pub fn data_plane_address(&self) -> SocketAddr {
         self.dataplane_address
+    }
+
+    /// Total number of outbound datagrams the underlay socket refused since the tunnel was
+    /// created.
+    ///
+    /// A refused datagram is dropped rather than retried, because retrying one the socket will
+    /// never accept blocks every packet queued behind it. The tunnel therefore stays up when
+    /// sending fails persistently, for example because the interface went down or a firewall
+    /// answers `EPERM`, and this counter is what tells such a tunnel apart from a healthy one.
+    pub fn discarded_datagrams(&self) -> u64 {
+        self.discarded_datagrams.load(Ordering::Relaxed)
     }
 }
 

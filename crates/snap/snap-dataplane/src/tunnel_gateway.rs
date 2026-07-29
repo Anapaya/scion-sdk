@@ -22,7 +22,10 @@ use tokio::net::UdpSocket;
 
 use crate::{
     dispatcher::Dispatcher,
-    tunnel_gateway::{dispatcher::TunnelGatewayDispatcherReceiver, gateway::TunnelGateway},
+    tunnel_gateway::{
+        dispatcher::TunnelGatewayDispatcherReceiver, gateway::TunnelGateway,
+        metrics::TunnelGatewayMetrics,
+    },
 };
 
 pub mod dispatcher;
@@ -84,6 +87,7 @@ impl<S> TunnelGatewayObserver<S> for NoopTunnelGatewayObserver {
 ///   Used for flow accounting and metrics.
 /// * `tun_dispatcher_rx`: The receiving end of the dispatcher interface.
 /// * `server_static_secret`: The static secret of the tunnel gateway's tunnel endpoint.
+/// * `metrics`: Counters for events on the gateway's own send path.
 pub fn start_tunnel_gateway<A, D, O>(
     tasks: &mut CancelTaskSet,
     socket: UdpSocket,
@@ -92,6 +96,7 @@ pub fn start_tunnel_gateway<A, D, O>(
     observer: Arc<O>,
     tun_dispatcher_rx: TunnelGatewayDispatcherReceiver,
     server_static_secret: x25519_dalek::StaticSecret,
+    metrics: TunnelGatewayMetrics,
 ) where
     A: SnapTunAuthorization + 'static,
     D: Dispatcher + 'static,
@@ -104,6 +109,7 @@ pub fn start_tunnel_gateway<A, D, O>(
         dispatcher,
         observer,
         tun_dispatcher_rx,
+        metrics,
     );
     let token = tasks.cancellation_token();
     tasks.spawn_cancellable_task(async move {

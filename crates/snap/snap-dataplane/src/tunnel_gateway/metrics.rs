@@ -16,6 +16,25 @@
 use prometheus::{IntCounter, IntGauge};
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 
+/// Tunnel gateway metrics.
+#[derive(Debug, Clone)]
+pub struct TunnelGatewayMetrics {
+    /// Total number of outbound datagrams discarded because the socket refused them.
+    pub discarded_datagrams: IntCounter,
+}
+
+impl TunnelGatewayMetrics {
+    /// Create new tunnel gateway metrics instance with the given registry.
+    pub fn new(metrics_registry: &MetricsRegistry) -> Self {
+        TunnelGatewayMetrics {
+            discarded_datagrams: metrics_registry.int_counter(
+                "snap_tunnel_gw_discarded_datagrams_total",
+                "Total number of outbound datagrams discarded because the socket refused them.",
+            ),
+        }
+    }
+}
+
 /// Tunnel gateway dispatcher metrics.
 #[derive(Debug, Clone)]
 pub struct TunnelGatewayDispatcherMetrics {

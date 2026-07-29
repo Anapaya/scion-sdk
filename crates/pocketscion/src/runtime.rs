@@ -40,8 +40,10 @@ use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use scion_sdk_utils::task_handler::CancelTaskSet;
 use snap_control::server::identity_registry::IdentityRegistry;
 use snap_dataplane::tunnel_gateway::{
-    NoopTunnelGatewayObserver, dispatcher::TunnelGatewayDispatcher,
-    metrics::TunnelGatewayDispatcherMetrics, start_tunnel_gateway,
+    NoopTunnelGatewayObserver,
+    dispatcher::TunnelGatewayDispatcher,
+    metrics::{TunnelGatewayDispatcherMetrics, TunnelGatewayMetrics},
+    start_tunnel_gateway,
 };
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
@@ -348,6 +350,7 @@ impl PocketScionRuntime {
                 Arc::new(NoopTunnelGatewayObserver),
                 tun_dispatcher_rx,
                 static_secret,
+                TunnelGatewayMetrics::new(&metrics_registry),
             );
             let (reclaimed, _) = c_task_set.into_parts();
             *join_set = reclaimed;

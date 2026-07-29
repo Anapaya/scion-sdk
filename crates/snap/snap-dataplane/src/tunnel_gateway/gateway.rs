@@ -48,6 +48,7 @@ use crate::{
     tunnel_gateway::{
         ObservedPacketDirection, ObservedPacketMeta, TunnelGatewayObserver,
         dispatcher::TunnelGatewayDispatcherReceiver,
+        metrics::TunnelGatewayMetrics,
         packet_policy::{PacketPolicyError, inbound_datagram_check},
     },
 };
@@ -76,6 +77,7 @@ pub struct TunnelGateway<A, D, O: ?Sized> {
     outbound_queue: Receiver<(SocketAddr, Packet)>,
     dispatcher: Arc<D>,
     observer: Arc<O>,
+    metrics: TunnelGatewayMetrics,
 }
 
 impl<A, D, O: ?Sized> TunnelGateway<A, D, O>
@@ -92,6 +94,7 @@ where
         dispatcher: Arc<D>,
         observer: Arc<O>,
         tun_dispatcher_rx: TunnelGatewayDispatcherReceiver,
+        metrics: TunnelGatewayMetrics,
     ) -> Self {
         let TunnelGatewayDispatcherReceiver {
             pool,
@@ -105,6 +108,7 @@ where
             outbound_queue,
             dispatcher,
             observer,
+            metrics,
         }
     }
 
@@ -163,6 +167,7 @@ where
             SnapTunServer::new(self.static_server_secret, rate_limiter, self.authz);
         let mut timer = interval(Duration::from_millis(250));
         let socket = self.socket;
+        let metrics = self.metrics;
         let local_addr = ScionHostAddr::from(
             socket
                 .local_addr()
@@ -201,6 +206,7 @@ where
                                 &mut sender,
                                 Self::wg_kind_to_bytes(pkt),
                                 from,
+                                &metrics,
                             );
                         }
 
@@ -263,6 +269,7 @@ where
                                                         &mut sender,
                                                         Self::wg_kind_to_bytes(out_pkt),
                                                         from,
+                                                        &metrics,
                                                     );
                                                 }
                                             },
@@ -285,7 +292,7 @@ where
                         Ok::<(), std::convert::Infallible>(())
                     }) => {
                         match recv_res {
-                            Ok(()) => Self::try_flush_batch_log_err(&socket, &mut sender),
+                            Ok(()) => Self::try_flush_batch_log_err(&socket, &mut sender, &metrics),
                             Err(RecvBatchError::Io(e)) => {
                                 tracing::error!(err=?e, "i/o error on batched udp recv");
                             }
@@ -308,6 +315,7 @@ where
                                 &mut sender,
                                 Self::wg_kind_to_bytes(out_pkt),
                                 target,
+                                &metrics,
                             );
                         }
                         while !sender.is_full() {
@@ -327,15 +335,19 @@ where
                                 &mut sender,
                                 Self::wg_kind_to_bytes(out_pkt),
                                 target,
+                                &metrics,
                             );
                         }
-                        Self::try_flush_batch_log_err(&socket, &mut sender);
+                        Self::try_flush_batch_log_err(&socket, &mut sender, &metrics);
                     }
                     _ = timer.tick() => {
                         // Update timers inside SnapTun server.
                         for (addr, action) in snaptun_srv.update_timers() {
                             Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(action), addr);
                         }
+                        // Retry datagrams that stayed queued because the socket was not
+                        // writable, so a stalled queue does not wait for the next packet.
+                        Self::try_flush_batch_log_err(&socket, &mut sender, &metrics);
                     }
                 }
             }
@@ -364,9 +376,19 @@ where
     fn try_flush_batch_log_err(
         socket: &UdpSocket,
         sender: &mut UdpBatchSender<BATCH_SIZE, PACKET_BUF_SIZE>,
+        metrics: &TunnelGatewayMetrics,
     ) {
-        if let Err(e) = sender.try_flush_best_effort(socket) {
-            tracing::error!(err=?e, "could not flush batched udp packets to network");
+        let result = sender.try_flush_best_effort(socket);
+        // The sender only logs a sample of the datagrams it had to discard, so account for
+        // all of them here, including those discarded before the flush hit back pressure.
+        metrics
+            .discarded_datagrams
+            .inc_by(sender.take_discarded_datagrams());
+
+        // The queue is retained and flushed again on the next loop iteration or on the next
+        // timer tick.
+        if let Err(e) = result {
+            tracing::debug!(err=%e, "could not flush all batched udp datagrams");
         }
     }
 
@@ -375,16 +397,12 @@ where
         sender: &mut UdpBatchSender<BATCH_SIZE, PACKET_BUF_SIZE>,
         packet: Packet,
         target: SocketAddr,
+        metrics: &TunnelGatewayMetrics,
     ) {
         if let Err(error) = sender.try_queue_packet(packet, target) {
             match error {
                 QueuePacketError::Full { packet, target } => {
-                    let err = sender.try_flush_best_effort(socket);
-                    if let Err(ref flush_err) = err
-                        && flush_err.kind() != std::io::ErrorKind::WouldBlock
-                    {
-                        tracing::error!(err=?flush_err, "could not flush batched udp packets to network");
-                    }
+                    Self::try_flush_batch_log_err(socket, sender, metrics);
                     if sender.try_queue_packet(packet, target).is_err() {
                         tracing::debug!(
                             ?target,
