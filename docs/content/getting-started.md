@@ -176,18 +176,18 @@ socket, and `send_to` / `recv_from`.
 ## Where to go next
 
 - **Browse the examples** — every example under
-  [`scion-stack/examples/`](https://github.com/Anapaya/scion-sdk/tree/main/scion-stack/examples)
+  [`crates/scion-stack/examples/`](https://github.com/Anapaya/scion-sdk/tree/main/crates/scion-stack/examples)
   is runnable with `cargo run -p scion-stack --example <name>`.
 - **API reference** — the full API for the stack is on
   [docs.rs/scion-stack](https://docs.rs/scion-stack).
 - **PocketSCION** — see
-  [`pocketscion/README.md`](https://github.com/Anapaya/scion-sdk/tree/main/pocketscion)
+  [`crates/pocketscion/README.md`](https://github.com/Anapaya/scion-sdk/tree/main/crates/pocketscion)
   for the other topologies and underlays you can simulate.
 
 ## Full example
 
 The complete program, for reference. It lives in the SDK repo at
-[`scion-stack/examples/udp_echo.rs`](https://github.com/Anapaya/scion-sdk/tree/main/scion-stack/examples/udp_echo.rs).
+[`crates/scion-stack/examples/udp_echo.rs`](https://github.com/Anapaya/scion-sdk/tree/main/crates/scion-stack/examples/udp_echo.rs).
 
 ```rust reference="@sdk/crates/scion-stack/examples/udp_echo.rs#full-program" title="scion-stack/examples/udp_echo.rs"
 ```

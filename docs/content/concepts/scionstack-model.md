@@ -7,7 +7,7 @@ sidebar_position: 1
 import ScionstackAnatomy from './fig/scionstack-anatomy.drawio.svg';
 
 Everything you do with the SDK starts from a
-[`ScionStack`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html). It is the
+[`ScionStack`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html). It is the
 SCION equivalent of your operating system's networking stack: the object you open sockets on. If you
 have used the standard library's UDP sockets, the shape will feel familiar. The difference is that a
 `ScionStack` also knows how to discover the local SCION infrastructure, look up paths, carry your
@@ -46,9 +46,9 @@ Your application interacts with the top of this picture (sockets). The stack han
 ## Building a stack
 
 You configure a stack with
-[`ScionStackBuilder`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html)
+[`ScionStackBuilder`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html)
 and finish with
-[`build`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html#method.build).
+[`build`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.build).
 At minimum the stack needs to know where the local *endhost API* is, the service that answers
 underlay and path-lookup queries, and, when it will use a SNAP, how to authenticate. The examples
 wrap this in a one-line helper:
@@ -57,14 +57,14 @@ wrap this in a one-line helper:
 ```
 
 The builder is where the cross-cutting choices live: which underlay to prefer
-([`with_preferred_underlay`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html#method.with_preferred_underlay)),
+([`with_preferred_underlay`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_preferred_underlay)),
 how to reach the endhost API
-([`with_endhost_api`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html#method.with_endhost_api)),
+([`with_endhost_api`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_endhost_api)),
 and how to obtain a SNAP token
-([`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html#method.with_auth_token)).
+([`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)).
 Those knobs are covered on the [transport underlays](./transport-underlays.md) page.
 For the full set, see the
-[`ScionStackBuilder` reference](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html).
+[`ScionStackBuilder` reference](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html).
 
 ### Lifecycle
 
@@ -84,11 +84,11 @@ others exist for narrower needs.
 
 | Method | Socket | Use it for |
 | --- | --- | --- |
-| [`bind`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html#method.bind) | [`UdpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html) | path-aware UDP, the default; the stack picks paths for you |
-| [`connect`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html#method.connect) | [`UdpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html) | a `bind` fixed to one remote address |
-| [`bind_path_unaware`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html#method.bind_path_unaware) | [`PathUnawareUdpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/struct.PathUnawareUdpScionSocket.html) | UDP where *you* supply the path on every send |
-| [`bind_raw`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html#method.bind_raw) | [`RawScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/struct.RawScionSocket.html) | sending and receiving raw SCION packets |
-| [`bind_scmp`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html#method.bind_scmp) | [`ScmpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScmpScionSocket.html) | SCMP, SCION's control and diagnostic messages (think ICMP) |
+| [`bind`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.bind) | [`UdpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html) | path-aware UDP, the default; the stack picks paths for you |
+| [`connect`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.connect) | [`UdpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html) | a `bind` fixed to one remote address |
+| [`bind_path_unaware`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.bind_path_unaware) | [`PathUnawareUdpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.PathUnawareUdpScionSocket.html) | UDP where *you* supply the path on every send |
+| [`bind_raw`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.bind_raw) | [`RawScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.RawScionSocket.html) | sending and receiving raw SCION packets |
+| [`bind_scmp`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.bind_scmp) | [`ScmpScionSocket`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.ScmpScionSocket.html) | SCMP, SCION's control and diagnostic messages (think ICMP) |
 
 Binding and using a socket looks exactly like the standard library. Here are the server and client
 from the `udp_echo` example:
@@ -99,9 +99,9 @@ from the `udp_echo` example:
 ```rust reference="@sdk/crates/scion-stack/examples/udp_echo.rs#client" title="examples/udp_echo.rs"
 ```
 
-[`recv_from`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html#method.recv_from)
+[`recv_from`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.recv_from)
 yields the peer's SCION address and the socket remembers a return path to it automatically, so
-[`send_to`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html#method.send_to)
+[`send_to`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.send_to)
 can reply without your code ever touching path selection. Path awareness is there when you want it
 (see [Paths and path policies](./paths-and-policies.md)) and out of the way when you do not.
 

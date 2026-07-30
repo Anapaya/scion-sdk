@@ -49,7 +49,7 @@ flowchart TD
 ### Let the stack choose (the default)
 
 If you do not care, do nothing:
-[`send_to`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html#method.send_to)
+[`send_to`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.send_to)
 on a path-aware socket picks a path for you. The stack keeps the set of paths to each destination
 fresh and, by default, orders them sensibly (short and diverse first) and sends over the top one.
 This ranking is built in, with nothing to configure, and it is what the
@@ -58,17 +58,17 @@ This ranking is built in, with nothing to configure, and it is what the
 ### Choose explicitly, per send
 
 When you want to see and decide, ask the stack's path fetcher
-([`create_path_fetcher`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html#method.create_path_fetcher))
+([`create_path_fetcher`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.create_path_fetcher))
 for *every* path to the destination AS and inspect them yourself:
 
 ```rust reference="@sdk/crates/scion-stack/examples/udp_paths.rs#fetch-paths" title="examples/udp_paths.rs"
 ```
 
-Each [`ScionPath`](https://docs.rs/sciparse/latest/sciparse/scion/path/struct.ScionPath.html) carries
-[`metadata`](https://docs.rs/sciparse/latest/sciparse/scion/path/struct.ScionPath.html#method.metadata):
+Each [`ScionPath`](https://docs.rs/sciparse/latest/sciparse/path/struct.ScionPath.html) carries
+[`metadata`](https://docs.rs/sciparse/latest/sciparse/path/struct.ScionPath.html#method.metadata):
 the interfaces it traverses, its MTU, and latency hints, which is exactly what you would base a
 decision on (the example sorts by hop count). Once you hold a path, send over it explicitly with
-[`send_to_via`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html#method.send_to_via)
+[`send_to_via`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.send_to_via)
 instead of `send_to`:
 
 ```rust reference="@sdk/crates/scion-stack/examples/udp_paths.rs#send-each" title="examples/udp_paths.rs"
@@ -88,9 +88,9 @@ any path through a given AS:
 ```
 
 Attach it when you bind, via
-[`SocketConfig::with_path_policy`](https://docs.rs/scion-stack/latest/scion_stack/struct.SocketConfig.html#method.with_path_policy)
+[`SocketConfig::with_path_policy`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.SocketConfig.html#method.with_path_policy)
 passed to
-[`bind_with_config`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html#method.bind_with_config),
+[`bind_with_config`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html#method.bind_with_config),
 after which `send_to` only ever routes over paths that satisfy it:
 
 ```rust reference="@sdk/crates/scion-stack/examples/udp_path_policy.rs#bind-with-policy" title="examples/udp_path_policy.rs"

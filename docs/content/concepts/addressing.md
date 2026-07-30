@@ -33,14 +33,14 @@ The address types live in the `sciparse` crate, which `scion-stack` re-exports, 
 that depends only on `scion-stack` reaches them as `scion_stack::sciparse::…`. Two types cover almost
 everything you do:
 
-- [`IsdAsn`](https://docs.rs/sciparse/latest/sciparse/scion/identifier/isd_asn/struct.IsdAsn.html)
+- [`IsdAsn`](https://docs.rs/sciparse/latest/sciparse/identifier/isd_asn/struct.IsdAsn.html)
   identifies an AS. It parses from and displays as the `1-ff00:0:110` form, and exposes the ISD and
   AS parts.
-- [`ScionSocketIpAddr`](https://docs.rs/sciparse/latest/sciparse/scion/address/ip_socket_addr/struct.ScionSocketIpAddr.html)
+- [`ScionSocketIpAddr`](https://docs.rs/sciparse/latest/sciparse/address/ip_socket_addr/enum.ScionSocketIpAddr.html)
   is the full `ISD-AS + host + port` endpoint address, the type you pass to
-  [`send_to`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html#method.send_to)
+  [`send_to`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.send_to)
   and get back from
-  [`recv_from`](https://docs.rs/scion-stack/latest/scion_stack/struct.UdpScionSocket.html#method.recv_from).
+  [`recv_from`](https://docs.rs/scion-stack/latest/scion_stack/stack/socket/struct.UdpScionSocket.html#method.recv_from).
   It parses from and displays as `1-ff00:0:110,[fd00::1]:443` (an IPv4 host drops the brackets, for
   example `1-ff00:0:110,192.0.2.1:443`).
 

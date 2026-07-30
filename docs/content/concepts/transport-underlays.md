@@ -11,7 +11,7 @@ each.
 
 ## What an underlay is
 
-Your [`ScionStack`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStack.html) produces
+Your [`ScionStack`](https://docs.rs/scion-stack/latest/scion_stack/stack/struct.ScionStack.html) produces
 SCION packets. The underlay carries them to a device that can forward them into the SCION network.
 The stack abstracts over more than one underlay so the same socket code works whether you have
 direct SCION connectivity or reach the network through an access point. You pick which underlay to
@@ -45,14 +45,14 @@ you use on real deployments, and the one that requires a SNAP token (see below).
 ### Choosing an underlay
 
 Prefer an underlay when you build the stack, with
-[`with_preferred_underlay`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html#method.with_preferred_underlay)
+[`with_preferred_underlay`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_preferred_underlay)
 ([`PreferredUnderlay::Snap`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/enum.PreferredUnderlay.html)
 or `Udp`; the default is `Udp`). The stack then selects a matching underlay for the destination AS.
 Per-underlay settings live in
 [`SnapUnderlayConfig`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.SnapUnderlayConfig.html)
 and [`UdpUnderlayConfig`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.UdpUnderlayConfig.html);
 see the
-[`ScionStackBuilder` reference](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html).
+[`ScionStackBuilder` reference](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html).
 
 PocketSCION can simulate **either** underlay so you can develop against both locally: its topology
 helpers take an `UnderlayType` (`Snap` or `Udp`). The examples that ship with the SDK build their
@@ -82,9 +82,9 @@ sequenceDiagram
 You give the stack a token through a **token source**
 ([`TokenSource`](https://docs.rs/reqwest-connect-rpc/latest/reqwest_connect_rpc/token_source/trait.TokenSource.html)),
 either a static string via
-[`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html#method.with_auth_token)
+[`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)
 or a self-refreshing source via
-[`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/struct.ScionStackBuilder.html#method.with_auth_token_source).
+[`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source).
 Locally, the examples use a fixed development token that PocketSCION accepts
 ([`pocketscion::util::dev_auth_token`](https://docs.rs/pocketscion/latest/pocketscion/util/fn.dev_auth_token.html)):
 
