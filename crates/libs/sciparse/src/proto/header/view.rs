@@ -417,12 +417,21 @@ impl ScionHeaderView {
 }
 // Path header
 impl ScionHeaderView {
+    /// Returns the offset of the data plane path within the header.
+    ///
+    /// Offsets into the path, e.g. the byte range of a hop field, are relative to the path and need
+    /// to be shifted by this offset to point into the packet.
+    #[inline]
+    pub fn path_offset(&self) -> usize {
+        CommonHeaderLayout::SIZE_BYTES
+            + AddressHeaderLayout::new(self.dst_addr_type().size(), self.src_addr_type().size())
+                .size_bytes()
+    }
+
     /// Returns a view over the path
     #[inline]
     pub fn path(&self) -> ScionDpPathViewRef<'_> {
-        let path_offset = CommonHeaderLayout::SIZE_BYTES
-            + AddressHeaderLayout::new(self.dst_addr_type().size(), self.src_addr_type().size())
-                .size_bytes();
+        let path_offset = self.path_offset();
 
         let len = self.header_len() as usize;
 
@@ -463,9 +472,7 @@ impl ScionHeaderView {
     /// Returns a mutable view over the path
     #[inline]
     pub fn path_mut(&mut self) -> ScionDpPathViewRefMut<'_> {
-        let path_offset = CommonHeaderLayout::SIZE_BYTES
-            + AddressHeaderLayout::new(self.dst_addr_type().size(), self.src_addr_type().size())
-                .size_bytes();
+        let path_offset = self.path_offset();
 
         let len = self.header_len() as usize;
 

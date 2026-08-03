@@ -23,6 +23,7 @@ pub use echo::DefaultEchoHandler;
 pub(crate) use error::ScmpErrorHandler;
 use sciparse::{
     dataplane_path::view::ScionDpPathViewRef,
+    identifier::isd_asn::IsdAsn,
     packet::{model::ScionRawPacket, view::ScionRawPacketView},
     payload::scmp::model::ScmpErrorMessage,
 };
@@ -42,11 +43,17 @@ pub trait ScmpErrorReceiver: Send + Sync {
     ///
     /// # Arguments
     ///
+    /// * `src_ia` - The ISD-AS that reported the error.
     /// * `scmp_error` - The SCMP error to report.
     /// * `path` - The path that the SCMP error was received on (not reversed).
     // The explicit lifetime is required by `mockall`'s `automock` code generation.
     #[allow(clippy::needless_lifetimes, clippy::elidable_lifetime_names)]
-    fn report_scmp_error<'a>(&self, scmp_error: ScmpErrorMessage, path: ScionDpPathViewRef<'a>);
+    fn report_scmp_error<'a>(
+        &self,
+        src_ia: IsdAsn,
+        scmp_error: ScmpErrorMessage,
+        path: ScionDpPathViewRef<'a>,
+    );
 }
 
 // Note: `mockall` will generate `MockScmpErrorReceiver` for tests in this module.

@@ -29,7 +29,15 @@ use sciparse::{
     identifier::isd_asn::IsdAsn,
     packet::view::ScionRawPacketView,
     path::{ScionPath, fingerprint::data_plane::DpPathFingerprint},
-    payload::scmp::{model::ScmpErrorMessage, types::ScmpDestinationUnreachableCode},
+    payload::scmp::{
+        model::ScmpErrorMessage,
+        types::{
+            ScmpDestinationUnreachableCode,
+            ScmpParameterProblemCode::{
+                UnknownHopFieldConsEgressInterface, UnknownHopFieldConsIngressInterface,
+            },
+        },
+    },
 };
 
 use crate::{
@@ -235,7 +243,11 @@ impl IssueMarkerTarget {
 #[derive(Debug, Clone)]
 pub enum IssueKind {
     /// Path received SCMP error
-    Scmp { error: ScmpErrorMessage },
+    Scmp {
+        /// The ISD-AS that reported the error.
+        src_ia: IsdAsn,
+        error: ScmpErrorMessage,
+    },
     /// ICMP error
     // Placeholder variant; ICMP issues are recognized but not yet produced. TODO: details.
     #[allow(dead_code)]
@@ -246,7 +258,7 @@ pub enum IssueKind {
 impl Display for IssueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IssueKind::Scmp { error } => write!(f, "SCMP Error: {error:?}"),
+            IssueKind::Scmp { src_ia, error } => write!(f, "SCMP Error from {src_ia}: {error:?}"),
             IssueKind::Icmp { .. } => write!(f, "ICMP Error"),
             IssueKind::Socket { err } => write!(f, "Socket Error: {err:?}"),
         }
@@ -270,7 +282,7 @@ impl IssueKind {
     /// Returns the target type the issue applies to, if any.
     pub fn target_type(&self) -> Option<IssueMarkerTarget> {
         match self {
-            IssueKind::Scmp { error } => {
+            IssueKind::Scmp { src_ia, error } => {
                 match error {
                     ScmpErrorMessage::DestinationUnreachable(scmp_destination_unreachable) => {
                         // XXX(ake): Destination Unreachable depend on the destination host,
@@ -320,7 +332,31 @@ impl IssueKind {
                         })
                     }
                     ScmpErrorMessage::PacketTooBig(_) => None,
-                    ScmpErrorMessage::ParameterProblem(_) => None,
+                    ScmpErrorMessage::ParameterProblem(problem) => {
+                        match problem.code {
+                            // An AS that does not know the interface a hop field references cannot
+                            // forward over it. Which hop field the report refers to is only
+                            // unambiguous when the source AS reports it: then it is the first hop.
+                            UnknownHopFieldConsIngressInterface
+                            | UnknownHopFieldConsEgressInterface => {
+                                let offending = problem.get_offending_packet();
+                                let (pkt, _rest) =
+                                    ScionRawPacketView::try_from_slice(offending).ok()?;
+                                if pkt.header().src_ia() != *src_ia {
+                                    return None;
+                                }
+
+                                Some(IssueMarkerTarget::FirstHop {
+                                    isd_asn: *src_ia,
+                                    egress_interface: pkt
+                                        .header()
+                                        .path()
+                                        .first_egress_interface()?,
+                                })
+                            }
+                            _ => None,
+                        }
+                    }
                 }
             }
             IssueKind::Icmp { .. } => None,
@@ -345,7 +381,7 @@ impl IssueKind {
     /// Returns a negative score (penalty).
     pub(crate) fn penalty(&self) -> Score {
         let magnitude = match self {
-            IssueKind::Scmp { error } => {
+            IssueKind::Scmp { error, .. } => {
                 match error {
                     // LINK FAILURES (Max penalty)
                     // Interface down means the link is physically/logically broken.
@@ -371,10 +407,19 @@ impl IssueKind {
                             _ => -0.5,
                         }
                     }
-                    // Irrelevant
-                    ScmpErrorMessage::PacketTooBig(_) | ScmpErrorMessage::ParameterProblem(_) => {
-                        0.0
+                    ScmpErrorMessage::ParameterProblem(problem) => {
+                        match problem.code {
+                            // An interface unknown to the reporting AS is as unusable as one that
+                            // is down, and stays that way until that AS is reconfigured.
+                            UnknownHopFieldConsIngressInterface
+                            | UnknownHopFieldConsEgressInterface => -1.0,
+                            // Irrelevant
+                            _ => 0.0,
+                        }
                     }
+
+                    // Irrelevant
+                    ScmpErrorMessage::PacketTooBig(_) => 0.0,
                 }
             }
 
@@ -430,5 +475,84 @@ impl SendError {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sciparse::{
+        address::ip_addr::ScionIpAddr,
+        core::encode::WireEncode,
+        identifier::{asn::Asn, isd::Isd},
+        payload::scmp::{model::ScmpParameterProblem, types::ScmpParameterProblemCode},
+        util::test_builder::TestPathBuilder,
+    };
+
+    use super::*;
+
+    const EGRESS_INTERFACE: u16 = 11;
+
+    fn src_ia() -> IsdAsn {
+        IsdAsn::new(Isd(1), Asn(10))
+    }
+
+    /// Quotes a packet that leaves [`src_ia`] on [`EGRESS_INTERFACE`] in a parameter problem.
+    fn parameter_problem(code: ScmpParameterProblemCode) -> ScmpErrorMessage {
+        let src = ScionIpAddr::new(src_ia(), [192, 0, 2, 1].into());
+        let dst = ScionIpAddr::new(IsdAsn::new(Isd(1), Asn(20)), [198, 51, 100, 1].into());
+        let offending = TestPathBuilder::new(src.into(), dst.into())
+            .up()
+            .add_hop(0, EGRESS_INTERFACE)
+            .add_hop(12, 0)
+            .build(77)
+            .scion_packet_udp(b"payload", 4242, 53)
+            .try_encode_to_vec()
+            .expect("failed to encode packet");
+
+        ScmpParameterProblem::new(code, 0, offending).into()
+    }
+
+    #[test]
+    fn unknown_interface_reported_by_source_as_targets_the_first_hop() {
+        for code in [
+            ScmpParameterProblemCode::UnknownHopFieldConsIngressInterface,
+            ScmpParameterProblemCode::UnknownHopFieldConsEgressInterface,
+        ] {
+            let issue = IssueKind::Scmp {
+                src_ia: src_ia(),
+                error: parameter_problem(code),
+            };
+
+            assert_eq!(
+                issue.target_type(),
+                Some(IssueMarkerTarget::FirstHop {
+                    isd_asn: src_ia(),
+                    egress_interface: EGRESS_INTERFACE,
+                }),
+                "{code:?} should penalize the first hop"
+            );
+            assert_eq!(issue.penalty(), Score::new_clamped(-1.0));
+        }
+    }
+
+    #[test]
+    fn unknown_interface_reported_by_another_as_is_ignored() {
+        let issue = IssueKind::Scmp {
+            src_ia: IsdAsn::new(Isd(1), Asn(20)),
+            error: parameter_problem(ScmpParameterProblemCode::UnknownHopFieldConsIngressInterface),
+        };
+
+        assert_eq!(issue.target_type(), None);
+    }
+
+    #[test]
+    fn unrelated_parameter_problem_is_ignored() {
+        let issue = IssueKind::Scmp {
+            src_ia: src_ia(),
+            error: parameter_problem(ScmpParameterProblemCode::InvalidPath),
+        };
+
+        assert_eq!(issue.target_type(), None);
+        assert_eq!(issue.penalty(), Score::new_clamped(0.0));
     }
 }

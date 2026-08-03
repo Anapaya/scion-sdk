@@ -57,8 +57,9 @@ impl ScmpHandler for ScmpErrorHandler {
             .ok()?;
 
         tracing::debug!(err = ?scmp_error, "reporting SCMP error");
+        let src_ia = pkt.header().src_ia();
         self.receivers.for_each(|receiver| {
-            receiver.report_scmp_error(scmp_error.clone(), path);
+            receiver.report_scmp_error(src_ia, scmp_error.clone(), path);
         });
         None
     }
@@ -110,15 +111,19 @@ mod scmp_error_handler_tests {
 
         let expected_path = packet.header().path().to_owned_view();
 
+        let expected_src_ia = packet.header().src_ia();
         let mut mock_receiver = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver
             .expect_report_scmp_error()
-            .withf(move |error: &ScmpErrorMessage, path: &ScionDpPathViewRef| {
-                matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
-                    && *path == expected_path.as_ref()
-            })
+            .withf(
+                move |src_ia: &IsdAsn, error: &ScmpErrorMessage, path: &ScionDpPathViewRef| {
+                    *src_ia == expected_src_ia
+                        && matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
+                        && *path == expected_path.as_ref()
+                },
+            )
             .times(1)
-            .returning(|_, _| {});
+            .returning(|_, _, _| {});
 
         let receiver_arc: Arc<dyn ScmpErrorReceiver> = Arc::new(mock_receiver);
         let subscribers = Subscribers::new();
@@ -207,22 +212,26 @@ mod scmp_error_handler_tests {
         let mut mock_receiver1 = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver1
             .expect_report_scmp_error()
-            .withf(move |error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
-                matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
-                    && p == &expected_path_clone1.as_ref()
-            })
+            .withf(
+                move |_src_ia: &IsdAsn, error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
+                    matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
+                        && p == &expected_path_clone1.as_ref()
+                },
+            )
             .times(1)
-            .returning(|_, _| {});
+            .returning(|_, _, _| {});
 
         let mut mock_receiver2 = crate::stack::scmp_handler::MockScmpErrorReceiver::new();
         mock_receiver2
             .expect_report_scmp_error()
-            .withf(move |error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
-                matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
-                    && p == &expected_path_clone2.as_ref()
-            })
+            .withf(
+                move |_src_ia: &IsdAsn, error: &ScmpErrorMessage, p: &ScionDpPathViewRef| {
+                    matches!(error, ScmpErrorMessage::DestinationUnreachable(_))
+                        && p == &expected_path_clone2.as_ref()
+                },
+            )
             .times(1)
-            .returning(|_, _| {});
+            .returning(|_, _, _| {});
 
         let receiver1_arc: Arc<dyn ScmpErrorReceiver> = Arc::new(mock_receiver1);
         let receiver2_arc: Arc<dyn ScmpErrorReceiver> = Arc::new(mock_receiver2);

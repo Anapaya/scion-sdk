@@ -464,8 +464,19 @@ impl<F: PathFetcher> MultiPathManager<F> {
 }
 
 impl<F: PathFetcher> ScmpErrorReceiver for MultiPathManager<F> {
-    fn report_scmp_error(&self, scmp_error: ScmpErrorMessage, _path: ScionDpPathViewRef) {
-        self.report_path_issue(SystemTime::now(), IssueKind::Scmp { error: scmp_error });
+    fn report_scmp_error(
+        &self,
+        src_ia: IsdAsn,
+        scmp_error: ScmpErrorMessage,
+        _path: ScionDpPathViewRef,
+    ) {
+        self.report_path_issue(
+            SystemTime::now(),
+            IssueKind::Scmp {
+                src_ia,
+                error: scmp_error,
+            },
+        );
     }
 }
 
