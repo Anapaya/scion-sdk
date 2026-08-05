@@ -204,18 +204,33 @@ impl CancelTaskSet {
     /// Joins all tasks in the set. If any task fails to join or returns an error, cancel the token
     /// to signal a graceful shutdown to the remaining tasks.
     pub async fn join_all(&mut self) {
+        let _ = self.try_join_all().await;
+    }
+
+    /// Same as [Self::join_all], but returns the error of the first task that failed.
+    ///
+    /// All tasks are joined regardless; the error is meant for callers that report a task failure
+    /// as a failure of the whole process.
+    pub async fn try_join_all(&mut self) -> Result<(), std::io::Error> {
+        let mut first_error = None;
         while let Some(result) = self.join_set.join_next().await {
-            match result {
-                Ok(Ok(())) => {} // Task completed successfully
+            let error = match result {
+                Ok(Ok(())) => continue, // Task completed successfully
                 Ok(Err(e)) => {
                     tracing::error!(error=%e, "Task failed");
-                    self.cancellation_token.cancel();
+                    e
                 }
                 Err(e) => {
                     tracing::error!(error=%e, "Task join failed");
-                    self.cancellation_token.cancel();
+                    std::io::Error::other(e)
                 }
-            }
+            };
+            self.cancellation_token.cancel();
+            first_error = first_error.or(Some(error));
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 }
