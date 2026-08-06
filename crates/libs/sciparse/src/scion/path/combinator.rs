@@ -21,7 +21,7 @@
 //!
 //! [1]: <https://github.com/scionproto/scion/blob/38e79c43faf38ebec719ac71fb65e1f814050e3b/private/path/combinator/combinator.go#L60>
 
-mod graph;
+pub mod graph;
 
 #[cfg(test)]
 mod test_graph;
@@ -47,11 +47,11 @@ use crate::{
 ///
 /// The algorithm is based on the scionproto go implementation.
 #[inline]
-pub fn combine<EntryType: Entry>(
+pub fn combine<'a, EntryType: Entry>(
     src: IsdAsn,
     dst: IsdAsn,
-    cores: Vec<PathSegment<EntryType>>,
-    non_cores: Vec<PathSegment<EntryType>>,
+    cores: impl Iterator<Item = &'a PathSegment<EntryType>>,
+    non_cores: impl Iterator<Item = &'a PathSegment<EntryType>>,
 ) -> Vec<ScionPath> {
     combine_with_weight_fn(src, dst, cores, non_cores, number_of_hops)
 }
@@ -70,11 +70,11 @@ pub fn combine<EntryType: Entry>(
 ///
 /// The algorithm is based on the scionproto go implementation.
 #[inline]
-pub fn combine_with_weight_fn<EntryType: Entry>(
+pub fn combine_with_weight_fn<'a, EntryType: Entry>(
     src: IsdAsn,
     dst: IsdAsn,
-    cores: Vec<PathSegment<EntryType>>,
-    non_cores: Vec<PathSegment<EntryType>>,
+    cores: impl Iterator<Item = &'a PathSegment<EntryType>>,
+    non_cores: impl Iterator<Item = &'a PathSegment<EntryType>>,
     weight_fn: impl Fn(&graph::InputSegment<EntryType>, u64, bool) -> u64,
 ) -> Vec<ScionPath> {
     if src == dst {
@@ -82,31 +82,20 @@ pub fn combine_with_weight_fn<EntryType: Entry>(
     }
     let mut graph = graph::MultiGraph::new(weight_fn);
     let segments = cores
-        .iter()
         .map(graph::InputSegment::new_core)
-        .chain(non_cores.iter().map(graph::InputSegment::new_non_core))
-        .collect::<Vec<_>>();
-    graph.add_segments(segments.as_slice());
+        .chain(non_cores.map(graph::InputSegment::new_non_core));
+
+    graph.add_segments(segments);
+
     let solutions = graph.get_paths(src, dst);
     let paths = solutions
         .iter()
         .filter_map(|s| s.path().ok().flatten())
-        .filter(|p| !has_loops(p))
+        .map(|(p, _segments)| p)
         .collect();
+
     filter_duplicates(paths)
 }
-
-/// Returns true if the path has more than 2 interfaces from the same AS. I.e.
-/// if it has a loop.
-#[inline]
-fn has_loops(path: &ScionPath) -> bool {
-    let mut ia_counts = HashMap::new();
-    for i in path.metadata.as_ref().unwrap().interfaces.as_ref().unwrap() {
-        *ia_counts.entry(i.interface.isd_asn).or_insert(0) += 1;
-    }
-    ia_counts.values().any(|v| *v > 2)
-}
-
 /// filter_duplicates removes paths with identical sequences of path interfaces,
 /// keeping only the one instance with latest expiry.
 /// Duplicates can arise when multiple combinations of different path segments
@@ -177,8 +166,8 @@ mod tests {
         let paths = combine(
             test_case.src,
             test_case.dst,
-            test_case.cores,
-            test_case.non_cores,
+            test_case.cores.iter(),
+            test_case.non_cores.iter(),
         );
         let actual: Vec<Vec<(IsdAsn, u16)>> = paths
             .iter()
@@ -797,6 +786,27 @@ mod tests {
     }
 
     #[test]
+    fn test_path_with_a_loop_is_dropped() {
+        let g = default_graph().unwrap();
+        run_test(TestCase {
+            src: "1-ff00:0:112".parse().unwrap(),
+            dst: "1-ff00:0:111".parse().unwrap(),
+            cores: vec![g.beacon("1-ff00:0:120".parse().unwrap(), &[1]).unwrap()],
+            non_cores: vec![
+                // up segment: 130->111->112, which already passes through the destination
+                g.beacon("1-ff00:0:130".parse().unwrap(), &[112, 103])
+                    .unwrap(),
+                // down segment: 120->111
+                g.beacon("1-ff00:0:120".parse().unwrap(), &[5]).unwrap(),
+            ],
+            // The graph also finds the up-core-down combination, but it enters and leaves 111 on
+            // the way up and comes back to it at the end, i.e. it loops. Only the shortcut within
+            // the up segment is a real path.
+            expected_paths: vec![interfaces(&["1-ff00:0:112#494", "1-ff00:0:111#103"])],
+        });
+    }
+
+    #[test]
     fn test_bad_peering() {
         let mut g = default_graph().unwrap();
 
@@ -912,8 +922,8 @@ mod tests {
         let paths = combine(
             "1-ff00:0:112".parse().unwrap(),
             "1-ff00:0:111".parse().unwrap(),
-            vec![],
-            vec![up],
+            [].iter(),
+            [up].iter(),
         );
 
         assert_eq!(paths.len(), 1, "should produce exactly one combined path");
@@ -936,8 +946,8 @@ mod tests {
         let paths = combine(
             "1-ff00:0:112".parse().unwrap(),
             "1-ff00:0:111".parse().unwrap(),
-            vec![],
-            vec![up],
+            [].iter(),
+            [up].iter(),
         );
 
         assert_eq!(paths.len(), 1, "should produce exactly one combined path");
@@ -961,8 +971,8 @@ mod tests {
         let paths = combine(
             "1-ff00:0:112".parse().unwrap(),
             "1-ff00:0:130".parse().unwrap(),
-            vec![],
-            vec![up],
+            [].iter(),
+            [up].iter(),
         );
 
         assert_eq!(paths.len(), 1, "should produce exactly one combined path");
@@ -1031,8 +1041,8 @@ mod tests {
         let paths = combine(
             "1-ff00:0:112".parse().unwrap(),
             "2-ff00:0:212".parse().unwrap(),
-            vec![],
-            vec![up, down],
+            [].iter(),
+            [up, down].iter(),
         );
 
         assert_eq!(paths.len(), 1, "should produce exactly one combined path");
@@ -1074,8 +1084,8 @@ mod tests {
         let paths = combine(
             "1-ff00:0:112".parse().unwrap(),
             "2-ff00:0:212".parse().unwrap(),
-            vec![],
-            vec![up, down],
+            [].iter(),
+            [up, down].iter(),
         );
 
         assert_eq!(paths.len(), 1, "should produce exactly one combined path");

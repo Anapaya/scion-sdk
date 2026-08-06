@@ -20,7 +20,7 @@
 //!
 //! Main type is: [SignedPathSegment]
 use std::{
-    fmt,
+    fmt::{self, Display},
     hash::{Hash, Hasher},
     ops::Deref,
     time::{Duration, SystemTime},
@@ -76,7 +76,7 @@ impl<E: Entry + Sized> PathSegment<E> {
 
     /// Returns a hash of the segment covering all hops, except for peerings.
     #[inline]
-    pub fn id(&self) -> SegmentID {
+    pub fn fingerprint(&self) -> SegmentFp {
         let mut hasher = Sha256::new();
 
         for ase in &self.as_entries {
@@ -88,12 +88,12 @@ impl<E: Entry + Sized> PathSegment<E> {
             hasher.update(ase.hop_entry.hop_field.cons_egress.to_be_bytes());
         }
 
-        SegmentID(hasher.finalize().into())
+        SegmentFp(hasher.finalize().into())
     }
 
     /// Returns a hash of the segment covering all hops including peerings.
     #[inline]
-    pub fn full_id(&self) -> SegmentID {
+    pub fn full_id(&self) -> SegmentFp {
         let mut hasher = Sha256::new();
 
         for ase in &self.as_entries {
@@ -113,7 +113,7 @@ impl<E: Entry + Sized> PathSegment<E> {
             }
         }
 
-        SegmentID(hasher.finalize().into())
+        SegmentFp(hasher.finalize().into())
     }
 
     /// Returns the first IA in the path segment.
@@ -166,6 +166,12 @@ impl<E: Entry + Sized> PathSegment<E> {
         compare: impl Fn(Duration, Duration) -> bool,
     ) -> SystemTime {
         let mut ttl = init_ttl;
+
+        // If there are no AS entries, the expiry time is just the timestamp of the segment.
+        if self.as_entries.is_empty() {
+            return SystemTime::UNIX_EPOCH + Duration::from_secs(self.info.timestamp as u64);
+        }
+
         for ase in &self.as_entries {
             let ase = ase.get();
 
@@ -245,7 +251,7 @@ impl<E: Entry> fmt::Display for PathSegment<E> {
         write!(
             f,
             "PathSegment[id: {} ts: {:?} hops: ",
-            self.id().logging_id(),
+            self.fingerprint().logging_id(),
             self.info.timestamp, // TODO: format timestamp in human readable format
         )?;
         self.format_hops(f)?;
@@ -459,15 +465,15 @@ impl SignedPathSegment {
 }
 
 /// Segment ID, which is a hash of a path segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SegmentID([u8; 32]);
-impl From<[u8; 32]> for SegmentID {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct SegmentFp([u8; 32]);
+impl From<[u8; 32]> for SegmentFp {
     #[inline]
     fn from(value: [u8; 32]) -> Self {
         Self(value)
     }
 }
-impl SegmentID {
+impl SegmentFp {
     /// Returns a short hex-encoded prefix of the segment ID for logging.
     #[inline]
     fn logging_id(&self) -> String {
@@ -477,10 +483,16 @@ impl SegmentID {
             .collect::<String>()
     }
 }
-impl std::hash::Hash for SegmentID {
+impl std::hash::Hash for SegmentFp {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write(&self.0);
+    }
+}
+impl Display for SegmentFp {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.logging_id())
     }
 }
 
@@ -1136,5 +1148,18 @@ mod tests {
         let expected =
             "PathSegment[id: e6f0dd86a0413116d3c43919 ts: 0 hops: 1-1 2>2 1-2 3>2 1-2 3]";
         assert_eq!(segment.to_string(), expected);
+    }
+
+    /// A segment without any AS entry has no hop field to take a TTL from, so its expiry is its
+    /// own timestamp. Adding the initial TTL of [`PathSegment::expires_earliest`] to that would
+    /// overflow [`SystemTime`].
+    #[test]
+    fn expiry_of_a_segment_without_hops_is_its_timestamp() {
+        let timestamp = 1_000_000;
+        let segment = SignedPathSegment::empty(timestamp, 42);
+
+        let expected = SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(timestamp));
+        assert_eq!(segment.expires_earliest(), expected);
+        assert_eq!(segment.expires_latest(), expected);
     }
 }

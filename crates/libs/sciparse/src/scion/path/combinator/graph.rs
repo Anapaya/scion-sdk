@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use tinyvec::TinyVec;
+use tinyvec::{ArrayVec, TinyVec};
 
 use crate::{
     core::{
@@ -33,16 +33,22 @@ use crate::{
         ScionPath,
         metadata::{InterfaceMetadata, PathMetadata, path_interface::PathInterface},
     },
-    segment::{Entry, PathSegment, SegmentID},
+    segment::{Entry, PathSegment, SegmentFp},
 };
 
 /// Multigraph is the graph used to find valid paths.
+///
 /// Vertices are either ASes (IA) or Peering vertices that represent the use of a peering link
 /// in one direction.
+///
 /// Edges represent the valid use of a segment to send data from one vertex to another.
 /// Edges are bidirectional i.e. they are added in both directions.
+///
 /// The edges are annotated with the segment and with the weight calculated by the given weight
 /// function.
+///
+/// Unless you want more precise control over iterating over the graph, you should use
+/// [combine](super::combine) instead of using this graph directly.
 pub struct MultiGraph<'a, WeightFn, EntryType: Entry>
 where
     WeightFn: Fn(&InputSegment<'a, EntryType>, u64, bool) -> u64,
@@ -72,7 +78,7 @@ pub struct Edge {
 }
 
 /// Map to store the set of edges between two vertices. The edges are keyed by the segment hash.
-type EdgeMap<'a, EntryType> = HashMap<&'a InputSegment<'a, EntryType>, Edge>;
+type EdgeMap<'a, EntryType> = HashMap<InputSegment<'a, EntryType>, Edge>;
 /// Maps destination vertices to the list of edges that point towards them.
 type VertexInfo<'a, EntryType> = HashMap<Vertex, EdgeMap<'a, EntryType>>;
 
@@ -161,23 +167,23 @@ impl Vertex {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InputSegment<'a, EntryType: Entry> {
     /// Core segment.
-    Core(&'a PathSegment<EntryType>, SegmentID),
+    Core(&'a PathSegment<EntryType>, SegmentFp),
     /// Non-core segment.
-    NonCore(&'a PathSegment<EntryType>, SegmentID),
+    NonCore(&'a PathSegment<EntryType>, SegmentFp),
 }
 
 impl<'a, EntryType: Entry> InputSegment<'a, EntryType> {
     /// Create a new core input segment.
     #[inline]
     pub fn new_core(path_segment: &'a PathSegment<EntryType>) -> Self {
-        let id = path_segment.id();
+        let id = path_segment.fingerprint();
         Self::Core(path_segment, id)
     }
 
     /// Create a new non-core input segment.
     #[inline]
     pub fn new_non_core(path_segment: &'a PathSegment<EntryType>) -> Self {
-        let id = path_segment.id();
+        let id = path_segment.fingerprint();
         Self::NonCore(path_segment, id)
     }
 
@@ -195,7 +201,7 @@ impl<'a, EntryType: Entry> InputSegment<'a, EntryType> {
 
     /// Returns the segment id.
     #[inline]
-    const fn id(&self) -> &SegmentID {
+    const fn fingerprint(&self) -> &SegmentFp {
         match self {
             Self::Core(_, id) => id,
             Self::NonCore(_, id) => id,
@@ -214,7 +220,7 @@ impl<'a, EntryType: Entry> InputSegment<'a, EntryType> {
 
 /// Weight function that uses the number of links traversed when using the segment as cost.
 #[inline]
-pub(crate) fn number_of_hops<EntryType: Entry>(
+pub fn number_of_hops<EntryType: Entry>(
     segment: &InputSegment<EntryType>,
     shortcut_idx: u64,
     towards_peer: bool,
@@ -252,7 +258,10 @@ where
     /// Returns the count of segments which were successfully added.
     /// If a segment contains no hops, it is not added to the graph.``
     #[inline]
-    pub fn add_segments(&mut self, segments: &'a [InputSegment<EntryType>]) -> usize {
+    pub fn add_segments(
+        &mut self,
+        segments: impl Iterator<Item = InputSegment<'a, EntryType>>,
+    ) -> usize {
         let mut added = 0;
         for segment in segments {
             if self.add_segment(segment).is_ok() {
@@ -263,7 +272,7 @@ where
     }
 
     #[inline]
-    fn add_segment(&mut self, segment: &'a InputSegment<EntryType>) -> Result<(), &'static str> {
+    fn add_segment(&mut self, segment: InputSegment<'a, EntryType>) -> Result<(), &'static str> {
         match segment {
             InputSegment::Core(..) => {
                 self.add_core_segment(segment)?;
@@ -285,7 +294,7 @@ where
     #[inline]
     fn add_core_segment(
         &mut self,
-        segment: &'a InputSegment<EntryType>,
+        segment: InputSegment<'a, EntryType>,
     ) -> Result<(), &'static str> {
         let first_ia = segment.path_segment().first_ia();
         let last_ia = segment.path_segment().last_ia();
@@ -295,12 +304,13 @@ where
             return Err("Segment does not contain any hops");
         };
 
+        let weight = (self.weight_fn)(&segment, 0, false);
         self.add_edge(
             Vertex::AS(first_ia),
             Vertex::AS(last_ia),
             segment,
             Edge {
-                weight: (self.weight_fn)(segment, 0, false),
+                weight,
                 shortcut_idx: 0,
                 peer: None,
             },
@@ -319,7 +329,7 @@ where
     /// contain any hops.
     fn add_non_core_segment(
         &mut self,
-        segment: &'a InputSegment<EntryType>,
+        segment: InputSegment<'a, EntryType>,
     ) -> Result<(), &'static str> {
         let Some(leaf) = segment.path_segment().last_ia() else {
             // If the segment does not contain any hops, we cannot add any edges.
@@ -329,12 +339,13 @@ where
         for (idx, entry) in segment.path_segment().iter().enumerate().rev() {
             // For the last entry in the segment (the leaf) we don't need to add an edge.
             if idx != segment.path_segment().len() - 1 {
+                let weight = (self.weight_fn)(&segment, idx as u64, false);
                 self.add_edge(
                     Vertex::AS(leaf),
                     Vertex::AS(entry.local),
-                    segment,
+                    segment.clone(),
                     Edge {
-                        weight: (self.weight_fn)(segment, idx as u64, false),
+                        weight,
                         shortcut_idx: idx,
                         peer: None,
                     },
@@ -344,6 +355,8 @@ where
             for (peer_idx, peer) in entry.peer_entries.iter().enumerate() {
                 // The peering vertices are oriented in the direction that the peering link is
                 // used. We add two edges, one for each direction.
+
+                let edge_weight = (self.weight_fn)(&segment, idx as u64, true);
                 self.add_directed_edge(
                     Vertex::AS(leaf),
                     Vertex::Peering {
@@ -352,15 +365,17 @@ where
                         peer_ia: peer.peer,
                         peer_ifid: peer.peer_interface,
                     },
-                    segment,
+                    segment.clone(),
                     Edge {
                         // We set the towards_peer flag to true to account for the peer link.
                         // But only in one direction.
-                        weight: (self.weight_fn)(segment, idx as u64, true),
+                        weight: edge_weight,
                         shortcut_idx: idx,
                         peer: Some(peer_idx),
                     },
                 );
+
+                let edge_weight = (self.weight_fn)(&segment, idx as u64, false);
                 self.add_directed_edge(
                     Vertex::Peering {
                         local_ia: peer.peer,
@@ -369,9 +384,9 @@ where
                         peer_ifid: peer.hop_field.cons_ingress,
                     },
                     Vertex::AS(leaf),
-                    segment,
+                    segment.clone(),
                     Edge {
-                        weight: (self.weight_fn)(segment, idx as u64, false),
+                        weight: edge_weight,
                         shortcut_idx: idx,
                         peer: Some(peer_idx),
                     },
@@ -388,10 +403,10 @@ where
         &mut self,
         src: Vertex,
         dst: Vertex,
-        segment: &'a InputSegment<EntryType>,
+        segment: InputSegment<'a, EntryType>,
         edge: Edge,
     ) {
-        self.add_directed_edge(src, dst, segment, edge);
+        self.add_directed_edge(src, dst, segment.clone(), edge);
         self.add_directed_edge(dst, src, segment, edge);
     }
 
@@ -401,7 +416,7 @@ where
         &mut self,
         src: Vertex,
         dst: Vertex,
-        segment: &'a InputSegment<EntryType>,
+        segment: InputSegment<'a, EntryType>,
         edge: Edge,
     ) {
         self.adjacencies
@@ -462,7 +477,10 @@ where
                     return d;
                 }
                 // Finally, use the segment id to break ties.
-                let d = edge_a.segment.id().cmp(edge_b.segment.id());
+                let d = edge_a
+                    .segment
+                    .fingerprint()
+                    .cmp(edge_b.segment.fingerprint());
                 if d.is_ne() {
                     return d;
                 }
@@ -484,7 +502,7 @@ where
                 for (segment, edge) in edges {
                     if let (Vertex::AS(_), Vertex::AS(_)) = (src, dst) {
                         // Add undirected edge for edges between IA vertices.
-                        if seen.contains(&(dst, src, segment.id())) {
+                        if seen.contains(&(dst, src, segment.fingerprint())) {
                             continue;
                         } else {
                             flowchart.push_str(&format!(
@@ -505,7 +523,7 @@ where
                                 },
                                 dst.mermaid_node()
                             ));
-                            seen.insert((src, dst, segment.id()));
+                            seen.insert((src, dst, segment.fingerprint()));
                         }
                     } else {
                         // Add directed edge for edges between IA and Peering vertices.
@@ -604,6 +622,10 @@ impl<'a, EntryType: Entry> SolutionEdge<'a, EntryType> {
     }
 }
 
+/// A combined path and the fingerprints of the at most three segments it was built from, in path
+/// order.
+pub type CombinedPath = (ScionPath, ArrayVec<[SegmentFp; 3]>);
+
 /// Path solution is a sequence of edges that form a valid path from src to dst.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct PathSolution<'a, EntryType: Entry> {
@@ -679,7 +701,10 @@ impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
     }
 
     /// Construct a path from the solution.
-    pub fn path(&self) -> Result<Option<ScionPath>, EncodeError> {
+    ///
+    /// Returns the path and the fingerprints of the segments it was built from
+    /// Returns None if the solution did not contain a valid path.
+    pub fn path(&self) -> Result<Option<CombinedPath>, EncodeError> {
         if self.edges.is_empty() {
             return Ok(None);
         }
@@ -687,7 +712,12 @@ impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
         let mut mtu = u16::MAX;
         let mut path = StandardPath::new_empty();
         let mut interfaces = Vec::new();
+        let mut segment_fps = ArrayVec::new();
         for solution_edge in self.edges.iter() {
+            // If the caller wants to know which segments were used in the path, push the segment
+            // fingerprint to the provided vector.
+            segment_fps.push(*solution_edge.segment.fingerprint());
+
             let mut segment_interfaces = Vec::new();
             let mut hops = TinyVec::with_capacity(
                 solution_edge.segment.path_segment().len() - solution_edge.edge.shortcut_idx,
@@ -802,6 +832,18 @@ impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
                 .expect("valid path encoding should always produce a valid view"),
         );
 
+        // Check if the path has a loop
+        let mut ia_counts = HashMap::new();
+        for i in &interfaces {
+            let count = ia_counts.entry(i.interface.isd_asn).or_insert(0);
+            *count += 1;
+
+            // If any IA appears more than twice, the path has a loop and is invalid.
+            if *count > 2 {
+                return Ok(None);
+            }
+        }
+
         let start_ia = interfaces
             .first()
             .expect("edges are checked to be not empty")
@@ -824,6 +866,6 @@ impl<'a, EntryType: Entry> PathSolution<'a, EntryType> {
 
         let path = ScionPath::new(start_ia, end_ia, encoded, Some(metadata), None);
 
-        Ok(Some(path))
+        Ok(Some((path, segment_fps)))
     }
 }

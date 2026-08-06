@@ -21,6 +21,7 @@ mockall = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+scc = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -45,6 +46,8 @@ scion-sdk-utils = { workspace = true }
 sciparse = { workspace = true }
 snap-tokens = { workspace = true }
 snap-tun = { workspace = true }
+
+futures = { workspace = true }
 
 [lints]
 workspace = true

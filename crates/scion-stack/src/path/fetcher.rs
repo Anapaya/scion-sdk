@@ -178,8 +178,12 @@ impl PathFetcher for PathFetcherImpl {
             }
         }
 
-        let paths =
-            sciparse::path::combinator::combine(src, dst, all_core_segments, all_non_core_segments);
+        let paths = sciparse::path::combinator::combine(
+            src,
+            dst,
+            all_core_segments.iter(),
+            all_non_core_segments.iter(),
+        );
 
         for (fetcher_name, error) in &errors {
             tracing::warn!(

@@ -105,13 +105,14 @@ impl PocketScionRuntime {
             .segment_registry
             .endhost_list_segments(src, src, dst)?;
 
-        let (core_segments, non_core_segments) = {
-            let segs = segments.into_path_segments(&sguard.topology, valid_after, 0, 255)?;
+        let segs = segments.into_path_segments(&sguard.topology, valid_after, 0, 255)?;
 
-            (segs.core, segs.down.into_iter().chain(segs.up).collect())
-        };
-
-        Ok(combine(src, dst, core_segments, non_core_segments))
+        Ok(combine(
+            src,
+            dst,
+            segs.core.iter(),
+            segs.down.iter().chain(segs.up.iter()),
+        ))
     }
 }
 
