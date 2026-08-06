@@ -31,18 +31,10 @@ pub const UNDERLAY_SERVICE: &str = "UnderlayService";
 /// Segments service.
 pub const SEGMENTS_SERVICE: &str = "SegmentsService";
 
-/// Path service.
-#[deprecated(note = "Use SEGMENTS_SERVICE instead")]
-pub const PATH_SERVICE: &str = "PathService";
-
 /// List underlays endpoint.
 pub const LIST_UNDERLAYS: &str = "/ListUnderlays";
 /// List segments endpoint.
 pub const LIST_SEGMENTS: &str = "/ListSegments";
-
-/// List paths endpoint.
-#[deprecated(note = "Use LIST_SEGMENTS instead")]
-pub const LIST_PATHS: &str = "/ListPaths";
 
 /// Nests the endhost API routes into the provided `base_router`.
 pub fn nest_endhost_api(
@@ -57,14 +49,6 @@ pub fn nest_endhost_api(
         &service_path(ENDHOST_API_V1, UNDERLAY_SERVICE),
         underlay_router,
     );
-
-    // XXX(bunert): deprecated path service
-    #[allow(deprecated)]
-    let path_router = axum::Router::new()
-        .route(LIST_PATHS, post(list_segments_handler))
-        .with_state(path_service.clone());
-    #[allow(deprecated)]
-    let base_router = base_router.nest(&service_path(ENDHOST_API_V1, PATH_SERVICE), path_router);
 
     let segment_router = axum::Router::new()
         .route(LIST_SEGMENTS, post(list_segments_handler))
