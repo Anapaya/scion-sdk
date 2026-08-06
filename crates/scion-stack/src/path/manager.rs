@@ -447,8 +447,6 @@ impl<F: PathFetcher> MultiPathManager<F> {
             return;
         }
 
-        tracing::debug!(%issue, "New path issue");
-
         let issue_marker = IssueMarker {
             target: applies_to,
             timestamp,
@@ -611,6 +609,8 @@ impl PathIssueManager {
                 return;
             }
         }
+
+        tracing::debug!(%id, %issue, "New path issue");
 
         // Broadcast issue
         self.issue_broadcast_tx.send((id, marker.clone())).ok();
