@@ -35,8 +35,8 @@ pub struct MetricsRegistry {
 }
 
 impl MetricsRegistry {
-    /// Use prometheus' default registry and register process metrics. As a
-    /// result, this registry will 'point' to the global registry.
+    /// Use prometheus' default registry and register process metrics. As a result, this registry
+    /// will 'point' to the global registry.
     pub fn new_global() -> Self {
         let registry = prometheus::default_registry().clone();
 

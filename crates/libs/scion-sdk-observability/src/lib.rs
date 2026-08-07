@@ -42,9 +42,10 @@ use tracing_subscriber::{
     prelude::*,
 };
 
-use crate::dedup::DeduplicatingFormatter;
+use crate::{dedup::DeduplicatingFormatter, log_metrics::LogEntriesLayer};
 
 pub mod dedup;
+pub mod log_metrics;
 pub mod metrics;
 pub mod prometheus_json;
 
@@ -134,6 +135,8 @@ pub struct TracingConfig {
     console_format: LogFormat,
     /// Collapse consecutive identical console events into a repeat summary.
     console_dedup: bool,
+    /// Counts emitted log entries by level, if enabled.
+    log_entries: Option<LogEntriesLayer>,
     directives: Vec<String>,
     extra_layers: Vec<Box<dyn Layer<Registry> + Send + Sync + 'static>>,
 }
@@ -145,6 +148,7 @@ impl Default for TracingConfig {
             console_output: Some(LogOutput::Stderr),
             console_format: LogFormat::Text,
             console_dedup: false,
+            log_entries: None,
             directives: Vec::new(),
             extra_layers: Vec::new(),
         }
@@ -179,6 +183,17 @@ impl TracingConfig {
     /// summary when a different event arrives. See [`dedup::DeduplicatingFormatter`].
     pub fn with_deduplication(mut self, enabled: bool) -> Self {
         self.console_dedup = enabled;
+        self
+    }
+
+    /// Count emitted log entries by level, exposing the counter on `registry`. Disabled by
+    /// default.
+    ///
+    /// The counter is registered here rather than when tracing is initialized, so that it lands on
+    /// the registry the caller serves. Pass the registry that is exposed to Prometheus; a counter
+    /// registered elsewhere is counted but never scraped.
+    pub fn with_log_metrics(mut self, registry: &metrics::registry::MetricsRegistry) -> Self {
+        self.log_entries = Some(LogEntriesLayer::new(registry));
         self
     }
 
@@ -225,6 +240,7 @@ impl TracingConfig {
             console_output,
             console_format,
             console_dedup,
+            log_entries,
             directives,
             extra_layers,
         } = self;
@@ -270,6 +286,10 @@ impl TracingConfig {
                 make_filter(&directives)?,
             ));
             guards.push(guard);
+        }
+
+        if let Some(layer) = log_entries {
+            layers.push(layer.with_filter(make_filter(&directives)?).boxed());
         }
 
         // add any additionally configured layers
