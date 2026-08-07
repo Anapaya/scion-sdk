@@ -45,6 +45,11 @@ pub enum EstablishError {
     /// The HTTP/3 layer could not be initialized on the established transport.
     #[error("failed to initialize the HTTP/3 layer")]
     H3Init,
+    /// The client was closed with
+    /// [`Http3Client::close`](super::Http3Client::close). A closed client stays
+    /// closed: it never establishes another connection.
+    #[error("client closed")]
+    Closed,
 }
 
 /// An error issuing a request or opening a `CONNECT` tunnel.
@@ -54,9 +59,16 @@ pub enum RequestError {
     #[error("connection establishment failed: {0}")]
     Establish(#[from] EstablishError),
     /// The connection closed (or was already closed) before the response head
-    /// arrived. In-flight requests faulted this way are **not** retried.
+    /// arrived — the peer closed it, or it idled out. In-flight requests faulted
+    /// this way are **not** retried.
     #[error("connection closed")]
     ConnectionClosed,
+    /// The request was in flight when
+    /// [`Http3Client::close`](super::Http3Client::close) tore the connection
+    /// down locally, as opposed to the peer or idle close reported by
+    /// [`ConnectionClosed`](Self::ConnectionClosed).
+    #[error("client closed locally")]
+    LocallyClosed,
     /// The peer reset the request stream with the given HTTP/3 error code.
     #[error("stream reset by peer (code {0:#x})")]
     Reset(u64),

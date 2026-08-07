@@ -86,7 +86,14 @@ pub trait QuicScionApplication: Send {
     /// consumer wakers into `wakeups`.
     fn update(&mut self, conn: &mut squiche::Connection, wakeups: &mut Wakeups);
 
-    /// Called once when the connection is closed, to fault pending work.
+    /// Called when the connection is closed, to fault pending work.
+    ///
+    /// This is not guaranteed to be the last call the application receives.
+    /// An application that closes its own connection may call this out of band
+    /// to fault pending work immediately, rather than wait out the draining period
+    /// before the driver observes the close. The driver keeps calling
+    /// [`Self::update`] until then and calls this again when it does. Terminal
+    /// state recorded here must therefore survive later `update` calls.
     fn on_closed(&mut self, wakeups: &mut Wakeups);
 }
 

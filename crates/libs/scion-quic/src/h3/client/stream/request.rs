@@ -32,6 +32,7 @@ use crate::{
         common::{
             H3_REQUEST_CANCELLED, H3Error,
             headers::header_map_to_h3,
+            is_terminated,
             write::{send_data, send_trailers},
         },
     },
@@ -207,6 +208,12 @@ fn poll_send(
     };
     let mut guard = handle.lock();
     let QuicScionConn { inner, app, .. } = &mut *guard;
+    if is_terminated(inner) {
+        return Poll::Ready(Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "connection closed",
+        )));
+    }
     let Some(h3) = app.h3.as_mut() else {
         return Poll::Ready(Err(io::Error::new(
             io::ErrorKind::NotConnected,

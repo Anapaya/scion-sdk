@@ -31,9 +31,12 @@ use response::ReadGuard;
 pub use response::{CollectError, H3ResponseBody, ResponseFut};
 
 use crate::{
-    h3::client::{
-        app::{Http3ClientApp, register_stream},
-        error::RequestError,
+    h3::{
+        client::{
+            app::{Http3ClientApp, register_stream},
+            error::RequestError,
+        },
+        common::is_terminated,
     },
     quic::connection::{ConnectionHandle, QuicScionConn, WeakConnectionHandle},
 };
@@ -54,6 +57,15 @@ pub(crate) fn initiate_request(
     let stream_id = {
         let mut guard = handle.lock();
         let QuicScionConn { inner, app, .. } = &mut *guard;
+        // The connection can go away between the caller obtaining it and getting
+        // here; report that as a close rather than as an opaque h3 send error.
+        if is_terminated(inner) {
+            return Err(if app.locally_closed {
+                RequestError::LocallyClosed
+            } else {
+                RequestError::ConnectionClosed
+            });
+        }
         let Some(h3) = app.h3.as_mut() else {
             return Err(RequestError::ConnectionClosed);
         };

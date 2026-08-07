@@ -22,6 +22,10 @@ pub(crate) mod headers;
 pub(crate) mod read;
 pub(crate) mod write;
 
+/// HTTP/3 `H3_NO_ERROR` error code, used when closing a connection that has no
+/// fault to report (RFC 9114 §8.1).
+pub(crate) const H3_NO_ERROR: u64 = 0x0100;
+
 /// HTTP/3 internal error code, used when resetting a stream on a body error or
 /// closing a connection that does not speak `h3`.
 pub(crate) const H3_INTERNAL_ERROR: u64 = 0x0102;
@@ -95,7 +99,27 @@ pub(crate) enum ReadState {
     Trailers(http::HeaderMap),
     /// The body has ended (FIN received).
     Eof,
-    /// The stream was reset by the peer (or the connection closed) with the
-    /// given code.
+    /// The stream was reset by the peer with the given code.
     Reset(u64),
+    /// The connection closed (locally or by the peer) while the stream was
+    /// still open.
+    ///
+    /// Only a stream still in [`Streaming`](Self::Streaming) reaches this state.
+    /// One that had already ended ([`Eof`](Self::Eof), staged
+    /// [`Trailers`](Self::Trailers), or [`Reset`](Self::Reset)) keeps that
+    /// verdict, so a close never retroactively spoils a body that already
+    /// finished.
+    Closed,
+}
+
+/// Whether `conn` can still carry application data.
+///
+/// A connection that is closed, draining, or has a queued or received CONNECTION_CLOSE will never
+/// again carry application data, so writers must fail instead of parking on a capacity waker nobody
+/// will ever wake.
+pub(crate) fn is_terminated(conn: &squiche::Connection) -> bool {
+    conn.is_closed()
+        || conn.is_draining()
+        || conn.local_error().is_some()
+        || conn.peer_error().is_some()
 }

@@ -363,6 +363,7 @@ pub(crate) fn poll_head(
     let Http3ClientApp {
         response_heads,
         streams,
+        locally_closed,
         ..
     } = app;
     let Some(slot) = response_heads.get_mut(&stream_id) else {
@@ -379,16 +380,25 @@ pub(crate) fn poll_head(
             Poll::Ready(Ok(head))
         }
         ResponseHeadState::Waiting => {
-            // A reset (or connection close, which sets `Reset(0)`) before the
-            // head means the request faulted.
+            // A reset or a connection close before the head means the request
+            // faulted.
             match streams.get(&stream_id) {
                 Some(st) => {
-                    if let ReadState::Reset(code) = st.read_state {
-                        return Poll::Ready(Err(if code == 0 {
-                            RequestError::ConnectionClosed
-                        } else {
-                            RequestError::Reset(code)
-                        }));
+                    // `locally_closed` implies `Closed` on every open stream (see
+                    // the field's docs).
+                    match st.read_state {
+                        ReadState::Closed if *locally_closed => {
+                            return Poll::Ready(Err(RequestError::LocallyClosed));
+                        }
+                        ReadState::Closed => {
+                            return Poll::Ready(Err(RequestError::ConnectionClosed));
+                        }
+                        ReadState::Reset(code) => {
+                            return Poll::Ready(Err(RequestError::Reset(code)));
+                        }
+                        // The stream is still open, so the head may yet arrive:
+                        // fall through and register a waker.
+                        ReadState::Streaming | ReadState::Trailers(_) | ReadState::Eof => {}
                     }
                 }
                 None => {

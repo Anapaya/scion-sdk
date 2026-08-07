@@ -36,11 +36,15 @@ use std::{sync::Arc, time::Duration};
 use ring::rand::{SecureRandom, SystemRandom};
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::sync::{Notify, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     app::QuicScionApplication,
     h3::{
-        client::{app::Http3ClientApp, error::EstablishError},
+        client::{
+            app::{Http3ClientApp, close_connection},
+            error::EstablishError,
+        },
         common::H3_INTERNAL_ERROR,
     },
     quic::connection::{ConnectionHandle, IsdAsnPair, QuicScionConn, QuicScionConnDriver},
@@ -52,26 +56,38 @@ use crate::{
 /// Spawns a task that drives the handshake, builds the application and handle,
 /// reports the handle back, and then becomes the connection driver for the life
 /// of the connection.
+///
+/// The bootstrap task owns the connection's teardown for the whole of its life:
+/// cancelling `closed` aborts the handshake if it is still running, and closes
+/// the connection if it has already completed. Without that, a `closed` that
+/// lands in the instant between the handshake finishing and the caller receiving
+/// the handle would leave the caller with an error and the connection with
+/// nobody to shut it down.
 pub(crate) async fn connect(
     remote: ScionSocketIpAddr,
     socket: Arc<dyn GenericScionUdpSocket>,
     server_name: Option<String>,
     mut quiche_config: squiche::Config,
     handshake_timeout: Duration,
+    closed: CancellationToken,
 ) -> Result<ConnectionHandle<Http3ClientApp>, EstablishError> {
-    let (tx, rx) = oneshot::channel();
+    let (mut tx, rx) = oneshot::channel();
 
     tokio::spawn(async move {
         // Bound the handshake: an unreachable remote would otherwise only fail once quiche's idle
         // timeout elapses (far longer than callers expect).
-        let handshake_result = match tokio::time::timeout(
-            handshake_timeout,
-            handshake(remote, &socket, server_name.as_deref(), &mut quiche_config),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_elapsed) => Err(EstablishError::Handshake),
+        let handshake_result = tokio::select! {
+            res = tokio::time::timeout(
+                handshake_timeout,
+                handshake(remote, &socket, server_name.as_deref(), &mut quiche_config),
+            ) => match res {
+                Ok(result) => result,
+                Err(_elapsed) => Err(EstablishError::Handshake),
+            },
+            // Nobody is left to hand a connection to: the client was closed, or
+            // the caller dropped the request it was establishing for.
+            _ = closed.cancelled() => return,
+            _ = tx.closed() => return,
         };
         let conn = match handshake_result {
             Ok(conn) => conn,
@@ -109,8 +125,9 @@ pub(crate) async fn connect(
         );
 
         if tx.send(Ok(handle.clone())).is_err() {
-            // The caller gave up waiting for the connection; nothing to drive.
-            return;
+            // The caller gave up waiting for the connection; close it here rather
+            // than leave it running unreferenced until the idle timeout.
+            close_connection(&handle);
         }
 
         // Drive the established connection with two cooperating loops: the shared
@@ -118,6 +135,9 @@ pub(crate) async fn connect(
         // (feeds inbound packets, the single-connection analog of the server
         // endpoint's recv loop). When the connection closes the driver returns,
         // and `select!` drops — and thereby cancels — the ingress loop.
+        //
+        // The loops keep running after a close so the driver can flush
+        // CONNECTION_CLOSE; they end when the connection reports itself closed.
         let driver = QuicScionConnDriver::new(handle.clone(), socket.clone());
         tokio::select! {
             res = driver.run() => {
@@ -125,11 +145,20 @@ pub(crate) async fn connect(
                     tracing::warn!(?err, "client connection driver exited with a socket error");
                 }
             }
-            _ = ingress::run(handle, socket) => {}
+            _ = ingress::run(handle.clone(), socket) => {}
+            _ = close_on_cancel(&handle, &closed) => {}
         }
     });
 
     rx.await.map_err(|_| EstablishError::Handshake)?
+}
+
+/// Closes the connection once `closed` is cancelled, then parks forever so the
+/// driver finishes the teardown and ends the `select!` that runs it.
+async fn close_on_cancel(handle: &ConnectionHandle<Http3ClientApp>, closed: &CancellationToken) {
+    closed.cancelled().await;
+    close_connection(handle);
+    std::future::pending::<()>().await
 }
 
 /// Drives the QUIC handshake until the connection is established, returning the

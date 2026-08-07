@@ -185,7 +185,9 @@ where
 
     fn on_closed(&mut self, wakeups: &mut Wakeups) {
         for st in self.streams.values_mut() {
-            st.read_state = ReadState::Reset(0);
+            if matches!(st.read_state, ReadState::Streaming) {
+                st.read_state = ReadState::Closed;
+            }
             if let Some(w) = st.read_waker.take() {
                 wakeups.schedule(w);
             }

@@ -39,7 +39,7 @@ use squiche::h3::NameValue;
 use crate::{
     app::{QuicScionApplication, Wakeups},
     h3::common::{
-        H3_INTERNAL_ERROR, H3App, ReadState, StreamState,
+        H3_INTERNAL_ERROR, H3_NO_ERROR, H3App, ReadState, StreamState,
         headers::headers_to_map,
         read::{on_data, on_finished, on_reset, wake_writable},
     },
@@ -60,6 +60,15 @@ pub struct Http3ClientApp {
     pub(crate) streams: HashMap<u64, StreamState>,
     /// Client-only response-head routing, keyed by stream id.
     pub(crate) response_heads: HashMap<u64, ResponseHeadSlot>,
+    /// Whether this connection was torn down by
+    /// [`Http3Client::close`](super::Http3Client::close), as opposed to by the
+    /// peer or an idle timeout.
+    ///
+    /// Once set, every stream that was still open is in [`ReadState::Closed`]:
+    /// [`close_connection`] sets this and faults the streams under the same
+    /// lock, [`Self::update`] then stops routing events, and no new stream can
+    /// be opened on a terminated connection.
+    pub(crate) locally_closed: bool,
 }
 
 impl QuicScionApplication for Http3ClientApp {
@@ -71,6 +80,7 @@ impl QuicScionApplication for Http3ClientApp {
             self_handle: None,
             streams: HashMap::new(),
             response_heads: HashMap::new(),
+            locally_closed: false,
         };
 
         if conn.application_proto() != b"h3" {
@@ -99,6 +109,12 @@ impl QuicScionApplication for Http3ClientApp {
     }
 
     fn update(&mut self, conn: &mut squiche::Connection, wakeups: &mut Wakeups) {
+        // `close_connection` already faulted every stream, and the driver keeps
+        // stepping us until the connection finishes draining. Routing further
+        // events would undo that verdict.
+        if self.locally_closed {
+            return;
+        }
         let Http3ClientApp {
             h3,
             streams,
@@ -174,7 +190,9 @@ impl QuicScionApplication for Http3ClientApp {
 
     fn on_closed(&mut self, wakeups: &mut Wakeups) {
         for st in self.streams.values_mut() {
-            st.read_state = ReadState::Reset(0);
+            if matches!(st.read_state, ReadState::Streaming) {
+                st.read_state = ReadState::Closed;
+            }
             if let Some(w) = st.read_waker.take() {
                 wakeups.schedule(w);
             }
@@ -225,6 +243,26 @@ pub(crate) enum ResponseHeadState {
 pub(crate) struct ResponseHead {
     pub(crate) status: http::StatusCode,
     pub(crate) headers: http::HeaderMap,
+}
+
+/// Closes `handle`'s connection at the application level and faults everything in
+/// flight on it.
+///
+/// The fault is raised here rather than left to the driver's own `on_closed`:
+/// squiche only reports the connection as closed once the draining period
+/// expires, which is exactly the delay an explicit close exists to avoid.
+pub(crate) fn close_connection(handle: &ConnectionHandle<Http3ClientApp>) {
+    let mut wakeups = Wakeups::default();
+    {
+        let mut conn = handle.lock();
+        conn.app.locally_closed = true;
+        // `Done` means the connection was already closed, locally or by the peer.
+        let _ = conn.inner.close(true, H3_NO_ERROR, b"client closed");
+        conn.app.on_closed(&mut wakeups);
+    }
+    // Let the driver flush CONNECTION_CLOSE, then wake consumers off the lock.
+    handle.notify();
+    wakeups.fire();
 }
 
 /// Registers a freshly-opened request stream's read/write and head-routing state.

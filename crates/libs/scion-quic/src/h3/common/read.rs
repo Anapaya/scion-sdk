@@ -95,6 +95,7 @@ pub(crate) fn poll_read_frame<A: H3App>(
                 }
                 ReadState::Eof => Poll::Ready(None),
                 ReadState::Reset(code) => Poll::Ready(Some(Err(H3Error::Reset(*code)))),
+                ReadState::Closed => Poll::Ready(Some(Err(H3Error::ConnectionClosed))),
             }
         }
         Err(err) => Poll::Ready(Some(Err(H3Error::H3(err)))),
@@ -167,7 +168,11 @@ pub(crate) fn on_reset(
     wakeups: &mut Wakeups,
 ) {
     if let Some(st) = streams.get_mut(&stream_id) {
-        st.read_state = ReadState::Reset(code);
+        // A close is the stronger, already-terminal verdict: a reset arriving
+        // afterwards must not relabel the fault as the peer's doing.
+        if !matches!(st.read_state, ReadState::Closed) {
+            st.read_state = ReadState::Reset(code);
+        }
         if let Some(w) = st.read_waker.take() {
             wakeups.schedule(w);
         }

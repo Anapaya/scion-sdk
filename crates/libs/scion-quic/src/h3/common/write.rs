@@ -22,7 +22,7 @@ use http_body::Body;
 use squiche::h3::Header;
 
 use crate::{
-    h3::common::{H3App, H3Error, headers::header_map_to_h3},
+    h3::common::{H3App, H3Error, headers::header_map_to_h3, is_terminated},
     quic::connection::{QuicScionConn, WeakConnectionHandle},
 };
 
@@ -39,6 +39,9 @@ pub(crate) async fn send_headers<A: H3App>(
         };
         let mut guard = handle.lock();
         let QuicScionConn { inner, app, .. } = &mut *guard;
+        if is_terminated(inner) {
+            return Poll::Ready(Err(H3Error::ConnectionClosed));
+        }
         let (h3, streams) = app.h3_streams();
         let Some(h3) = h3 else {
             return Poll::Ready(Err(H3Error::ConnectionClosed));
@@ -80,6 +83,9 @@ pub(crate) async fn send_data<A: H3App>(
         };
         let mut guard = handle.lock();
         let QuicScionConn { inner, app, .. } = &mut *guard;
+        if is_terminated(inner) {
+            return Poll::Ready(Err(H3Error::ConnectionClosed));
+        }
         let (h3, streams) = app.h3_streams();
         let Some(h3) = h3 else {
             return Poll::Ready(Err(H3Error::ConnectionClosed));
@@ -133,6 +139,9 @@ pub(crate) async fn send_trailers<A: H3App>(
         };
         let mut guard = handle.lock();
         let QuicScionConn { inner, app, .. } = &mut *guard;
+        if is_terminated(inner) {
+            return Poll::Ready(Err(H3Error::ConnectionClosed));
+        }
         let (h3, streams) = app.h3_streams();
         let Some(h3) = h3 else {
             return Poll::Ready(Err(H3Error::ConnectionClosed));

@@ -38,7 +38,10 @@ use bytes::Bytes;
 use http_body::{Body, Frame};
 use scion_quic::{
     h3::{
-        client::{CollectError, H3DuplexStream, H3ResponseBody, Http3Client, RequestError},
+        client::{
+            CollectError, EstablishError, H3DuplexStream, H3Error, H3ResponseBody, Http3Client,
+            RequestError,
+        },
         server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
     },
     quic::{
@@ -242,6 +245,33 @@ impl HttpService for StreamingService {
             .body(ChunkedBody {
                 chunks,
                 trailers: Some(trailers),
+            })
+            .unwrap()
+    }
+}
+
+/// A response with no body at all: `GET /empty` ends at the head, `GET
+/// /empty-trailers` ends with a trailing header section. Neither yields a DATA
+/// frame, so the client's read state reaches its terminal value (`Eof` or staged
+/// `Trailers`) without the caller having read anything.
+#[derive(Clone)]
+struct EmptyResponseService;
+
+impl HttpService for EmptyResponseService {
+    type Body = H3RequestBody;
+    type ResponseBody = ChunkedBody;
+
+    async fn call(&self, req: http::Request<H3RequestBody>) -> http::Response<ChunkedBody> {
+        let trailers = (req.uri().path() == "/empty-trailers").then(|| {
+            let mut trailers = http::HeaderMap::new();
+            trailers.insert("x-trailer", http::HeaderValue::from_static("done"));
+            trailers
+        });
+        http::Response::builder()
+            .status(http::StatusCode::OK)
+            .body(ChunkedBody {
+                chunks: VecDeque::new(),
+                trailers,
             })
             .unwrap()
     }
@@ -508,6 +538,16 @@ async fn post(
         .unwrap();
 
     client.request(req).await
+}
+
+/// Builds a POST with an unbounded body. The pump fills the flow-control window
+/// and then parks on it, which is how a test gets a writer blocked on capacity.
+fn infinite_post(path: &str) -> http::Request<InfiniteBody> {
+    http::Request::builder()
+        .method(http::Method::POST)
+        .uri(format!("https://example.com{path}"))
+        .body(InfiniteBody)
+        .unwrap()
 }
 
 /// Opens a full-duplex byte stream over a `CONNECT` request issued through
@@ -1365,5 +1405,448 @@ async fn bytes_surfaces_reset_as_error() {
     assert!(
         matches!(err, CollectError::H3(_)),
         "expected an H3 error, got {err:?}"
+    );
+}
+
+/// Polls `client.tracked_stream_state()` until it reaches zero. Bounded by the
+/// caller's `#[ntest::timeout]`.
+async fn wait_for_released_streams(client: &Http3Client) {
+    loop {
+        if client.tracked_stream_state().await == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// `close()` faults a request that is waiting for its response head, promptly
+/// and with the local-close error, rather than leaving it to the idle timeout.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_faults_inflight_request() {
+    let (_server, socket) = spawn_server(HangingService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    // The service never responds, so the response future is still waiting for
+    // the head when the close lands.
+    let (response, _writer) = client
+        .request_with_writer(head_request(http::Method::GET, "/hang"))
+        .await
+        .expect("request");
+
+    client.close().await;
+
+    // The bound is what matters: two seconds against a 30s idle timeout, so a
+    // pass cannot be the idle timeout firing.
+    match tokio::time::timeout(Duration::from_secs(2), response)
+        .await
+        .expect("the request must fault promptly, not by idle timeout")
+    {
+        Err(RequestError::LocallyClosed) => {}
+        Err(other) => panic!("expected a local-close fault, got {other:?}"),
+        Ok(_) => panic!("the hanging service should not have produced a response"),
+    }
+}
+
+/// `close()` cuts loose a caller blocked establishing the connection instead of
+/// making it wait out the handshake timeout.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_during_establishment() {
+    // A peer that never answers: the socket pair is live (so sends succeed) but
+    // nothing serves the other half.
+    let (client_socket, _server_socket) = MockScionSocket::pair(8192, client_addr(), server_addr());
+    let client = Http3Client::with_config(
+        server_addr(),
+        Arc::new(client_socket),
+        Some("localhost".to_string()),
+        QuicConfig::builder()
+            .verify_peer(false)
+            .idle_timeout(LONG_IDLE)
+            // Long enough that finishing inside it proves the close did it.
+            .handshake_timeout(Duration::from_secs(30))
+            .build(),
+    );
+
+    let (established, ()) = tokio::join!(client.connect(), async {
+        // Let the handshake get under way before closing.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        client.close().await;
+    });
+
+    assert!(
+        matches!(established, Err(EstablishError::Closed)),
+        "establishment must abort with a closed error, got {established:?}"
+    );
+}
+
+/// A `close()` landing anywhere in the handshake window leaves no connection
+/// running, whichever way the race went.
+///
+/// The delicate ordering is a close that arrives after the bootstrap task has
+/// handed the connection over but before the caller receives it: the caller then
+/// has an error and no handle, so only the bootstrap task is left to shut the
+/// connection down.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(30_000)]
+async fn close_racing_establishment_leaves_no_connection() {
+    // Sweep the window rather than guess where the handshake completes.
+    for delay in [0, 1, 2, 5, 10, 25] {
+        let (server, socket) = spawn_server(EchoService, LONG_IDLE);
+        let client = make_client(socket, LONG_IDLE);
+
+        let (established, ()) = tokio::join!(client.connect(), async {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            client.close().await;
+        });
+        // Either outcome is legitimate; what must not happen is a connection left
+        // running with nobody holding it.
+        assert!(
+            matches!(established, Ok(()) | Err(EstablishError::Closed)),
+            "unexpected establishment result at {delay}ms: {established:?}"
+        );
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_until(|| server.registered_connections() == 0),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("closing {delay}ms into the handshake orphaned a live connection")
+        });
+    }
+}
+
+/// `close()` is idempotent: a second call is a no-op and does not hang.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn double_close_is_idempotent() {
+    let (_server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = post(&client, "/echo", "hello").await.expect("request");
+    let (body, _) = read_body(response.into_body()).await;
+    assert_eq!(body, b"hello");
+    assert!(!client.is_closed());
+
+    client.close().await;
+    client.close().await;
+    assert!(client.is_closed());
+}
+
+/// The client reports the remote it is pinned to, so callers ranking candidates
+/// need not track the address separately.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn remote_reports_the_pinned_address() {
+    let (_server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    assert_eq!(client.remote(), server_addr());
+    // Establishing does not change it.
+    client.connect().await.expect("connect");
+    assert_eq!(client.remote(), server_addr());
+}
+
+/// A closed client stays closed: it fails later requests instead of lazily
+/// re-establishing the connection.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn request_after_close_does_not_reconnect() {
+    let (server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = post(&client, "/echo", "first").await.expect("request");
+    let (body, _) = read_body(response.into_body()).await;
+    assert_eq!(body, b"first");
+    assert_eq!(server.established.load(Ordering::SeqCst), 1);
+
+    client.close().await;
+
+    let result = post(&client, "/echo", "second").await;
+    assert!(
+        matches!(result, Err(RequestError::Establish(EstablishError::Closed))),
+        "a request after close must fail as closed, got {:?}",
+        result.err()
+    );
+    assert_eq!(
+        server.established.load(Ordering::SeqCst),
+        1,
+        "a closed client must not re-establish the connection"
+    );
+}
+
+/// A writer parked on stream capacity when the connection closes must fail, not
+/// wait for capacity that will never come: its `WriteGuard` is what releases the
+/// per-stream bookkeeping.
+///
+/// Uses the idle close rather than [`Http3Client::close`] so the client still
+/// holds the connection and `tracked_stream_state` can observe it. The request
+/// body is unbounded and the service never drains it, so the pump is parked on
+/// the flow-control window when the connection goes.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(30_000)]
+async fn parked_writer_releases_stream_state_on_idle_close() {
+    let idle = Duration::from_millis(500);
+    let (_server, socket) = spawn_server(HangingService, idle);
+    let client = make_client(socket, idle);
+
+    // `request` pumps the body on a spawned task, so the write half is held by
+    // that task rather than by this one.
+    let request = client.request(infinite_post("/hang"));
+    tokio::pin!(request);
+    // Let the body fill the flow-control window and the pump park on it.
+    tokio::select! {
+        _ = &mut request => panic!("the hanging service should not have responded"),
+        _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+    }
+    assert_ne!(
+        client.tracked_stream_state().await,
+        0,
+        "the in-flight request should hold per-stream state"
+    );
+
+    // The connection idles out, faulting the request.
+    let result = request.await;
+    assert!(
+        matches!(
+            result,
+            Err(RequestError::ConnectionClosed) | Err(RequestError::Reset(_))
+        ),
+        "expected a connection-closed fault, got {:?}",
+        result.err()
+    );
+
+    wait_for_released_streams(&client).await;
+}
+
+/// Closing with a request in flight faults it promptly, including one whose body
+/// pump is parked on stream capacity.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_faults_request_with_parked_body_pump() {
+    let (_server, socket) = spawn_server(HangingService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let request = client.request(infinite_post("/hang"));
+    tokio::pin!(request);
+    tokio::select! {
+        _ = &mut request => panic!("the hanging service should not have responded"),
+        _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+    }
+
+    client.close().await;
+
+    match tokio::time::timeout(Duration::from_secs(2), request)
+        .await
+        .expect("the request must fault promptly")
+    {
+        Err(RequestError::LocallyClosed) => {}
+        Err(other) => panic!("expected a local-close fault, got {other:?}"),
+        Ok(_) => panic!("the hanging service should not have produced a response"),
+    }
+}
+
+/// The peer learns of the close from CONNECTION_CLOSE, not from its own idle
+/// timeout: the server deregisters the connection well inside its 30s idle.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_is_visible_to_the_peer() {
+    let (server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = post(&client, "/echo", "hello").await.expect("request");
+    let (body, _) = read_body(response.into_body()).await;
+    assert_eq!(body, b"hello");
+    wait_until(|| server.registered_connections() == 1).await;
+
+    client.close().await;
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_until(|| server.registered_connections() == 0),
+    )
+    .await
+    .expect("the server must observe the close, not wait out its idle timeout");
+}
+
+/// Dropping the client tears the connection down, rather than leaving its driver
+/// running until the idle timeout.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn dropping_the_client_closes_the_connection() {
+    let (server, socket) = spawn_server(EchoService, LONG_IDLE);
+    // Hold the client's end of the socket pair. A real UDP socket has no peer to
+    // notice going away, but `MockScionSocket` is a channel: once the client and
+    // its connection task release the last reference, the server's `recv_from`
+    // fails and its endpoint driver returns before it can deregister anything.
+    let peer_socket = socket.clone();
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = post(&client, "/echo", "hello").await.expect("request");
+    let (body, _) = read_body(response.into_body()).await;
+    assert_eq!(body, b"hello");
+    wait_until(|| server.registered_connections() == 1).await;
+
+    drop(client);
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_until(|| server.registered_connections() == 0),
+    )
+    .await
+    .expect("the connection must not outlive the client that owns it");
+    drop(peer_socket);
+}
+
+/// Closing while another task is mid-request faults that task's request rather
+/// than deadlocking or leaving it to hang.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_concurrent_with_request_on_another_task() {
+    let (_server, socket) = spawn_server(HangingService, LONG_IDLE);
+    let client = Arc::new(make_client(socket, LONG_IDLE));
+
+    const N: usize = 8;
+    let mut tasks = Vec::new();
+    for i in 0..N {
+        let client = client.clone();
+        tasks.push(tokio::spawn(async move {
+            let req = http::Request::builder()
+                .method(http::Method::POST)
+                .uri("https://example.com/hang")
+                .body(FullBody::new(format!("c-{i}")))
+                .unwrap();
+            client.request(req).await.err()
+        }));
+    }
+    // Let the requests reach the wire before the close lands on top of them.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    client.close().await;
+
+    for task in tasks {
+        let err = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("every concurrent request must fault promptly")
+            .expect("task panicked");
+        assert!(
+            matches!(
+                err,
+                Some(RequestError::LocallyClosed)
+                    | Some(RequestError::Establish(EstablishError::Closed))
+            ),
+            "expected a closed fault, got {err:?}"
+        );
+    }
+}
+
+/// A response that had already ended is not retroactively spoiled by a close: it
+/// still reads out as a clean end of body, not as a connection fault.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_preserves_a_finished_response_body() {
+    let (_server, socket) = spawn_server(EmptyResponseService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = get(&client, "/empty").await.expect("request");
+    // Let the FIN land, so the read state is terminal before the close.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    client.close().await;
+
+    let mut body = response.into_body();
+    assert!(
+        body.next_frame().await.is_none(),
+        "a body that already ended must still read as a clean end after a close"
+    );
+}
+
+/// A trailing header section that had already arrived survives a close instead of
+/// being replaced by a fault.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_preserves_a_staged_trailer_section() {
+    let (_server, socket) = spawn_server(EmptyResponseService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = get(&client, "/empty-trailers").await.expect("request");
+    // Let the trailing header section land and be staged before the close.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    client.close().await;
+
+    let (data, trailers) = read_body(response.into_body()).await;
+    assert!(data.is_empty());
+    assert_eq!(
+        trailers
+            .expect("the trailing header section must survive the close")
+            .get("x-trailer")
+            .map(|v| v.as_bytes()),
+        Some(b"done".as_slice())
+    );
+}
+
+/// A response body still streaming when the close lands faults instead of
+/// truncating into a silent EOF.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_faults_a_streaming_response_body() {
+    let (_server, socket) = spawn_server(InfiniteService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = get(&client, "/infinite").await.expect("request");
+    let mut body = response.into_body();
+    body.next_frame()
+        .await
+        .expect("body should yield a first frame")
+        .expect("first frame should not be an error");
+
+    client.close().await;
+
+    loop {
+        match tokio::time::timeout(Duration::from_secs(2), body.next_frame())
+            .await
+            .expect("the body must fault promptly")
+        {
+            // Bytes already buffered before the close still read out.
+            Some(Ok(_)) => continue,
+            Some(Err(H3Error::ConnectionClosed)) => break,
+            Some(Err(other)) => panic!("expected a connection-closed error, got {other:?}"),
+            None => panic!("an interrupted body must fault, not report a clean end"),
+        }
+    }
+}
+
+/// A `CONNECT` tunnel open across a close faults on read, as
+/// [`Http3Client::close`] documents.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn close_faults_an_open_connect_tunnel() {
+    let (_server, socket) = spawn_server(ConnectEchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let (parts, mut stream) = connect_tunnel(&client, "example.com:443")
+        .await
+        .expect("CONNECT");
+    assert_eq!(parts.status, http::StatusCode::OK);
+    stream.write_all(b"ping").await.expect("write tunnel");
+    stream.flush().await.expect("flush tunnel");
+    let mut echo = [0u8; 4];
+    stream
+        .read_exact(&mut echo)
+        .await
+        .expect("read tunnel echo");
+
+    client.close().await;
+
+    let err = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut [0u8; 16]))
+        .await
+        .expect("the tunnel must fault promptly")
+        .expect_err("an open tunnel must fault on close, not report EOF");
+    assert_eq!(
+        err.kind(),
+        io::ErrorKind::NotConnected,
+        "expected a not-connected error, got {err:?}"
     );
 }
