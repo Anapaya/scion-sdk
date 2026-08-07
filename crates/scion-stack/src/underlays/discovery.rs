@@ -42,7 +42,7 @@ pub trait UnderlayDiscovery: Send + Sync {
 }
 
 /// Underlay discovery information for a SCION router.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ScionRouter {
     /// The internal interface socket address of the SCION router.
