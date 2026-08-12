@@ -61,7 +61,10 @@ use self::{
 };
 pub use self::{
     error::{EstablishError, RequestError, UploadError},
-    stream::{CollectError, H3DuplexStream, H3ResponseBody, RequestBodyWriter, ResponseFut},
+    stream::{
+        CollectError, CollectToStringError, H3DuplexStream, H3ResponseBody, RequestBodyWriter,
+        ResponseFut,
+    },
 };
 pub use crate::h3::common::H3Error;
 use crate::{

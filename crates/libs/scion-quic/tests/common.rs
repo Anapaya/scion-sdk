@@ -18,7 +18,6 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    io,
     net::{Ipv4Addr, SocketAddr},
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
@@ -27,6 +26,7 @@ use std::{
 use async_trait::async_trait;
 use chacha20::{ChaCha8Rng, rand_core::Rng};
 use prometheus::IntGauge;
+pub use scion_quic::test_util::MockScionSocket;
 use scion_quic::{
     quic::{
         config::QuicConfig,
@@ -116,103 +116,6 @@ fn build_server_config(quic_config: QuicConfig) -> (squiche::Config, NamedTempFi
         .unwrap();
 
     (config, cert_file, key_file)
-}
-
-struct MockDatagram {
-    data: Vec<u8>,
-    src: ScionSocketIpAddr,
-    dst: ScionSocketIpAddr,
-}
-
-/// Simple in-memory mock implementation of a [`GenericScionUdpSocket`].
-pub struct MockScionSocket {
-    recv_channel: Mutex<mpsc::Receiver<MockDatagram>>,
-    send_channel: mpsc::Sender<MockDatagram>,
-    local_addr: ScionSocketIpAddr,
-}
-
-impl MockScionSocket {
-    /// Creates a pair of connected `MockScionSocket`s
-    pub fn pair(
-        queue_size: usize,
-        sockaddr_a: ScionSocketIpAddr,
-        sockaddr_b: ScionSocketIpAddr,
-    ) -> (MockScionSocket, MockScionSocket) {
-        let (a_to_b_tx, a_to_b_rx) = mpsc::channel(queue_size);
-        let (b_to_a_tx, b_to_a_rx) = mpsc::channel(queue_size);
-
-        let socket_a = MockScionSocket {
-            recv_channel: Mutex::new(a_to_b_rx),
-            send_channel: b_to_a_tx,
-            local_addr: sockaddr_a,
-        };
-
-        let socket_b = MockScionSocket {
-            recv_channel: Mutex::new(b_to_a_rx),
-            send_channel: a_to_b_tx,
-            local_addr: sockaddr_b,
-        };
-
-        (socket_a, socket_b)
-    }
-}
-
-#[async_trait::async_trait]
-impl GenericScionUdpSocket for MockScionSocket {
-    /// Asynchronously sends a Datagram to the specified destination address.
-    async fn send_to(
-        &self,
-        payload: &[u8],
-        destination: ScionSocketIpAddr,
-    ) -> Result<(), BoxedSocketError> {
-        let datagram = MockDatagram {
-            data: payload.to_vec(),
-            src: self.local_addr,
-            dst: destination,
-        };
-
-        self.send_channel
-            .send(datagram)
-            .await
-            .map_err(|e| Box::new(e) as BoxedSocketError)
-    }
-
-    /// Asynchronously receives a Datagram, writing it into the provided buffer, and returns the
-    /// number of bytes read and the source address.
-    async fn recv_from(
-        &self,
-        buf: &mut [u8],
-    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError> {
-        loop {
-            let datagram = self.recv_channel.lock().await.recv().await.ok_or_else(|| {
-                Box::new(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "Channel closed",
-                )) as BoxedSocketError
-            })?;
-
-            // Route by the standard socket address only, ignoring the ISD-AS:
-            // the endpoint-based QUIC stack tags outgoing packets with the
-            // *local* ISD-AS rather than the peer's, so an ISD-AS-sensitive
-            // comparison would drop legitimate server->client replies. Test
-            // peers always have distinct socket addresses, so this still routes
-            // unambiguously.
-            if datagram.dst.socket_addr() != self.local_addr.socket_addr() {
-                continue; // Ignore datagrams not addressed to this socket
-            }
-            let data = datagram.data;
-            let src = datagram.src;
-
-            let len = data.len().min(buf.len());
-            buf[..len].copy_from_slice(&data[..len]);
-            return Ok((len, src));
-        }
-    }
-
-    /// Returns the local socket address of this socket.
-    fn local_addr(&self) -> ScionSocketIpAddr {
-        self.local_addr
-    }
 }
 
 /// Direction of traffic.

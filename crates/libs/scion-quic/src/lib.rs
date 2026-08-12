@@ -18,6 +18,8 @@ pub mod app;
 pub mod h3;
 pub mod quic;
 pub mod socket;
+#[cfg(feature = "test-util")]
+pub mod test_util;
 
 /// UDP packet buffer size.
 pub const UDP_PACKET_BUFFER_SIZE: usize = 65535;

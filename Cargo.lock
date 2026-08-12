@@ -4672,6 +4672,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "scion-http3"
+version = "0.6.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "bytes",
+ "futures",
+ "http",
+ "http-body",
+ "ntest",
+ "pocketscion",
+ "rcgen",
+ "scion-h3-axum",
+ "scion-quic",
+ "scion-sdk-utils",
+ "scion-stack",
+ "sciparse",
+ "tempfile",
+ "test-log",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "scion-protobuf"
 version = "0.6.1"
 dependencies = [
@@ -4695,6 +4723,7 @@ dependencies = [
  "prometheus",
  "rcgen",
  "ring",
+ "scion-quic",
  "sciparse",
  "squiche",
  "tempfile",

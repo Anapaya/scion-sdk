@@ -28,7 +28,7 @@ pub use duplex::H3DuplexStream;
 pub use request::RequestBodyWriter;
 use request::{WriteGuard, request_headers};
 use response::ReadGuard;
-pub use response::{CollectError, H3ResponseBody, ResponseFut};
+pub use response::{CollectError, CollectToStringError, H3ResponseBody, ResponseFut};
 
 use crate::{
     h3::{

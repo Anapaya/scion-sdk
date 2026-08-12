@@ -17,9 +17,7 @@
 //! These tests run a HTTP/3-over-QUIC server reachable through an in-memory mock SCION socket,
 //! and exercise the client against it — including the multi-remote failover behaviour.
 
-use std::{
-    convert::Infallible, io, net::Ipv4Addr, pin::Pin, sync::Arc, task::Poll, time::Duration,
-};
+use std::{convert::Infallible, net::Ipv4Addr, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use bytes::Bytes;
 use http::{Method, StatusCode};
@@ -34,10 +32,10 @@ use scion_quic::{
         server_endpoint::{Metrics, QuicScionEndpointDriver, QuicScionServerEndpoint},
     },
     socket::{BoxedSocketError, GenericScionUdpSocket},
+    test_util::MockScionSocket,
 };
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tempfile::NamedTempFile;
-use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -48,86 +46,6 @@ const SERVICE_URL: &str = "https://localhost/test.v1.EchoService/Echo";
 struct Echo {
     #[prost(string, tag = "1")]
     value: String,
-}
-
-struct MockDatagram {
-    data: Vec<u8>,
-    src: ScionSocketIpAddr,
-    dst: ScionSocketIpAddr,
-}
-
-struct MockScionSocket {
-    recv_channel: Mutex<mpsc::Receiver<MockDatagram>>,
-    send_channel: mpsc::Sender<MockDatagram>,
-    local_addr: ScionSocketIpAddr,
-}
-
-impl MockScionSocket {
-    fn pair(
-        queue_size: usize,
-        addr_a: ScionSocketIpAddr,
-        addr_b: ScionSocketIpAddr,
-    ) -> (MockScionSocket, MockScionSocket) {
-        let (a_to_b_tx, a_to_b_rx) = mpsc::channel(queue_size);
-        let (b_to_a_tx, b_to_a_rx) = mpsc::channel(queue_size);
-
-        let socket_a = MockScionSocket {
-            recv_channel: Mutex::new(a_to_b_rx),
-            send_channel: b_to_a_tx,
-            local_addr: addr_a,
-        };
-        let socket_b = MockScionSocket {
-            recv_channel: Mutex::new(b_to_a_rx),
-            send_channel: a_to_b_tx,
-            local_addr: addr_b,
-        };
-        (socket_a, socket_b)
-    }
-}
-
-#[async_trait::async_trait]
-impl GenericScionUdpSocket for MockScionSocket {
-    async fn send_to(
-        &self,
-        payload: &[u8],
-        destination: ScionSocketIpAddr,
-    ) -> Result<(), BoxedSocketError> {
-        let datagram = MockDatagram {
-            data: payload.to_vec(),
-            src: self.local_addr,
-            dst: destination,
-        };
-        self.send_channel
-            .send(datagram)
-            .await
-            .map_err(|e| Box::new(e) as BoxedSocketError)
-    }
-
-    async fn recv_from(
-        &self,
-        buf: &mut [u8],
-    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError> {
-        loop {
-            let datagram = self.recv_channel.lock().await.recv().await.ok_or_else(|| {
-                Box::new(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "channel closed",
-                )) as BoxedSocketError
-            })?;
-
-            if datagram.dst != self.local_addr {
-                continue;
-            }
-
-            let len = datagram.data.len().min(buf.len());
-            buf[..len].copy_from_slice(&datagram.data[..len]);
-            return Ok((len, datagram.src));
-        }
-    }
-
-    fn local_addr(&self) -> ScionSocketIpAddr {
-        self.local_addr
-    }
 }
 
 /// A SCION socket that silently drops everything it sends and never receives, simulating a remote

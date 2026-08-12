@@ -1,40 +1,51 @@
 [package]
-name = "scion-connect-rpc"
+name = "scion-http3"
 version = "0.6.1"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
-description = "Connect RPC client library over QUIC/HTTP3 via SCION"
+description = "High-level HTTP/3-over-SCION client: URL in, response out"
+readme = "README.md"
 repository = "https://github.com/anapaya/scion-sdk"
-keywords = ["HTTP3", "QUIC", "RPC"]
+keywords = ["HTTP3", "QUIC", "SCION"]
+categories = ["network-programming"]
 
 [dependencies]
+# Local Dependencies
+scion-quic = { workspace = true }
+scion-stack = { workspace = true }
+sciparse = { workspace = true }
+
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
-prost = { workspace = true }
-scion-quic = { workspace = true }
-sciparse = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
 ntest = { workspace = true }
+pocketscion = { workspace = true }
+rcgen = { workspace = true }
+scion-h3-axum = { workspace = true }
 # Version-less on purpose: `cargo package` resolves a versioned dev-dep against
 # crates.io, where no published scion-quic has `test-util`. Version-less
 # dev-deps are dropped from the published manifest instead.
 scion-quic = { path = "../scion-quic", features = ["test-util"] }
-rcgen = { workspace = true }
-squiche = { workspace = true }
+scion-sdk-utils = { workspace = true }
 tempfile = { workspace = true }
-test-log = { workspace = true, features = ["trace"] }
+test-log = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tokio-util = { workspace = true }
+
+[[example]]
+name = "http3_get_post"
+test = true
 
 [lints]
 workspace = true

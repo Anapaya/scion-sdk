@@ -8,6 +8,11 @@ description = "QUIC via SCION as transport"
 repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["HTTP3", "QUIC", "SCION"]
 
+[features]
+# In-memory testing utilities (see `scion_quic::test_util`). For
+# `[dev-dependencies]` of crates building on scion-quic; not a stable API.
+test-util = []
+
 [dependencies]
 # global dependencies
 async-trait = { workspace = true }
@@ -26,6 +31,12 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 chacha20 = { workspace = true, features = ["rng"] }
+# Self-dependency so the crate's own integration tests get the `test-util`
+# feature without forcing it on downstream users. Deliberately not inherited
+# from the workspace: that carries a version, and `cargo package` resolves a
+# versioned dev-dep against crates.io, where no published release has this
+# feature yet. Version-less dev-deps are dropped from the published manifest.
+scion-quic = { path = ".", features = ["test-util"] }
 ntest = { workspace = true }
 rcgen = { workspace = true }
 tempfile = { workspace = true }
