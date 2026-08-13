@@ -695,8 +695,6 @@ dependencies = [
 [[package]]
 name = "boring-sys"
 version = "4.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15aad385759d3da2737772aefb391332227bef7cb71fb85c106cadd9d1e63a98"
 dependencies = [
  "bindgen",
  "cmake",
@@ -3287,9 +3285,9 @@ dependencies = [
 
 [[package]]
 name = "octets"
-version = "0.3.5"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8311fa8ab7a57759b4ff1f851a3048d9ef0effaa0130726426b742d26d8a88e7"
+checksum = "866cb5af6f3aa3c1b44c3c2d79d22165fbb1b102e1b3fb499864bfe34736ec4b"
 
 [[package]]
 name = "oid-registry"
@@ -5415,13 +5413,16 @@ dependencies = [
 
 [[package]]
 name = "squiche"
-version = "0.24.8-ana.3"
+version = "0.29.3-ana.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4195768e8f894a79fc6acfa4b2f304257b5759965873a80e9a6638841f7ca6a"
+checksum = "f4d895ee89c5cdb80f6c95e5561f975e0da68f583da4151ec6d00bdd5028973a"
 dependencies = [
- "cmake",
+ "boring",
+ "bytes",
+ "debug_panic",
  "either",
  "enum_dispatch",
+ "foreign-types-shared",
  "intrusive-collections",
  "libc",
  "libm",

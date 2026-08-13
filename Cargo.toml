@@ -130,7 +130,7 @@ serde_yaml_ng = "0.10"
 sha2 = "0.10"
 simple-mermaid = "0.2"
 socket2 = "0.6.1"
-squiche = "0.24.8-ana.3"
+squiche = "0.29.3-ana.3"
 tempfile = "3.23"
 test-log = { version = "0.2", features = ["trace"] }
 thiserror = "2.0"
@@ -189,3 +189,9 @@ incremental = false         # Disable incremental compilation to allow caching d
 inherits = "release"
 lto = true
 codegen-units = 1
+
+# Redirect boring-sys to the pinned tree vendored under third_party/boring-sys.
+# It carries the checked-in bindings for x86_64-unknown-linux-gnu, so building
+# that target needs no libclang. See third_party/boring-sys-patches.
+[patch.crates-io]
+boring-sys = { path = "../../third_party/boring-sys" }
