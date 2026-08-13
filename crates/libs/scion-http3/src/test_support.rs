@@ -31,7 +31,9 @@ use axum::{
     routing::{get, post},
 };
 use scion_quic::{
-    quic::config::QuicConfig, socket::GenericScionUdpSocket, test_util::MockScionSocket,
+    quic::config::QuicConfig,
+    socket::GenericScionUdpSocket,
+    test_util::{BreakableScionSocket, MockScionSocket},
 };
 use scion_stack::{
     resolver::{ResolveError, ScionDnsResolver},
@@ -127,7 +129,9 @@ pub(crate) struct TestServerHarness {
     server_quic: QuicConfig,
     cert_file: NamedTempFile,
     key_file: NamedTempFile,
-    cancel: StdMutex<CancellationToken>,
+    cancel: CancellationToken,
+    /// The client sockets handed out so far, so a test can break them.
+    sockets: StdMutex<Vec<Arc<BreakableScionSocket>>>,
     /// Number of sockets handed out (= connection attempts made).
     pub(crate) binds: AtomicUsize,
     /// When set, the first bind stalls until [`release_stalled`] is called.
@@ -159,7 +163,8 @@ impl TestServerHarness {
             server_quic,
             cert_file,
             key_file,
-            cancel: StdMutex::new(CancellationToken::new()),
+            cancel: CancellationToken::new(),
+            sockets: StdMutex::new(Vec::new()),
             binds: AtomicUsize::new(0),
             stall_first_bind: AtomicBool::new(false),
             stall_gate: tokio::sync::Notify::new(),
@@ -177,13 +182,14 @@ impl TestServerHarness {
         self.stall_gate.notify_waiters();
     }
 
-    /// Kills all currently running servers (their sockets drop, so
-    /// established connections break). Servers spawned by later binds run
-    /// under a fresh token.
-    pub(crate) fn kill_servers(&self) {
-        let mut cancel = self.cancel.lock().unwrap();
-        let old = std::mem::replace(&mut *cancel, CancellationToken::new());
-        old.cancel();
+    /// Breaks every socket handed out so far, taking the underlay away from the
+    /// connections on them at once instead of waiting on a QUIC timeout. The
+    /// servers stay up but become unreachable; sockets from later binds are
+    /// intact, and reach a fresh server as usual.
+    pub(crate) fn break_sockets(&self) {
+        for socket in self.sockets.lock().unwrap().drain(..) {
+            socket.break_socket();
+        }
     }
 
     fn server_config(&self) -> scion_quic::reexport::squiche::Config {
@@ -200,7 +206,7 @@ impl TestServerHarness {
 
 impl Drop for TestServerHarness {
     fn drop(&mut self) {
-        self.cancel.lock().unwrap().cancel();
+        self.cancel.cancel();
     }
 }
 
@@ -213,7 +219,7 @@ impl SocketBinder for TestServerHarness {
         self.binds.fetch_add(1, Ordering::SeqCst);
         let (client_socket, server_socket) =
             MockScionSocket::pair(1024, client_addr(), server_addr());
-        let cancel = self.cancel.lock().unwrap().clone();
+        let cancel = self.cancel.clone();
         let router = self.router.clone();
         let config = self.server_config();
         tokio::spawn(async move {
@@ -225,7 +231,9 @@ impl SocketBinder for TestServerHarness {
             )
             .await;
         });
-        Ok(Arc::new(client_socket))
+        let client_socket = Arc::new(BreakableScionSocket::new(Arc::new(client_socket)));
+        self.sockets.lock().unwrap().push(client_socket.clone());
+        Ok(client_socket)
     }
 }
 

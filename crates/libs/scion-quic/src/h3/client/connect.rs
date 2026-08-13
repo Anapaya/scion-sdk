@@ -27,7 +27,10 @@
 //! the single-connection analog of the server endpoint's recv
 //! loop). The same task drives the handshake and then both loops, so the socket
 //! is read continuously and there is no window where nobody is reading it. When
-//! the connection closes the driver returns, which cancels the ingress loop.
+//! the connection closes the driver returns, which cancels the ingress loop; a
+//! failing socket ends whichever loop reaches it first. Either way the
+//! connection is left marked as no longer driven, so the client establishes a
+//! new one rather than handing this one out again.
 
 mod ingress;
 
@@ -42,7 +45,7 @@ use crate::{
     app::QuicScionApplication,
     h3::{
         client::{
-            app::{Http3ClientApp, close_connection},
+            app::{Http3ClientApp, close_connection, on_driver_stopped},
             error::EstablishError,
         },
         common::H3_INTERNAL_ERROR,
@@ -148,6 +151,10 @@ pub(crate) async fn connect(
             _ = ingress::run(handle.clone(), socket) => {}
             _ = close_on_cancel(&handle, &closed) => {}
         }
+        // Both loops are gone, so the connection is unusable whatever ended
+        // them: a socket failure leaves a transport that still looks live but
+        // has nobody to send, receive, or time it out for it.
+        on_driver_stopped(&handle);
     });
 
     rx.await.map_err(|_| EstablishError::Handshake)?

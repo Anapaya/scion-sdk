@@ -19,10 +19,11 @@
 //! part of the stable API: enable them for `[dev-dependencies]` only, never
 //! from library code.
 
-use std::io;
+use std::{io, sync::Arc};
 
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::sync::{Mutex, mpsc};
+use tokio_util::sync::CancellationToken;
 
 use crate::socket::{BoxedSocketError, GenericScionUdpSocket};
 
@@ -131,5 +132,67 @@ impl GenericScionUdpSocket for MockScionSocket {
 
     fn local_addr(&self) -> ScionSocketIpAddr {
         self.local_addr
+    }
+}
+
+/// A socket wrapper that fails in both directions once
+/// [`break_socket`](Self::break_socket) is called, including a `recv_from`
+/// already parked on it.
+///
+/// This is how a test takes the underlay away from an established connection.
+/// The socket keeps existing, but nothing can be sent or received on it any
+/// more, which is what a broken link or a torn-down stack looks like to the
+/// layers above.
+pub struct BreakableScionSocket {
+    inner: Arc<dyn GenericScionUdpSocket>,
+    broken: CancellationToken,
+}
+
+impl BreakableScionSocket {
+    /// Wraps `inner`, initially intact.
+    pub fn new(inner: Arc<dyn GenericScionUdpSocket>) -> Self {
+        Self {
+            inner,
+            broken: CancellationToken::new(),
+        }
+    }
+
+    /// Breaks the socket: this call and every later one fails, as does any
+    /// `recv_from` currently parked on it. Idempotent.
+    pub fn break_socket(&self) {
+        self.broken.cancel();
+    }
+
+    fn failure() -> BoxedSocketError {
+        Box::new(io::Error::new(io::ErrorKind::BrokenPipe, "socket broken"))
+    }
+}
+
+#[async_trait::async_trait]
+impl GenericScionUdpSocket for BreakableScionSocket {
+    async fn send_to(
+        &self,
+        payload: &[u8],
+        destination: ScionSocketIpAddr,
+    ) -> Result<(), BoxedSocketError> {
+        if self.broken.is_cancelled() {
+            return Err(Self::failure());
+        }
+        self.inner.send_to(payload, destination).await
+    }
+
+    async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, ScionSocketIpAddr), BoxedSocketError> {
+        tokio::select! {
+            biased;
+            () = self.broken.cancelled() => Err(Self::failure()),
+            res = self.inner.recv_from(buf) => res,
+        }
+    }
+
+    fn local_addr(&self) -> ScionSocketIpAddr {
+        self.inner.local_addr()
     }
 }

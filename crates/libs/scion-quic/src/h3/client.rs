@@ -276,8 +276,14 @@ impl Http3Client {
         }
 
         if let Some(handle) = guard.as_ref() {
-            let closed = handle.lock().inner.is_closed();
-            if !closed {
+            let usable = {
+                let conn = handle.lock();
+                // A connection whose driver stopped is dead even though the
+                // transport reports itself as live: the socket under it failed,
+                // and reusing it would hang every request on it.
+                !conn.inner.is_closed() && !conn.app.driver_stopped
+            };
+            if usable {
                 return Ok(handle.clone());
             }
         }

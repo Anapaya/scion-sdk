@@ -390,34 +390,25 @@ mod tests {
     }
 
     #[test(tokio::test)]
-    #[ntest::timeout(20_000)]
+    #[ntest::timeout(10_000)]
     async fn establish_failure_reconnects_once_and_retries() {
         let (router, hits) = test_router();
         let harness = TestServerHarness::new(router);
         let resolver = StaticResolver::new(vec![server_scion_ip()]);
-        // A short QUIC idle timeout, so the client notices the broken
-        // connection quickly (a dead transport is otherwise only detected
-        // when the idle timer fires).
-        let config = test_config().with_quic_config(
-            QuicConfig::builder()
-                .verify_peer(false)
-                .handshake_timeout(Duration::from_millis(400))
-                .idle_timeout(Duration::from_millis(500))
-                .build(),
-        );
-        let (client, _) = harness_client(harness.clone(), resolver, config);
+        let (client, _) = harness_client(harness.clone(), resolver, test_config());
 
         let response = client.get(url("localhost", "/hello")).await.unwrap();
         assert!(response.is_success());
         assert_eq!(harness.binds.load(SeqCst), 1);
 
-        // Break the established connection: the server side of the pair goes
-        // away. Once the idle timeout marks the connection dead, the pooled
-        // client's own re-establishment (same socket, dead pair) fails, and
-        // the request path re-establishes through the pool (fresh socket,
-        // fresh server) and retries — invisible to the caller.
-        harness.kill_servers();
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        // Break the established connection by taking its socket away. The
+        // pooled client's own re-establishment (same, still broken socket)
+        // then fails, so the request path re-establishes through the pool
+        // (fresh socket, fresh server) and retries — invisible to the caller.
+        harness.break_sockets();
+        // Long enough for the client to notice the broken socket, which takes
+        // a couple of task wake-ups rather than any timeout.
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         let response = client.get(url("localhost", "/hello")).await.unwrap();
         assert!(response.is_success());

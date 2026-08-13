@@ -69,6 +69,14 @@ pub struct Http3ClientApp {
     /// lock, [`Self::update`] then stops routing events, and no new stream can
     /// be opened on a terminated connection.
     pub(crate) locally_closed: bool,
+    /// Whether the tasks driving this connection have ended, which they do when
+    /// the socket under it fails.
+    ///
+    /// The transport can still look healthy at that point: nobody is left to
+    /// fire its timers, so it does not even notice the idle timeout. Nothing
+    /// can be sent or received on it any more, and this flag is what says so.
+    /// See [`on_driver_stopped`].
+    pub(crate) driver_stopped: bool,
 }
 
 impl QuicScionApplication for Http3ClientApp {
@@ -81,6 +89,7 @@ impl QuicScionApplication for Http3ClientApp {
             streams: HashMap::new(),
             response_heads: HashMap::new(),
             locally_closed: false,
+            driver_stopped: false,
         };
 
         if conn.application_proto() != b"h3" {
@@ -262,6 +271,24 @@ pub(crate) fn close_connection(handle: &ConnectionHandle<Http3ClientApp>) {
     }
     // Let the driver flush CONNECTION_CLOSE, then wake consumers off the lock.
     handle.notify();
+    wakeups.fire();
+}
+
+/// Records that the tasks driving `handle`'s connection have ended, and faults
+/// everything in flight on it.
+///
+/// Called once the connection bootstrap's loops return. A clean close gets here
+/// with the transport already closed and every stream already faulted, so this
+/// changes nothing; a socket failure gets here with a transport that still
+/// reports itself as live, and this is what tells the client to establish a new
+/// connection instead of handing this one out again.
+pub(crate) fn on_driver_stopped(handle: &ConnectionHandle<Http3ClientApp>) {
+    let mut wakeups = Wakeups::default();
+    {
+        let mut conn = handle.lock();
+        conn.app.driver_stopped = true;
+        conn.app.on_closed(&mut wakeups);
+    }
     wakeups.fire();
 }
 

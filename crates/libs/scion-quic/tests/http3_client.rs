@@ -50,6 +50,7 @@ use scion_quic::{
         server_endpoint::{Metrics, QuicScionEndpointDriver, QuicScionServerEndpoint},
     },
     socket::GenericScionUdpSocket,
+    test_util::BreakableScionSocket,
 };
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tokio::{
@@ -159,7 +160,7 @@ where
     )
 }
 
-fn make_client(socket: Arc<MockScionSocket>, idle: Duration) -> Http3Client {
+fn make_client(socket: Arc<dyn GenericScionUdpSocket>, idle: Duration) -> Http3Client {
     Http3Client::with_config(
         server_addr(),
         socket,
@@ -854,6 +855,51 @@ async fn lazy_reconnect_after_close() {
     assert!(
         server.established.load(Ordering::SeqCst) >= 2,
         "a fresh connection should have been established after the idle close"
+    );
+}
+
+/// A socket failure ends the tasks driving the connection while the transport
+/// still reports itself as live (nobody is left to fire its idle timer). The
+/// client must treat that connection as dead: requests on it fail instead of
+/// hanging on a connection nobody drives, and it is never handed out again.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn socket_failure_retires_the_connection() {
+    let (_server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let socket = Arc::new(BreakableScionSocket::new(socket));
+    let client = make_client(socket.clone(), LONG_IDLE);
+
+    let response = post(&client, "/echo", "first")
+        .await
+        .expect("first request");
+    let (body, _) = read_body(response.into_body()).await;
+    assert_eq!(body, b"first");
+
+    socket.break_socket();
+
+    // A request that races the failure fails in one of two ways, depending on
+    // which side of the failure it lands on: establishing a replacement
+    // connection, or in flight on the connection that just died. What it must
+    // not do is hang.
+    let Err(err) = post(&client, "/echo", "second").await else {
+        panic!("request on a broken socket succeeded");
+    };
+    assert!(
+        matches!(
+            err,
+            RequestError::Establish(EstablishError::Io(_)) | RequestError::ConnectionClosed
+        ),
+        "{err}"
+    );
+
+    // Past the race, the dead connection is gone for good: every further
+    // request establishes a new one, which the broken socket then fails.
+    let Err(err) = post(&client, "/echo", "third").await else {
+        panic!("request after the connection died succeeded");
+    };
+    assert!(
+        matches!(err, RequestError::Establish(EstablishError::Io(_))),
+        "{err}"
     );
 }
 

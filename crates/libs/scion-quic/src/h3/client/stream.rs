@@ -59,7 +59,7 @@ pub(crate) fn initiate_request(
         let QuicScionConn { inner, app, .. } = &mut *guard;
         // The connection can go away between the caller obtaining it and getting
         // here; report that as a close rather than as an opaque h3 send error.
-        if is_terminated(inner) {
+        if is_terminated(inner) || app.driver_stopped {
             return Err(if app.locally_closed {
                 RequestError::LocallyClosed
             } else {
