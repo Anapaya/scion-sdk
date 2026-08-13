@@ -189,9 +189,3 @@ incremental = false         # Disable incremental compilation to allow caching d
 inherits = "release"
 lto = true
 codegen-units = 1
-
-# Redirect boring-sys to the pinned tree vendored under third_party/boring-sys.
-# It carries the checked-in bindings for x86_64-unknown-linux-gnu, so building
-# that target needs no libclang. See third_party/boring-sys-patches.
-[patch.crates-io]
-boring-sys = { path = "../../third_party/boring-sys" }
