@@ -26,9 +26,14 @@ use thiserror::Error;
 ///
 /// # Error handling
 ///
-/// Implementations SHOULD return `ResolveError::NoValidEntries` only when a
-/// lookup succeeds but yields no valid SCION TXT entries. Partial failures
-/// SHOULD return the valid addresses and log warnings for invalid entries.
+/// Implementations SHOULD return `ResolveError::NoValidEntries` when a lookup
+/// completes but yields no valid SCION TXT entries, which includes a name that
+/// has no TXT records at all and a name that does not exist. Lookups that never
+/// complete (timeout, network error, server failure) SHOULD return
+/// `ResolveError::DnsLookup`, the only outcome a retry can change; callers
+/// branch on that with [`ResolveError::is_transient`] rather than on the
+/// variants. Partial failures SHOULD return the valid addresses and log
+/// warnings for invalid entries.
 #[async_trait]
 pub trait ScionDnsResolver: Send + Sync {
     /// Resolve a domain into SCION addresses.
@@ -45,17 +50,36 @@ pub trait ScionDnsResolver: Send + Sync {
 #[derive(Debug, Error, PartialEq)]
 #[non_exhaustive]
 pub enum ResolveError {
-    /// DNS lookup failed.
+    /// The lookup itself failed, for example on a timeout, a network error, or
+    /// a server failure. A retry may succeed.
     #[error("dns lookup failed: {0}")]
     DnsLookup(String),
-    /// No valid TSAR entries were found.
+    /// The lookup completed without producing a usable SCION address: the TXT
+    /// records that exist do not parse as TSAR entries, the name has no TXT
+    /// records, or the name does not exist. A retry does not help for as long
+    /// as the answer stays valid.
     #[error("no valid TSAR TXT entries for {domain}")]
     NoValidEntries {
         /// Domain name that was looked up.
         domain: String,
-        /// Invalid entries encountered during parsing or TXT decoding.
+        /// Invalid entries encountered during parsing or TXT decoding. Empty
+        /// when the lookup returned no TXT records to parse.
         invalid_entries: Vec<InvalidEntry>,
     },
+}
+
+impl ResolveError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: the enum is `#[non_exhaustive]`,
+    /// and a new variant would silently fall into a caller's wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::DnsLookup(_) => true,
+            Self::NoValidEntries { .. } => false,
+        }
+    }
 }
 
 /// Metadata for a TXT entry that could not be parsed.

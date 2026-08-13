@@ -267,11 +267,11 @@ impl Error {
         }
     }
 
-    /// Maps a resolver error to [`Error::Resolution`], deciding retryability
-    /// from the failure kind: a failed lookup may succeed later, a host
-    /// without valid TSAR records will not.
+    /// Maps a resolver error to [`Error::Resolution`], taking retryability from
+    /// the resolver's own classification: a failed lookup may succeed later, a
+    /// host without valid TSAR records will not.
     pub(crate) fn from_resolve_error(host: &str, err: ResolveError) -> Error {
-        let retryable = matches!(err, ResolveError::DnsLookup(_));
+        let retryable = err.is_transient();
         Error::Resolution {
             host: host.to_string(),
             retryable,

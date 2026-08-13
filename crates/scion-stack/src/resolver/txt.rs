@@ -40,7 +40,8 @@ use std::{collections::HashMap, net::IpAddr, str::FromStr};
 
 use async_trait::async_trait;
 use hickory_resolver::{
-    ResolverBuilder, TokioResolver, name_server::TokioConnectionProvider, proto::rr::rdata::TXT,
+    ResolveErrorKind, ResolverBuilder, TokioResolver, name_server::TokioConnectionProvider,
+    proto::rr::rdata::TXT,
 };
 use sciparse::{address::ip_addr::ScionIpAddr, identifier::isd_asn::IsdAsn};
 use thiserror::Error;
@@ -56,6 +57,20 @@ const SCION_TXT_PREFIX: &str = "scion=v1;";
 /// parsing outcomes are reported through `ResolveError` from `ScionDnsResolver::resolve`.
 ///
 /// Domain-specific overrides can be added to bypass DNS and always return the configured addresses.
+///
+/// # Caching
+///
+/// This type holds no cache of its own. Lookups are cached by the DNS core underneath, at the
+/// records' own TTLs, and that cache covers negative answers too: a name without TXT records is
+/// remembered for the negative TTL of the zone's SOA. Clones share that cache; dropping the last
+/// clone drops the cache with it.
+///
+/// Callers who need different bounds, or no caching at all, set `ResolverOpts` (`cache_size`,
+/// `positive_min_ttl`, `positive_max_ttl`, `negative_min_ttl`, `negative_max_ttl`) on the builder
+/// returned by [`ScionTxtDnsResolver::builder`] before passing it to
+/// [`ScionTxtDnsResolver::from_builder`]. Bounding staleness means bounding it there; a cache added
+/// above this type could not do so, because on expiry it would only re-read the copy the DNS core
+/// still holds.
 #[derive(Clone, Debug)]
 pub struct ScionTxtDnsResolver {
     resolver: TokioResolver,
@@ -157,7 +172,7 @@ impl ScionDnsResolver for ScionTxtDnsResolver {
             .resolver
             .txt_lookup(domain)
             .await
-            .map_err(|err| ResolveError::DnsLookup(err.to_string()))?;
+            .map_err(|err| classify_lookup_error(domain, &err))?;
 
         let mut txt_records = Vec::new();
         let mut invalid_entries = Vec::new();
@@ -205,6 +220,27 @@ impl PartialEq for TxtResolverError {
         match (self, other) {
             (Self::DnsConfig { message: a, .. }, Self::DnsConfig { message: b, .. }) => a == b,
         }
+    }
+}
+
+/// Splits a hickory lookup failure into the two outcomes of the [`ScionDnsResolver`] contract: a
+/// lookup that completed but found no TXT records is a permanent [`ResolveError::NoValidEntries`]
+/// verdict, every other failure (timeout, network error, SERVFAIL) is a transient
+/// [`ResolveError::DnsLookup`] that a retry may resolve.
+///
+/// Hickory reports both an empty answer and a non-existent name as `NoRecordsFound`. Both are
+/// permanent for as long as the negative answer is valid, so the distinction between "no such name"
+/// and "the name exists without TXT records" is not carried over. Failure kinds we do not recognize
+/// stay transient, which is the safe default for a retry decision.
+fn classify_lookup_error(domain: &str, err: &hickory_resolver::ResolveError) -> ResolveError {
+    match err.kind() {
+        ResolveErrorKind::Proto(proto) if proto.is_no_records_found() => {
+            ResolveError::NoValidEntries {
+                domain: domain.to_string(),
+                invalid_entries: Vec::new(),
+            }
+        }
+        _ => ResolveError::DnsLookup(err.to_string()),
     }
 }
 
@@ -334,7 +370,75 @@ fn format_invalid_entries(entries: &[InvalidEntry]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use hickory_resolver::proto::{
+        ProtoError, ProtoErrorKind,
+        op::{Query, ResponseCode},
+        rr::{Name, RecordType},
+    };
+
     use super::*;
+
+    /// Builds the failure hickory reports for a TXT query that found no records, which is also how
+    /// it reports a name that does not exist (`response_code` tells the two apart).
+    fn no_records_error(
+        domain: &str,
+        response_code: ResponseCode,
+    ) -> hickory_resolver::ResolveError {
+        let query = Query::query(Name::from_str(domain).expect("valid name"), RecordType::TXT);
+        ResolveErrorKind::Proto(ProtoError::nx_error(
+            Box::new(query),
+            None,
+            None,
+            None,
+            response_code,
+            false,
+            None,
+        ))
+        .into()
+    }
+
+    #[test]
+    fn classify_empty_answer_as_no_valid_entries() {
+        let raw = no_records_error("example.com.", ResponseCode::NoError);
+
+        let err = classify_lookup_error("example.com", &raw);
+
+        assert_eq!(
+            err,
+            ResolveError::NoValidEntries {
+                domain: "example.com".to_string(),
+                invalid_entries: Vec::new(),
+            }
+        );
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn classify_nonexistent_name_as_no_valid_entries() {
+        let raw = no_records_error("example.com.", ResponseCode::NXDomain);
+
+        let err = classify_lookup_error("example.com", &raw);
+
+        assert_eq!(
+            err,
+            ResolveError::NoValidEntries {
+                domain: "example.com".to_string(),
+                invalid_entries: Vec::new(),
+            }
+        );
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn classify_timeout_as_transient_lookup_failure() {
+        let raw: hickory_resolver::ResolveError =
+            ResolveErrorKind::Proto(ProtoError::from(ProtoErrorKind::Timeout)).into();
+
+        let err = classify_lookup_error("example.com", &raw);
+
+        assert!(matches!(err, ResolveError::DnsLookup(_)), "{err:?}");
+        assert!(err.is_transient());
+    }
 
     #[test]
     fn parse_txt_payload_single() {
