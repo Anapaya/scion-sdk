@@ -35,7 +35,7 @@ jobs:
         uses: ./.github/actions/disk-cleanup
       - name: On linux set CARGO_TARGET_DIR
         if: runner.os == 'Linux'
-        run: echo "CARGO_TARGET_DIR=~/.cache/cargo/target" >> $GITHUB_ENV
+        run: echo "CARGO_TARGET_DIR=$HOME/.cache/cargo/target" >> "$GITHUB_ENV"
       - name: Install NASM
         # NASM required for squiche on windows
         if: runner.os == 'Windows'
