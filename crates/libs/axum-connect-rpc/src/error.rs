@@ -14,7 +14,10 @@
 // Copied from `reqwest-connect-rpc` and adapted for axum.
 //! Connect RPC error types and conversions.
 
-use axum::{http::StatusCode, response::IntoResponse};
+use axum::{
+    http::{StatusCode, header},
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -199,7 +202,7 @@ impl IntoResponse for CrpcError {
             r#"{"code":"internal","message":"failed to serialize error"}"#.to_string()
         });
 
-        (status, body).into_response()
+        (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
     }
 }
 
