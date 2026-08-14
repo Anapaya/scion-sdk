@@ -36,6 +36,7 @@
 pub mod auth;
 pub mod paths;
 pub mod segments;
+pub mod sni;
 pub mod uplinks;
 
 #[cfg(test)]
@@ -51,6 +52,7 @@ mod sketch {
         auth::AuthService,
         paths::PathManager,
         segments::SegmentManager,
+        sni::WapSNI,
         uplinks::{GenericUplink, UplinkEstablisher, UplinkManager},
     };
 
@@ -70,7 +72,9 @@ mod sketch {
 
     use anyhow::Context;
     use sciparse::{
-        address::socket_addr::ScionSocketAddr, identifier::isd_asn::IsdAsn, path::ScionPath,
+        address::{ip_socket_addr::ScionSocketIpAddr, socket_addr::ScionSocketAddr},
+        identifier::isd_asn::IsdAsn,
+        path::ScionPath,
     };
     use tokio::select;
     use tokio_util::sync::CancellationToken;
@@ -94,9 +98,12 @@ mod sketch {
             .await
             .context("Failed to extract SNI from connection")?;
 
-        let dst_addr: ScionSocketAddr = resolve_tsar_for_sni(&sni)
+        let gateway_domain = sni.gateway_domain();
+        let dst_addr: ScionSocketIpAddr = resolve_tsar(gateway_domain.as_str())
             .await
-            .context("Failed to resolve TSAR for SNI")?;
+            .context("Failed to resolve TSAR for SNI")?
+            .try_to_scion_sock_ip_addr()
+            .context("TSAR did not resolve to a SCION socket IP address")?;
 
         // Select the path this client should take
         let used_path = cp
@@ -140,17 +147,17 @@ mod sketch {
         Ok(())
     }
 
-    async fn resolve_tsar_for_sni(_sni: &str) -> anyhow::Result<ScionSocketAddr> {
+    async fn resolve_tsar(_sni: &str) -> anyhow::Result<ScionSocketAddr> {
         todo!()
     }
 
-    async fn tls_extract_sni_from_connection(_client_tcp_stream: ()) -> anyhow::Result<String> {
+    async fn tls_extract_sni_from_connection(_client_tcp_stream: ()) -> anyhow::Result<WapSNI> {
         todo!()
     }
 
     async fn start_forwarding(
         _client_ip: IpAddr,
-        _sni: &str,
+        _sni: &WapSNI,
         _uplink_stream: <MockUplink as GenericUplink>::StreamType,
         _client_stream: (),
     ) -> anyhow::Result<()> {
@@ -166,7 +173,7 @@ mod sketch {
         async fn establish_connection(
             &self,
             _path: ScionPath,
-            _dst_addr: ScionSocketAddr,
+            _dst_addr: ScionSocketIpAddr,
             _closed: CancellationToken,
         ) -> anyhow::Result<Self::Uplink> {
             todo!("Implement the uplink connection establishment")
@@ -180,7 +187,7 @@ mod sketch {
     impl GenericUplink for MockUplink {
         type StreamType = ();
 
-        async fn establish_stream(&self, _dst_sni: &str) -> anyhow::Result<Self::StreamType> {
+        async fn establish_stream(&self, _dst_sni: &WapSNI) -> anyhow::Result<Self::StreamType> {
             todo!("Implement the uplink stream establishment")
         }
 

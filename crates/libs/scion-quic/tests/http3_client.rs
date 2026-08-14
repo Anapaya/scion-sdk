@@ -39,8 +39,8 @@ use http_body::{Body, Frame};
 use scion_quic::{
     h3::{
         client::{
-            CollectError, EstablishError, H3DuplexStream, H3Error, H3ResponseBody, Http3Client,
-            RequestError,
+            CloseReason, CollectError, EstablishError, H3DuplexStream, H3Error, H3ResponseBody,
+            Http3Client, RequestError,
         },
         server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
     },
@@ -1548,7 +1548,7 @@ async fn close_racing_establishment_leaves_no_connection() {
         // Either outcome is legitimate; what must not happen is a connection left
         // running with nobody holding it.
         assert!(
-            matches!(established, Ok(()) | Err(EstablishError::Closed)),
+            matches!(established, Ok(_) | Err(EstablishError::Closed)),
             "unexpected establishment result at {delay}ms: {established:?}"
         );
 
@@ -1894,5 +1894,97 @@ async fn close_faults_an_open_connect_tunnel() {
         err.kind(),
         io::ErrorKind::NotConnected,
         "expected a not-connected error, got {err:?}"
+    );
+}
+
+// --------------------------------------------------------------------------
+// Connection tokens
+// --------------------------------------------------------------------------
+
+/// `connect` hands out a token for the connection it established, which reports
+/// that connection as up for as long as it carries requests.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn connect_hands_out_a_token_for_the_live_connection() {
+    let (_server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let connection = client.connect().await.expect("connect");
+    assert!(!connection.is_closed());
+    assert_eq!(connection.close_reason(), None);
+
+    let response = post(&client, "/echo", "hello").await.expect("request");
+    let (body, _) = read_body(response.into_body()).await;
+    assert_eq!(body, b"hello");
+    assert!(
+        !connection.is_closed(),
+        "the connection the token names is the one carrying requests"
+    );
+}
+
+/// `close` is observable on the token at once, without waiting out the draining
+/// period the QUIC layer would otherwise report the close after.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn a_token_reports_a_local_close() {
+    let (_server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+    let connection = client.connect().await.expect("connect");
+
+    client.close().await;
+
+    let reason = tokio::time::timeout(Duration::from_secs(2), connection.closed())
+        .await
+        .expect("a local close must be reported promptly");
+    assert_eq!(reason, CloseReason::Local);
+    assert_eq!(connection.close_reason(), Some(CloseReason::Local));
+}
+
+/// A connection that idles out is reported on its token, so an owner learns of
+/// the break without having to issue a request to find out.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn a_token_reports_an_idle_close() {
+    let idle = Duration::from_millis(300);
+    let (_server, socket) = spawn_server(EchoService, idle);
+    let client = make_client(socket, idle);
+    let connection = client.connect().await.expect("connect");
+
+    assert_eq!(connection.closed().await, CloseReason::IdleTimeout);
+    // The client itself stays usable: only this connection ended.
+    assert!(!client.is_closed());
+}
+
+/// A connection whose socket dies is reported too, even though the QUIC layer
+/// never sees a close: nothing reads or writes its packets anymore.
+///
+/// The client must also stop handing that connection out. Before it did, a
+/// request would be initiated on a connection nobody drives and would never be
+/// answered — here it fails at establishment instead, the socket being gone.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(20_000)]
+async fn a_token_reports_a_dead_socket_and_the_connection_is_not_reused() {
+    let (_server, socket) = spawn_server(EchoService, LONG_IDLE);
+    let socket = Arc::new(BreakableScionSocket::new(socket));
+    let client = make_client(socket.clone(), LONG_IDLE);
+    let connection = client.connect().await.expect("connect");
+
+    // The idle timeout is far off, so only the socket can end this connection.
+    socket.break_socket();
+
+    assert_eq!(connection.closed().await, CloseReason::Io);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), post(&client, "/echo", "after"))
+        .await
+        .expect("a request must not park on a connection nobody drives");
+    assert!(
+        matches!(
+            result,
+            Err(RequestError::Establish(
+                EstablishError::Io(_) | EstablishError::Handshake
+            ))
+        ),
+        "expected a failed re-establishment, got {:?}",
+        result.err()
     );
 }

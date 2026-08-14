@@ -37,8 +37,9 @@ use sciparse::{
 use tokio_util::sync::CancellationToken;
 
 use crate::pg_wap2::{
-    auth::{AuthService, DestinationSNI, DstGrant, GrantedSegmentId},
+    auth::{AuthService, DstGrant, GrantedSegmentId},
     segments::{PairGuard, SegmentManager, SegmentStoreId, SegmentsIter},
+    sni::{CustomerDomainRef, WapSNI},
 };
 
 /// Combines public and granted segments into paths.
@@ -76,7 +77,7 @@ impl PathManager {
     pub async fn best_path(
         &self,
         client_ip: IpAddr,
-        dst_sni: &DestinationSNI,
+        dst_sni: &WapSNI,
         src: IsdAsn,
         dst: IsdAsn,
         now: SystemTime,
@@ -86,7 +87,7 @@ impl PathManager {
         }
 
         // Check if the client is authorized for the destination SNI and get the granted segments.
-        let auth_segments = self.0.auth.dst_grant(client_ip, dst_sni, now).context(
+        let auth_segments = self.0.auth.dst_grant(client_ip, dst_sni.customer_domain(), now).context(
             "IP address is not authorized for the given destination SNI or the grant has expired",
         )?;
 
@@ -241,15 +242,15 @@ impl PathManager {
     pub fn watch_grants(
         &self,
         client_ip: IpAddr,
-        dst_sni: &DestinationSNI,
+        customer_domain: CustomerDomainRef<'_>,
         used: &UsedPath,
         now: SystemTime,
     ) -> anyhow::Result<GrantWatch> {
         let dst_grant = self
             .0
             .auth
-            .watch_grant(client_ip, dst_sni, now)
-            .with_context(|| format!("No live grant of {client_ip} for {dst_sni}"))?;
+            .watch_grant(client_ip, customer_domain, now)
+            .with_context(|| format!("No live grant of {client_ip} for {customer_domain}"))?;
 
         let mut grants = vec![dst_grant];
 
@@ -261,7 +262,7 @@ impl PathManager {
             grants.push(
                 self.0
                     .auth
-                    .watch_segment_grant(client_ip, dst_sni, id, now)
+                    .watch_segment_grant(client_ip, customer_domain, id, now)
                     .with_context(|| {
                         format!(
                             "No live grant of {client_ip} for segment {} of the path",
@@ -447,7 +448,7 @@ mod tests {
 
     use super::*;
     use crate::pg_wap2::test_util::{
-        Fixture, IDLE_EVICTION_TIME, MAX_FETCH_INTERVAL, MockFetcher, SNI, at, client_ip, core_ia,
+        Fixture, IDLE_EVICTION_TIME, MAX_FETCH_INTERVAL, MockFetcher, at, client_ip, core_ia,
         core_segment, core_store_id, down_segment, granted_core_id, granted_id, leaf_ia,
         non_core_store_id, other_leaf_ia, sni, store_id, up_segment,
     };
@@ -532,7 +533,7 @@ mod tests {
         );
         fixture.grant_for(
             client_ip(),
-            SNI,
+            sni().customer_domain(),
             Vec::new(),
             vec![up_segment(0), down_segment(0)],
             at(0),
@@ -574,7 +575,13 @@ mod tests {
             Duration::from_secs(100),
         );
         // The core hop between the two core ASes is the private part of this path.
-        fixture.grant_for(client_ip(), SNI, vec![core_segment(0)], Vec::new(), at(0));
+        fixture.grant_for(
+            client_ip(),
+            sni().customer_domain(),
+            vec![core_segment(0)],
+            Vec::new(),
+            at(0),
+        );
 
         let used = fixture
             .paths
@@ -604,7 +611,7 @@ mod tests {
         // The client keeps the path only while its grant on that core segment holds.
         let watch = fixture
             .paths
-            .watch_grants(client_ip(), &sni(), &used, at(0))
+            .watch_grants(client_ip(), sni().customer_domain(), &used, at(0))
             .expect("the client is authorized for the path");
         fixture.auth.clean(at(101));
         assert!(watch.expired().now_or_never().is_some());
@@ -627,7 +634,7 @@ mod tests {
         let refreshed_at = at(MAX_FETCH_INTERVAL.as_secs() + 1);
         fixture.grant_for(
             client_ip(),
-            SNI,
+            sni().customer_domain(),
             Vec::new(),
             vec![up_segment(600), down_segment(600)],
             refreshed_at,

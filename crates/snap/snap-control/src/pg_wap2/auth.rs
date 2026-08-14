@@ -45,6 +45,8 @@ use std::{
 use sciparse::segment::{SegmentFp, SignedPathSegment};
 use tokio_util::sync::CancellationToken;
 
+use crate::pg_wap2::sni::{CustomerDomain, CustomerDomainRef};
+
 /// Tracks which client IPs are authorized for which targets and segments.
 #[derive(Clone)]
 pub struct AuthService(Arc<AuthServiceShared>);
@@ -140,7 +142,7 @@ impl AuthService {
     pub fn authorize(
         &self,
         ip: IpAddr,
-        destinations: HashMap<DestinationSNI, AuthSegments>,
+        destinations: HashMap<CustomerDomain, AuthSegments>,
         now: SystemTime,
     ) {
         // TODO: Auth segments are client input and should be validated.
@@ -280,10 +282,15 @@ impl AuthService {
     /// Returns `None` if no valid grant exists.
     /// Returns `DstGrant` with the segments currently granted for the given SNI if a valid
     /// grant exists.
-    pub fn dst_grant(&self, ip: IpAddr, dst: &DestinationSNI, now: SystemTime) -> Option<DstGrant> {
+    pub fn dst_grant(
+        &self,
+        ip: IpAddr,
+        dst: CustomerDomainRef<'_>,
+        now: SystemTime,
+    ) -> Option<DstGrant> {
         let this = self.read();
 
-        let dst_auth = this.auth_ips.get(&ip)?.auth_dsts.get(dst)?;
+        let dst_auth = this.auth_ips.get(&ip)?.auth_dsts.get(dst.as_str())?;
 
         // Grant has already expired, return None to indicate that the client needs to
         // reauthenticate.
@@ -329,7 +336,7 @@ impl AuthService {
     pub fn grant_expiry(
         &self,
         ip: IpAddr,
-        dst: &DestinationSNI,
+        dst: CustomerDomainRef<'_>,
         now: SystemTime,
     ) -> Option<SystemTime> {
         let this = self.read();
@@ -337,7 +344,7 @@ impl AuthService {
         this.auth_ips
             .get(&ip)?
             .auth_dsts
-            .get(dst)
+            .get(dst.as_str())
             .filter(|dst_auth| dst_auth.is_valid(now))
             .map(|dst_auth| dst_auth.granted_until)
     }
@@ -347,7 +354,7 @@ impl AuthService {
     pub fn segment_grant_expiry(
         &self,
         ip: IpAddr,
-        dst: &DestinationSNI,
+        dst: CustomerDomainRef<'_>,
         id: &GrantedSegmentId,
         now: SystemTime,
     ) -> Option<SystemTime> {
@@ -356,7 +363,7 @@ impl AuthService {
         this.auth_ips
             .get(&ip)?
             .auth_dsts
-            .get(dst)?
+            .get(dst.as_str())?
             .segment_grants
             .get(id)
             .filter(|grant| grant.is_valid(now))
@@ -368,7 +375,7 @@ impl AuthService {
     pub fn watch_grant(
         &self,
         ip: IpAddr,
-        dst: &DestinationSNI,
+        customer_domain: CustomerDomainRef<'_>,
         now: SystemTime,
     ) -> Option<CancellationToken> {
         let this = self.read();
@@ -376,15 +383,15 @@ impl AuthService {
         let grant = this
             .auth_ips
             .get(&ip)
-            .and_then(|auth_entry| auth_entry.auth_dsts.get(dst));
+            .and_then(|auth_entry| auth_entry.auth_dsts.get(customer_domain.as_str()));
 
         let Some(grant) = grant else {
-            tracing::debug!(%ip, %dst, "No grant found");
+            tracing::debug!(%ip, %customer_domain, "No grant found");
             return None;
         };
 
         if !grant.is_valid(now) {
-            tracing::debug!(%ip, %dst, "Grant has already expired");
+            tracing::debug!(%ip, %customer_domain, "Grant has already expired");
             return None;
         }
 
@@ -396,7 +403,7 @@ impl AuthService {
     pub fn watch_segment_grant(
         &self,
         ip: IpAddr,
-        dst: &DestinationSNI,
+        customer_domain: CustomerDomainRef<'_>,
         id: &GrantedSegmentId,
         now: SystemTime,
     ) -> Option<CancellationToken> {
@@ -406,12 +413,12 @@ impl AuthService {
             .auth_ips
             .get(&ip)?
             .auth_dsts
-            .get(dst)?
+            .get(customer_domain.as_str())?
             .segment_grants
             .get(id)?;
 
         if !segment_grant.is_valid(now) {
-            tracing::debug!(%ip, %dst, ?id, "Segment grant has already expired");
+            tracing::debug!(%ip, %customer_domain, ?id, "Segment grant has already expired");
             return None;
         }
 
@@ -592,9 +599,6 @@ impl GrantedSegmentId {
     }
 }
 
-/// The SNI of a target the client wants to reach.
-pub type DestinationSNI = String;
-
 /// A segment in the authoritative store, with the number of grants referencing it.
 struct AuthSegmentEntry {
     segment: SignedPathSegment,
@@ -615,7 +619,7 @@ impl AuthSegmentEntry {
 /// Everything one IP is authorized for.
 #[derive(Default)]
 struct IpAuthInfo {
-    auth_dsts: HashMap<DestinationSNI, DstAuthInfo>,
+    auth_dsts: HashMap<CustomerDomain, DstAuthInfo>,
 }
 
 /// A grant for one (IP, destination) pair.
@@ -731,28 +735,41 @@ mod tests {
         fixture.grant_non_core(vec![first.clone()], at(0));
         let first_expiry = fixture
             .auth
-            .segment_grant_expiry(client_ip(), &sni(), &granted_id(&first), at(0))
+            .segment_grant_expiry(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&first),
+                at(0),
+            )
             .expect("the first segment is granted");
 
         // A refresh 10s later that only mentions the second segment must not take the first away.
         fixture.grant_non_core(vec![second.clone()], at(10));
 
         assert_eq!(
-            fixture
-                .auth
-                .segment_grant_expiry(client_ip(), &sni(), &granted_id(&first), at(10)),
+            fixture.auth.segment_grant_expiry(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&first),
+                at(10)
+            ),
             Some(first_expiry),
             "the first grant must be kept, with its original expiry"
         );
         assert_eq!(
-            fixture
-                .auth
-                .segment_grant_expiry(client_ip(), &sni(), &granted_id(&second), at(10)),
+            fixture.auth.segment_grant_expiry(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&second),
+                at(10)
+            ),
             Some(at(110)),
             "the second grant runs for the full auth duration from the refresh"
         );
         assert_eq!(
-            fixture.auth.grant_expiry(client_ip(), &sni(), at(10)),
+            fixture
+                .auth
+                .grant_expiry(client_ip(), sni().customer_domain(), at(10)),
             Some(at(110)),
             "the target grant is extended by the refresh"
         );
@@ -767,9 +784,12 @@ mod tests {
         fixture.grant_non_core(vec![segment.clone()], at(0));
 
         assert_eq!(
-            fixture
-                .auth
-                .segment_grant_expiry(client_ip(), &sni(), &granted_id(&segment), at(0)),
+            fixture.auth.segment_grant_expiry(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&segment),
+                at(0)
+            ),
             Some(segment.expires_earliest()),
             "the grant must be capped at the expiry of the segment it is granted on"
         );
@@ -784,9 +804,12 @@ mod tests {
         fixture.grant_non_core(vec![segment.clone()], expired);
 
         assert_eq!(
-            fixture
-                .auth
-                .segment_grant_expiry(client_ip(), &sni(), &granted_id(&segment), expired),
+            fixture.auth.segment_grant_expiry(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&segment),
+                expired
+            ),
             None
         );
     }
@@ -800,11 +823,16 @@ mod tests {
 
         let target_expired = fixture
             .auth
-            .watch_grant(client_ip(), &sni(), at(0))
+            .watch_grant(client_ip(), sni().customer_domain(), at(0))
             .expect("the target grant is live");
         let segment_expired = fixture
             .auth
-            .watch_segment_grant(client_ip(), &sni(), &granted_id(&segment), at(0))
+            .watch_segment_grant(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&segment),
+                at(0),
+            )
             .expect("the segment grant is live");
 
         assert!(fixture.auth.ip_is_authorized(client_ip(), at(0)));
@@ -815,7 +843,12 @@ mod tests {
             at(100),
             "clean reports when the next grant expires"
         );
-        assert!(fixture.auth.dst_grant(client_ip(), &sni(), at(0)).is_some());
+        assert!(
+            fixture
+                .auth
+                .dst_grant(client_ip(), sni().customer_domain(), at(0))
+                .is_some()
+        );
 
         fixture.auth.clean(at(101));
 
@@ -830,7 +863,7 @@ mod tests {
         assert!(
             fixture
                 .auth
-                .dst_grant(client_ip(), &sni(), at(101))
+                .dst_grant(client_ip(), sni().customer_domain(), at(101))
                 .is_none()
         );
         assert!(
@@ -842,16 +875,16 @@ mod tests {
         assert!(
             fixture
                 .auth
-                .watch_grant(client_ip(), &sni(), at(101))
+                .watch_grant(client_ip(), sni().customer_domain(), at(101))
                 .is_none(),
             "there is no live grant left to wait on"
         );
     }
 
-    /// One IP with two destination grants: `SNI` runs until t=100 with a shared and a private
-    /// segment, `OTHER_SNI` is refreshed at t=50 and runs until t=150 with only the shared one.
+    /// One IP with two destination grants: [`sni`] runs until t=100 with a shared and a private
+    /// segment, [`other_sni`] is refreshed at t=50 and runs until t=150 with only the shared one.
     ///
-    /// Returns the fixture, the shared segment and the segment only `SNI` is granted.
+    /// Returns the fixture, the shared segment and the segment only [`sni`] is granted.
     fn two_destination_fixture() -> (Fixture, SignedPathSegment, SignedPathSegment) {
         let fixture = Fixture::new(MockFetcher::empty(), Duration::from_secs(100));
 
@@ -862,11 +895,11 @@ mod tests {
             client_ip(),
             HashMap::from([
                 (
-                    sni(),
+                    sni().customer_domain().into(),
                     AuthSegments::new(Vec::new(), vec![shared.clone(), only_sni.clone()]),
                 ),
                 (
-                    other_sni(),
+                    other_sni().customer_domain().into(),
                     AuthSegments::new(Vec::new(), vec![shared.clone()]),
                 ),
             ]),
@@ -877,7 +910,7 @@ mod tests {
         fixture.auth.authorize(
             client_ip(),
             HashMap::from([(
-                other_sni(),
+                other_sni().customer_domain().into(),
                 AuthSegments::new(Vec::new(), vec![shared.clone()]),
             )]),
             at(50),
@@ -892,19 +925,29 @@ mod tests {
 
         let sni_expired = fixture
             .auth
-            .watch_grant(client_ip(), &sni(), at(50))
+            .watch_grant(client_ip(), sni().customer_domain(), at(50))
             .expect("the lapsing destination is granted");
         let other_expired = fixture
             .auth
-            .watch_grant(client_ip(), &other_sni(), at(50))
+            .watch_grant(client_ip(), other_sni().customer_domain(), at(50))
             .expect("the refreshed destination is granted");
         let shared_for_sni_expired = fixture
             .auth
-            .watch_segment_grant(client_ip(), &sni(), &granted_id(&shared), at(50))
+            .watch_segment_grant(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&shared),
+                at(50),
+            )
             .expect("the shared segment is granted for the lapsing destination");
         let shared_for_other_expired = fixture
             .auth
-            .watch_segment_grant(client_ip(), &other_sni(), &granted_id(&shared), at(50))
+            .watch_segment_grant(
+                client_ip(),
+                other_sni().customer_domain(),
+                &granted_id(&shared),
+                at(50),
+            )
             .expect("the shared segment is granted for the refreshed destination");
 
         assert_eq!(
@@ -916,7 +959,7 @@ mod tests {
         assert!(
             fixture
                 .auth
-                .dst_grant(client_ip(), &sni(), at(101))
+                .dst_grant(client_ip(), sni().customer_domain(), at(101))
                 .is_none(),
             "the lapsed destination is gone"
         );
@@ -928,7 +971,7 @@ mod tests {
 
         let other_grant = fixture
             .auth
-            .dst_grant(client_ip(), &other_sni(), at(101))
+            .dst_grant(client_ip(), other_sni().customer_domain(), at(101))
             .expect("the refreshed destination is untouched");
         assert_eq!(
             other_grant
@@ -977,7 +1020,7 @@ mod tests {
         assert!(
             fixture
                 .auth
-                .dst_grant(client_ip(), &other_sni(), at(151))
+                .dst_grant(client_ip(), other_sni().customer_domain(), at(151))
                 .is_none(),
             "and so is that last destination"
         );
@@ -1000,7 +1043,12 @@ mod tests {
 
         let omitted_expired = fixture
             .auth
-            .watch_segment_grant(client_ip(), &sni(), &granted_id(&omitted), at(0))
+            .watch_segment_grant(
+                client_ip(),
+                sni().customer_domain(),
+                &granted_id(&omitted),
+                at(0),
+            )
             .expect("both segments are granted");
 
         // The re-auth carries only one of the two segments; the other keeps running out.
@@ -1031,7 +1079,7 @@ mod tests {
 
         let grant = fixture
             .auth
-            .dst_grant(client_ip(), &sni(), at(101))
+            .dst_grant(client_ip(), sni().customer_domain(), at(101))
             .expect("the destination was extended by the refresh");
         assert_eq!(
             grant
@@ -1053,9 +1101,12 @@ mod tests {
         fixture.auth.authorize(
             client_ip(),
             HashMap::from([
-                (sni(), AuthSegments::new(Vec::new(), vec![granted.clone()])),
                 (
-                    other_sni(),
+                    sni().customer_domain().into(),
+                    AuthSegments::new(Vec::new(), vec![granted.clone()]),
+                ),
+                (
+                    other_sni().customer_domain().into(),
                     AuthSegments::new(vec![other.clone()], Vec::new()),
                 ),
             ]),
@@ -1064,7 +1115,7 @@ mod tests {
 
         let segments = fixture
             .auth
-            .dst_grant(client_ip(), &sni(), at(0))
+            .dst_grant(client_ip(), sni().customer_domain(), at(0))
             .expect("the target is granted");
         assert_eq!(
             segments
@@ -1077,7 +1128,7 @@ mod tests {
 
         let other_segments = fixture
             .auth
-            .dst_grant(client_ip(), &other_sni(), at(0))
+            .dst_grant(client_ip(), other_sni().customer_domain(), at(0))
             .expect("the other target is granted");
         assert_eq!(
             other_segments
@@ -1088,10 +1139,12 @@ mod tests {
             "a segment granted for another target is only visible there"
         );
 
+        let ungranted =
+            CustomerDomain::new("ungranted.example.com".to_owned()).expect("a valid domain");
         assert!(
             fixture
                 .auth
-                .dst_grant(client_ip(), &"ungranted.example.com".to_string(), at(0))
+                .dst_grant(client_ip(), ungranted.as_domain(), at(0))
                 .is_none()
         );
     }

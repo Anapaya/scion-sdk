@@ -19,6 +19,8 @@
 //! re-establishes it if it breaks (**lazy reconnect**).
 //! [`close`](Http3Client::close) ends it explicitly, faulting everything in
 //! flight without waiting for a timeout and marking the client closed.
+//! [`connect`](Http3Client::connect) establishes a connection eagerly and hands
+//! out a [`ConnectionToken`], allowing the caller to observe that connection's lifetime.
 //!
 //! There are two ways to issue a request:
 //! - [`request`](Http3Client::request) to send a request body on a background task and await the
@@ -38,13 +40,14 @@
 //! [`QuicScionApplication`](crate::app::QuicScionApplication) /
 //! [`ConnectionHandle`] machinery. The per-connection internals are private
 //! submodules: the driver engine (`app`) that routes responses, the connection
-//! bootstrap and its ingress loop (`connect`), and an open request stream with
-//! its two halves (`stream`). Only the types above are part of
+//! bootstrap and its ingress loop (`connect`), an open request stream with its
+//! two halves (`stream`). Only the types above are part of
 //! the API.
 
 mod app;
 mod connect;
 mod error;
+mod lifetime;
 mod stream;
 
 use std::sync::Arc;
@@ -58,9 +61,11 @@ use tokio_util::sync::CancellationToken;
 use self::{
     app::{Http3ClientApp, close_connection},
     connect::connect,
+    lifetime::ConnLifetime,
 };
 pub use self::{
     error::{EstablishError, RequestError, UploadError},
+    lifetime::{CloseReason, ConnectionToken},
     stream::{
         CollectError, CollectToStringError, H3DuplexStream, H3ResponseBody, RequestBodyWriter,
         ResponseFut,
@@ -68,6 +73,7 @@ pub use self::{
 };
 pub use crate::h3::common::H3Error;
 use crate::{
+    h3::common::is_terminated,
     quic::{config::QuicConfig, connection::ConnectionHandle},
     socket::GenericScionUdpSocket,
 };
@@ -94,9 +100,27 @@ pub struct Http3Client {
     config: QuicConfig,
     /// The current connection, if any. The async mutex serializes establishment
     /// so concurrent first-use opens only one connection.
-    current: Mutex<Option<ConnectionHandle<Http3ClientApp>>>,
+    current: Mutex<Option<Connection>>,
     /// Cancelled by [`Self::close`] and by dropping the client.
     closed: CancellationToken,
+}
+
+/// Connection handle and lifetime
+#[derive(Clone)]
+struct Connection {
+    handle: ConnectionHandle<Http3ClientApp>,
+    lifetime: Arc<ConnLifetime>,
+}
+
+impl Connection {
+    /// Whether this connection can still carry requests.
+    fn is_usable(&self) -> bool {
+        if self.lifetime.is_closed() {
+            return false;
+        }
+        let conn = self.handle.lock();
+        !is_terminated(&conn.inner) && !conn.app.driver_stopped
+    }
 }
 
 impl Drop for Http3Client {
@@ -171,10 +195,10 @@ impl Http3Client {
         &self,
         req: http::Request<()>,
     ) -> Result<(ResponseFut, RequestBodyWriter), RequestError> {
-        let handle = self.get_connection().await?;
+        let conn = self.get_connection().await?;
         let (parts, ()) = req.into_parts();
 
-        stream::initiate_request(&handle, parts)
+        stream::initiate_request(&conn.handle, parts)
     }
 
     /// Issues a request, returning its response.
@@ -196,9 +220,9 @@ impl Http3Client {
         B::Data: Send,
         B::Error: Send + Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let handle = self.get_connection().await?;
+        let conn = self.get_connection().await?;
         let (parts, body) = req.into_parts();
-        let (response, writer) = stream::initiate_request(&handle, parts)?;
+        let (response, writer) = stream::initiate_request(&conn.handle, parts)?;
 
         // Drive the request body on a background task, concurrently with the response.
         tokio::spawn(async move {
@@ -210,15 +234,21 @@ impl Http3Client {
         response.await
     }
 
-    /// Eagerly establishes the connection if none is currently up.
+    /// Ensures a connection is established, and returns it's [`ConnectionToken`].
     ///
     /// Connections are normally established lazily on the first
-    /// [`request`](Http3Client::request); this warms one up ahead of time so
-    /// establishment failures surface here instead of on the first request. It
-    /// is a no-op when a live connection already exists.
-    pub async fn connect(&self) -> Result<(), EstablishError> {
-        self.get_connection().await?;
-        Ok(())
+    /// [`request`](Http3Client::request).
+    /// This warms one up ahead of time so establishment failures surface here instead of on the
+    /// first request.
+    ///
+    /// When a live connection already exists, no connection is established and its
+    /// [`ConnectionToken`] is returned.
+    ///
+    /// The [`ConnectionToken`] allows observing the connection's lifetime and resolves once it
+    /// ends.
+    pub async fn connect(&self) -> Result<ConnectionToken, EstablishError> {
+        let conn = self.get_connection().await?;
+        Ok(ConnectionToken::new(conn.lifetime))
     }
 
     /// Closes the client and tears down its connection.
@@ -247,8 +277,9 @@ impl Http3Client {
         self.closed.cancel();
         // Release the connection state with the handle; the driver holds its own
         // until it has flushed the close and exited.
-        if let Some(handle) = self.current.lock().await.take() {
-            close_connection(&handle);
+        if let Some(conn) = self.current.lock().await.take() {
+            conn.lifetime.close(CloseReason::Local);
+            close_connection(&conn.handle);
         }
     }
 
@@ -258,11 +289,11 @@ impl Http3Client {
     }
 
     /// Returns the current connection, establishing (or re-establishing) one if
-    /// none exists or the current one is closed.
+    /// none exists or the current one is no longer usable.
     ///
     /// The async mutex serializes concurrent first-use so only one connection is
     /// established.
-    async fn get_connection(&self) -> Result<ConnectionHandle<Http3ClientApp>, EstablishError> {
+    async fn get_connection(&self) -> Result<Connection, EstablishError> {
         // Fast path: don't queue behind an establishment we already know we will
         // not use.
         if self.is_closed() {
@@ -275,23 +306,18 @@ impl Http3Client {
             return Err(EstablishError::Closed);
         }
 
-        if let Some(handle) = guard.as_ref() {
-            let usable = {
-                let conn = handle.lock();
-                // A connection whose driver stopped is dead even though the
-                // transport reports itself as live: the socket under it failed,
-                // and reusing it would hang every request on it.
-                !conn.inner.is_closed() && !conn.app.driver_stopped
-            };
-            if usable {
-                return Ok(handle.clone());
-            }
+        if let Some(conn) = guard.as_ref()
+            && conn.is_usable()
+        {
+            return Ok(conn.clone());
         }
 
         let quiche_config = self
             .config
             .to_quiche_config()
             .map_err(EstablishError::Quic)?;
+
+        let lifetime = ConnLifetime::new();
         let connect = connect(
             self.remote,
             self.socket.clone(),
@@ -299,6 +325,7 @@ impl Http3Client {
             quiche_config,
             self.config.handshake_timeout,
             self.closed.clone(),
+            lifetime.clone(),
         );
         // Whichever arm wins, the connection is accounted for: the bootstrap task
         // holds the same token and closes whatever it managed to establish.
@@ -309,8 +336,10 @@ impl Http3Client {
         if self.is_closed() {
             return Err(EstablishError::Closed);
         }
-        *guard = Some(handle.clone());
-        Ok(handle)
+
+        let conn = Connection { handle, lifetime };
+        *guard = Some(conn.clone());
+        Ok(conn)
     }
 
     /// Test-only introspection: the number of per-stream bookkeeping entries the
@@ -326,10 +355,10 @@ impl Http3Client {
     #[doc(hidden)]
     pub async fn tracked_stream_state(&self) -> usize {
         let guard = self.current.lock().await;
-        let Some(handle) = guard.as_ref() else {
+        let Some(conn) = guard.as_ref() else {
             return 0;
         };
-        let conn = handle.lock();
+        let conn = conn.handle.lock();
         conn.app.streams.len() + conn.app.response_heads.len()
     }
 }

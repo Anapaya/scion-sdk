@@ -47,6 +47,7 @@ use crate::{
         client::{
             app::{Http3ClientApp, close_connection, on_driver_stopped},
             error::EstablishError,
+            lifetime::{CloseReason, ConnLifetime},
         },
         common::H3_INTERNAL_ERROR,
     },
@@ -60,7 +61,7 @@ use crate::{
 /// reports the handle back, and then becomes the connection driver for the life
 /// of the connection.
 ///
-/// The bootstrap task owns the connection's teardown for the whole of its life:
+/// The bootstrap task owns the connection's teardown and `lifetime` for the whole of its life:
 /// cancelling `closed` aborts the handshake if it is still running, and closes
 /// the connection if it has already completed. Without that, a `closed` that
 /// lands in the instant between the handshake finishing and the caller receiving
@@ -73,10 +74,14 @@ pub(crate) async fn connect(
     mut quiche_config: squiche::Config,
     handshake_timeout: Duration,
     closed: CancellationToken,
+    lifetime: Arc<ConnLifetime>,
 ) -> Result<ConnectionHandle<Http3ClientApp>, EstablishError> {
     let (mut tx, rx) = oneshot::channel();
 
     tokio::spawn(async move {
+        // Ensure the connection is marked as closed when this task ends.
+        let _lifetime_guard = CloseOnDrop(lifetime.clone());
+
         // Bound the handshake: an unreachable remote would otherwise only fail once quiche's idle
         // timeout elapses (far longer than callers expect).
         let handshake_result = tokio::select! {
@@ -142,22 +147,59 @@ pub(crate) async fn connect(
         // The loops keep running after a close so the driver can flush
         // CONNECTION_CLOSE; they end when the connection reports itself closed.
         let driver = QuicScionConnDriver::new(handle.clone(), socket.clone());
-        tokio::select! {
-            res = driver.run() => {
-                if let Err(err) = res {
+        let reason = tokio::select! {
+            res = driver.run() => match res {
+                // Check why the connection ended, so the caller can observe it.
+                Ok(()) => close_reason(&handle),
+                Err(err) => {
                     tracing::warn!(?err, "client connection driver exited with a socket error");
+                    CloseReason::Io
                 }
-            }
-            _ = ingress::run(handle.clone(), socket) => {}
-            _ = close_on_cancel(&handle, &closed) => {}
-        }
+            },
+            _ = ingress::run(handle.clone(), socket) =>{
+                if handle.lock().inner.is_closed() {
+                    // If the handle was closed, get reason from the state
+                    close_reason(&handle)
+                } else {
+                    // otherwise, the socket failed.
+                    CloseReason::Io
+                }
+            },
+            _ = close_on_cancel(&handle, &closed) => CloseReason::Local,
+        };
         // Both loops are gone, so the connection is unusable whatever ended
         // them: a socket failure leaves a transport that still looks live but
         // has nobody to send, receive, or time it out for it.
         on_driver_stopped(&handle);
+        lifetime.close(reason);
     });
 
     rx.await.map_err(|_| EstablishError::Handshake)?
+}
+
+/// Ends a connection's lifetime when the task that owns it goes away.
+///
+/// If a close reason is already set, no action is taken.
+struct CloseOnDrop(Arc<ConnLifetime>);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.0.close(CloseReason::Other);
+    }
+}
+
+/// Reads off a closed connection why it ended.
+fn close_reason(handle: &ConnectionHandle<Http3ClientApp>) -> CloseReason {
+    let conn = handle.lock();
+    if conn.app.locally_closed {
+        CloseReason::Local
+    } else if conn.inner.is_timed_out() {
+        CloseReason::IdleTimeout
+    } else if conn.inner.peer_error().is_some() {
+        CloseReason::Peer
+    } else {
+        CloseReason::Other
+    }
 }
 
 /// Closes the connection once `closed` is cancelled, then parks forever so the

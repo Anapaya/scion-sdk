@@ -295,6 +295,21 @@ impl PathUnawareUdpScionSocket {
     pub fn snap_data_plane(&self) -> Option<net::SocketAddr> {
         self.snap_data_plane
     }
+
+    /// Converts the [`PathUnawareUdpScionSocket`] to a [`UdpScionSocket`] using the given
+    /// [`PathManager`]
+    ///
+    /// ### Params
+    /// * `path_manager`: The path manager this socket will query for paths to the destination.
+    /// * `connect_timeout`: The timeout for the initial path lookup when connecting to a remote
+    ///   address.
+    pub fn into_path_aware<P: PathManager>(
+        self,
+        path_manager: Arc<P>,
+        connect_timeout: Duration,
+    ) -> UdpScionSocket<P> {
+        UdpScionSocket::new(self, path_manager, connect_timeout, Subscribers::default())
+    }
 }
 
 /// A SCMP SCION socket.

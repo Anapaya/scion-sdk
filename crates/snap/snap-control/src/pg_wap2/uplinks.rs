@@ -64,14 +64,14 @@ use std::{
 
 use anyhow::Context;
 use sciparse::{
-    address::socket_addr::ScionSocketAddr,
+    address::ip_socket_addr::ScionSocketIpAddr,
     path::{ScionPath, fingerprint::data_plane::DpPathFingerprint},
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::pg_wap2::{
-    auth::DestinationSNI,
     paths::{GrantWatch, PathManager, PathSegmentsGuard, UsedPath},
+    sni::WapSNI,
 };
 
 /// Identifies an uplink by the (path, WAG) pair it was established for.
@@ -83,7 +83,7 @@ pub struct UplinkKey {
     /// Fingerprint of the path the uplink sends over.
     pub path_fp: DpPathFingerprint,
     /// The WAG the uplink is connected to.
-    pub wag: ScionSocketAddr,
+    pub wag: ScionSocketIpAddr,
 }
 
 /// Owns the uplinks towards the WAGs, one per (path, WAG) pair.
@@ -138,9 +138,9 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
     pub async fn establish_stream(
         &self,
         client_ip: IpAddr,
-        dst_sni: &DestinationSNI,
+        sni: &WapSNI,
         used_path: UsedPath,
-        wag: ScionSocketAddr,
+        wag: ScionSocketIpAddr,
         now: SystemTime,
     ) -> anyhow::Result<UplinkStreamGuard<Establisher::Uplink>> {
         // Watch the client's grants before anything is established, so an unauthorized client
@@ -148,7 +148,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
         let grants = self
             .0
             .paths
-            .watch_grants(client_ip, dst_sni, &used_path, now)
+            .watch_grants(client_ip, sni.customer_domain(), &used_path, now)
             .context("Client is not authorized to use the path")?;
 
         // Prepare the uplink and increase its stream count, so it is not cleaned while the stream
@@ -158,7 +158,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
         let stream = reservation
             .entry()
             .uplink
-            .establish_stream(dst_sni)
+            .establish_stream(sni)
             .await
             .context("Failed to establish stream on the uplink")?;
 
@@ -173,7 +173,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
     async fn reserve_uplink(
         &self,
         used_path: UsedPath,
-        wag: ScionSocketAddr,
+        wag: ScionSocketIpAddr,
         now: SystemTime,
     ) -> anyhow::Result<UplinkReservation<Establisher::Uplink>> {
         let key = UplinkKey {
@@ -538,7 +538,7 @@ pub trait UplinkEstablisher: Send + Sync + 'static {
 
     /// Establishes a connection to `dst_addr` over `path`.
     ///
-    /// `closed` ends the uplink's life and is cancelled from both sides.
+    /// `closed` ends the uplink's life and can be cancelled from both sides.
     ///
     /// The uplink has to cancel it once it is no longer usable, e.g. after a network error. An
     /// uplink that never cancels the token keeps being used.
@@ -546,10 +546,18 @@ pub trait UplinkEstablisher: Send + Sync + 'static {
     /// The manager cancels it when it drops the uplink, which is not a failure: an uplink is also
     /// dropped once nothing streams over it anymore. An implementation can await it to shut its own
     /// tasks down.
+    ///
+    /// ### Parameters
+    /// - `path`: The SCION path to use for the uplink.
+    /// - `dst_addr`: The SCION socket address of the WAG to connect to.
+    /// - `closed`: A cancellation token that is cancelled when the uplink is should be closed. The
+    ///   implementation should also cancel it when the uplink is no longer usable.
+    // XXX: WAP <> WAG needs to authorize, but STREAM <-- WAG -->SERVER is using a different SNI.
+    // This is slightly akward, and should be looked at as part of the WAP<>WAG Authorization story
     async fn establish_connection(
         &self,
         path: ScionPath,
-        dst_addr: ScionSocketAddr,
+        dst_addr: ScionSocketIpAddr,
         closed: CancellationToken,
     ) -> anyhow::Result<Self::Uplink>;
 }
@@ -564,7 +572,7 @@ pub trait GenericUplink: Send + Sync + 'static {
     type StreamType: Send;
 
     /// Opens a new stream to `dst_sni` on this uplink.
-    async fn establish_stream(&self, dst_sni: &str) -> anyhow::Result<Self::StreamType>;
+    async fn establish_stream(&self, dst_sni: &WapSNI) -> anyhow::Result<Self::StreamType>;
 
     /// Switches the uplink over to `new_path` without interrupting its streams.
     fn replace_path(&self, new_path: ScionPath) -> anyhow::Result<()>;
@@ -580,8 +588,8 @@ mod tests {
     use crate::pg_wap2::{
         paths::UsedPath,
         test_util::{
-            Fixture, IDLE_EVICTION_TIME, MockFetcher, SNI, at, client_ip, core_ia, granted_id,
-            leaf_ia, other_client_ip, sni, stranger_ip, up_segment, wag,
+            Fixture, IDLE_EVICTION_TIME, MockFetcher, at, client_ip, core_ia, granted_id, leaf_ia,
+            other_client_ip, other_sni, sni, stranger_ip, up_segment, wag,
         },
     };
 
@@ -619,7 +627,7 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq)]
     enum UplinkEvent {
-        Connected(ScionSocketAddr),
+        Connected(ScionSocketIpAddr),
         ConnectionRefused,
         Stream(String),
         StreamRefused,
@@ -718,7 +726,7 @@ mod tests {
         async fn establish_connection(
             &self,
             _path: ScionPath,
-            dst_addr: ScionSocketAddr,
+            dst_addr: ScionSocketIpAddr,
             closed: CancellationToken,
         ) -> anyhow::Result<Self::Uplink> {
             self.with_state(|state| {
@@ -741,14 +749,16 @@ mod tests {
     impl GenericUplink for TestUplink {
         type StreamType = ();
 
-        async fn establish_stream(&self, dst_sni: &str) -> anyhow::Result<Self::StreamType> {
+        async fn establish_stream(&self, dst_sni: &WapSNI) -> anyhow::Result<Self::StreamType> {
             self.0.with_state(|state| {
                 if state.failing.stream {
                     state.log.push(UplinkEvent::StreamRefused);
                     anyhow::bail!("the test asked streaming to fail");
                 }
 
-                state.log.push(UplinkEvent::Stream(dst_sni.to_string()));
+                state
+                    .log
+                    .push(UplinkEvent::Stream(dst_sni.full_domain().to_string()));
                 Ok(())
             })
         }
@@ -848,7 +858,7 @@ mod tests {
     #[tokio::test]
     async fn uplinks_are_shared_per_path_and_wag() {
         let (fixture, uplinks, manager, used) = uplink_fixture().await;
-        fixture.grant_target(client_ip(), "other.example.com", at(0));
+        fixture.grant_target(client_ip(), other_sni().customer_domain(), at(0));
 
         let first = manager
             .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
@@ -857,7 +867,7 @@ mod tests {
         let second = manager
             .establish_stream(
                 client_ip(),
-                &"other.example.com".to_string(),
+                &other_sni(),
                 used.clone(),
                 wag(leaf_ia()),
                 at(0),
@@ -872,7 +882,7 @@ mod tests {
         );
         assert_eq!(
             uplinks.streamed_snis(),
-            vec![SNI.to_string(), "other.example.com".to_string()],
+            vec![sni().to_string(), other_sni().to_string()],
             "both SNIs get their own stream on that uplink"
         );
         assert!(std::ptr::eq(
@@ -972,7 +982,12 @@ mod tests {
         assert!(
             fixture
                 .auth
-                .segment_grant_expiry(client_ip(), &sni(), &granted_id(&up_segment(0)), at(101))
+                .segment_grant_expiry(
+                    client_ip(),
+                    sni().customer_domain(),
+                    &granted_id(&up_segment(0)),
+                    at(101)
+                )
                 .is_none()
         );
         assert!(
@@ -1018,7 +1033,7 @@ mod tests {
         let (fixture, uplinks, manager, used) = shared_uplink_fixture().await;
 
         // A third client is granted the target, but not the private segment the path uses.
-        fixture.grant_target(stranger_ip(), SNI, at(0));
+        fixture.grant_target(stranger_ip(), sni().customer_domain(), at(0));
 
         assert!(
             manager

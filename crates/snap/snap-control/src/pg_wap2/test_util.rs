@@ -26,7 +26,7 @@ use std::{
 
 use endhost_api_models::SegmentsError;
 use sciparse::{
-    address::socket_addr::ScionSocketAddr,
+    address::ip_socket_addr::ScionSocketIpAddr,
     dataplane_path::standard::types::HopFieldMac,
     identifier::isd_asn::IsdAsn,
     reexport::p256,
@@ -37,14 +37,20 @@ use sciparse::{
 };
 
 use super::{
-    auth::{AuthSegments, AuthService, DestinationSNI, GrantedSegmentId},
+    auth::{AuthSegments, AuthService, GrantedSegmentId},
     paths::PathManager,
     segments::{SegmentManager, SegmentStoreId},
 };
+use crate::pg_wap2::sni::{CustomerDomainRef, WapSNI};
 
-pub const SNI: &str = "target.example.com";
-/// A second target, for the cases where one IP holds grants for two destinations.
-pub const OTHER_SNI: &str = "other.example.com";
+pub fn sni() -> WapSNI {
+    WapSNI::new("id.wap.target.example.com".to_string()).unwrap()
+}
+
+pub fn other_sni() -> WapSNI {
+    WapSNI::new("id.wap.other.example.com".to_string()).unwrap()
+}
+
 /// Interfaces of the up segment used by most tests.
 pub const UP_IFS: (u16, u16) = (1, 2);
 /// Interfaces of the core segment, which connects [`core_ia`] and [`other_core_ia`].
@@ -84,16 +90,8 @@ pub fn other_leaf_ia() -> IsdAsn {
     "1-ff00:0:121".parse().unwrap()
 }
 
-pub fn other_sni() -> DestinationSNI {
-    OTHER_SNI.to_string()
-}
-
-pub fn wag(ia: IsdAsn) -> ScionSocketAddr {
+pub fn wag(ia: IsdAsn) -> ScionSocketIpAddr {
     format!("[{ia},10.0.0.1]:443").parse().unwrap()
-}
-
-pub fn sni() -> DestinationSNI {
-    SNI.to_string()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -373,16 +371,19 @@ impl Fixture {
     pub fn grant_non_core(&self, segments: Vec<SignedPathSegment>, now: SystemTime) {
         self.auth.authorize(
             client_ip(),
-            HashMap::from([(sni(), AuthSegments::new(Vec::new(), segments))]),
+            HashMap::from([(
+                sni().customer_domain().into(),
+                AuthSegments::new(Vec::new(), segments),
+            )]),
             now,
         );
     }
 
     /// Grants `ip` access to `dst`, without any private segments.
-    pub fn grant_target(&self, ip: IpAddr, dst: &str, now: SystemTime) {
+    pub fn grant_target(&self, ip: IpAddr, dst: CustomerDomainRef<'_>, now: SystemTime) {
         self.auth.authorize(
             ip,
-            HashMap::from([(dst.to_string(), AuthSegments::default())]),
+            HashMap::from([(dst.into(), AuthSegments::default())]),
             now,
         );
     }
@@ -391,7 +392,10 @@ impl Fixture {
     pub fn grant_non_core_to(&self, ip: IpAddr, segments: Vec<SignedPathSegment>, now: SystemTime) {
         self.auth.authorize(
             ip,
-            HashMap::from([(sni(), AuthSegments::new(Vec::new(), segments))]),
+            HashMap::from([(
+                sni().customer_domain().into(),
+                AuthSegments::new(Vec::new(), segments),
+            )]),
             now,
         );
     }
@@ -400,14 +404,14 @@ impl Fixture {
     pub fn grant_for(
         &self,
         ip: IpAddr,
-        dst: &str,
+        dst: CustomerDomainRef<'_>,
         core: Vec<SignedPathSegment>,
         non_core: Vec<SignedPathSegment>,
         now: SystemTime,
     ) {
         self.auth.authorize(
             ip,
-            HashMap::from([(dst.to_string(), AuthSegments::new(core, non_core))]),
+            HashMap::from([(dst.into(), AuthSegments::new(core, non_core))]),
             now,
         );
     }
