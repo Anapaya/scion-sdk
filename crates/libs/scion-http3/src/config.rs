@@ -219,9 +219,9 @@ impl Config {
     }
 
     /// Sets the QUIC configuration used for every connection: trust anchors
-    /// (`ca_certs_file` / `ca_certs_dir`), peer verification, handshake and
-    /// idle timeouts, and transport tuning. The application protocol list must
-    /// contain `h3` (the default).
+    /// (`ca_certs_file` / `ca_certs_dir` / `ca_certs_pem`), peer verification,
+    /// handshake and idle timeouts, and transport tuning. The application
+    /// protocol list must contain `h3` (the default).
     #[must_use]
     pub fn with_quic_config(mut self, quic: QuicConfig) -> Self {
         self.quic = quic;

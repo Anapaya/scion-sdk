@@ -68,6 +68,15 @@ pub fn setup_sockets() -> (MockScionSocket, MockScionSocket) {
 /// loaded into the config. They must be kept alive for as long as the config
 /// (or any connection created from it) is in use.
 pub fn generate_server_config() -> (squiche::Config, NamedTempFile, NamedTempFile) {
+    let (config, _cert_pem, cert_file, key_file) =
+        build_server_config(QuicConfig::builder().verify_peer(false).build());
+    (config, cert_file, key_file)
+}
+
+/// Like [`generate_server_config`], but also returns the PEM-encoded
+/// certificate the server presents, for clients that have to trust it.
+pub fn generate_server_config_with_cert() -> (squiche::Config, String, NamedTempFile, NamedTempFile)
+{
     build_server_config(QuicConfig::builder().verify_peer(false).build())
 }
 
@@ -78,17 +87,21 @@ pub fn generate_server_config() -> (squiche::Config, NamedTempFile, NamedTempFil
 pub fn generate_server_config_with_idle_timeout(
     idle_timeout: Duration,
 ) -> (squiche::Config, NamedTempFile, NamedTempFile) {
-    build_server_config(
+    let (config, _cert_pem, cert_file, key_file) = build_server_config(
         QuicConfig::builder()
             .verify_peer(false)
             .idle_timeout(idle_timeout)
             .build(),
-    )
+    );
+    (config, cert_file, key_file)
 }
 
 /// Generates a self-signed certificate/key for the given [`QuicConfig`] and
-/// loads them into the resulting `squiche::Config`.
-fn build_server_config(quic_config: QuicConfig) -> (squiche::Config, NamedTempFile, NamedTempFile) {
+/// loads them into the resulting `squiche::Config`. Returns the config, the
+/// PEM-encoded certificate, and the temp files backing certificate and key.
+fn build_server_config(
+    quic_config: QuicConfig,
+) -> (squiche::Config, String, NamedTempFile, NamedTempFile) {
     let mut config = quic_config.to_quiche_config().unwrap();
 
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
@@ -115,7 +128,7 @@ fn build_server_config(quic_config: QuicConfig) -> (squiche::Config, NamedTempFi
         .load_priv_key_from_pem_file(key_file.path().to_str().unwrap())
         .unwrap();
 
-    (config, cert_file, key_file)
+    (config, cert_pem, cert_file, key_file)
 }
 
 /// Direction of traffic.

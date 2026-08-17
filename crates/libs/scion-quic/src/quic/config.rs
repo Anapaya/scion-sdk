@@ -41,6 +41,17 @@ pub struct QuicConfig {
     pub ca_certs_directory: Option<String>,
     /// Optional path to a CA certificate PEM file for verification.
     pub ca_certs_file: Option<String>,
+    /// Optional bundle of PEM-encoded CA certificates for verification, held in
+    /// memory.
+    ///
+    /// This is for platforms whose trust anchors don't live in a file or a
+    /// directory, e.g. Android, where the system key store holds them.
+    ///
+    /// Trust anchors accumulate: the bundle is added to the same certificate
+    /// store as [`ca_certs_directory`](Self::ca_certs_directory) and
+    /// [`ca_certs_file`](Self::ca_certs_file), so a chain verifies if it is
+    /// anchored in any of the configured sources.
+    pub ca_certs_pem: Option<Vec<u8>>,
     /// Optional list of signature algorithm preferences for certificate verification.
     /// If set, overrides the default list. Use `squiche::SIGN_ED25519` (0x0807) to
     /// accept Ed25519 certificates.
@@ -69,6 +80,7 @@ impl Default for QuicConfig {
             verify_peer: true,
             ca_certs_directory: None,
             ca_certs_file: None,
+            ca_certs_pem: None,
             verify_algorithm_prefs: None,
             initial_max_data: 10_000_000,
             initial_max_stream_data_bidi_local: 1_000_000,
@@ -103,6 +115,9 @@ impl QuicConfig {
         }
         if let Some(ca_certs_file) = &self.ca_certs_file {
             config.load_verify_locations_from_file(ca_certs_file)?;
+        }
+        if let Some(ca_certs_pem) = &self.ca_certs_pem {
+            config.load_verify_locations_from_memory(ca_certs_pem)?;
         }
 
         config.set_max_idle_timeout(self.idle_timeout.as_millis() as u64);
@@ -172,6 +187,25 @@ impl QuicConfigBuilder {
     /// Sets the path to a CA certificate PEM file for verification.
     pub fn ca_certs_file(mut self, path: impl Into<String>) -> Self {
         self.config.ca_certs_file = Some(path.into());
+        self
+    }
+
+    /// Sets a bundle of PEM-encoded CA certificates for verification, read from
+    /// memory instead of the filesystem.
+    ///
+    /// Use this where the trust anchors are not on disk, e.g. on Android, where
+    /// they come from the system key store. The bundle may hold several
+    /// certificates; PEM blocks that hold something other than a certificate are
+    /// skipped. A malformed bundle, or one without a single certificate, fails
+    /// the later [`QuicConfig::to_quiche_config`], not this call.
+    ///
+    /// Anchors from here are added to the same store as those from
+    /// [`ca_certs_file`](Self::ca_certs_file) and
+    /// [`ca_certs_dir`](Self::ca_certs_dir), so the sources combine. Calling
+    /// this twice replaces the bundle rather than extending it; concatenate the
+    /// PEM blocks to load several.
+    pub fn ca_certs_pem(mut self, pem: impl Into<Vec<u8>>) -> Self {
+        self.config.ca_certs_pem = Some(pem.into());
         self
     }
 
