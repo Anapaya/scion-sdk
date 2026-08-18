@@ -14,9 +14,11 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 
 prost = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [features]
-protobuf = ["prost"]
+# The serde impls are implemented on the prost types, so they share its gate.
+protobuf = ["prost", "serde"]
 default = ["protobuf"]
 
 [lints]

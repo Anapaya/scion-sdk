@@ -26,6 +26,9 @@ pub mod endhost {
             //! Version 1 of the endhost discovery API.
 
             include!("proto/gen/endhost.discovery.v1.rs");
+            // Canonical protobuf-JSON serde impls, so the service can also be
+            // reached with the Connect JSON codec.
+            include!("proto/gen/endhost.discovery.v1.serde.rs");
         }
     }
 }

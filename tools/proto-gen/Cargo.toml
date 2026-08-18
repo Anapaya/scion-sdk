@@ -9,6 +9,7 @@ repository = "https://github.com/anapaya/scion-sdk"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+pbjson-build = { workspace = true }
 prost-build = { workspace = true }
 
 tempfile = { workspace = true }

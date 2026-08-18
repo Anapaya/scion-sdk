@@ -153,7 +153,9 @@ dependencies = [
 name = "anapaya-aa-protobuf"
 version = "0.6.1"
 dependencies = [
+ "pbjson",
  "prost",
+ "serde",
 ]
 
 [[package]]
@@ -187,6 +189,7 @@ version = "0.6.1"
 dependencies = [
  "async-trait",
  "prost",
+ "serde",
  "thiserror 2.0.18",
  "url",
 ]
@@ -3461,6 +3464,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pbjson"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8edd1efdd8ab23ba9cb9ace3d9987a72663d5d7c9f74fa00b51d6213645cf6c"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+]
+
+[[package]]
+name = "pbjson-build"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ed4d5c6ae95e08ac768883c8401cf0e8deb4e6e1d6a4e1fd3d2ec4f0ec63200"
+dependencies = [
+ "heck",
+ "itertools 0.14.0",
+ "prost",
+ "prost-types",
+]
+
+[[package]]
 name = "pem"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3964,6 +3989,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pbjson-build",
  "prost-build",
  "tempfile",
  "tonic-prost-build",

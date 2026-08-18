@@ -22,4 +22,7 @@
 pub mod v1 {
     //! Version 1 of the Anapaya AA service.
     include!("proto/anapaya.aa.v1.rs");
+    // Canonical protobuf-JSON serde impls, so the service can also be reached
+    // with the Connect JSON codec.
+    include!("proto/anapaya.aa.v1.serde.rs");
 }

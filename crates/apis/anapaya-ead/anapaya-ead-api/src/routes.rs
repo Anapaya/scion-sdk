@@ -25,7 +25,7 @@ use axum::{
     routing::post,
 };
 use axum_client_ip::{ClientIp, ClientIpSource};
-use axum_connect_rpc::extractor::ConnectRpc;
+use axum_connect_rpc::extractor::ConnectRpcAny;
 
 struct GcpClientIp(pub IpAddr);
 
@@ -85,13 +85,11 @@ pub fn nest_endhost_discovery_api(
 async fn get_endhost_apis(
     State(discovery_service): State<Arc<dyn EndhostApiDiscovery>>,
     GcpClientIp(client_ip): GcpClientIp,
-    ConnectRpc(_): ConnectRpc<RpcGetEndhostApisRequest>,
-) -> ConnectRpc<RpcGetEndhostApisResponse> {
+    request: ConnectRpcAny<RpcGetEndhostApisRequest>,
+) -> ConnectRpcAny<RpcGetEndhostApisResponse> {
     let apis = discovery_service.discover_endhost_apis(client_ip).await;
 
-    let response = RpcGetEndhostApisResponse {
+    request.reply(RpcGetEndhostApisResponse {
         groups: apis.into_iter().map(Into::into).collect(),
-    };
-
-    ConnectRpc(response)
+    })
 }

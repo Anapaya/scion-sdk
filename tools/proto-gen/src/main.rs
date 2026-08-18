@@ -57,6 +57,7 @@ fn main() -> anyhow::Result<()> {
             extern_includes: vec![],
             protoc_args: vec![],
             use_tonic: true,
+            serde_packages: vec![],
         },
         CompileConfig {
             name: "endhost-api",
@@ -65,6 +66,7 @@ fn main() -> anyhow::Result<()> {
             extern_includes: vec![scion_proto_externs.clone()],
             protoc_args: vec!["--experimental_allow_proto3_optional"],
             use_tonic: false,
+            serde_packages: vec![],
         },
         CompileConfig {
             name: "endhost-api-discovery",
@@ -73,6 +75,7 @@ fn main() -> anyhow::Result<()> {
             extern_includes: vec![],
             protoc_args: vec![],
             use_tonic: false,
+            serde_packages: vec![".endhost.discovery.v1"],
         },
         CompileConfig {
             name: "hsd-api",
@@ -81,6 +84,7 @@ fn main() -> anyhow::Result<()> {
             extern_includes: vec![scion_proto_externs.clone()],
             protoc_args: vec!["--experimental_allow_proto3_optional"],
             use_tonic: false,
+            serde_packages: vec![],
         },
         CompileConfig {
             name: "anapaya-aa",
@@ -89,6 +93,7 @@ fn main() -> anyhow::Result<()> {
             extern_includes: vec![],
             protoc_args: vec![],
             use_tonic: false,
+            serde_packages: vec![".anapaya.aa.v1"],
         },
         CompileConfig {
             name: "snap-control",
@@ -97,6 +102,7 @@ fn main() -> anyhow::Result<()> {
             extern_includes: vec![],
             protoc_args: vec![],
             use_tonic: false,
+            serde_packages: vec![],
         },
         CompileConfig {
             name: "edge-tun",
@@ -105,6 +111,7 @@ fn main() -> anyhow::Result<()> {
             extern_includes: vec![],
             protoc_args: vec![],
             use_tonic: false,
+            serde_packages: vec![],
         },
     ];
 
@@ -232,6 +239,28 @@ struct CompileConfig {
     /// If true, use tonic to generate gRPC service code.
     /// If false, use prost to generate only message code.
     use_tonic: bool,
+    /// Which messages additionally get canonical protobuf-JSON serde impls, so
+    /// that the service can also be called with the Connect JSON codec. Empty
+    /// disables it.
+    ///
+    /// Each entry is matched as a prefix of a message's fully-qualified proto
+    /// name, so `".anapaya.aa.v1"` selects every message in that package, and
+    /// `""` would select all of them. Entries name proto packages, not Rust
+    /// modules or crates.
+    ///
+    /// Output goes to one `<proto.package>.serde.rs` per package, alongside the
+    /// prost `<proto.package>.rs`; the crate must `include!` both.
+    ///
+    /// Enable this for services reachable from a web browser, which cannot
+    /// encode protobuf without a codec of its own. The impls follow the proto3
+    /// JSON mapping, so `bytes` become base64 strings and 64-bit integers become
+    /// strings, rather than the byte arrays and lossy numbers a plain serde
+    /// derive would emit.
+    ///
+    /// A crate enabling this needs a `serde` dependency, and additionally
+    /// `pbjson` once any of its messages has a numeric, `bytes`, or enum field —
+    /// those are the ones whose generated code calls pbjson's helpers.
+    serde_packages: Vec<&'static str>,
 }
 
 #[derive(Clone)]
@@ -285,9 +314,41 @@ impl CompileConfig {
         fs::create_dir_all(out_dir)
             .with_context(|| format!("failed to create output directory {}", out_dir))?;
 
+        if self.serde_packages.is_empty() {
+            config
+                .compile_protos(&proto_files, &include_dirs)
+                .with_context(|| format!("failed to compile {}", self.name))?;
+            return Ok(());
+        }
+
+        // pbjson-build works from a descriptor set, which prost_build can emit
+        // as a side effect. Keep it in a temp dir: `out_dir` is a checked-in
+        // source directory, and `check` diffs it against generated output.
+        let descriptor_dir = tempfile::Builder::new()
+            .prefix("proto-gen-descriptor-")
+            .tempdir()?;
+        let descriptor_path = descriptor_dir.path().join("descriptor.bin");
+
         config
+            .file_descriptor_set_path(&descriptor_path)
             .compile_protos(&proto_files, &include_dirs)
             .with_context(|| format!("failed to compile {}", self.name))?;
+
+        let descriptor = fs::read(&descriptor_path)
+            .with_context(|| format!("failed to read descriptor set for {}", self.name))?;
+
+        pbjson_build::Builder::new()
+            .register_descriptors(&descriptor)
+            .with_context(|| format!("failed to register descriptors for {}", self.name))?
+            .out_dir(out_dir)
+            // Skip unknown fields instead of failing, matching both the
+            // protobuf codec and connect-go's JSON codec. Without this a client
+            // that sends a field the server does not know yet gets a 400.
+            // `ignore_unknown_enum_variants` is the same knob for enum values,
+            // needed once any message here gains an enum field.
+            .ignore_unknown_fields()
+            .build(&self.serde_packages)
+            .with_context(|| format!("failed to generate serde impls for {}", self.name))?;
 
         Ok(())
     }
