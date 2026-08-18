@@ -28,7 +28,7 @@ pub mod builder;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
     time::Duration,
 };
@@ -165,14 +165,15 @@ impl PocketScionRuntime {
         Ok(())
     }
 
-    /// Binds a UDP socket to `addr`, or to a random localhost port if `None`.
+    /// Binds a UDP socket to `addr`, or to an ephemeral port on `default_ip` if `None`.
     /// Writes the actual bound address back via `set_addr`.
     async fn bind_udp_or_random(
         addr: Option<SocketAddr>,
+        default_ip: IpAddr,
         set_addr: impl FnOnce(SocketAddr),
         context: impl std::fmt::Display,
     ) -> anyhow::Result<tokio::net::UdpSocket> {
-        let bind_addr = addr.unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
+        let bind_addr = addr.unwrap_or_else(|| SocketAddr::from((default_ip, 0)));
         let socket = tokio::net::UdpSocket::bind(bind_addr)
             .await
             .with_context(|| format!("Failed to bind UDP socket for {context}"))?;
@@ -180,14 +181,15 @@ impl PocketScionRuntime {
         Ok(socket)
     }
 
-    /// Binds a TCP listener to `addr`, or to a random localhost port if `None`.
+    /// Binds a TCP listener to `addr`, or to an ephemeral port on `default_ip` if `None`.
     /// Writes the actual bound address back via `set_addr`.
     async fn bind_tcp_or_random(
         addr: Option<SocketAddr>,
+        default_ip: IpAddr,
         set_addr: impl FnOnce(SocketAddr),
         context: impl std::fmt::Display,
     ) -> anyhow::Result<TcpListener> {
-        let bind_addr = addr.unwrap_or_else(|| SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
+        let bind_addr = addr.unwrap_or_else(|| SocketAddr::from((default_ip, 0)));
         let listener = TcpListener::bind(bind_addr)
             .await
             .with_context(|| format!("Failed to bind TCP listener for {context}"))?;
@@ -234,6 +236,7 @@ impl PocketScionRuntime {
             let io_config = io_config.clone();
             let listener = Self::bind_tcp_or_random(
                 io_config.snap_control_addr(snap_id),
+                io_config.default_bind_ip(),
                 |addr| {
                     io_config.set_snap_control_addr(snap_id, addr);
                 },
@@ -312,6 +315,7 @@ impl PocketScionRuntime {
             let io_config = io_config.clone();
             let socket = Self::bind_udp_or_random(
                 io_config.snap_data_plane_addr(snap_id),
+                io_config.default_bind_ip(),
                 |addr| {
                     io_config.set_snap_data_plane_addr(snap_id, addr);
                 },
@@ -368,6 +372,7 @@ impl PocketScionRuntime {
         for (id, _) in pstate.endhost_apis() {
             let listener = Self::bind_tcp_or_random(
                 io_config.endhost_api_addr(id),
+                io_config.default_bind_ip(),
                 |addr| {
                     io_config.set_endhost_api_addr(id, addr);
                 },
@@ -395,6 +400,7 @@ impl PocketScionRuntime {
         for (id, _) in pstate.anapaya_ead_apis() {
             let listener = Self::bind_tcp_or_random(
                 io_config.anapaya_ead_api_addr(id),
+                io_config.default_bind_ip(),
                 |addr| {
                     io_config.set_anapaya_ead_api_addr(id, addr);
                 },
@@ -420,6 +426,7 @@ impl PocketScionRuntime {
             for &iface_id in ext_state.interfaces.keys() {
                 let socket = Self::bind_udp_or_random(
                     io_config.external_as_interface_addr(isd_as, iface_id),
+                    io_config.default_bind_ip(),
                     |addr| {
                         io_config.set_external_as_interface_addr(isd_as, iface_id, addr);
                     },
@@ -456,6 +463,7 @@ impl PocketScionRuntime {
                     let io_config = io_config.clone();
                     let listener = Self::bind_tcp_or_random(
                         io_config.control_service_addr(isd_as),
+                        io_config.default_bind_ip(),
                         |addr| {
                             io_config.set_control_service_addr(isd_as, addr);
                         },
@@ -483,6 +491,7 @@ impl PocketScionRuntime {
         for (isd_as, _) in pstate.daemon_services() {
             let tcp_listener = Self::bind_tcp_or_random(
                 io_config.daemon_service_addr(isd_as),
+                io_config.default_bind_ip(),
                 |addr| {
                     io_config.set_daemon_service_addr(isd_as, addr);
                 },
@@ -510,6 +519,7 @@ impl PocketScionRuntime {
             let io_config = io_config.clone();
             let udp_socket = Self::bind_udp_or_random(
                 io_config.router_socket_addr(sock_id),
+                io_config.default_bind_ip(),
                 |addr| {
                     io_config.set_router_socket_addr(sock_id, addr);
                 },
@@ -600,6 +610,7 @@ impl PocketScionRuntime {
         if pstate.has_auth_server() {
             let listener = Self::bind_tcp_or_random(
                 io_config.auth_server_addr(),
+                io_config.default_bind_ip(),
                 |addr| {
                     io_config.set_auth_server_addr(addr);
                 },

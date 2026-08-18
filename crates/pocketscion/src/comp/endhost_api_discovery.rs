@@ -57,7 +57,7 @@ impl EndhostApiDiscovery for EndhostApiDiscoveryService {
                 continue;
             };
 
-            let url = addr_to_http_url(addr);
+            let url = addr_to_http_url(self.io_config.advertise(addr));
 
             for ia in eh_api.local_ases {
                 groups

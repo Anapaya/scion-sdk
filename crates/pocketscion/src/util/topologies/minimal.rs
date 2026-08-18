@@ -19,6 +19,7 @@ use std::{collections::BTreeMap, num::NonZeroU16};
 use chrono::Utc;
 
 use crate::{
+    io_config::IoConfig,
     network::scion::topology::{ScionAs, ScionLink, ScionLinkType, ScionTopologyBuilder},
     runtime::builder::PocketScionRuntimeBuilder,
     state::PocketScionState,
@@ -41,6 +42,15 @@ fn minimal_topology_builder() -> ScionTopologyBuilder {
 /// between them. As well as either a SNAP or a UDP underlay, depending on the `underlay` parameter.
 #[doc = simple_mermaid::mermaid!("diagrams/minimal.mmd")]
 pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
+    minimal_topology_with_io_config(underlay, IoConfig::new()).await
+}
+
+/// Same as [minimal_topology], but with an explicit I/O configuration, e.g. to control the bind
+/// and advertised addresses of the components.
+pub async fn minimal_topology_with_io_config(
+    underlay: UnderlayType,
+    io_config: IoConfig,
+) -> PsSetup {
     let mut pstate = PocketScionState::new(Utc::now());
 
     pstate.set_topology(minimal_topology_builder().build().unwrap());
@@ -76,6 +86,7 @@ pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
 
     let pocketscion = PocketScionRuntimeBuilder::new()
         .with_system_state(pstate)
+        .with_io_config(io_config)
         .start()
         .await
         .expect("Failed to start PocketSCION");
@@ -113,6 +124,15 @@ fn two_path_topology_builder() -> ScionTopologyBuilder {
 /// `underlay` parameter.
 #[doc = simple_mermaid::mermaid!("diagrams/two_path.mmd")]
 pub async fn two_path_topology(underlay: UnderlayType) -> PsSetup {
+    two_path_topology_with_io_config(underlay, IoConfig::new()).await
+}
+
+/// Same as [two_path_topology], but with an explicit I/O configuration, e.g. to control the bind
+/// and advertised addresses of the components.
+pub async fn two_path_topology_with_io_config(
+    underlay: UnderlayType,
+    io_config: IoConfig,
+) -> PsSetup {
     scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let mut pstate = PocketScionState::new(Utc::now());
@@ -150,6 +170,7 @@ pub async fn two_path_topology(underlay: UnderlayType) -> PsSetup {
 
     let pocketscion = PocketScionRuntimeBuilder::new()
         .with_system_state(pstate)
+        .with_io_config(io_config)
         .start()
         .await
         .expect("Failed to start PocketSCION");

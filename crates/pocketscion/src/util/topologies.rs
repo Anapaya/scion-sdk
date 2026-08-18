@@ -53,9 +53,12 @@ pub struct PsSetup {
 
 impl PsSetup {
     /// Returns the endhost API address for the given ISD-AS as an HTTP [Url].
+    ///
+    /// The URL is the one clients must use: when the I/O configuration carries an advertised IP,
+    /// it replaces the bound IP.
     pub fn endhost_api(&self, isd_as: IsdAsn) -> Option<Url> {
         let id = self.endhost_apis.get(&isd_as)?;
         let addr = self.runtime.endhost_api_addr(*id)?;
-        Some(addr_to_http_url(addr))
+        Some(addr_to_http_url(self.runtime.io_config().advertise(addr)))
     }
 }

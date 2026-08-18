@@ -185,7 +185,12 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
 
         self.io_config
             .snap_data_plane_addr(self.snap_id)
-            .map(|address| vec![SnapUnderlay { address, isd_ases }])
+            .map(|address| {
+                vec![SnapUnderlay {
+                    address: self.io_config.advertise(address),
+                    isd_ases,
+                }]
+            })
             .unwrap_or_default()
     }
 
@@ -219,6 +224,7 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
             address: self
                 .io_config
                 .snap_data_plane_addr(self.snap_id)
+                .map(|addr| self.io_config.advertise(addr))
                 .ok_or_else(|| {
                     (
                         http::StatusCode::NOT_FOUND,
@@ -226,7 +232,7 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
                     )
                 })?,
             snap_tun_control_address: self.io_config.snap_control_addr(self.snap_id).map(|a| {
-                match a {
+                match self.io_config.advertise(a) {
                     SocketAddr::V4(addr) => {
                         Url::parse(&format!("http://{}", addr))
                             .expect("It is safe to format a SocketAddr as a URL")

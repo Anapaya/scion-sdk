@@ -14,7 +14,7 @@
 
 //! PocketSCION I/O configuration.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use sciparse::identifier::isd_asn::IsdAsn;
 
@@ -29,7 +29,16 @@ helper::io_config! {
     /// This struct contains the socket addresses for all components of PocketSCION.
     /// These addresses map to real socket addresses on the host, and are used to configure the I/O of the components.
     ///
-    /// If no specific address is configured for a component, it will bind to a random port to all interfaces.
+    /// If no specific address is configured for a component, it binds to an ephemeral port on
+    /// `bind_ip`, or on localhost when `bind_ip` is not set. The network forwarder is the
+    /// exception and binds to all interfaces. The actual bound address is written back into this
+    /// configuration.
+    ///
+    /// `advertised_ip` replaces the IP of every address that is handed to clients, keeping the
+    /// port. This applies to explicitly configured addresses as well, not only to automatically
+    /// bound ones: it defines how clients see the host, not how components bind. Use it when
+    /// clients reach the host through a different IP than the one components bind, for example
+    /// an Android emulator that reaches the host loopback as `10.0.2.2`.
     struct IoConfig;
     addr_map(router_socket: RouterId),
     addr_map(endhost_api: EndhostApiId),
@@ -41,6 +50,26 @@ helper::io_config! {
     addr_map_keyed(external_as_interface: (isd_asn: IsdAsn, interface_id: u16)),
     addr_map_keyed(network_forwarder: (isd_asn: IsdAsn, ip_addr: IpAddr)),
     addr_singleton(auth_server),
+    ip_singleton(bind_ip),
+    ip_singleton(advertised_ip),
+}
+
+impl IoConfig {
+    /// Returns `addr` as clients must see it: with the IP replaced by `advertised_ip` when it is
+    /// set, and unchanged otherwise. The port is always kept. The replacement is unconditional:
+    /// it does not matter whether `addr` was configured explicitly or bound automatically.
+    pub fn advertise(&self, addr: SocketAddr) -> SocketAddr {
+        match self.advertised_ip() {
+            Some(ip) => SocketAddr::new(ip, addr.port()),
+            None => addr,
+        }
+    }
+
+    /// Returns the IP that components bind to when no explicit address is configured for them:
+    /// `bind_ip`, or localhost when `bind_ip` is not set.
+    pub fn default_bind_ip(&self) -> IpAddr {
+        self.bind_ip().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+    }
 }
 
 mod helper {
@@ -52,6 +81,8 @@ mod helper {
     ///   signatures instead of a single tuple parameter.
     /// - addr_singleton: generates an Option<SocketAddr> field with the given name, and
     ///   getter/setter methods to access it.
+    /// - ip_singleton: generates an Option<IpAddr> field with the given name, and getter/setter
+    ///   methods to access it.
     /// - custom_map: generates a BTreeMap<$Key, $Val> field with the given name, without any
     ///   getter/setter methods.
     macro_rules! io_config {
@@ -61,6 +92,7 @@ mod helper {
             $(addr_map($field:ident : $Key:ty),)*
             $(addr_map_keyed($field4:ident : ($($kname:ident : $KTy:ty),+)),)*
             $(addr_singleton($field2:ident),)*
+            $(ip_singleton($field5:ident),)*
             $(custom_map($field3:ident : $Key3:ty => $Val:ty),)*
         ) => {
             paste::paste! {
@@ -87,6 +119,10 @@ mod helper {
                     $(
                         #[schema(value_type = String, nullable = true)]
                         $field2: ::std::option::Option<::std::net::SocketAddr>,
+                    )*
+                    $(
+                        #[schema(value_type = String, nullable = true)]
+                        $field5: ::std::option::Option<::std::net::IpAddr>,
                     )*
                     $(
                         $field3: ::std::collections::BTreeMap<$Key3, $Val>,
@@ -172,9 +208,46 @@ mod helper {
                             self.inner.write().unwrap().$field2.replace(addr)
                         }
                     )*
+
+                    // ip_singleton methods
+                    $(
+                        /// Returns the configured IP if it exists.
+                        pub fn [<$field5:snake>](&self) -> ::std::option::Option<::std::net::IpAddr> {
+                            self.inner.read().unwrap().$field5
+                        }
+
+                        /// Sets the IP, returning the previous value if any.
+                        pub fn [<set_ $field5:snake>](&self, ip: ::std::net::IpAddr) -> ::std::option::Option<::std::net::IpAddr> {
+                            self.inner.write().unwrap().$field5.replace(ip)
+                        }
+                    )*
                 }
             }
         };
     }
     pub(crate) use io_config;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advertise_replaces_ip_and_keeps_port() {
+        let io = IoConfig::new();
+        let addr: SocketAddr = "127.0.0.1:8041".parse().unwrap();
+        assert_eq!(io.advertise(addr), addr);
+
+        io.set_advertised_ip("10.0.2.2".parse().unwrap());
+        assert_eq!(io.advertise(addr), "10.0.2.2:8041".parse().unwrap());
+    }
+
+    #[test]
+    fn default_bind_ip_falls_back_to_localhost() {
+        let io = IoConfig::new();
+        assert_eq!(io.default_bind_ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+        io.set_bind_ip("127.0.0.2".parse().unwrap());
+        assert_eq!(io.default_bind_ip(), "127.0.0.2".parse::<IpAddr>().unwrap());
+    }
 }

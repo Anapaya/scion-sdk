@@ -174,7 +174,7 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
             }
 
             let internal_interface = match self.io_config.router_socket_addr(router_id) {
-                Some(addr) => addr,
+                Some(addr) => self.io_config.advertise(addr),
                 None => {
                     tracing::error!(
                         router_id = %router_id,
@@ -210,7 +210,7 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
             }
 
             let address = match self.io_config.snap_control_addr(snap_id) {
-                Some(addr) => addr,
+                Some(addr) => self.io_config.advertise(addr),
                 None => {
                     tracing::warn!(
                         snap_id = %snap_id,
@@ -498,5 +498,31 @@ mod tests {
 
             assert_eq!(sort(res), sort(expected));
         }
+    }
+
+    #[test]
+    fn should_advertise_configured_ip() {
+        let (mut state, io, t) = setup().unwrap();
+        io.set_advertised_ip("10.0.2.2".parse().unwrap());
+
+        let service = PsEndhostApiUnderlayDiscovery {
+            id: state.add_endhost_api(vec![t.ias.0]),
+            system_state: state.clone(),
+            io_config: io.clone(),
+        };
+
+        let res = service.list_underlays(t.ias.0);
+        let expected = Underlays {
+            udp_underlay: vec![ScionRouter {
+                internal_interface: "10.0.2.2:31".parse().unwrap(),
+                ..t.disc_udp_underlays.0
+            }],
+            snap_underlay: vec![Snap {
+                address: addr_to_http_url("10.0.2.2:11".parse().unwrap()),
+                ..t.disc_snaps.0
+            }],
+        };
+
+        assert_eq!(sort(res), sort(expected));
     }
 }
