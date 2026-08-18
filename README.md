@@ -104,6 +104,12 @@ the main components at the top level. The most relevant crates are:
 - [sciparse](crates/libs/sciparse/): Contains the definitions for SCION data plane and control plane
   entities, such as packet formats and control plane messages.
 
+Language bindings live outside `crates/`:
+
+- [bindings/android/](bindings/android/): Packages the SCION HTTP/3 client into an Android library
+  (AAR), cross-compiling [scion-http3-ffi](crates/libs/scion-http3-ffi/) for `arm64-v8a` and
+  `x86_64`.
+
 ## Contributing
 
 We welcome contributions from the community! If you'd like to help improve the SCION endhost SDK,

@@ -4726,6 +4726,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "scion-http3-ffi"
+version = "0.0.0"
+dependencies = [
+ "scion-http3",
+]
+
+[[package]]
 name = "scion-protobuf"
 version = "0.6.1"
 dependencies = [

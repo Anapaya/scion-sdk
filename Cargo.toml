@@ -47,6 +47,7 @@ pocketscion = { path = "crates/pocketscion", version = "0.6.1" }
 
 scion-protobuf = { path = "crates/libs/scion-protobuf", version = "0.6.1" }
 sciparse = { path = "crates/libs/sciparse", version = "0.6.1" }
+scion-http3 = { path = "crates/libs/scion-http3", version = "0.6.1" }
 
 snap-control = { path = "crates/snap/snap-control", version = "0.6.1" }
 snap-dataplane = { path = "crates/snap/snap-dataplane", version = "0.6.1" }
@@ -191,3 +192,18 @@ incremental = false         # Disable incremental compilation to allow caching d
 inherits = "release"
 lto = true
 codegen-units = 1
+
+# Profile for the mobile FFI shared libraries. Size-first, but unwinding stays
+# on: the FFI boundary catches panics and turns them into errors, where
+# panic=abort would take the host application's process down with it.
+# `scion-http3-ffi` refuses to compile under panic=abort to keep that honest.
+[profile.mobile]
+inherits = "release"
+opt-level = "s"             # "z" additionally disables loop vectorisation, which costs
+                            # more in the crypto and packet paths than the size it saves
+lto = "thin"                # try CARGO_PROFILE_MOBILE_LTO=fat before changing this
+codegen-units = 1
+panic = "unwind"            # inherited from release anyway; stated so it cannot drift
+strip = "none"              # stripped by bindings/android/tools/android.py, which
+                            # keeps the unstripped library for the symbol checks
+incremental = false

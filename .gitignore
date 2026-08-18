@@ -32,3 +32,12 @@ Desktop.ini
 
 # Node / pnpm (documentation preview tooling)
 node_modules/
+
+# Android bindings (Gradle output, and the native libraries and bindings that
+# non-Gradle steps write into generated/)
+bindings/android/.gradle/
+bindings/android/.kotlin/
+bindings/android/build/
+bindings/android/*/build/
+bindings/android/*/generated/
+bindings/android/local.properties

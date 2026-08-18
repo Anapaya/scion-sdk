@@ -1,3 +1,9 @@
 # Windows use \r\n as line endings. Git automatically deals with that, but that leads to files being
 # modified inadvertently when running on windows (e.g. CI steps).
 * text=auto eol=lf
+
+# The Gradle wrapper: the jar is binary, and the Windows batch script needs CRLF, both of which
+# `* text=auto eol=lf` above would otherwise get wrong.
+*.jar binary
+gradlew text eol=lf
+gradlew.bat text eol=crlf

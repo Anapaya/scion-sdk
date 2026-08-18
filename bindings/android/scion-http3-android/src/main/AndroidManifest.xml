@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026 Anapaya Systems
+
+  These permissions merge into every consuming application's manifest:
+
+    INTERNET             the client opens UDP sockets to reach the SCION underlay
+    ACCESS_NETWORK_STATE ConnectivityManager.NetworkCallback drives re-establishment across a
+                         Wi-Fi to cellular handover
+
+  There is deliberately no android:extractNativeLibs here. Leaving it unset keeps AGP's default
+  (false for minSdk >= 23), which is what 16 KB page-size compatibility needs, and avoids imposing a
+  packaging mode on consumers through the manifest merger.
+
+  No package attribute either: AGP 8 takes it from the namespace in build.gradle.kts.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+</manifest>

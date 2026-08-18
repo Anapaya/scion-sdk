@@ -1,0 +1,25 @@
+[package]
+name = "scion-http3-ffi"
+edition.workspace = true
+# Not published: this crate is consumed as a built artifact (a shared library
+# packaged into the Android AAR or the iOS framework), never as a dependency.
+publish = false
+license = "Apache-2.0"
+description = "C ABI shared library for the SCION HTTP/3 client, built for Android and iOS"
+repository = "https://github.com/anapaya/scion-sdk"
+
+[lib]
+# Underscored soname libscion_http3_ffi.so, loaded from Kotlin as
+# System.loadLibrary("scion_http3_ffi"). The rlib is what lets the unit tests
+# link against this crate.
+name = "scion_http3_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+scion-http3 = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.release]
+publish = false
