@@ -54,6 +54,29 @@ in rec {
   shellHook = ''
     export PATH=$PATH:''${CARGO_HOME:-~/.cargo}/bin
     export PATH=$PATH:''${RUSTUP_HOME:-~/.rustup}/toolchains/${rustVersion}-x86_64-unknown-linux-gnu/bin
+
+    # Repair the rust-lld wrapper of every installed rustup toolchain.
+    #
+    # nixpkgs' rustup replaces the rust-lld shim of each toolchain it installs
+    # (lib/rustlib/<host>/bin/gcc-ld/ld.lld) with a script that calls
+    # ld-wrapper.sh from the rustup derivation, and it writes that store path
+    # into ~/.rustup. The path goes dead when a later rustup replaces the
+    # derivation or nix collects it as garbage. Then every link through
+    # rust-lld fails with "ld-wrapper.sh: No such file or directory".
+    #
+    # Point the shims back at the rustup of this shell. Only dead references
+    # are rewritten, so a healthy toolchain stays untouched.
+    (
+      ld_wrapper="${pkgs.rustup}/nix-support/ld-wrapper.sh"
+      [ -e "$ld_wrapper" ] || exit 0
+      for shim in "''${RUSTUP_HOME:-$HOME/.rustup}"/toolchains/*/lib/rustlib/*/bin/gcc-ld/ld.lld; do
+        [ -f "$shim" ] || continue
+        dead="$(sed -n 's|.*"\(/nix/store/[^"]*/nix-support/ld-wrapper.sh\)".*|\1|p' "$shim" | head -n1)"
+        [ -n "$dead" ] && [ "$dead" != "$ld_wrapper" ] && [ ! -e "$dead" ] || continue
+        echo "dev-env: repairing rust-lld wrapper of ''${shim#*/toolchains/}"
+        sed -i "s|$dead|$ld_wrapper|" "$shim"
+      done
+    )
   '';
 
   ### Rust Bind Gen
