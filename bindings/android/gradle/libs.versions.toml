@@ -1,0 +1,24 @@
+# Copyright 2026 Anapaya Systems
+
+# One place for the libraries both modules use. JNA is how the bindings reach the native library at
+# all, and coroutine cancellation is what turns a cancelled call into a cancelled HTTP/3 request.
+# The JVM-host tests assert that behaviour, so the versions they measure have to be the versions the
+# AAR ships, which is what keeping them here guarantees.
+
+[versions]
+jna = "5.14.0"
+kotlinx-coroutines = "1.7.3"
+junit = "5.10.2"
+# Test-only: reads the one line of JSON the test server prints, and its control API's replies.
+gson = "2.11.0"
+
+[libraries]
+# The @aar classifier matters on Android: that artifact carries JNA's own native libraries per ABI,
+# which the plain jar does not.
+jna-android = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

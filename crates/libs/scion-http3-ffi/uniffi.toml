@@ -1,0 +1,16 @@
+[bindings.kotlin]
+# Matches the `[lib] name` in Cargo.toml, so the generated code looks up
+# libscion_http3_ffi.so.
+cdylib_name = "scion_http3_ffi"
+
+# A sub-package of the hand-written library's own. The generated names are close
+# enough to the ones the public API uses to collide with them, and this code is
+# not the surface anyone should program against.
+package_name = "com.anapaya.scion.http3.uniffi"
+
+# `android = true` is deliberately not set, for two reasons. The generated file
+# would import android.os.Build and android.system.SystemCleaner, which do not
+# exist on a desktop JVM, and the same file has to compile for both the AAR and
+# the JVM-host tests. And it would buy nothing on device: SystemCleaner needs API
+# 33 while the library targets 24, and the default template already picks a
+# cleaner at run time, falling back to JNA's below that.

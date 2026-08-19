@@ -14,13 +14,19 @@
 //! Utility functions to configure the rustls crypto provider.
 use rustls::crypto::CryptoProvider;
 
-/// Installs the `ring` crypto provider for rustls.
+/// Installs the `ring` crypto provider for rustls, unless a provider is already installed.
+///
+/// Idempotent, and deliberately tolerant of losing the race: the SDK can be embedded in an
+/// application that installs its own provider, or loaded twice into one process, and a library
+/// finding the default already set is not a reason to take the process down.
 pub fn select_ring_crypto_provider() {
     use std::sync::Once;
 
     // Ensure this is only run once per process.
     static START: Once = Once::new();
     START.call_once(|| {
-        CryptoProvider::install_default(rustls::crypto::ring::default_provider()).unwrap();
+        if CryptoProvider::install_default(rustls::crypto::ring::default_provider()).is_err() {
+            tracing::debug!("A rustls crypto provider is already installed; keeping it");
+        }
     });
 }

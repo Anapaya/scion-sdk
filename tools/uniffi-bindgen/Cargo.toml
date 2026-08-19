@@ -1,0 +1,15 @@
+[package]
+name = "uniffi-bindgen"
+edition.workspace = true
+publish = false
+license = "Apache-2.0"
+description = "The uniffi binding generator, pinned to the version the FFI crate is built against"
+repository = "https://github.com/anapaya/scion-sdk"
+
+[dependencies]
+# `cli` brings in clap and the bindgen machinery. It lives here rather than behind a
+# feature of scion-http3-ffi so that neither ever reaches the shared library.
+uniffi = { workspace = true, features = ["cli"] }
+
+[lints]
+workspace = true

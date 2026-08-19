@@ -1,0 +1,31 @@
+[package]
+name = "scion-h3-test-server"
+edition.workspace = true
+# A tool, not a library, and not published: it exists to be run by test suites,
+# in any language. Keeping it out of scion-http3 keeps a network simulator out of
+# that crate's dependency graph and out of its published tarball.
+publish = false
+license = "Apache-2.0"
+description = "A PocketSCION topology serving HTTP/3, for testing clients against a real request path"
+repository = "https://github.com/anapaya/scion-sdk"
+
+[dependencies]
+axum = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
+http-body = { workspace = true }
+pocketscion = { workspace = true }
+rcgen = { workspace = true }
+scion-h3-axum = { workspace = true }
+scion-quic = { workspace = true }
+scion-sdk-utils = { workspace = true }
+scion-stack = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

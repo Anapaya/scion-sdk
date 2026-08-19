@@ -36,7 +36,10 @@ JNI_LIBS_DIR = MODULE_DIR / "generated/jniLibs"
 CARGO_PACKAGE = "scion-http3-ffi"
 CARGO_PROFILE = "mobile"
 LIBRARY = "libscion_http3_ffi.so"
-EXPORTED_SYMBOL = "scion_http3_ffi_smoke"
+# The version handshake uniffi's scaffolding exports, named after the crate. Checking for it proves
+# the whole binding surface survived LTO and stripping, and it is also the first symbol the
+# generated Kotlin calls, so a library without it fails at load rather than at first use.
+EXPORTED_SYMBOL = "ffi_scion_http3_ffi_uniffi_contract_version"
 
 # 16 KB, required for Android 15 and later on arm64.
 MIN_PAGE_ALIGN = 16384

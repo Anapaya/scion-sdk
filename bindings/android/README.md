@@ -2,9 +2,23 @@
 
 A Gradle project that packages the Rust SCION HTTP/3 client into an Android library (AAR). The Rust
 code itself lives in [`crates/`](../../crates): this directory cross-compiles
-[`scion-http3-ffi`](../../crates/libs/scion-http3-ffi) for Android and wraps the result.
+[`scion-http3-ffi`](../../crates/libs/scion-http3-ffi) for Android, generates the Kotlin bindings for
+it, and wraps the result.
 
 ABIs: `arm64-v8a` and `x86_64` (the emulator). `armeabi-v7a` is deliberately not built.
+
+Two modules, and the tools that feed them:
+
+| | |
+| --- | --- |
+| `scion-http3-android` | The Android library. Generates the Kotlin bindings, compiles them, and packages the result with the cross-compiled libraries into the AAR. |
+| `scion-http3-jvm-test` | Tests for the bindings, on a desktop JVM. Not published, and not part of the AAR. |
+| `tools/android.py` | Cross-compiles the shared library for each ABI and checks the result. |
+| `../../tools/uniffi-bindgen` | The binding generator, built from the workspace's pinned `uniffi`. |
+
+Gradle owns the bindings; `android.py` owns the cross-compile. The split follows what needs an NDK:
+the bindings come from a host build, which needs only cargo, while the libraries need the whole
+NDK and cmake toolchain and are therefore produced outside Gradle.
 
 ## Prerequisites
 
@@ -13,6 +27,9 @@ ABIs: `arm64-v8a` and `x86_64` (the emulator). `armeabi-v7a` is deliberately not
   `sdkmanager --install "ndk;27.0.12077973"`.
 - **cmake** and a **libclang**, both of which BoringSSL and its bindings generator need.
 - **Python 3.9 or newer**, which `tools/android.py` runs under. No third-party packages.
+- A **Linux or macOS host**. The cross-compiled libraries would build anywhere the NDK runs, but the
+  host build that the bindings are generated from, and the JVM-host tests that load it, name the
+  shared library per platform and cover those two only. Windows is not (yet) supported.
 - The two Rust targets:
 
   ```bash
@@ -25,13 +42,18 @@ toolchain, leaving the JDK, the Android SDK and the NDK to install yourself.
 
 ## Building
 
-From the repository root:
+From `endhost/public`:
 
 ```bash
 export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973   # or wherever yours lives
 ./bindings/android/tools/android.py build                     # both ABIs, then checks them
 cd bindings/android && ./gradlew :scion-http3-android:assembleRelease
 ```
+
+Assembling generates the Kotlin bindings on the way (`generateBindings`), from a **host** build of
+`scion-http3-ffi` rather than from either cross-compiled library. UniFFI reads its metadata out of
+the built library, and that metadata says nothing about the target, so one host compile produces the
+Kotlin that ships in the AAR and the Kotlin the JVM tests run against.
 
 `build` takes `--abi arm64-v8a` to build a single ABI, which roughly halves the time when you are
 iterating on the cross-build itself, and `--skip-verify` to leave the checks to you. Note that
@@ -53,15 +75,52 @@ summary says so.
 
 Outputs:
 
+Paths below are relative to this directory, except where they are under cargo's target directory,
+written `<cargo target>`. That location is configurable, through `CARGO_TARGET_DIR`, through
+`build.target-dir` in a `.cargo/config.toml`, or left at the default `target/`, and CI moves it out
+of the workspace to share one cache between jobs. Nothing here assumes it: `android.py` and
+`settings.gradle.kts` both ask cargo. To see where it is:
+
+```bash
+cargo metadata --format-version 1 --no-deps | jq -r '.target_directory'
+```
+
 | Path | Contents |
 | --- | --- |
 | `scion-http3-android/generated/jniLibs/<abi>/libscion_http3_ffi.so` | Stripped, what ships |
 | `scion-http3-android/generated/unstripped/<abi>/` | Unstripped, for symbolicating a native crash |
 | `scion-http3-android/generated/build-manifest.json` | What the build produced, checked by `verify` |
+| `scion-http3-android/generated/kotlin/` | The generated bindings, compiled by both modules |
 | `scion-http3-android/build/outputs/aar/scion-http3-android-release.aar` | The AAR |
+| `<cargo target>/release/libscion_http3_ffi.{so,dylib}` | The host library, which the JVM tests load |
+| `<cargo target>/release/scion-h3-test-server` | The test server those tests run as a child process |
+| `<cargo target>/<triple>/mobile/` | The cross-compiled libraries, before staging |
 
 `generated/` is gitignored and sits outside `build/`, so `gradle clean` does not delete artifacts
-Gradle did not produce.
+Gradle did not produce. The unstripped libraries live there too, beside the stripped ones they
+correspond to, so a `cargo clean` cannot take one and leave the other.
+
+## Testing the bindings
+
+```bash
+cd bindings/android && ./gradlew :scion-http3-jvm-test:test
+```
+
+Ordinary JUnit tests on a desktop JVM, with no emulator and no Android SDK involved: UniFFI's Kotlin
+binds through JNA, which is not Android-specific, and the FFI layer touches no Android API. Gradle
+builds everything they need, including
+[`scion-h3-test-server`](../../tools/scion-h3-test-server), which the tests run as a child process:
+it is a PocketSCION topology with an HTTP/3 server in it, and requests really cross the SCION data
+plane.
+
+The module resolves the bindings as an artifact the Android module offers, then compiles them as its
+own main source set rather than depending on the compiled classes. That is what lets its tests reach
+UniFFI's `internal` declarations, which is how the cancellation test can assert that a cancelled
+call left nothing behind. The library it loads is the same file the bindings were generated from,
+taken from cargo's output rather than staged, so the two cannot come from different builds.
+
+Anything that touches an Android API belongs to the instrumented tier instead, which the Kotlin
+library brings with it.
 
 ## Consuming the AAR
 
@@ -118,5 +177,7 @@ the NDK sysroot. Run the build through the tool rather than invoking `cargo` dir
 | `'gnu/stubs-32.h' file not found` | The bindings generator is reading host headers. Build through `android.py`. |
 | `typedef redefinition ... mbstate_t` | Host C++ flags reached BoringSSL's cmake build. As above. |
 | `Missing prebuilt native libraries` | Gradle's `checkNativeLibraries` task. Run `tools/android.py build`, or pass `-PskipNativeCheck` for lint-only work. |
+| `No Kotlin was generated under ...` | Gradle's `generateBindings` task. The library exports no UniFFI metadata: usually `uniffi::setup_scaffolding!` is gone, or the package name in `uniffi.toml` changed. |
+| `scion.test.server is not set` | A JVM test was run outside Gradle. It is the Gradle task that builds the test server and passes its path. |
 | `the Rust standard library for <target> is missing` | `rustup target add <target>`. |
-| cmake warns that `ANDROID_ABI` and friends "were not used by the project" | A stale BoringSSL build directory is being reused, and cmake honours its own cache over the defines passed to it. Delete `$CARGO_TARGET_DIR/<triple>` and build again. Do this after changing the NDK or the API level. |
+| cmake warns that `ANDROID_ABI` and friends "were not used by the project" | A stale BoringSSL build directory is being reused, and cmake honours its own cache over the defines passed to it. Delete `<cargo target>/<triple>` and build again. Do this after changing the NDK or the API level. |
