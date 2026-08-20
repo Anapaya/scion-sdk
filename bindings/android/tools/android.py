@@ -30,7 +30,9 @@ WORKSPACE_ROOT = ANDROID_DIR.parent.parent
 
 MODULE_DIR = ANDROID_DIR / "scion-http3-android"
 GRADLE_MODULE = MODULE_DIR / "build.gradle.kts"
-KOTLIN_FACADE = MODULE_DIR / "src/main/kotlin/com/anapaya/scion/http3/ScionHttp3.kt"
+# Where the Kotlin side declares which library it loads. Not the hand-written code: the
+# generated bindings load it, and they take the name from here.
+UNIFFI_CONFIG = WORKSPACE_ROOT / "crates/libs/scion-http3-ffi/uniffi.toml"
 JNI_LIBS_DIR = MODULE_DIR / "generated/jniLibs"
 
 CARGO_PACKAGE = "scion-http3-ffi"
@@ -411,19 +413,16 @@ def android_api_level() -> int:
     return int(match.group(1))
 
 
-# Anchored to the declaration, on one line, rather than to the first mention of the name: the KDoc
-# above it refers to NATIVE_LIBRARY_NAME too, and a pattern that may cross newlines would start there
-# and pick up whatever string literal came next.
-LIBRARY_NAME_DECLARATION = re.compile(
-    r'^\s*(?:public\s+)?const\s+val\s+NATIVE_LIBRARY_NAME\s*:\s*String\s*=\s*"([^"\n]*)"',
-    re.MULTILINE,
-)
+# Anchored to the start of a line, and not allowed to cross one: a commented-out `cdylib_name`, or one
+# named in prose above the real key, must not be read as the declaration. TOML comments run to the end
+# of the line, so requiring the key to open the line is what rules them out.
+CDYLIB_NAME_DECLARATION = re.compile(r'^\s*cdylib_name\s*=\s*"([^"\n]*)"', re.MULTILINE)
 
 
 def declared_library_name() -> str | None:
-    if not KOTLIN_FACADE.is_file():
+    if not UNIFFI_CONFIG.is_file():
         return None
-    match = LIBRARY_NAME_DECLARATION.search(KOTLIN_FACADE.read_text())
+    match = CDYLIB_NAME_DECLARATION.search(UNIFFI_CONFIG.read_text())
     return match.group(1) if match else None
 
 
@@ -502,13 +501,13 @@ def check_contracts(report: Report) -> None:
     declared = declared_library_name()
     expected = LIBRARY.removeprefix("lib").removesuffix(".so")
     if declared is None:
-        report.skip("library name", f"no NATIVE_LIBRARY_NAME declaration in {KOTLIN_FACADE}")
+        report.skip("library name", f"no cdylib_name declaration in {UNIFFI_CONFIG}")
     elif declared == expected:
-        report.ok(f'Kotlin loads "{declared}", matching {LIBRARY}')
+        report.ok(f'the bindings load "{declared}", matching {LIBRARY}')
     else:
         report.fail(
-            f'{KOTLIN_FACADE} loads "{declared}" but the library is {LIBRARY}.\n'
-            "      System.loadLibrary would fail at run time."
+            f'{UNIFFI_CONFIG} names "{declared}" but the library is {LIBRARY}.\n'
+            "      The generated bindings would look for a library that is not there."
         )
 
 

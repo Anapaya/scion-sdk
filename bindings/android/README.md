@@ -5,13 +5,17 @@ code itself lives in [`crates/`](../../crates): this directory cross-compiles
 [`scion-http3-ffi`](../../crates/libs/scion-http3-ffi) for Android, generates the Kotlin bindings for
 it, and wraps the result.
 
+**Using the library rather than building it?** See
+[`scion-http3-android/README.md`](scion-http3-android/README.md), which is the documentation for
+consumers. This file is about the build.
+
 ABIs: `arm64-v8a` and `x86_64` (the emulator). `armeabi-v7a` is deliberately not built.
 
 Two modules, and the tools that feed them:
 
 | | |
 | --- | --- |
-| `scion-http3-android` | The Android library. Generates the Kotlin bindings, compiles them, and packages the result with the cross-compiled libraries into the AAR. |
+| `scion-http3-android` | The Android library: the Kotlin API, the generated bindings, and the cross-compiled libraries, packaged into the AAR. |
 | `scion-http3-jvm-test` | Tests for the bindings, on a desktop JVM. Not published, and not part of the AAR. |
 | `tools/android.py` | Cross-compiles the shared library for each ABI and checks the result. |
 | `../../tools/uniffi-bindgen` | The binding generator, built from the workspace's pinned `uniffi`. |
@@ -121,6 +125,27 @@ taken from cargo's output rather than staged, so the two cannot come from differ
 
 Anything that touches an Android API belongs to the instrumented tier instead, which the Kotlin
 library brings with it.
+
+## Testing the Kotlin library
+
+```bash
+cd bindings/android && ./gradlew :scion-http3-android:testReleaseUnitTest
+```
+
+Also plain JUnit on a desktop JVM, but against a fake of the FFI seam rather than the real library,
+so these tests load no native code and start no SCION network. What they cover is the part of this
+library that decides anything: when connectivity is rebuilt after a network change, what a client
+does and does not do while being built, the lifecycle, and the mapping in both directions.
+
+Unlike the bindings tests above, this needs the Android SDK, because the tests compile against
+`android.jar`. Everything they exercise reaches the framework through an interface in
+`internal/Seams.kt`, so nothing in them actually calls it: `testOptions.unitTests` deliberately
+leaves `isReturnDefaultValues` off, which makes a test that bypassed a seam fail with "not mocked"
+rather than quietly succeed on a stubbed zero.
+
+What that tier cannot show is whether the framework behaves the way those seams assume, or whether a
+cancelled call really reaches the Rust future. The first is the instrumented tests' job, the second
+is covered above.
 
 ## Consuming the AAR
 

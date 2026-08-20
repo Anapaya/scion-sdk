@@ -2,7 +2,7 @@
 # Copyright 2026 Anapaya Systems
 """Tests for the parsing in android.py.
 
-Everything this tool reads out of another file, a Gradle script and a Kotlin source, is pinned here
+Everything this tool reads out of another file, a Gradle script and a uniffi config, is pinned here
 against a sample of the real thing. A format change then fails a test rather than silently returning
 the wrong answer, which is the failure mode these parsers have.
 
@@ -26,44 +26,46 @@ android {
 }
 """
 
-# The KDoc mentions the constant before the declaration does, which is what makes an unanchored
-# pattern read the wrong string literal.
-KOTLIN_FACADE = """
-public object ScionHttp3 {
-    /**
-     * Base name of the bundled native library, as passed to [System.loadLibrary].
-     *
-     * The AAR carries one `jni/<abi>/lib$NATIVE_LIBRARY_NAME.so` per supported ABI.
-     */
-    public const val NATIVE_LIBRARY_NAME: String = "scion_http3_ffi"
+# The comment above the key is what an unanchored pattern would read the wrong literal from. The name
+# lives here rather than in the Kotlin: the generated bindings load the library, and they take the name
+# from this file.
+UNIFFI_CONFIG = """
+[bindings.kotlin]
+# Matches the `[lib] name` in Cargo.toml, so the generated code looks up
+# libscion_http3_ffi.so.
+cdylib_name = "scion_http3_ffi"
 
-    @JvmStatic
-    public fun loadNativeLibrary() {
-        System.loadLibrary(NATIVE_LIBRARY_NAME)
-    }
-}
+package_name = "com.anapaya.scion.http3.uniffi"
 """
 
 
 class DeclaredLibraryName(unittest.TestCase):
-    def test_reads_the_declaration_not_the_kdoc_mention(self):
-        match = android.LIBRARY_NAME_DECLARATION.search(KOTLIN_FACADE)
+    def test_reads_the_declaration(self):
+        match = android.CDYLIB_NAME_DECLARATION.search(UNIFFI_CONFIG)
         self.assertIsNotNone(match)
         self.assertEqual(match.group(1), "scion_http3_ffi")
 
-    def test_does_not_cross_lines_into_a_later_literal(self):
-        # A KDoc mention with no declaration must find nothing rather than the next string it meets.
-        kdoc_only = """
-        /** mentions NATIVE_LIBRARY_NAME in prose. */
-        private const val SOMETHING_ELSE: String = "not the library"
+    def test_ignores_a_commented_out_key(self):
+        # The likeliest way this file grows a second mention of the key, and the reason the pattern
+        # requires it to open the line.
+        commented = """
+        [bindings.kotlin]
+        # cdylib_name = "an_old_name"
+        package_name = "com.anapaya.scion.http3.uniffi"
         """
-        self.assertIsNone(android.LIBRARY_NAME_DECLARATION.search(kdoc_only))
+        self.assertIsNone(android.CDYLIB_NAME_DECLARATION.search(commented))
 
-    def test_matches_without_the_public_modifier(self):
-        source = '    const val NATIVE_LIBRARY_NAME: String = "other_name"'
-        match = android.LIBRARY_NAME_DECLARATION.search(source)
-        self.assertIsNotNone(match)
-        self.assertEqual(match.group(1), "other_name")
+    def test_does_not_cross_lines_into_a_later_literal(self):
+        prose_only = """
+        # cdylib_name is what the bindings load.
+        package_name = "not the library"
+        """
+        self.assertIsNone(android.CDYLIB_NAME_DECLARATION.search(prose_only))
+
+    def test_reads_the_name_the_real_config_declares(self):
+        # The check this parser feeds compares the two, so an unparseable config would silently skip
+        # it rather than fail.
+        self.assertEqual(android.declared_library_name(), "scion_http3_ffi")
 
 
 class MinSdk(unittest.TestCase):

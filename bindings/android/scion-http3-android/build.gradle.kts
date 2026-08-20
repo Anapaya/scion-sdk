@@ -162,6 +162,17 @@ android {
         }
     }
 
+    testOptions {
+        unitTests.all {
+            it.useJUnitPlatform()
+        }
+
+        // isReturnDefaultValues is deliberately left off. Everything the unit tests exercise reaches
+        // the platform through an interface in internal/, so a test that ends up calling android.*
+        // has bypassed a seam; the default stub throwing "not mocked" says so, where a returned zero
+        // would let the test pass on a value the device never produces.
+    }
+
     packaging {
         jniLibs {
             // Keep AGP away from the libraries. Its stripReleaseDebugSymbols task needs an NDK (see
@@ -207,6 +218,13 @@ dependencies {
     // The @aar artifact, not the plain jar: it carries JNA's own native libraries for each Android
     // ABI, which is how the generated bindings reach ours.
     api("${libs.jna.android.get()}@aar")
+
+    // The unit tier runs on a desktop JVM against a fake of the FFI seam, so it needs neither the
+    // native library nor a coroutine test dispatcher: what it drives is ordinary suspending code, and
+    // the clock the staleness tests advance is injected rather than virtual.
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 // Every task that reads the main source set has to be told about generateBindings by hand. Adding
