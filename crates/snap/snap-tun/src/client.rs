@@ -232,6 +232,20 @@ pub enum ConnectSnapTunSocketError {
     SnapTunConnectionError(#[from] SnapTunnelDriverError),
 }
 
+impl ConnectSnapTunSocketError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::SnapTunControlPlaneClientError(error) => error.is_transient(),
+            Self::SnapTunConnectionError(error) => error.is_transient(),
+        }
+    }
+}
+
 impl SnapTunEndpoint {
     /// Creates a new SNAP tunnel socket manager.
     pub fn new(token_source: Arc<dyn TokenSource>, static_private: x25519::StaticSecret) -> Self {

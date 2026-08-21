@@ -20,7 +20,7 @@ use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 use endhost_api_client::client::CrpcEndhostApiClient;
 use rand::seq::IndexedRandom;
 use reqwest_connect_rpc::{
-    client::CrpcClientError,
+    client::{CrpcClientCreationError, CrpcClientError},
     token_source::{TokenSource, static_token::StaticTokenSource},
 };
 use scion_sdk_utils::backoff::ExponentialBackoff;
@@ -277,10 +277,10 @@ impl ScionStackBuilder {
                 let mut client = match crpc_c {
                     Some(client) => {
                         CrpcEndhostApiClient::new_with_client(&url, client)
-                            .map_err(ApiAttemptError::client_setup)?
+                            .map_err(ApiAttemptError::ClientSetup)?
                     }
                     None => {
-                        CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::client_setup)?
+                        CrpcEndhostApiClient::new(&url).map_err(ApiAttemptError::ClientSetup)?
                     }
                 };
                 if let Some(token_source) = &token_source {
@@ -293,7 +293,7 @@ impl ScionStackBuilder {
                     ExponentialBackoff::new(0.5, 10.0, 2.0, 0.5),
                 )
                 .await
-                .map_err(ApiAttemptError::underlay_discovery)?;
+                .map_err(ApiAttemptError::UnderlayDiscovery)?;
                 Ok((client, discovery))
             }
         };
@@ -425,6 +425,25 @@ pub enum BuildScionStackError {
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl BuildScionStackError {
+    /// Returns whether the failure is transient, so that building the stack may succeed on retry.
+    ///
+    /// Prefer this over matching the variants: the enum is `#[non_exhaustive]`, so a new variant
+    /// would silently fall into a caller's wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Discovery completed and reported no underlay, or none was configured to begin with.
+            Self::UnderlayUnavailable(_) => false,
+            Self::AllEndhostApisFailed(failed) => failed.is_transient(),
+            Self::EndhostApiSourceError(source) => source.is_transient(),
+            Self::Snap(error) => error.is_transient(),
+            // Not a condition of the network or the server, so it holds on a retry.
+            Self::Internal(_) => false,
+        }
+    }
+}
+
 /// Build SNAP SCION stack errors.
 ///
 /// The underlying cause of the client/discovery variants is available through
@@ -441,6 +460,22 @@ pub enum BuildSnapScionStackError {
     /// Error making the data plane discovery request to the SNAP control plane.
     #[error("data plane discovery request error")]
     DataPlaneDiscovery(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl BuildSnapScionStackError {
+    /// Returns whether the failure is transient, so that building the stack may succeed on retry.
+    ///
+    /// Prefer this over matching the variants: the enum is `#[non_exhaustive]`, so a new variant
+    /// would silently fall into a caller's wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Discovery completed and reported that the SNAP has no data plane to hand out.
+            Self::DataPlaneUnavailable(_) => false,
+            // Both talk to the SNAP control plane, so they fail while it is unreachable.
+            Self::ControlPlaneClientSetup(_) | Self::DataPlaneDiscovery(_) => true,
+        }
+    }
 }
 
 /// Error returned when every attempted endhost API fails.
@@ -486,64 +521,30 @@ impl std::error::Error for AllEndhostApisFailed {}
 
 /// Error for a single endhost API connection attempt.
 ///
-/// The underlying cause is available through [`std::error::Error::source`]; the concrete source
-/// type is intentionally not exposed. Use [`is_transient`](ApiAttemptError::is_transient) to decide
-/// whether a retry may help.
+/// Use [`is_transient`](ApiAttemptError::is_transient) to decide whether a retry may help.
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum ApiAttemptError {
-    /// The API client could not be instantiated (e.g. invalid URL scheme).
+    /// The API client could not be instantiated.
     #[error("client setup")]
-    ClientSetup {
-        /// Whether the failure is transient and a retry may help.
-        transient: bool,
-        /// The underlying cause.
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
+    ClientSetup(#[source] CrpcClientCreationError),
     /// Underlay discovery against the API failed (e.g. server unreachable).
     #[error("underlay discovery")]
-    UnderlayDiscovery {
-        /// Whether the failure is transient and a retry may help.
-        transient: bool,
-        /// The underlying cause.
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
+    UnderlayDiscovery(#[source] CrpcClientError),
 }
 
 impl ApiAttemptError {
-    pub(crate) fn client_setup(error: anyhow::Error) -> Self {
-        // Client setup failures (e.g. an invalid URL scheme) are configuration errors, not
-        // transient.
-        Self::ClientSetup {
-            transient: false,
-            source: error.into_boxed_dyn_error(),
-        }
-    }
-
-    pub(crate) fn underlay_discovery(error: CrpcClientError) -> Self {
-        Self::UnderlayDiscovery {
-            transient: is_transient_crpc_error(&error),
-            source: Box::new(error),
-        }
-    }
-
     /// Returns whether the failure is transient and a retry may help.
+    ///
+    /// Prefer this over matching the variants: the enum is `#[non_exhaustive]`, so a new variant
+    /// would silently fall into a caller's wildcard arm.
     #[must_use]
     pub fn is_transient(&self) -> bool {
         match self {
-            Self::ClientSetup { transient, .. } | Self::UnderlayDiscovery { transient, .. } => {
-                *transient
-            }
+            Self::ClientSetup(error) => error.is_transient(),
+            Self::UnderlayDiscovery(error) => error.is_transient(),
         }
     }
-}
-
-/// A CRPC error is considered transient if it stems from a connection-level failure that may
-/// succeed on retry.
-fn is_transient_crpc_error(error: &CrpcClientError) -> bool {
-    matches!(error, CrpcClientError::ConnectionError { .. })
 }
 
 /// Configuration for endhost API discovery during stack building.
@@ -718,6 +719,7 @@ impl UdpUnderlayConfig {
 mod tests {
     use std::borrow::Cow;
 
+    use reqwest::header;
     use reqwest_connect_rpc::client::CrpcClientError;
     use url::Url;
 
@@ -738,14 +740,21 @@ mod tests {
         }
     }
 
+    fn client_creation_error() -> CrpcClientCreationError {
+        CrpcClientCreationError::InvalidUserAgent {
+            user_agent: "in\nvalid".to_owned(),
+            source: header::HeaderValue::from_str("in\nvalid").expect_err("invalid header value"),
+        }
+    }
+
     #[test]
     fn api_attempt_error_transient_classification() {
         // A connection-level discovery failure is transient.
-        assert!(ApiAttemptError::underlay_discovery(connection_error()).is_transient());
+        assert!(ApiAttemptError::UnderlayDiscovery(connection_error()).is_transient());
         // Any other discovery failure is not.
-        assert!(!ApiAttemptError::underlay_discovery(non_connection_error()).is_transient());
+        assert!(!ApiAttemptError::UnderlayDiscovery(non_connection_error()).is_transient());
         // Client setup failures are configuration errors, never transient.
-        assert!(!ApiAttemptError::client_setup(anyhow::anyhow!("invalid url")).is_transient());
+        assert!(!ApiAttemptError::ClientSetup(client_creation_error()).is_transient());
     }
 
     #[test]
@@ -759,7 +768,7 @@ mod tests {
         assert!(
             AllEndhostApisFailed::new(vec![(
                 url.clone(),
-                ApiAttemptError::underlay_discovery(connection_error()),
+                ApiAttemptError::UnderlayDiscovery(connection_error()),
             )])
             .is_transient()
         );
@@ -769,11 +778,11 @@ mod tests {
             !AllEndhostApisFailed::new(vec![
                 (
                     url.clone(),
-                    ApiAttemptError::underlay_discovery(connection_error()),
+                    ApiAttemptError::UnderlayDiscovery(connection_error()),
                 ),
                 (
                     url,
-                    ApiAttemptError::underlay_discovery(non_connection_error())
+                    ApiAttemptError::UnderlayDiscovery(non_connection_error())
                 ),
             ])
             .is_transient()

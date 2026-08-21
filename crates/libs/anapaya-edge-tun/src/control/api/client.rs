@@ -57,6 +57,29 @@ pub enum EdgeTunClientError {
     /// The server returned an invalid or unexpected response.
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+    /// The server accepted the request but assigned no address.
+    #[error("no address assigned")]
+    NoAddressAssigned,
+}
+
+impl EdgeTunClientError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::RequestError(error) => error.is_transient(),
+            // The call reached the server and it answered, just not with something this client can
+            // work with.
+            Self::InvalidResponse(_) => false,
+            // No assignment means the server has no address to give at the moment: the registration
+            // this client just made raced its own expiry, or the address pool is momentarily full.
+            // Both clear on their own, so another attempt is worth it.
+            Self::NoAddressAssigned => true,
+        }
+    }
 }
 
 /// Connect-RPC client for the edge-tun control plane API.
@@ -170,13 +193,11 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
     }
 
     /// Requests an IP address assignment from the edge-tun server.
-    ///
-    /// Returns `None` if the server could not assign an address, or `Some(addr)` if successful.
     pub async fn assign_address(
         &self,
         client_identity: x25519::PublicKey,
         requested_address: Option<IpAddr>,
-    ) -> Result<Option<IpAddr>, EdgeTunClientError> {
+    ) -> Result<IpAddr, EdgeTunClientError> {
         let url = self.make_url(ASSIGN_ADDRESSES);
         let requested_addresses = requested_address
             .map(addr_to_ip_address_range)
@@ -195,14 +216,13 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
             )
             .await?;
 
-        match resp.assigned_addresses.into_iter().next() {
-            None => Ok(None),
-            Some(range) => {
-                let addr = ip_address_range_to_addr(range)
-                    .map_err(|e| EdgeTunClientError::InvalidResponse(e.to_string()))?;
-                Ok(Some(addr))
-            }
-        }
+        let range = resp
+            .assigned_addresses
+            .into_iter()
+            .next()
+            .ok_or(EdgeTunClientError::NoAddressAssigned)?;
+        ip_address_range_to_addr(range)
+            .map_err(|e| EdgeTunClientError::InvalidResponse(e.to_string()))
     }
 
     /// Fetches advertised routes for the given client identity.

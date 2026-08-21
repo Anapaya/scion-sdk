@@ -346,6 +346,30 @@ mod tests {
 
     use super::*;
 
+    /// A refresher that keeps failing publishes its failure, and `get_token` hands the waiter the
+    /// same error back — variant included, which is what lets the caller skip a pointless retry.
+    #[tokio::test]
+    async fn a_refresh_failure_reaches_get_token_with_its_classification() {
+        let source = RefreshTokenSource::builder("test", || {
+            async { Err::<TokenWithExpiry, _>(TokenSourceError::rejected("api key revoked")) }
+        })
+        .build();
+
+        let error = tokio::time::timeout(Duration::from_secs(1), source.get_token())
+            .await
+            .expect("get_token should not block once the refresh failed")
+            .expect_err("a failing refresher yields no token");
+
+        assert!(
+            !error.is_transient(),
+            "{error} should still be permanent after the watch channel",
+        );
+        assert!(
+            error.to_string().contains("api key revoked"),
+            "the cause should survive too, got {error}",
+        );
+    }
+
     #[tokio::test]
     async fn initial_token_is_published_without_calling_refresh() {
         let refresh_count = Arc::new(AtomicUsize::new(0));

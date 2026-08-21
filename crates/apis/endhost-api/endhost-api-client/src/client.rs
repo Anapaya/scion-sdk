@@ -28,7 +28,7 @@
 //! use endhost_api_client::client::{CrpcEndhostApiClient, EndhostApiClient};
 //! use sciparse::identifier::isd_asn::IsdAsn;
 //!
-//! pub async fn get_all_udp_sockaddrs() -> anyhow::Result<Vec<SocketAddr>> {
+//! pub async fn get_all_udp_sockaddrs() -> Result<Vec<SocketAddr>, Box<dyn std::error::Error>> {
 //!     let crpc_client =
 //!         CrpcEndhostApiClient::new(&url::Url::parse("http://10.0.0.1:48080/").unwrap())?;
 //!
@@ -53,7 +53,7 @@ use endhost_api_protobuf::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
 use reqwest_connect_rpc::{
-    client::{CrpcClient, CrpcClientError},
+    client::{CrpcClient, CrpcClientCreationError, CrpcClientError},
     token_source::TokenSource,
 };
 use sciparse::{identifier::isd_asn::IsdAsn, rpc::FromRpcError, segment::SegmentsPage};
@@ -103,14 +103,17 @@ impl Deref for CrpcEndhostApiClient {
 
 impl CrpcEndhostApiClient {
     /// Creates a new endhost API client from the given base URL.
-    pub fn new(base_url: &url::Url) -> anyhow::Result<Self> {
+    pub fn new(base_url: &url::Url) -> Result<Self, CrpcClientCreationError> {
         Ok(CrpcEndhostApiClient {
             client: CrpcClient::new(base_url)?,
         })
     }
 
     /// Creates a new endhost API client from the given base URL and [`reqwest::Client`].
-    pub fn new_with_client(base_url: &url::Url, client: reqwest::Client) -> anyhow::Result<Self> {
+    pub fn new_with_client(
+        base_url: &url::Url,
+        client: reqwest::Client,
+    ) -> Result<Self, CrpcClientCreationError> {
         Ok(CrpcEndhostApiClient {
             client: CrpcClient::new_with_client(base_url, client)?,
         })

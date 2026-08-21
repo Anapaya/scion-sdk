@@ -166,11 +166,13 @@ use std::{borrow::Cow, fmt, net, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use reqwest_connect_rpc::client::{CrpcClientCreationError, CrpcClientError};
 use sciparse::{
     address::ip_socket_addr::ScionSocketIpAddr,
     identifier::{isd::Isd, isd_asn::IsdAsn},
     packet::view::ScionRawPacketView,
 };
+use snap_tun::client::ConnectSnapTunSocketError;
 pub use socket::{PathUnawareUdpScionSocket, RawScionSocket, ScmpScionSocket, UdpScionSocket};
 use url::Url;
 
@@ -577,6 +579,25 @@ pub enum ScionSocketBindError {
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl ScionSocketBindError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::InvalidBindAddress(error) => error.is_transient(),
+            Self::SnapConnectionError(error) => error.is_transient(),
+            // The underlay set is kept up to date by discovery but it's not treated as transient
+            // error.
+            Self::NoUnderlayAvailable(_) => false,
+            Self::PortAlreadyInUse(_) => false,
+            Self::Other(_) => false, // Not classifiable
+        }
+    }
+}
+
 /// Error related to the bind address of the socket.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[non_exhaustive]
@@ -600,10 +621,19 @@ pub enum InvalidBindAddressError {
     NoLocalIpAddressFound,
 }
 
+impl InvalidBindAddressError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // The host has no address to bind to yet.
+            Self::NoLocalIpAddressFound => true,
+            Self::CannotBindToRequestedAddress(..) | Self::AddressMismatch { .. } => false,
+        }
+    }
+}
+
 /// Error related to the connection to the SNAP data plane.
-///
-/// The underlying cause of the client/discovery variants is available through
-/// [`std::error::Error::source`]; the concrete source types are intentionally not exposed.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SnapConnectionError {
@@ -612,13 +642,30 @@ pub enum SnapConnectionError {
     SnapTokenSourceMissing,
     /// Error establishing the SNAP tunnel.
     #[error("error establishing SNAP tunnel")]
-    TunnelEstablishment(#[source] Box<dyn std::error::Error + Send + Sync>),
+    TunnelEstablishment(#[source] ConnectSnapTunSocketError),
     /// Failed to create the SNAP control plane client.
     #[error("failed to create SNAP control plane client")]
-    ControlPlaneClientCreation(#[source] Box<dyn std::error::Error + Send + Sync>),
+    ControlPlaneClientCreation(#[source] CrpcClientCreationError),
     /// Failed to discover the SNAP data plane.
     #[error("failed to discover SNAP data plane")]
-    DataPlaneDiscovery(#[source] Box<dyn std::error::Error + Send + Sync>),
+    DataPlaneDiscovery(#[source] CrpcClientError),
+}
+
+impl SnapConnectionError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // The stack was built without a token source, which no retry supplies.
+            Self::SnapTokenSourceMissing => false,
+            Self::ControlPlaneClientCreation(error) => error.is_transient(),
+            Self::TunnelEstablishment(error) => error.is_transient(),
+            Self::DataPlaneDiscovery(error) => error.is_transient(),
+        }
+    }
 }
 
 /// Available kinds of SCION sockets.

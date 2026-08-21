@@ -61,6 +61,24 @@ pub enum ApiKeyTokenRefresherError {
     },
 }
 
+impl ApiKeyTokenRefresherError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::RpcError(error) => error.is_transient(),
+            // The AA service answered, but not with a token this client can read.
+            Self::JwtDecodeError(_) => false,
+            // The expiry is compared against the local clock, so a clock that is behind makes a
+            // perfectly valid token look expired. That resolves itself once the clock is corrected.
+            Self::ExpInThePast { .. } => true,
+        }
+    }
+}
+
 /// Minimal JWT claims used solely to read the `exp` field.
 #[derive(Deserialize)]
 struct SnapClaims {
@@ -117,9 +135,14 @@ impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
     ///
     /// Use this instead of [`TokenRefresher::refresh`] when you need the
     /// metadata (e.g. the endhost API discovery URL) from the bootstrap call.
+    ///
+    /// Unlike [`TokenRefresher::refresh`], this reports the concrete
+    /// [`ApiKeyTokenRefresherError`], so that callers can tell a rejected API
+    /// key from a service they could not reach via
+    /// [`ApiKeyTokenRefresherError::is_transient`].
     pub async fn refresh_with_metadata(
         &self,
-    ) -> Result<(TokenWithExpiry, Option<Metadata>), TokenSourceError> {
+    ) -> Result<(TokenWithExpiry, Option<Metadata>), ApiKeyTokenRefresherError> {
         let result = self
             .client
             .authenticate_by_key(
@@ -131,8 +154,7 @@ impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
             .map_err(ApiKeyTokenRefresherError::RpcError)?;
 
         let snap_token = result.snap_token;
-        let expires_at =
-            expires_at_from_token(&snap_token).map_err(|e| Box::new(e) as TokenSourceError)?;
+        let expires_at = expires_at_from_token(&snap_token)?;
 
         // Assuming signed, JWT-token, the signature should provide a unique
         // identifier for the token.
@@ -159,7 +181,16 @@ impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
 #[async_trait]
 impl<C: AaAuthClient + 'static> TokenRefresher for ApiKeyTokenRefresher<C> {
     async fn refresh(&self) -> Result<TokenWithExpiry, TokenSourceError> {
-        let (token_with_expiry, _metadata) = self.refresh_with_metadata().await?;
+        let (token_with_expiry, _metadata) =
+            self.refresh_with_metadata().await.map_err(|error| {
+                // An auth service that could not be reached is worth another call, a rejected API
+                // key is not; keep the concrete error as the cause either way.
+                if error.is_transient() {
+                    TokenSourceError::unavailable(error)
+                } else {
+                    TokenSourceError::rejected(error)
+                }
+            })?;
         Ok(token_with_expiry)
     }
 }
@@ -167,6 +198,8 @@ impl<C: AaAuthClient + 'static> TokenRefresher for ApiKeyTokenRefresher<C> {
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use reqwest_connect_rpc::error::{CrpcError, CrpcErrorCode};
 
     use super::*;
     use crate::client::{AuthResult, MockAaAuthClient};
@@ -302,5 +335,32 @@ mod tests {
         let result = refresher.refresh().await;
 
         assert!(result.is_err(), "expected error from RPC failure");
+    }
+
+    #[test]
+    fn an_unreachable_auth_service_is_transient() {
+        let error = ApiKeyTokenRefresherError::RpcError(
+            reqwest_connect_rpc::client::CrpcClientError::ConnectionError {
+                context: "test: connection refused".into(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "connection refused",
+                )),
+            },
+        );
+
+        assert!(error.is_transient(), "{error} should be transient");
+    }
+
+    #[test]
+    fn a_rejected_api_key_is_permanent() {
+        let error = ApiKeyTokenRefresherError::RpcError(
+            reqwest_connect_rpc::client::CrpcClientError::CrpcError(CrpcError::new(
+                CrpcErrorCode::Unauthenticated,
+                "invalid API key".into(),
+            )),
+        );
+
+        assert!(!error.is_transient(), "{error} should be permanent");
     }
 }

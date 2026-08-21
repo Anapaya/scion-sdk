@@ -62,6 +62,55 @@ pub enum SnapTunnelDriverError {
     WireguardError(WireGuardError),
 }
 
+impl SnapTunnelDriverError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // The underlay socket could not carry the datagram, which is a condition of the local
+            // network or of the route to the data plane.
+            Self::SendIoError(_) | Self::ReceiveIoError(_) => true,
+            // The peer did not complete the handshake within the WireGuard time window, so a new
+            // handshake may still succeed.
+            Self::ConnectionExpired => true,
+            // The consumer of the tunnel is gone; there is nothing left to deliver packets to.
+            Self::ReceiveQueueClosed => false,
+            // A WireGuard failure describes either the datagram or the configuration, and only
+            // the second survives a retry. Ordering, duplication, corruption and replay are all
+            // properties of one datagram that a fresh handshake, or simply the next packet,
+            // leaves behind. A peer key that does not match, a poisoned lock, and a buffer this
+            // side sized too small answer the same way every time.
+            //
+            // Spelled out rather than reached through a wildcard: `WireGuardError` is not
+            // `#[non_exhaustive]`, so naming every variant makes an `ana-gotatun` upgrade a
+            // compile error here instead of a silent reclassification.
+            Self::WireguardError(error) => {
+                match error {
+                    WireGuardError::NoCurrentSession
+                    | WireGuardError::WrongIndex
+                    | WireGuardError::UnexpectedPacket
+                    | WireGuardError::WrongPacketType
+                    | WireGuardError::IncorrectPacketLength
+                    | WireGuardError::InvalidPacket
+                    | WireGuardError::InvalidCounter
+                    | WireGuardError::DuplicateCounter
+                    | WireGuardError::InvalidMac
+                    | WireGuardError::InvalidAeadTag
+                    | WireGuardError::InvalidTai64nTimestamp
+                    | WireGuardError::WrongTai64nTimestamp
+                    | WireGuardError::ConnectionExpired => true,
+                    WireGuardError::WrongKey
+                    | WireGuardError::LockFailed
+                    | WireGuardError::DestinationBufferTooSmall => false,
+                }
+            }
+        }
+    }
+}
+
 struct SnapTunnelDriver {
     pub tunn: Arc<Mutex<Tunn>>,
     pub static_private: x25519::StaticSecret,
@@ -636,5 +685,36 @@ fn to_bytes(wg: WgKind) -> Packet<[u8]> {
         WgKind::HandshakeResp(p) => p.into_bytes(),
         WgKind::CookieReply(p) => p.into_bytes(),
         WgKind::Data(p) => p.into_bytes(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn driver_error_transient_classification() {
+        // The socket or the peer did not carry the handshake through, so a retry may.
+        assert!(SnapTunnelDriverError::SendIoError(io::Error::other("boom")).is_transient());
+        assert!(SnapTunnelDriverError::ReceiveIoError(io::Error::other("boom")).is_transient());
+        assert!(SnapTunnelDriverError::ConnectionExpired.is_transient());
+        // Handshake timing and packet ordering: a datagram that arrived late, twice, or for a
+        // session that has since rotated. None of them says anything about the next attempt.
+        for error in [
+            WireGuardError::NoCurrentSession,
+            WireGuardError::WrongIndex,
+            WireGuardError::UnexpectedPacket,
+            WireGuardError::InvalidCounter,
+            WireGuardError::DuplicateCounter,
+        ] {
+            assert!(
+                SnapTunnelDriverError::WireguardError(error).is_transient(),
+                "a handshake-timing condition was reported as permanent"
+            );
+        }
+        // A peer key that does not match, and a gone consumer, answer the same way on every
+        // attempt.
+        assert!(!SnapTunnelDriverError::WireguardError(WireGuardError::WrongKey).is_transient());
+        assert!(!SnapTunnelDriverError::ReceiveQueueClosed.is_transient());
     }
 }

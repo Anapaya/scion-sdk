@@ -69,6 +69,12 @@ impl CrpcError {
             detail: None,
         }
     }
+
+    /// Returns whether the failure is transient, so that a retry may help.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        self.code.is_transient()
+    }
 }
 
 impl std::error::Error for CrpcError {}
@@ -122,6 +128,35 @@ pub enum CrpcErrorCode {
     DataLoss,
     /// Caller doesn't have valid authentication credentials for the operation.
     Unauthenticated,
+}
+
+impl CrpcErrorCode {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// The codes that describe a server or a network that is momentarily not up to answering are
+    /// transient. Everything else describes a request the server understood and rejected, or a
+    /// state it cannot be argued out of; repeating such a request produces the same answer.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Unavailable
+            | Self::DeadlineExceeded
+            | Self::ResourceExhausted
+            | Self::Aborted => true,
+            Self::Canceled
+            | Self::Unknown
+            | Self::InvalidArgument
+            | Self::NotFound
+            | Self::AlreadyExists
+            | Self::PermissionDenied
+            | Self::FailedPrecondition
+            | Self::OutOfRange
+            | Self::Unimplemented
+            | Self::Internal
+            | Self::DataLoss
+            | Self::Unauthenticated => false,
+        }
+    }
 }
 
 impl std::fmt::Display for CrpcErrorCode {

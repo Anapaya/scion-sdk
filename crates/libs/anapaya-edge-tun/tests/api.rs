@@ -27,7 +27,10 @@ use ana_gotatun::x25519;
 use anapaya_edge_tun::{
     control::{
         EdgeTunControlPlane, EdgeTunDataPlaneConfig,
-        api::{client::EdgeTunControlPlaneClient, server::EdgeTunControlPlaneCrpcApi},
+        api::{
+            client::{EdgeTunClientError, EdgeTunControlPlaneClient},
+            server::EdgeTunControlPlaneCrpcApi,
+        },
     },
     proto::anapaya::edgetun::v1::{
         AddressAssignRequest, AddressAssignResponse, GetDataPlaneConfigurationRequest,
@@ -399,7 +402,7 @@ async fn test_assign_address_ipv4() {
         .await
         .expect("assign_address");
 
-    assert_eq!(result, Some(assigned));
+    assert_eq!(result, assigned);
 }
 
 #[test_log::test(tokio::test)]
@@ -428,7 +431,7 @@ async fn test_assign_address_ipv6() {
         .await
         .expect("assign_address ipv6");
 
-    assert_eq!(result, Some(assigned));
+    assert_eq!(result, assigned);
 }
 
 #[test_log::test(tokio::test)]
@@ -450,12 +453,17 @@ async fn test_assign_address_none() {
     let client = make_client(client_socket, server_addr).await;
     let identity = x25519::PublicKey::from([5u8; 32]);
 
-    let result = client
+    let error = client
         .assign_address(identity, None)
         .await
-        .expect("assign_address none");
+        .expect_err("a server that assigns nothing is an error, not an empty success");
 
-    assert_eq!(result, None);
+    assert!(
+        matches!(error, EdgeTunClientError::NoAddressAssigned),
+        "expected NoAddressAssigned, got {error}",
+    );
+    // The server has no address to give right now, e.g. its pool is full; asking again may work.
+    assert!(error.is_transient(), "{error} should be transient");
 }
 
 /// Tests that the server rejects a request containing more than one address.

@@ -17,7 +17,10 @@ use std::{net::SocketAddr, ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use endhost_api_client::client::CrpcEndhostApiClient;
-use reqwest_connect_rpc::{client::CrpcClientError, token_source::TokenSource};
+use reqwest_connect_rpc::{
+    client::{CrpcClientCreationError, CrpcClientError},
+    token_source::TokenSource,
+};
 use snap_tun::client::SnapTunControlPlaneClient;
 use url::Url;
 use x25519_dalek::PublicKey;
@@ -30,7 +33,10 @@ use crate::{
 /// Re-export the endhost API client and the reqwest connect RPC cllient.
 pub mod re_export {
     pub use endhost_api_client::client::{CrpcEndhostApiClient, EndhostApiClient};
-    pub use reqwest_connect_rpc::{client::CrpcClientError, token_source::*};
+    pub use reqwest_connect_rpc::{
+        client::{CrpcClientCreationError, CrpcClientError},
+        token_source::*,
+    };
 }
 
 /// SNAP data plane address response.
@@ -75,13 +81,16 @@ impl Deref for CrpcSnapControlClient {
 
 impl CrpcSnapControlClient {
     /// Creates a new client with default settings
-    pub fn new(base_url: &Url) -> anyhow::Result<Self> {
+    pub fn new(base_url: &Url) -> Result<Self, CrpcClientCreationError> {
         let client = CrpcEndhostApiClient::new(base_url)?;
         Ok(Self { client })
     }
 
     /// Creates a new client with the provided `reqwest::Client`.
-    pub fn new_with_client(base_url: &Url, client: reqwest::Client) -> anyhow::Result<Self> {
+    pub fn new_with_client(
+        base_url: &Url,
+        client: reqwest::Client,
+    ) -> Result<Self, CrpcClientCreationError> {
         Ok(Self {
             client: CrpcEndhostApiClient::new_with_client(base_url, client)?,
         })

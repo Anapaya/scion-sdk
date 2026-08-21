@@ -52,12 +52,38 @@ pub fn random_static_private() -> x25519::StaticSecret {
     x25519::StaticSecret::from(static_private_bytes)
 }
 
-type AuthTokenFuture = std::pin::Pin<
-    Box<
-        dyn std::future::Future<
-                Output = Result<Option<String>, Box<dyn std::error::Error + Send + Sync>>,
-            > + Send,
-    >,
+/// Why a token callback could not produce an auth token.
+///
+/// The callback owns whatever it obtains the token from, so it is the only place that can tell
+/// whether a retry might work; the variant it picks is how it says so.
+#[derive(Debug, thiserror::Error)]
+pub enum AuthTokenError {
+    /// No token right now, but a later call may produce one, e.g. because the request to the
+    /// token service did not get through.
+    #[error("auth token temporarily unavailable")]
+    Unavailable(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// No token, and asking again yields the same answer, e.g. because the credential behind it
+    /// was rejected or revoked.
+    #[error("auth token rejected")]
+    Rejected(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl AuthTokenError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Unavailable(_) => true,
+            Self::Rejected(_) => false,
+        }
+    }
+}
+
+/// The future a token callback returns. Type-erased so the tunnel can hold callbacks that own
+/// different things; name it to give a closure the expected type, as in
+/// `|| Box::pin(async { ... }) as AuthTokenFuture`.
+pub type AuthTokenFuture = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<Option<String>, AuthTokenError>> + Send>,
 >;
 type AuthTokenGetter = dyn Fn() -> AuthTokenFuture + Send + Sync;
 
@@ -180,23 +206,20 @@ impl EdgeTunnelOptionsBuilder {
 pub enum EdgeTunnelError {
     /// Failed to obtain an auth token.
     #[error("auth token acquisition failed")]
-    ControlAuthToken(#[source] Box<dyn std::error::Error + Send + Sync>),
+    ControlAuthToken(#[source] AuthTokenError),
     /// Failed to establish the control plane connection.
     #[error("control plane connection failed")]
     ControlConnect(#[source] CrpcClientError),
     /// A control plane RPC call failed.
     #[error("control plane RPC failed")]
     ControlRpc(#[from] EdgeTunClientError),
-    /// The server did not assign an address.
-    #[error("no address assigned by server")]
-    NoAddressAssigned,
     /// The server assigned a different address on re-registration.
     #[error("assigned address changed on re-registration")]
     AssignedAddressChanged {
         /// The previously assigned address.
         old_addr: IpAddr,
         /// The newly assigned address.
-        new_addr: Option<IpAddr>,
+        new_addr: IpAddr,
     },
     /// Periodic identity re-registration failed after exhausting retries.
     #[error("periodic identity registration task failed after {retries} retries")]
@@ -207,6 +230,25 @@ pub enum EdgeTunnelError {
         #[source]
         last_error: Box<EdgeTunnelError>,
     },
+}
+
+impl EdgeTunnelError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::ControlAuthToken(error) => error.is_transient(),
+            Self::ControlConnect(error) => error.is_transient(),
+            Self::ControlRpc(error) => error.is_transient(),
+            // The tunnel has to be rebuilt around the new address, which a fresh
+            // [`EdgeTunnel::connect`] does.
+            Self::AssignedAddressChanged { .. } => true,
+            Self::IdentityRegistration { last_error, .. } => last_error.is_transient(),
+        }
+    }
 }
 
 /// A high-level edge-tun tunnel coordinating control and data planes.
@@ -281,8 +323,7 @@ impl EdgeTunnel {
         tracing::debug!("Requesting address assignment from edge app server");
         let assigned_addr = control_client
             .assign_address(static_public, requested_ip)
-            .await?
-            .ok_or(EdgeTunnelError::NoAddressAssigned)?;
+            .await?;
 
         // Get announced routes.
         tracing::debug!(%assigned_addr, "Fetching announced routes from edge app server");
@@ -415,7 +456,7 @@ impl EdgeTunnel {
         let new_assigned_address = control_client
             .assign_address(self.static_public, Some(self.assigned_addr))
             .await?;
-        if Some(self.assigned_addr) != new_assigned_address {
+        if self.assigned_addr != new_assigned_address {
             return Err(EdgeTunnelError::AssignedAddressChanged {
                 old_addr: self.assigned_addr,
                 new_addr: new_assigned_address,

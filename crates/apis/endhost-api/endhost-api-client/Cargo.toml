@@ -9,7 +9,6 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 
 [dependencies]
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 endhost-api = { workspace = true }
 endhost-api-models = { workspace = true }

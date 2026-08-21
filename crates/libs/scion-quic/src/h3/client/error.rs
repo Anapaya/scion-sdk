@@ -52,6 +52,47 @@ pub enum EstablishError {
     Closed,
 }
 
+impl EstablishError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall
+    /// into a caller's wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // A property of the address, not of the network.
+            Self::InvalidAddress => false,
+            // A handshake packet could not be sent or received, e.g. because the
+            // host has no route to the remote.
+            Self::Io(_) => true,
+            Self::Quic(error) => {
+                !matches!(
+                    error,
+                    // A peer certificate that does not validate, or a QUIC config
+                    // whose TLS setup the crypto layer rejects (e.g. a CA bundle
+                    // that cannot be loaded), fails the same way on every attempt.
+                    squiche::Error::TlsFail
+                    | squiche::Error::CryptoFail
+                    // The peer does not speak a QUIC version or transport
+                    // parameters this client can talk to.
+                    | squiche::Error::UnknownVersion
+                    | squiche::Error::InvalidTransportParam
+                )
+            }
+            // The connection closed before it was established, which includes the
+            // handshake timing out because the remote never answered.
+            Self::Handshake => true,
+            // The peer does not serve HTTP/3 on this endpoint.
+            Self::AlpnMismatch => false,
+            // Setting up the HTTP/3 layer on an already-established transport does
+            // not depend on the network, so it fails again the same way.
+            Self::H3Init => false,
+            // A closed client stays closed, so retrying it can never succeed.
+            Self::Closed => false,
+        }
+    }
+}
+
 /// An error issuing a request or opening a `CONNECT` tunnel.
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
@@ -91,4 +132,36 @@ pub enum UploadError {
     /// connection went away).
     #[error("send failed: {0}")]
     Send(#[from] H3Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EstablishError;
+
+    #[test]
+    fn a_remote_that_did_not_answer_is_transient() {
+        assert!(EstablishError::Handshake.is_transient());
+        assert!(
+            EstablishError::Io(Box::new(std::io::Error::new(
+                std::io::ErrorKind::NetworkUnreachable,
+                "no route to host",
+            )))
+            .is_transient()
+        );
+        assert!(EstablishError::Quic(squiche::Error::InvalidPacket).is_transient());
+    }
+
+    #[test]
+    fn a_closed_client_is_permanent() {
+        // The one that must not be retried: a closed client never establishes another
+        // connection, so a retry loop around it cannot terminate on success.
+        assert!(!EstablishError::Closed.is_transient());
+    }
+
+    #[test]
+    fn a_peer_we_cannot_talk_to_is_permanent() {
+        assert!(!EstablishError::Quic(squiche::Error::TlsFail).is_transient());
+        assert!(!EstablishError::AlpnMismatch.is_transient());
+        assert!(!EstablishError::InvalidAddress.is_transient());
+    }
 }

@@ -1717,7 +1717,6 @@ dependencies = [
 name = "endhost-api-client"
 version = "0.6.1"
 dependencies = [
- "anyhow",
  "async-trait",
  "endhost-api",
  "endhost-api-models",
@@ -4491,7 +4490,6 @@ dependencies = [
 name = "reqwest-connect-rpc"
 version = "0.6.1"
 dependencies = [
- "anyhow",
  "async-trait",
  "bytes",
  "prost",

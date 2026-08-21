@@ -14,6 +14,10 @@
 //! Integration tests for error SCION stack error handling.
 
 use pocketscion::util::topologies::{IA132, UnderlayType, minimal::two_path_topology};
+use reqwest_connect_rpc::{
+    client::CrpcClientError,
+    error::{CrpcError, CrpcErrorCode},
+};
 use scion_stack::stack::{
     ScionSocketBindError, ScionStackBuilder, SnapConnectionError, builder::BuildScionStackError,
 };
@@ -63,15 +67,16 @@ async fn test_invalid_snap_token() {
         .bind(None)
         .await;
 
-    // TODO(uniquefine): this should match a more specific error to indicate that the auth token
-    // is invalid.
     assert!(
         matches!(
-            result,
+            &result,
             Err(ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::DataPlaneDiscovery(_)
+                SnapConnectionError::DataPlaneDiscovery(CrpcClientError::CrpcError(CrpcError {
+                    code: CrpcErrorCode::Unauthenticated,
+                    ..
+                }))
             ))
         ),
-        "expected Snap::DataPlaneDiscovery with Unauthenticated code for invalid token, got {result:?}"
+        "expected an unauthenticated Snap::DataPlaneDiscovery for an invalid token, got {result:?}"
     );
 }

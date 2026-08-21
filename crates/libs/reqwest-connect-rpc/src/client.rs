@@ -15,7 +15,6 @@
 
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use anyhow::Context as _;
 use bytes::Bytes;
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use thiserror::Error;
@@ -53,6 +52,60 @@ pub enum CrpcClientError {
     /// Error retrieving a token from the token source.
     #[error("failed to retrieve token: {0}")]
     TokenSourceError(#[from] TokenSourceError),
+    /// The token cannot be sent as an `Authorization` header value.
+    #[error("failed to format token as header value: {0}")]
+    InvalidTokenHeader(#[source] header::InvalidHeaderValue),
+}
+
+impl CrpcClientError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // The exchange did not complete: name resolution failed, the host has no route to
+            // the server, or the connection dropped part way through the response body.
+            Self::ConnectionError { .. } => true,
+            Self::CrpcError(error) => error.is_transient(),
+            Self::DecodeError { .. } => false,
+            Self::InvalidTokenHeader(_) => false,
+            Self::TokenSourceError(error) => error.is_transient(),
+        }
+    }
+}
+
+/// Error creating a [`CrpcClient`].
+#[derive(Debug, Error)]
+pub enum CrpcClientCreationError {
+    /// The HTTP client could not be built.
+    #[error("failed to build HTTP client")]
+    HttpClient(#[source] reqwest::Error),
+    /// The user agent cannot be sent as a `User-Agent` header value.
+    #[error("invalid user agent {user_agent:?}")]
+    InvalidUserAgent {
+        /// The rejected user agent.
+        user_agent: String,
+        /// The underlying cause.
+        #[source]
+        source: header::InvalidHeaderValue,
+    },
+}
+
+impl CrpcClientCreationError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Creating a client builds a TLS backend and formats a header value from arguments the
+            // caller supplies, so the next attempt with the same arguments fails the same way.
+            Self::HttpClient(_) | Self::InvalidUserAgent { .. } => false,
+        }
+    }
 }
 
 const APPLICATION_PROTO: &str = "application/proto";
@@ -67,11 +120,11 @@ pub struct CrpcClient {
 
 impl CrpcClient {
     /// Creates a new [`CrpcClient`] for the given base URL.
-    pub fn new(base_url: &url::Url) -> anyhow::Result<Self> {
+    pub fn new(base_url: &url::Url) -> Result<Self, CrpcClientCreationError> {
         let http_client = reqwest::ClientBuilder::new()
             .timeout(Duration::from_secs(30))
             .build()
-            .context("error creating HTTP client")?;
+            .map_err(CrpcClientCreationError::HttpClient)?;
 
         Self::new_with_client(base_url, http_client)
     }
@@ -80,10 +133,14 @@ impl CrpcClient {
     pub fn new_with_client(
         base_url: &url::Url,
         http_client: reqwest::Client,
-    ) -> anyhow::Result<Self> {
-        let user_agent =
-            HeaderValue::from_str(&format!("reqwest-crpc {}", env!("CARGO_PKG_VERSION")))
-                .context("error creating user agent header")?;
+    ) -> Result<Self, CrpcClientCreationError> {
+        let default_user_agent = format!("reqwest-crpc {}", env!("CARGO_PKG_VERSION"));
+        let user_agent = HeaderValue::from_str(&default_user_agent).map_err(|source| {
+            CrpcClientCreationError::InvalidUserAgent {
+                user_agent: default_user_agent,
+                source,
+            }
+        })?;
 
         Ok(CrpcClient {
             http_client,
@@ -100,9 +157,16 @@ impl CrpcClient {
     }
 
     /// Sets the user agent header for all following requests.
-    pub fn use_user_agent(&mut self, user_agent: &str) -> anyhow::Result<&mut Self> {
-        self.user_agent = HeaderValue::from_str(user_agent)
-            .with_context(|| format!("error creating user agent header from {user_agent}"))?;
+    pub fn use_user_agent(
+        &mut self,
+        user_agent: &str,
+    ) -> Result<&mut Self, CrpcClientCreationError> {
+        self.user_agent = HeaderValue::from_str(user_agent).map_err(|source| {
+            CrpcClientCreationError::InvalidUserAgent {
+                user_agent: user_agent.to_owned(),
+                source,
+            }
+        })?;
         Ok(self)
     }
 
@@ -150,11 +214,7 @@ impl CrpcClient {
         if let Some(token_source) = &self.token_source {
             let token = token_source.get_token().await?;
             let token_header = header::HeaderValue::from_str(&token_source.format_header(token))
-                .map_err(|e| {
-                    CrpcClientError::TokenSourceError(
-                        format!("error formatting token as header value: {e:?}").into(),
-                    )
-                })?;
+                .map_err(CrpcClientError::InvalidTokenHeader)?;
 
             headers.insert(header::AUTHORIZATION, token_header);
         }
@@ -198,10 +258,9 @@ impl CrpcClient {
         }
 
         let body = response.bytes().await.map_err(|e| {
-            CrpcClientError::DecodeError {
+            CrpcClientError::ConnectionError {
                 context: "error reading response body".into(),
-                source: Some(e.into()),
-                body: None,
+                source: e.into(),
             }
         })?;
 

@@ -69,14 +69,14 @@ impl SnapUnderlaySocket {
             Some(client) => {
                 CrpcSnapControlClient::new_with_client(&snap_cp, client).map_err(|e| {
                     crate::stack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
+                        SnapConnectionError::ControlPlaneClientCreation(e),
                     )
                 })?
             }
             None => {
                 CrpcSnapControlClient::new(&snap_cp).map_err(|e| {
                     crate::stack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
+                        SnapConnectionError::ControlPlaneClientCreation(e),
                     )
                 })?
             }
@@ -85,7 +85,7 @@ impl SnapUnderlaySocket {
 
         let data_plane = snap_cp_client.get_data_plane_address().await.map_err(|e| {
             crate::stack::ScionSocketBindError::SnapConnectionError(
-                SnapConnectionError::DataPlaneDiscovery(Box::new(e)),
+                SnapConnectionError::DataPlaneDiscovery(e),
             )
         })?;
 
@@ -102,14 +102,14 @@ impl SnapUnderlaySocket {
             Some(client) => {
                 CrpcSnapControlClient::new_with_client(&snaptun_cp_addr, client).map_err(|e| {
                     crate::stack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
+                        SnapConnectionError::ControlPlaneClientCreation(e),
                     )
                 })?
             }
             None => {
                 CrpcSnapControlClient::new(&snaptun_cp_addr).map_err(|e| {
                     crate::stack::ScionSocketBindError::SnapConnectionError(
-                        SnapConnectionError::ControlPlaneClientCreation(e.into_boxed_dyn_error()),
+                        SnapConnectionError::ControlPlaneClientCreation(e),
                     )
                 })?
             }
@@ -129,7 +129,7 @@ impl SnapUnderlaySocket {
             Arc::new(socket),
             receive_queue_capacity,
             pool.clone(),
-        ).await.map_err(|e| crate::stack::ScionSocketBindError::SnapConnectionError(SnapConnectionError::TunnelEstablishment(Box::new(e))))?;
+        ).await.map_err(|e| crate::stack::ScionSocketBindError::SnapConnectionError(SnapConnectionError::TunnelEstablishment(e)))?;
 
         let tunnel_addr = tunnel.local_addr();
         let local_addr =

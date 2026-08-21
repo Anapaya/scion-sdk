@@ -47,7 +47,7 @@ use scion_quic::socket::GenericScionUdpSocket;
 use scion_stack::{
     ScionStack,
     resolver::{ScionDnsResolver, txt::ScionTxtDnsResolver},
-    stack::{ScionSocketBindError, builder::BuildScionStackError},
+    stack::ScionSocketBindError,
 };
 use sciparse::address::ip_addr::ScionIpAddr;
 
@@ -149,10 +149,7 @@ impl Epoch {
             builder = customizer(builder);
         }
         let stack = builder.build().await.map_err(|e| {
-            let retryable = match &e {
-                BuildScionStackError::AllEndhostApisFailed(failed) => failed.is_transient(),
-                _ => false,
-            };
+            let retryable = e.is_transient();
             Error::StackBuild {
                 retryable,
                 source: Box::new(e),

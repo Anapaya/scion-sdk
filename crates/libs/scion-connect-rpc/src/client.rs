@@ -59,6 +59,24 @@ pub enum RequestError {
     },
 }
 
+impl RequestError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // The request never made it to the server, or its response never made it back.
+            Self::ConnectionError { .. } => true,
+            Self::CrpcError(error) => error.is_transient(),
+            // The server answered with something this client cannot parse, which the same request
+            // will run into again.
+            Self::DecodeError { .. } => false,
+        }
+    }
+}
+
 /// Trait for a Connect-RPC client.
 #[async_trait::async_trait]
 pub trait ConnectRpcClient {
@@ -123,6 +141,23 @@ pub enum CrpcClientError {
     /// No remotes were provided to connect to.
     #[error("no remotes provided")]
     NoRemotes,
+}
+
+impl CrpcClientError {
+    /// Returns whether the failure is transient, so that a retry may help.
+    ///
+    /// Prefer this over matching the variants: a new variant would silently fall into a caller's
+    /// wildcard arm.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // Not every failed handshake is worth repeating: an unreachable server is, a server
+            // whose certificate does not validate is not.
+            Self::H3Error(error) => error.is_transient(),
+            // The caller passed no remote to connect to.
+            Self::NoRemotes => false,
+        }
+    }
 }
 
 impl CrpcClient {
