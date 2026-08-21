@@ -2,10 +2,11 @@
 # Copyright 2026 Anapaya Systems
 """Build and check the SCION HTTP/3 native libraries for Android.
 
-Two subcommands:
+Three subcommands:
 
-    build    cross-compile scion-http3-ffi for each ABI and stage the result
-    verify   check the staged libraries, and the contracts they share with the Gradle module
+    build       cross-compile scion-http3-ffi for each ABI and stage the result
+    verify      check the staged libraries, and the contracts they share with the Gradle module
+    verify-aar  check that an assembled AAR carries those libraries and the code that calls them
 
 See ../README.md for prerequisites and troubleshooting.
 """
@@ -15,12 +16,14 @@ from __future__ import annotations
 import argparse
 import functools
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +37,9 @@ GRADLE_MODULE = MODULE_DIR / "build.gradle.kts"
 # generated bindings load it, and they take the name from here.
 UNIFFI_CONFIG = WORKSPACE_ROOT / "crates/libs/scion-http3-ffi/uniffi.toml"
 JNI_LIBS_DIR = MODULE_DIR / "generated/jniLibs"
+# What `gradlew :scion-http3-android:assembleRelease` produces. `verify-aar` takes --aar for
+# anything else, a file published under a version or downloaded from a release say.
+DEFAULT_AAR = MODULE_DIR / "build/outputs/aar/scion-http3-android-release.aar"
 
 CARGO_PACKAGE = "scion-http3-ffi"
 CARGO_PROFILE = "mobile"
@@ -51,6 +57,10 @@ MIN_PAGE_ALIGN = 16384
 ALLOWED_NEEDED = frozenset({"libc.so", "libdl.so", "libm.so", "libc++_shared.so"})
 
 NDK_VERSION_HINT = "27.0.12077973"
+
+# The class the whole binding surface hangs off. The AAR has to carry it twice, once in each of the
+# packages below: the generated bindings, and the hand-written facade in front of them.
+CLIENT_CLASS = "ScionHttp3Client"
 
 
 @dataclass(frozen=True)
@@ -426,6 +436,26 @@ def declared_library_name() -> str | None:
     return match.group(1) if match else None
 
 
+PACKAGE_NAME_DECLARATION = re.compile(r'^\s*package_name\s*=\s*"([^"\n]*)"', re.MULTILINE)
+NAMESPACE_DECLARATION = re.compile(r'^\s*namespace\s*=\s*"([^"\n]*)"', re.MULTILINE)
+
+
+def declared_bindings_package() -> str | None:
+    """The package uniffi generates the bindings into."""
+    if not UNIFFI_CONFIG.is_file():
+        return None
+    match = PACKAGE_NAME_DECLARATION.search(UNIFFI_CONFIG.read_text())
+    return match.group(1) if match else None
+
+
+def declared_facade_package() -> str | None:
+    """The package the Gradle module compiles the hand-written library into."""
+    if not GRADLE_MODULE.is_file():
+        return None
+    match = NAMESPACE_DECLARATION.search(GRADLE_MODULE.read_text())
+    return match.group(1) if match else None
+
+
 # Undefined symbols that mean the C++ runtime was not linked in. Matching only the std:: mangling
 # would miss nearly all of it: BoringSSL's use of std:: is mostly header-only templates that get
 # emitted locally, whereas what actually goes missing when libc++, libc++abi or libunwind are absent
@@ -632,6 +662,119 @@ def verify(abis: list[Abi], require_symbols: bool = False) -> None:
     print(summary)
 
 
+def check_aar_libraries(report: Report, archive: zipfile.ZipFile) -> None:
+    """Checks that the AAR carries a library for every ABI, and that they are the built bytes."""
+    print("==> packaged libraries")
+
+    entries = set(archive.namelist())
+
+    packaged = {
+        name.split("/")[1] for name in entries if name.startswith("jni/") and name.count("/") >= 2
+    }
+    unknown = sorted(packaged - set(ABIS))
+    if unknown:
+        report.fail(
+            f"the AAR carries unrecognised ABI director{'y' if len(unknown) == 1 else 'ies'}: "
+            f"{' '.join(unknown)}.\n"
+            "      They shipped without being checked."
+        )
+    else:
+        report.ok("no unrecognised ABI directories")
+
+    recorded = {}
+    if BUILD_MANIFEST.is_file():
+        recorded = json.loads(BUILD_MANIFEST.read_text()).get("libraries", {})
+
+    for abi in ABIS.values():
+        entry = f"jni/{abi.name}/{LIBRARY}"
+        if entry not in entries:
+            report.fail(
+                f"the AAR does not carry {entry}.\n"
+                "      Check jniLibs.srcDirs in the Gradle module, and that the library was built."
+            )
+            continue
+
+        staged = JNI_LIBS_DIR / abi.name / LIBRARY
+        if staged.is_file():
+            expected, source = sha256_of(staged), str(staged)
+        elif abi.name in recorded:
+            expected, source = recorded[abi.name], BUILD_MANIFEST.name
+        else:
+            report.skip(f"{abi.name} contents", "no staged library and no build manifest")
+            continue
+
+        if hashlib.sha256(archive.read(entry)).hexdigest() == expected:
+            report.ok(f"{entry} is the library that was built")
+        else:
+            report.fail(
+                f"{entry} does not match {source}.\n"
+                "      Something rewrote the library on its way into the AAR. Check that\n"
+                "      packaging.jniLibs.keepDebugSymbols still covers it, because a rewrite\n"
+                "      undoes the page alignment `verify` checked."
+            )
+
+
+def check_aar_classes(report: Report, archive: zipfile.ZipFile) -> None:
+    """Checks that the AAR carries something to call the native libraries with."""
+    print("==> packaged classes")
+
+    if "classes.jar" not in archive.namelist():
+        report.fail("the AAR has no classes.jar, so nothing in it can reach the native libraries")
+        return
+
+    with zipfile.ZipFile(io.BytesIO(archive.read("classes.jar"))) as classes:
+        entries = set(classes.namelist())
+
+    for what, package in (
+        ("the generated bindings", declared_bindings_package()),
+        ("the hand-written facade", declared_facade_package()),
+    ):
+        if package is None:
+            report.skip(what, "the package it is compiled into could not be read")
+            continue
+        entry = f"{package.replace('.', '/')}/{CLIENT_CLASS}.class"
+        if entry in entries:
+            report.ok(f"classes.jar carries {entry}")
+        else:
+            report.fail(
+                f"classes.jar does not carry {entry}, which is {what}.\n"
+                "      An AAR missing it ships megabytes of native library and no way to reach it."
+            )
+
+
+def verify_aar(aar: Path) -> None:
+    """Checks an assembled AAR, needing neither an NDK nor a Rust toolchain.
+
+    The counterpart to `verify`, which runs before Gradle has packaged anything and so can only
+    speak for the staging directory. This says the AAR carries exactly those libraries and the
+    classes that call them, which is the part a sourceSets or packaging regression breaks while
+    leaving every other check here green.
+    """
+    if not aar.is_file():
+        raise Failure(
+            f"{aar} does not exist.\n"
+            "      Assemble it first with `gradlew :scion-http3-android:assembleRelease`, or pass\n"
+            "      --aar to check one somewhere else."
+        )
+
+    print(f"Checking {aar}")
+    report = Report()
+    try:
+        with zipfile.ZipFile(aar) as archive:
+            check_aar_libraries(report, archive)
+            check_aar_classes(report, archive)
+    except zipfile.BadZipFile as error:
+        raise Failure(f"{aar} is not a readable AAR: {error}") from error
+
+    print()
+    if report.failures:
+        raise Failure(f"{report.failures} check(s) failed")
+    summary = f"All checks passed for {aar.name}"
+    if report.skipped:
+        summary += f"\n{len(report.skipped)} check(s) skipped: {', '.join(report.skipped)}"
+    print(summary)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="android.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -648,11 +791,21 @@ def main(argv: list[str] | None = None) -> int:
 
     subcommands.add_parser("verify", help="check the staged libraries")
 
+    aar_parser = subcommands.add_parser("verify-aar", help="check an assembled AAR")
+    aar_parser.add_argument(
+        "--aar",
+        type=Path,
+        default=DEFAULT_AAR,
+        help="the AAR to check (default: the Gradle module's release output)",
+    )
+
     args = parser.parse_args(argv)
 
     try:
         if args.command == "build":
             build([ABIS[name] for name in args.abi or ABIS], args.skip_verify)
+        elif args.command == "verify-aar":
+            verify_aar(args.aar)
         else:
             verify(list(ABIS.values()))
     except Failure as failure:

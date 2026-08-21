@@ -4,7 +4,14 @@ plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
     id("org.jlleitschuh.gradle.ktlint")
+    id("maven-publish")
 }
+group = "com.anapaya.scion"
+version = gradle.extra["sdkVersion"] as String
+
+// The repository the published POM points back at, in the one form all four of its fields are built
+// from.
+val repositoryPath = "github.com/Anapaya/scion-sdk"
 
 // ABIs the AAR ships, mirroring the Rust targets built by ../tools/android.py:
 // arm64-v8a <- aarch64-linux-android, x86_64 <- x86_64-linux-android.
@@ -226,6 +233,67 @@ android {
     }
 }
 
+// A repository inside the build directory, which is what the release workflow uploads. A directory
+// in Maven layout carries the POM, the sources jar and a checksum of every file beside each artifact,
+// none of which a bare .aar has, and a consumer can point a `maven { }` block straight at it.
+// `publishToMavenLocal` writes the same publication into ~/.m2 for local development.
+publishing {
+    repositories {
+        maven {
+            name = "local"
+            url = uri(layout.buildDirectory.dir("maven-repo"))
+        }
+    }
+}
+
+// After evaluation because AGP creates the `release` software component while it evaluates the
+// android block above, and until it does there is nothing to publish from.
+//
+// The component carries the `api` dependencies into the POM, so a consumer resolving these
+// coordinates gets JNA and the coroutines library without declaring either. That is the whole reason
+// to publish a POM rather than only the file.
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                from(components["release"])
+                artifactId = "scion-http3-android"
+
+                // Complete rather than minimal: this is the metadata Maven Central requires,
+                // so publishing there later adds signing, credentials and a javadoc jar, and no
+                // further metadata work.
+                pom {
+                    name.set("SCION HTTP/3 client for Android")
+                    description.set(
+                        "An HTTP/3 client that carries its requests over SCION, packaged as an " +
+                            "Android library.",
+                    )
+                    url.set("https://$repositoryPath")
+                    licenses {
+                        license {
+                            name.set("Apache License, Version 2.0")
+                            url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                        }
+                    }
+                    developers {
+                        developer {
+                            name.set("Anapaya Systems")
+                            email.set("engineering@anapaya.net")
+                            organization.set("Anapaya Systems")
+                            organizationUrl.set("https://www.anapaya.net")
+                        }
+                    }
+                    scm {
+                        connection.set("scm:git:https://$repositoryPath.git")
+                        developerConnection.set("scm:git:ssh://git@$repositoryPath.git")
+                        url.set("https://$repositoryPath")
+                    }
+                }
+            }
+        }
+    }
+}
+
 // The generated bindings, offered to other projects as an artifact. Registering it from the task
 // carries the task and its declared outputs, so a consumer resolving this gets both the dependency
 // and the files, without naming a path in this project or reaching into its task container.
@@ -345,6 +413,30 @@ val checkConsumerRules by tasks.registering {
         }
     }
 }
+
+// ../settings.gradle.kts falls back to a placeholder version when it cannot reach cargo, because it
+// runs on every invocation and throwing there would leave no task runnable at all. Publishing under
+// that placeholder would be worse than failing: the artifact looks like a release and names a
+// version nobody can resolve.
+val checkPublishVersion by tasks.registering {
+    group = "verification"
+    description = "Asserts that the version came from the Cargo workspace, not from the fallback."
+
+    val fallback = gradle.extra["unknownSdkVersion"] as String
+    val resolved = version.toString()
+
+    doLast {
+        if (resolved == fallback) {
+            throw GradleException(
+                "The version is $fallback, which means ../settings.gradle.kts could not ask " +
+                    "cargo for it. Publishing needs cargo on PATH and a readable Cargo workspace.",
+            )
+        }
+    }
+}
+
+tasks.withType<PublishToMavenRepository>().configureEach { dependsOn(checkPublishVersion) }
+tasks.withType<PublishToMavenLocal>().configureEach { dependsOn(checkPublishVersion) }
 
 // Only the native-library check is gated. checkConsumerRules needs nothing that -PskipNativeCheck
 // skips, and the lint-only flows that pass the flag are exactly the ones where a package rename is

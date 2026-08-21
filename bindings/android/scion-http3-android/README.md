@@ -17,12 +17,36 @@ val rooms = client.get("https://chat.example.org/rooms").use { it.body.string() 
 
 ## Adding it
 
-The AAR is attached to the [GitHub releases](https://github.com/Anapaya/scion-sdk/releases). Download
-it, put it in your project, and point at it:
+Every [release](https://github.com/Anapaya/scion-sdk/releases) carries the library as an asset, in
+two forms. Take the one that suits how you want to depend on it. It is not on Maven Central yet.
+
+### As a repository
+
+`scion-http3-android-<version>-maven.zip` is a Maven repository holding the library and its POM.
+Unpack it anywhere and name that directory as a repository:
+
+```kotlin
+repositories {
+    maven { url = uri("libs/maven") }
+}
+
+dependencies {
+    implementation("com.anapaya.scion:scion-http3-android:<version>")
+
+    // Only for calling the library from a coroutine tied to the UI. JNA and kotlinx-coroutines-core
+    // arrive with the library, because the POM declares them.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+}
+```
+
+### As a file
+
+`scion-http3-android-<version>.aar` is the library on its own. Put it in your project and point at
+it:
 
 ```kotlin
 dependencies {
-    implementation(files("libs/scion-http3-android-release.aar"))
+    implementation(files("libs/scion-http3-android-<version>.aar"))
 
     // An AAR consumed as a file carries no dependency information, so these three are yours to
     // declare. The library needs the first two at run time; the third is only for calling it from a
@@ -35,6 +59,8 @@ dependencies {
 
 The `@aar` on JNA matters: that artifact carries JNA's native libraries for each Android ABI, and the
 plain jar does not.
+
+Each release also carries a sources jar, and a `SHA256SUMS` covering every asset.
 
 Requirements: `minSdk` 24, JDK 17 to build. The AAR ships `arm64-v8a` and `x86_64`, so it runs on
 current devices and on the emulator, but not on a 32-bit-only ARM device. It brings the `INTERNET` and

@@ -1,0 +1,151 @@
+# Copyright 2026 Anapaya Systems
+#
+# Builds the SCION HTTP/3 Android library from a release tag and attaches it to that release.
+#
+# `sdk-releaser tag` pushes the tag and creates the release. A release can also be rebuilt by hand
+# with workflow_dispatch, which is how to recover from a failed run.
+name: Release Android
+"on":
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing release tag to build and upload, for example v0.7.0.
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  # Keyed on the tag, so a dispatched rebuild supersedes an earlier attempt at the same release.
+  # Never cancelled in flight: a half-finished upload leaves a release carrying some of its assets.
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  ANDROID_NDK_VERSION: 27.0.12077973
+  ANDROID_COMPILE_SDK: "35"
+  ANDROID_BUILD_TOOLS: 35.0.0
+jobs:
+  release-aar:
+    name: android/aar
+    runs-on: ubuntu-24.04
+    # Cross-compiling BoringSSL for two ABIs with nothing cached. The nightly Android build in the
+    # monorepo budgets 60 minutes with a warm cache.
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      # Before any tool install, so there is room for the NDK.
+      - name: Disk cleanup
+        uses: ./.github/actions/disk-cleanup
+      # gradle-wrapper.jar is a binary checked into the repository; this verifies it against Gradle's
+      # published checksums.
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Setup the Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: >-
+            platforms;android-${{ env.ANDROID_COMPILE_SDK }}
+            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+      - name: Export ANDROID_NDK_HOME
+        # The only variable the native build needs, and deliberately the only one set here. See the
+        # environment notes in bindings/android/tools/android.py.
+        run: echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> "$GITHUB_ENV"
+      - name: Check the native build prerequisites
+        run: |
+          set -euo pipefail
+          # boring-sys compiles the BoringSSL it vendors with cmake.
+          cmake --version
+          # tools/android.py needs 3.9 or newer, and no third-party packages.
+          python3 --version
+          test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
+      # rust-toolchain.toml pins the channel, so rustup installs it on the first cargo call and
+      # `rustup target add` honours the same pin.
+      - name: Install the Android Rust targets
+        run: rustup target add aarch64-linux-android x86_64-linux-android
+      # Nothing here is cached, neither Rust nor Gradle. This runs once per release, where a stale
+      # cache is a worse risk than a cold cross compile.
+      - name: Cross-compile and check the native libraries
+        run: ./bindings/android/tools/android.py build
+      - name: Build the Maven publication
+        working-directory: bindings/android
+        run: ./gradlew --no-daemon :scion-http3-android:publishReleasePublicationToLocalRepository
+      # The module takes its version from the Cargo workspace, so this is where a tag pointing at the
+      # wrong tree is caught, rather than after a release has gone out labelled with the last one.
+      - name: Locate the publication and check it matches the tag
+        id: publication
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          root=bindings/android/scion-http3-android/build/maven-repo/com/anapaya/scion/scion-http3-android
+          dir="$root/$version"
+          if [[ ! -d "$dir" ]]; then
+            {
+              echo "There is no publication for $version."
+              echo "The Gradle module reads its version from the Cargo workspace, so $TAG and the"
+              echo "tree it points at disagree. What was published instead:"
+              ls "$root"
+            } >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+      - name: Check the AAR
+        env:
+          DIR: ${{ steps.publication.outputs.dir }}
+          VERSION: ${{ steps.publication.outputs.version }}
+        run: >-
+          ./bindings/android/tools/android.py verify-aar
+          --aar "$DIR/scion-http3-android-$VERSION.aar"
+      - name: Assemble the release assets
+        id: assets
+        env:
+          DIR: ${{ steps.publication.outputs.dir }}
+          VERSION: ${{ steps.publication.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/assets"
+          mkdir -p "$out"
+          cp "$DIR/scion-http3-android-$VERSION.aar" \
+             "$DIR/scion-http3-android-$VERSION-sources.jar" \
+             "$DIR/scion-http3-android-$VERSION.pom" \
+             "$out/"
+          # Through python rather than `zip`, which is not everywhere and would fail only here,
+          # at release time. `com` rather than the directory itself, because zipping `.` prefixes
+          # every entry with "./" and some Maven clients will not read that.
+          repo=bindings/android/scion-http3-android/build/maven-repo
+          (cd "$repo" && python3 -m zipfile -c "$out/scion-http3-android-$VERSION-maven.zip" com)
+          # Globbed on the artifact prefix rather than on everything, so the sums file cannot list
+          # itself.
+          (cd "$out" && sha256sum scion-http3-android-* > SHA256SUMS)
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+          ls -l "$out"
+      - name: Attach the assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIR: ${{ steps.assets.outputs.dir }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" > /dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes "Release $TAG"
+          gh release upload "$TAG" "$DIR"/* --clobber

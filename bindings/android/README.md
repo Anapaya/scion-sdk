@@ -17,7 +17,7 @@ Two modules, and the tools that feed them:
 | --- | --- |
 | `scion-http3-android` | The Android library: the Kotlin API, the generated bindings, and the cross-compiled libraries, packaged into the AAR. |
 | `scion-http3-jvm-test` | Tests for the bindings, on a desktop JVM. Not published, and not part of the AAR. |
-| `tools/android.py` | Cross-compiles the shared library for each ABI and checks the result. |
+| `tools/android.py` | Cross-compiles the shared library for each ABI, and checks both the result and the AAR it ends up in. |
 | `tools/e2e.sh` | Runs the end-to-end tests on an emulator. |
 | `../../tools/uniffi-bindgen` | The binding generator, built from the workspace's pinned `uniffi`. |
 
@@ -79,6 +79,21 @@ left behind by an earlier `--abi` run, or one copied in from elsewhere, is repor
 shipped. To check libraries built elsewhere, copy them into
 `scion-http3-android/generated/jniLibs/<abi>/`; the provenance check is then skipped, and the
 summary says so.
+
+`verify` runs before Gradle has packaged anything, so it can only speak for the staging directory.
+The AAR itself is a third subcommand:
+
+```bash
+./bindings/android/tools/android.py verify-aar
+```
+
+It checks that the AAR carries a library for every ABI, that each one is byte for byte the library
+that was built, and that `classes.jar` holds both the generated bindings and the hand-written
+facade. That last pair is what a `sourceSets` regression takes away while leaving every other check
+green:
+the result still assembles, still weighs megabytes, and has no way to reach the native code. Pass
+`--aar` to check a file somewhere else, a published or downloaded one say; it needs neither an NDK
+nor a Rust toolchain.
 
 Outputs:
 
@@ -180,16 +195,21 @@ Outputs:
 
 ## Consuming the AAR
 
-Either point at the file directly:
+The library is published as `com.anapaya.scion:scion-http3-android`, under the version of the SDK
+release it belongs to. The module reads that version from the Cargo workspace, so nothing here has
+to be bumped by hand and the AAR always carries the same number as the crates released beside it.
 
-```kotlin
-dependencies {
-    implementation(files("<path>/scion-http3-android-release.aar"))
-}
+For local development, publish it into your own Maven repository and add `mavenLocal()` to your
+repositories:
+
+```bash
+./gradlew :scion-http3-android:publishToMavenLocal
 ```
 
-or publish it locally with `./gradlew :scion-http3-android:publishToMavenLocal` and add
-`mavenLocal()` to your repositories.
+Releases carry the same publication as assets: the `.aar`, its sources jar, its POM, and a
+`-maven.zip` holding the whole Maven layout. Unpack that zip and name it as a repository to resolve
+the coordinates with their dependencies. Consumers who only want the file are documented in
+[`scion-http3-android/README.md`](scion-http3-android/README.md).
 
 The library declares the `INTERNET` and `ACCESS_NETWORK_STATE` permissions, which merge into the
 consuming application's manifest.

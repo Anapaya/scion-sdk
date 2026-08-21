@@ -16,16 +16,12 @@ dependencyResolutionManagement {
     }
 }
 
-// Where cargo puts what it builds, resolved once here and read by both modules through
-// `gradle.extra`. Asked of cargo rather than reconstructed from CARGO_TARGET_DIR: the directory can
-// equally come from `build.target-dir` in any of the `.cargo/config.toml` files cargo merges, or from
-// the default, and CI moves it out of the workspace to share one cache between jobs. Reconstructing
-// it silently points at the wrong place, and every path derived from it then goes missing.
-//
-// Falls back to the default when cargo cannot be run, so that tasks needing none of its output, a
-// lint-only invocation say, still work without a Rust toolchain.
+// Every value here has a fallback, so that tasks needing none of cargo's output, a lint-only
+// invocation say, still work without a Rust toolchain.
 val cargoWorkspaceDir = settingsDir.resolve("../..").canonicalFile
-gradle.extra["cargoTargetDir"] =
+
+@Suppress("UNCHECKED_CAST")
+val cargoMetadata: Map<String, Any>? =
     runCatching {
         val process =
             ProcessBuilder("cargo", "metadata", "--format-version", "1", "--no-deps")
@@ -34,13 +30,36 @@ gradle.extra["cargoTargetDir"] =
                 .start()
         val output = process.inputStream.bufferedReader().readText()
         check(process.waitFor() == 0) { "cargo metadata failed" }
-        @Suppress("UNCHECKED_CAST")
-        val metadata = groovy.json.JsonSlurper().parseText(output) as Map<String, Any>
-        File(metadata["target_directory"] as String)
+        groovy.json.JsonSlurper().parseText(output) as Map<String, Any>
     }.getOrElse {
-        logger.info("could not ask cargo for its target directory, assuming the default: $it")
-        cargoWorkspaceDir.resolve("target")
+        logger.info("could not run cargo metadata: $it")
+        null
     }
+
+gradle.extra["cargoTargetDir"] =
+    cargoMetadata?.let { File(it["target_directory"] as String) }
+        ?: cargoWorkspaceDir.resolve("target").also {
+            logger.info("assuming the default cargo target directory: $it")
+        }
+
+// The version the AAR is published under, taken from the SDK's own crates rather than kept in a
+// Gradle property, so that `sdk-releaser bump` needs to know nothing about Android and the two can
+// not drift.
+val sdkVersionCrate = "scion-stack"
+
+// What a build falls back to when cargo cannot be reached. Publishing refuses it; see
+// checkPublishVersion in scion-http3-android/build.gradle.kts.
+val unknownSdkVersion = "0.0.0-unknown"
+gradle.extra["unknownSdkVersion"] = unknownSdkVersion
+
+@Suppress("UNCHECKED_CAST")
+gradle.extra["sdkVersion"] =
+    (cargoMetadata?.get("packages") as? List<Map<String, Any>>)
+        ?.firstOrNull { it["name"] == sdkVersionCrate }
+        ?.get("version") as? String
+        ?: unknownSdkVersion.also {
+            logger.info("could not read the $sdkVersionCrate version from cargo, using $it")
+        }
 
 // A Gradle root of its own, rather than one at the workspace root: `endhost/public` is already both
 // a Cargo workspace root and a pnpm workspace root, and a third root marker there makes IDEs try to

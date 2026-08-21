@@ -9,8 +9,15 @@ the wrong answer, which is the failure mode these parsers have.
 Run with `python3 -m unittest discover bindings/android/tools`.
 """
 
+import contextlib
+import hashlib
+import io
+import json
+import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from unittest import mock
 
 import android
 
@@ -185,6 +192,175 @@ class StagedSet(unittest.TestCase):
             self.assertEqual(android.sha256_of(first), android.sha256_of(second))
             second.write_bytes(b"different")
             self.assertNotEqual(android.sha256_of(first), android.sha256_of(second))
+
+
+# The two classes an AAR has to carry, spelled out rather than derived, because pinning them is the
+# whole point: the check reads both packages out of the files that declare them, and a rename there
+# has to fail here.
+BINDINGS_CLASS = "com/anapaya/scion/http3/uniffi/ScionHttp3Client.class"
+FACADE_CLASS = "com/anapaya/scion/http3/ScionHttp3Client.class"
+
+BOTH_CLASSES = (BINDINGS_CLASS, FACADE_CLASS)
+
+
+def an_aar(libraries, classes=BOTH_CLASSES):
+    """An in-memory AAR carrying the given jni/ payloads and classes.jar entries.
+
+    `classes=None` leaves the classes.jar out altogether. The bare "jni/" directory entry is always
+    written, because a real AAR has one and it is not an ABI.
+    """
+    aar = io.BytesIO()
+    with zipfile.ZipFile(aar, "w") as archive:
+        archive.writestr("AndroidManifest.xml", "<manifest/>")
+        if classes is not None:
+            jar = io.BytesIO()
+            with zipfile.ZipFile(jar, "w") as classes_jar:
+                for name in classes:
+                    classes_jar.writestr(name, b"")
+            archive.writestr("classes.jar", jar.getvalue())
+        archive.writestr("jni/", b"")
+        for abi, payload in libraries.items():
+            archive.writestr(f"jni/{abi}/", b"")
+            archive.writestr(f"jni/{abi}/{android.LIBRARY}", payload)
+    return aar.getvalue()
+
+
+def a_library(abi):
+    """Stand-in bytes for one ABI's library, distinct per ABI so a mix-up is visible."""
+    return f"library for {abi}".encode()
+
+
+EVERY_ABI = {abi: a_library(abi) for abi in android.ABIS}
+
+
+class DeclaredPackages(unittest.TestCase):
+    """Both packages the AAR check looks for are read, not repeated, so both parsers are pinned."""
+
+    def test_reads_the_bindings_package(self):
+        match = android.PACKAGE_NAME_DECLARATION.search(UNIFFI_CONFIG)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "com.anapaya.scion.http3.uniffi")
+
+    def test_reads_the_facade_package(self):
+        match = android.NAMESPACE_DECLARATION.search(GRADLE_MODULE)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), "com.anapaya.scion.http3")
+
+    def test_ignores_the_word_in_prose(self):
+        # The real module talks about a renamed namespace in a comment, which is what an unanchored
+        # pattern would read the wrong literal from.
+        prose = "        // a renamed or deleted namespace would leave a file behind\n"
+        self.assertIsNone(android.NAMESPACE_DECLARATION.search(prose))
+
+    def test_reads_the_packages_the_real_files_declare(self):
+        self.assertEqual(android.declared_bindings_package(), "com.anapaya.scion.http3.uniffi")
+        self.assertEqual(android.declared_facade_package(), "com.anapaya.scion.http3")
+
+    def test_the_classes_the_check_looks_for_are_the_ones_pinned_here(self):
+        bindings = android.declared_bindings_package().replace(".", "/")
+        facade = android.declared_facade_package().replace(".", "/")
+        self.assertEqual(f"{bindings}/{android.CLIENT_CLASS}.class", BINDINGS_CLASS)
+        self.assertEqual(f"{facade}/{android.CLIENT_CLASS}.class", FACADE_CLASS)
+
+
+class AarContents(unittest.TestCase):
+    """The gate on the packaged artifact, which is the one thing the other checks cannot see."""
+
+    def check(self, aar, staged=None, recorded=None):
+        """Runs both AAR checks against an in-memory archive and returns the report.
+
+        `staged` is what the staging directory holds, `recorded` what the build manifest records.
+        Leaving both out is the case where there is nothing to compare the packaged bytes with.
+        """
+        with contextlib.ExitStack() as stack:
+            root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+            jni = root / "jniLibs"
+            for abi, payload in (staged or {}).items():
+                (jni / abi).mkdir(parents=True)
+                (jni / abi / android.LIBRARY).write_bytes(payload)
+
+            manifest = root / "build-manifest.json"
+            if recorded is not None:
+                manifest.write_text(json.dumps({"libraries": recorded}))
+
+            stack.enter_context(mock.patch.object(android, "JNI_LIBS_DIR", jni))
+            stack.enter_context(mock.patch.object(android, "BUILD_MANIFEST", manifest))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+
+            archive = stack.enter_context(zipfile.ZipFile(io.BytesIO(aar)))
+            report = android.Report()
+            android.check_aar_libraries(report, archive)
+            android.check_aar_classes(report, archive)
+            return report
+
+    def test_a_faithful_aar_passes(self):
+        report = self.check(an_aar(EVERY_ABI), staged=EVERY_ABI)
+        self.assertEqual(report.failures, 0)
+        self.assertEqual(report.skipped, [])
+
+    def test_a_missing_abi_fails(self):
+        one_abi = dict(list(EVERY_ABI.items())[:1])
+        self.assertEqual(self.check(an_aar(one_abi), staged=EVERY_ABI).failures, 1)
+
+    def test_an_abi_missing_from_both_the_aar_and_the_staging_directory_still_fails(self):
+        # What deriving the ABI list from the staging directory would have let through.
+        one_abi = dict(list(EVERY_ABI.items())[:1])
+        self.assertEqual(self.check(an_aar(one_abi), staged=one_abi).failures, 1)
+
+    def test_a_rewritten_library_fails(self):
+        rewritten = {abi: payload + b" rewritten" for abi, payload in EVERY_ABI.items()}
+        self.assertEqual(self.check(an_aar(rewritten), staged=EVERY_ABI).failures, len(EVERY_ABI))
+
+    def test_an_unrecognised_abi_directory_fails(self):
+        extra = dict(EVERY_ABI, **{"armeabi-v7a": a_library("armeabi-v7a")})
+        self.assertEqual(self.check(an_aar(extra), staged=EVERY_ABI).failures, 1)
+
+    def test_the_manifest_stands_in_for_a_missing_staging_directory(self):
+        recorded = {abi: hashlib.sha256(payload).hexdigest() for abi, payload in EVERY_ABI.items()}
+        self.assertEqual(self.check(an_aar(EVERY_ABI), recorded=recorded).failures, 0)
+
+    def test_the_manifest_catches_a_rewritten_library_too(self):
+        recorded = {abi: hashlib.sha256(payload).hexdigest() for abi, payload in EVERY_ABI.items()}
+        rewritten = {abi: payload + b" rewritten" for abi, payload in EVERY_ABI.items()}
+        self.assertEqual(self.check(an_aar(rewritten), recorded=recorded).failures, len(EVERY_ABI))
+
+    def test_nothing_to_compare_with_skips_rather_than_passes(self):
+        report = self.check(an_aar(EVERY_ABI))
+        self.assertEqual(report.failures, 0)
+        self.assertEqual(len(report.skipped), len(EVERY_ABI))
+
+    def test_a_classes_jar_without_the_bindings_fails(self):
+        # The AAR that ships megabytes of native library and no way to reach it.
+        aar = an_aar(EVERY_ABI, classes=(FACADE_CLASS,))
+        self.assertEqual(self.check(aar, staged=EVERY_ABI).failures, 1)
+
+    def test_a_classes_jar_without_the_facade_fails(self):
+        aar = an_aar(EVERY_ABI, classes=(BINDINGS_CLASS,))
+        self.assertEqual(self.check(aar, staged=EVERY_ABI).failures, 1)
+
+    def test_no_classes_jar_at_all_fails(self):
+        aar = an_aar(EVERY_ABI, classes=None)
+        self.assertEqual(self.check(aar, staged=EVERY_ABI).failures, 1)
+
+
+class AarPath(unittest.TestCase):
+    def test_the_default_is_the_release_output_of_the_gradle_module(self):
+        self.assertEqual(android.DEFAULT_AAR.parent, android.MODULE_DIR / "build/outputs/aar")
+        self.assertEqual(android.DEFAULT_AAR.suffix, ".aar")
+
+    def test_a_missing_aar_is_reported_rather_than_raising(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(android.Failure):
+                android.verify_aar(Path(directory) / "absent.aar")
+
+    def test_a_file_that_is_not_an_archive_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            not_an_aar = Path(directory) / "broken.aar"
+            not_an_aar.write_bytes(b"not a zip")
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(android.Failure):
+                    android.verify_aar(not_an_aar)
 
 
 if __name__ == "__main__":
