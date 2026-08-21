@@ -18,6 +18,7 @@ Two modules, and the tools that feed them:
 | `scion-http3-android` | The Android library: the Kotlin API, the generated bindings, and the cross-compiled libraries, packaged into the AAR. |
 | `scion-http3-jvm-test` | Tests for the bindings, on a desktop JVM. Not published, and not part of the AAR. |
 | `tools/android.py` | Cross-compiles the shared library for each ABI and checks the result. |
+| `tools/e2e.sh` | Runs the end-to-end tests on an emulator. |
 | `../../tools/uniffi-bindgen` | The binding generator, built from the workspace's pinned `uniffi`. |
 
 Gradle owns the bindings; `android.py` owns the cross-compile. The split follows what needs an NDK:
@@ -34,6 +35,8 @@ NDK and cmake toolchain and are therefore produced outside Gradle.
 - A **Linux or macOS host**. The cross-compiled libraries would build anywhere the NDK runs, but the
   host build that the bindings are generated from, and the JVM-host tests that load it, name the
   shared library per platform and cover those two only. Windows is not (yet) supported.
+- For the emulator tests only: **KVM** (`/dev/kvm`, on Linux), and a writable Android SDK, since
+  Gradle downloads the emulator and its system image into it on the first run.
 - The two Rust targets:
 
   ```bash
@@ -146,6 +149,34 @@ rather than quietly succeed on a stubbed zero.
 What that tier cannot show is whether the framework behaves the way those seams assume, or whether a
 cancelled call really reaches the Rust future. The first is the instrumented tests' job, the second
 is covered above.
+
+## Testing on an emulator
+
+```bash
+cd bindings/android && ./tools/e2e.sh            # everything
+cd bindings/android && ./tools/e2e.sh ResetTest  # one class
+```
+
+End-to-end tests using and Android emulator.
+
+The script builds the test server and the `x86_64` library, starts the server on this machine, runs
+`:scion-http3-android:emulatorX64DebugAndroidTest`, and stops the server again however the run ends.
+The emulator is a Gradle managed device declared in the module's build file, so the first run
+downloads an API 34 `aosp-atd` image and every run after it boots the same one.
+
+The tests read everything, the endhost API, the token, the server's SCION address, and its
+certificate, from the server's own `GET /info`. Only where this machine is and which port its
+control API listens on are agreed in advance, as instrumentation arguments with defaults in the
+build file.
+
+Outputs:
+
+| Path | Contents |
+| --- | --- |
+| `scion-http3-android/build/outputs/androidTest-results/managedDevice/` | JUnit XML, and logcat per test |
+| `scion-http3-android/build/reports/androidTests/managedDevice/` | The same run as HTML |
+| `build/e2e/fixture-snap.log` | The test server's own output, which is where a topology that failed says why |
+| `build/e2e/fixture-info.json` | The line it printed on start-up, which is what the tests read over the control API |
 
 ## Consuming the AAR
 

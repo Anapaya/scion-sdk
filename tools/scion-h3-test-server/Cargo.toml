@@ -16,6 +16,7 @@ futures = { workspace = true }
 http-body = { workspace = true }
 pocketscion = { workspace = true }
 rcgen = { workspace = true }
+sciparse = { workspace = true }
 scion-h3-axum = { workspace = true }
 scion-quic = { workspace = true }
 scion-sdk-utils = { workspace = true }

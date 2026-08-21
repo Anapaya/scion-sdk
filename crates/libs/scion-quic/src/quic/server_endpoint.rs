@@ -502,6 +502,10 @@ where
 
         while !cancel_token.is_cancelled() {
             tokio::select! {
+                // An idle endpoint parks in `recv_from` until a datagram arrives, so a driver
+                // checked only between iterations would keep its socket for as long as nothing was
+                // sent to it.
+                _ = cancel_token.cancelled() => break,
                 /* BEGIN I/O */
                 res = self.socket.recv_from(self.recv_buf.as_mut()) => {
                     // We treat I/O errors as fatal here.

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026 Anapaya Systems
+
+  The test application's own manifest, merged into nothing else: it is not part of the AAR and
+  reaches no consumer. The library declares INTERNET and ACCESS_NETWORK_STATE itself and they are
+  merged in from there; they are repeated here so that this file says what these tests need,
+  including of the emulator they run on.
+
+  usesCleartextTraffic is what the library's own manifest must never carry. The test server's
+  control API is plain HTTP on the host, deliberately not SCION and not TLS, so that a client under
+  test never has to reach it through the code being tested. Since Android 9 a cleartext request
+  fails without this, and it applies to this test application alone.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application android:usesCleartextTraffic="true" />
+
+</manifest>

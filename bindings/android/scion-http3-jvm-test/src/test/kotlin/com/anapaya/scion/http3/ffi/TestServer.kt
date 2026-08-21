@@ -33,7 +33,11 @@ class TestServer private constructor(
         /** The server's SCION address, without a port: the port comes from the URL. */
         val target: String,
         val caPem: String,
+        /** An authority that signed nothing here, for a client that has to fail to verify. */
+        val wrongCaPem: String,
         val controlUrl: String,
+        /** What carries the traffic, `udp` or `snap`. */
+        val underlay: String,
     )
 
     /** A URL on this server. */
@@ -57,6 +61,32 @@ class TestServer private constructor(
         val stats = JsonParser.parseString(get("/stats")).asJsonObject
         val entries = stats.getAsJsonObject(group) ?: JsonObject()
         return entries.get(key)?.asLong ?: 0
+    }
+
+    /**
+     * What the control API says this server is, which is the line the process printed.
+     *
+     * The instrumented tier has no standard output to read and discovers everything this way, so
+     * this tier checks the two agree rather than leaving that to an emulator run.
+     */
+    fun info(): Endpoints = endpointsOf(get("/info"))
+
+    /**
+     * Stops the HTTP/3 server and starts it again at the same address, with the same certificate.
+     *
+     * Returns once the new one is serving, so a request issued afterwards either reconnects or
+     * fails for a reason worth reporting.
+     */
+    fun restartServer() {
+        val request =
+            JavaHttpRequest
+                .newBuilder(URI.create(endpoints.controlUrl + "/restart-server"))
+                .POST(JavaHttpRequest.BodyPublishers.noBody())
+                .build()
+        val status = control.send(request, JavaHttpResponse.BodyHandlers.ofString())
+        check(status.statusCode() == 200) {
+            "the server did not restart: ${status.statusCode()} ${status.body()}"
+        }
     }
 
     private fun get(path: String): String {
@@ -120,17 +150,21 @@ class TestServer private constructor(
                     }.join()
             checkNotNull(description) { "$binary exited before reporting its endpoints" }
 
+            return TestServer(process, endpointsOf(description))
+        }
+
+        /** Reads the description the process prints, which is also what `GET /info` serves. */
+        private fun endpointsOf(description: String): Endpoints {
             val json = JsonParser.parseString(description).asJsonObject
-            return TestServer(
-                process,
-                Endpoints(
-                    endhostApiUrl = json.get("endhost_api_url").asString,
-                    authToken = json.get("auth_token").asString,
-                    baseUrl = json.get("base_url").asString,
-                    target = json.get("target").asString,
-                    caPem = json.get("ca_pem").asString,
-                    controlUrl = json.get("control_url").asString,
-                ),
+            return Endpoints(
+                endhostApiUrl = json.get("endhost_api_url").asString,
+                authToken = json.get("auth_token").asString,
+                baseUrl = json.get("base_url").asString,
+                target = json.get("target").asString,
+                caPem = json.get("ca_pem").asString,
+                wrongCaPem = json.get("wrong_ca_pem").asString,
+                controlUrl = json.get("control_url").asString,
+                underlay = json.get("underlay").asString,
             )
         }
     }

@@ -135,6 +135,20 @@ android {
         minSdk = 24
         // No targetSdk: a library inherits the consuming application's.
         consumerProguardFiles("consumer-rules.pro")
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Where the instrumented tests find the test server, which runs on the machine hosting the
+        // emulator rather than on the device. Only these two: everything else is read from the
+        // server's own /info, so a run needs no other agreement between the two sides.
+        //
+        // 10.0.2.2 is the emulator's translation of the host's loopback, which is where the test
+        // server binds. See ../tools/e2e.sh for why that address is also what the topology
+        // advertises, and why it advertises it for one autonomous system only.
+        testInstrumentationRunnerArguments["fixtureHost"] =
+            (project.findProperty("fixtureHost") ?: "10.0.2.2").toString()
+        testInstrumentationRunnerArguments["fixtureControlPort"] =
+            (project.findProperty("fixtureControlPort") ?: "7443").toString()
     }
 
     // No ndkVersion on purpose. The .so files are produced by cargo, outside Gradle, so there is no
@@ -171,6 +185,24 @@ android {
         // the platform through an interface in internal/, so a test that ends up calling android.*
         // has bypassed a seam; the default stub throwing "not mocked" says so, where a returned zero
         // would let the test pass on a value the device never produces.
+
+        // The emulator the instrumented tests run on, declared here rather than started by hand, so
+        // that one command does the same thing locally and in CI: `emulatorX64DebugAndroidTest`
+        // downloads the image, boots it, installs, runs, and writes JUnit XML and per-test logcat
+        // under build/outputs/androidTest-results/managedDevice/.
+        //
+        // aosp-atd is the automated-test image: no Google services, and stripped of what a test does
+        // not need, which is most of what makes an emulator slow to boot. x86_64 because that is the
+        // ABI ../tools/android.py builds for the emulator, and because it needs KVM to be usable at
+        // all.
+        managedDevices {
+            devices.create<com.android.build.api.dsl.ManagedVirtualDevice>("emulatorX64") {
+                device = "Pixel 6"
+                apiLevel = 34
+                systemImageSource = "aosp-atd"
+                require64Bit = true
+            }
+        }
     }
 
     packaging {
@@ -225,6 +257,11 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
+
+    // The instrumented tier using the android emulator.
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.gson)
 }
 
 // Every task that reads the main source set has to be told about generateBindings by hand. Adding

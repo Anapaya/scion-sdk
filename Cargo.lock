@@ -4820,6 +4820,7 @@ dependencies = [
  "scion-quic",
  "scion-sdk-utils",
  "scion-stack",
+ "sciparse",
  "serde_json",
  "tempfile",
  "tokio",

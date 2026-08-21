@@ -57,15 +57,14 @@ impl EndhostApiDiscovery for EndhostApiDiscoveryService {
                 continue;
             };
 
-            let url = addr_to_http_url(self.io_config.advertise(addr));
-
+            // Per group, not once for the endhost API: a group is what a client in that AS reads,
+            // and the address it has to be told depends on how that client reaches this host.
             for ia in eh_api.local_ases {
+                let url = addr_to_http_url(self.io_config.advertise(ia, addr));
                 groups
                     .entry(ia)
                     .or_insert_with(Vec::new)
-                    .push(EndhostApiInfo {
-                        address: url.clone(),
-                    });
+                    .push(EndhostApiInfo { address: url });
             }
         }
 

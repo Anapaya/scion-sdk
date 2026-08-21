@@ -163,7 +163,7 @@ impl DaemonService for PsDaemonService {
                     let Some(socket_addr) = socket_addr else {
                         continue;
                     };
-                    let socket_addr = self.io_config.advertise(socket_addr);
+                    let socket_addr = self.io_config.advertise(self.local_ia, socket_addr);
 
                     let if_ids = router.if_ids.iter().map(|intf| (*intf).into()).collect();
 

@@ -187,7 +187,9 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
             .snap_data_plane_addr(self.snap_id)
             .map(|address| {
                 vec![SnapUnderlay {
-                    address: self.io_config.advertise(address),
+                    address: self
+                        .io_config
+                        .advertise_any(isd_ases.iter().copied(), address),
                     isd_ases,
                 }]
             })
@@ -201,7 +203,6 @@ impl UnderlayDiscovery for SnapDataPlaneDiscoveryHandle {
 
 pub(crate) struct SnapResolverHandle {
     snap_id: SnapId,
-    #[allow(unused)]
     system_state: PocketScionState,
     io_config: IoConfig,
 }
@@ -220,11 +221,17 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
             ]);
             PublicKey::from(&StaticSecret::from(key.as_array()))
         };
+        let isd_ases: Vec<IsdAsn> = {
+            let sstate = self.system_state.read();
+            let snap = sstate.snaps.get(&self.snap_id).expect("SNAP not found");
+            snap.isd_ases().into_iter().collect()
+        };
+
         Ok(SnapDataPlane {
             address: self
                 .io_config
                 .snap_data_plane_addr(self.snap_id)
-                .map(|addr| self.io_config.advertise(addr))
+                .map(|addr| self.io_config.advertise_any(isd_ases.iter().copied(), addr))
                 .ok_or_else(|| {
                     (
                         http::StatusCode::NOT_FOUND,
@@ -232,7 +239,7 @@ impl SnapDataPlaneResolver for SnapResolverHandle {
                     )
                 })?,
             snap_tun_control_address: self.io_config.snap_control_addr(self.snap_id).map(|a| {
-                match self.io_config.advertise(a) {
+                match self.io_config.advertise_any(isd_ases.iter().copied(), a) {
                     SocketAddr::V4(addr) => {
                         Url::parse(&format!("http://{}", addr))
                             .expect("It is safe to format a SocketAddr as a URL")

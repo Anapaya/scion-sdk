@@ -134,6 +134,13 @@ tasks.named<Test>("test") {
     dependsOn(buildTestServer)
     useJUnitPlatform()
 
+    // The server binary, declared as an input rather than only passed as a system property below.
+    // Without this the tests are up to date whenever their own sources and classpath are unchanged,
+    // however much the server they run against has moved: a property is a string, and this one's
+    // value is a path that never changes. A change to the Rust fixture would then report the last
+    // run's result, which is the most convincing way for this tier to be wrong.
+    inputs.file(testServer)
+
     // One fork, which is also Gradle's default. Each would start a topology of its own, since the
     // shared test server is a per-JVM lazy, and one boot is enough.
     maxParallelForks = 1

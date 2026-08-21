@@ -174,7 +174,7 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
             }
 
             let internal_interface = match self.io_config.router_socket_addr(router_id) {
-                Some(addr) => self.io_config.advertise(addr),
+                Some(addr) => self.io_config.advertise(router.isd_as, addr),
                 None => {
                     tracing::error!(
                         router_id = %router_id,
@@ -210,7 +210,10 @@ impl UnderlayDiscovery for PsEndhostApiUnderlayDiscovery {
             }
 
             let address = match self.io_config.snap_control_addr(snap_id) {
-                Some(addr) => self.io_config.advertise(addr),
+                Some(addr) => {
+                    self.io_config
+                        .advertise_any(snap_isd_ases.iter().copied(), addr)
+                }
                 None => {
                     tracing::warn!(
                         snap_id = %snap_id,
@@ -503,7 +506,7 @@ mod tests {
     #[test]
     fn should_advertise_configured_ip() {
         let (mut state, io, t) = setup().unwrap();
-        io.set_advertised_ip("10.0.2.2".parse().unwrap());
+        io.set_advertised_ip(t.ias.0, "10.0.2.2".parse().unwrap());
 
         let service = PsEndhostApiUnderlayDiscovery {
             id: state.add_endhost_api(vec![t.ias.0]),
@@ -524,5 +527,27 @@ mod tests {
         };
 
         assert_eq!(sort(res), sort(expected));
+    }
+
+    /// The case the whole per-AS shape exists for: one AS rewritten, another left alone, in one
+    /// topology. A single advertised IP for the host could not serve both.
+    #[test]
+    fn should_advertise_only_the_as_it_was_configured_for() {
+        let (mut state, io, t) = setup().unwrap();
+        io.set_advertised_ip(t.ias.0, "10.0.2.2".parse().unwrap());
+
+        let service = PsEndhostApiUnderlayDiscovery {
+            id: state.add_endhost_api(vec![t.ias.1]),
+            system_state: state.clone(),
+            io_config: io.clone(),
+        };
+
+        assert_eq!(
+            sort(service.list_underlays(t.ias.1)),
+            sort(Underlays {
+                udp_underlay: vec![t.disc_udp_underlays.1],
+                snap_underlay: vec![t.disc_snaps.1],
+            }),
+        );
     }
 }

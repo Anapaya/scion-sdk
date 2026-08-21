@@ -29,6 +29,9 @@
 //!
 //! # What the JSON says
 //!
+//! The same object is served by `GET /info` on the control API, for a harness that did not start
+//! the process and therefore has no standard output to read.
+//!
 //! | Field | Purpose |
 //! | --- | --- |
 //! | `endhost_api_url` | The endhost API of AS 1-ff00:0:132, where a client discovers its connectivity. |
@@ -36,7 +39,9 @@
 //! | `base_url` | Where the server is, as a URL: `https://localhost:<port>`. |
 //! | `target` | The server's SCION address, without a port. The topology has no TSAR records, so a client either resolves `localhost` itself or passes this as an address override. |
 //! | `ca_pem` | The self-signed certificate the server presents, to be trusted as an anchor. |
-//! | `control_url` | The control API below, on loopback TCP. |
+//! | `wrong_ca_pem` | A second self-signed certificate that signs nothing here, for a client that must fail to verify. |
+//! | `control_url` | The control API below. |
+//! | `underlay` | Which underlay the topology carries traffic over, `udp` or `snap`. |
 //!
 //! # Request paths
 //!
@@ -53,17 +58,20 @@
 //! | `GET /status/{code}` | That status | Status codes arriving unchanged. |
 //! | `GET /trailers` | A body and an `x-checksum` trailer | The trailing header section, which no ordinary handler produces. |
 //! | `GET /slow?ms=` | A response after a delay | Request deadlines. Defaults to a second. |
-//! | `GET /big?bytes=` | That many bytes | Response size limits, and reassembly of a body spanning many frames. Defaults to a kilobyte. |
+//! | `GET /big?bytes=` | That many bytes | Response size limits, and reassembly of a body spanning many frames. Defaults to a kilobyte, and refuses more than 64 MiB rather than allocating it. |
 //! | `GET /invalid-utf8` | Two bytes that are not UTF-8 | Bodies that must not be decoded on the way through. |
 //! | `GET /endless-body?tag=` | A chunk every 50 ms, forever | Cancellation. The count for `tag` stops going up once the client's `STOP_SENDING` arrives, which is the only way to see from outside that a cancelled request reached the server. |
+//! | `GET /reset-stream` | A status, one chunk, then a stream reset | The failure in between a clean response and an unreachable peer, which cannot be provoked from the client side. |
 //!
 //! # Control API
 //!
-//! Plain HTTP over loopback TCP, so a client that is being tested never sees it.
+//! Plain HTTP over TCP, so a client that is being tested never sees it.
 //!
 //! | Path | Serves |
 //! | --- | --- |
-//! | `GET /stats` | `{"endless_chunks": {tag: count}, "requests": {path: count}}`. Chunks sent per endless-body tag, and completed requests per path. |
+//! | `GET /stats` | `{"endless_chunks": {tag: count}, "requests": {path: count}, "started": {path: count}, "restarts": count}`. Chunks sent per endless-body tag, requests per path that finished and that merely arrived, and restarts so far. |
+//! | `GET /info` | The description above, for a harness with no standard output to read. |
+//! | `POST /restart-server` | Stops the HTTP/3 server and starts it again at the same address, with the same certificate. Returns once the new one is serving. |
 //!
 //! # Options
 //!
@@ -71,48 +79,51 @@
 //! `--max-streams 0` makes every request fail against the peer's concurrent-stream limit, and
 //! `--alpn` set to anything but `h3` makes every connection attempt fail to agree on a protocol.
 //!
-//! Everything binds to loopback. Reaching it from a device or an emulator needs PocketSCION to bind
-//! its components to a routable address, which it cannot be told to do yet.
+//! `--underlay` picks what carries the traffic. `udp` puts a router in each AS and addresses
+//! endhosts by their own underlay address; `snap` puts a SNAP in each AS and tunnels to it. The
+//! difference matters to a client behind a NAT: over `snap` the endpoint is addressed at the
+//! address the tunnel observed, and over `udp` it is addressed at the one it believes it has, which
+//! nothing outside the NAT can reach.
+//!
+//! `--advertise-ip` separates where the topology listens from where it tells clients it is, which
+//! is what a client on another host needs. It applies to AS 1-ff00:0:132 alone, the one a client
+//! attaches to, and not to the AS the HTTP/3 server sits in. That split is what lets the address be
+//! one only the client can reach, such as an emulator's `10.0.2.2`: this process is a client of its
+//! own topology too, since the server discovers its connectivity the same way anything else does,
+//! and it goes on using the bound addresses of its own AS.
+//!
+//! `--bind-ip` moves where components listen, for a client that reaches this host at an address of
+//! its own rather than through a translation of loopback.
+//!
+//! `--control-port` fixes the control API's port, so that a harness which cannot read the line of
+//! JSON above still knows where to ask for it.
+
+mod app;
+mod control;
+mod server;
 
 use std::{
-    collections::BTreeMap,
     io::{BufRead, Write},
-    pin::Pin,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    task::{Context, Poll},
-    time::Duration,
+    net::IpAddr,
+    sync::Arc,
 };
 
-use axum::{
-    Router,
-    body::{Body, Bytes},
-    extract::{Path, Query, Request, State},
-    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
-    middleware::{self, Next},
-    response::{IntoResponse, Response},
-    routing::{any, get, post},
+use clap::{Parser, ValueEnum};
+use pocketscion::{
+    io_config::IoConfig,
+    util::{
+        dev_auth_token,
+        topologies::{IA132, UnderlayType, minimal::minimal_topology_with_io_config},
+    },
 };
-use clap::Parser;
-use pocketscion::util::{
-    dev_auth_token,
-    topologies::{IA132, IA212, PsSetup, UnderlayType, minimal::minimal_topology},
-};
-use scion_quic::quic::config::QuicConfig;
-use scion_stack::ScionStackBuilder;
 use tokio_util::sync::CancellationToken;
 
-/// The name in the server certificate, and therefore the host a client must use.
-const SERVER_NAME: &str = "localhost";
+use crate::{app::Counters, server::Http3Server};
 
-/// How often the endless body produces a chunk.
-const ENDLESS_BODY_INTERVAL: Duration = Duration::from_millis(50);
-
+/// Everything the topology and the server in it can be told at start-up.
 #[derive(Parser)]
 #[command(about = "A PocketSCION topology serving HTTP/3")]
-struct Args {
+pub struct Args {
     /// Concurrent request streams the server allows.
     ///
     /// Zero makes every request fail against the peer's stream limit, which is otherwise
@@ -126,50 +137,51 @@ struct Args {
     /// TLS failure rather than as an unreachable peer.
     #[arg(long, default_value = "h3")]
     alpn: String,
-}
 
-/// Counters the control API reports, and the routes that move them.
-#[derive(Default)]
-struct Counters {
-    /// Chunks sent per endless-body tag.
+    /// What carries the traffic between the two autonomous systems.
+    #[arg(long, value_enum, default_value_t = Underlay::Udp)]
+    underlay: Underlay,
+
+    /// The IP every component of the topology binds, ports staying ephemeral.
     ///
-    /// After a client cancels a request, its tag stops going up, which only happens once
-    /// `STOP_SENDING` has reached the server. That is how a test sees a cancellation arrive. Per
-    /// tag, so that concurrent tests do not read each other's.
-    endless_chunks: Mutex<BTreeMap<String, Arc<AtomicU64>>>,
-    /// Completed requests per path, so a test can prove a later request really reached the server.
-    requests: Mutex<BTreeMap<String, u64>>,
+    /// Defaults to loopback, which is what a client in this process or on this host wants.
+    #[arg(long)]
+    bind_ip: Option<IpAddr>,
+
+    /// The IP a client is told to reach AS 1-ff00:0:132 at, ports unchanged.
+    ///
+    /// Only that AS, so it may be an address this host cannot reach itself; see the crate
+    /// documentation.
+    #[arg(long)]
+    advertise_ip: Option<IpAddr>,
+
+    /// The control API's port. Zero, the default, takes an ephemeral one.
+    #[arg(long, default_value_t = 0)]
+    control_port: u16,
 }
 
-impl Counters {
-    fn endless_chunks(&self, tag: &str) -> Arc<AtomicU64> {
-        self.endless_chunks
-            .lock()
-            .expect("lock poisoned")
-            .entry(tag.to_owned())
-            .or_default()
-            .clone()
-    }
+/// What carries traffic between the ASes of the topology.
+#[derive(Clone, Copy, ValueEnum)]
+enum Underlay {
+    Udp,
+    Snap,
+}
 
-    fn record_request(&self, path: &str) {
-        *self
-            .requests
-            .lock()
-            .expect("lock poisoned")
-            .entry(path.to_owned())
-            .or_default() += 1;
+impl Underlay {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Snap => "snap",
+        }
     }
+}
 
-    fn snapshot(&self) -> serde_json::Value {
-        let endless: BTreeMap<String, u64> = self
-            .endless_chunks
-            .lock()
-            .expect("lock poisoned")
-            .iter()
-            .map(|(tag, count)| (tag.clone(), count.load(Ordering::Relaxed)))
-            .collect();
-        let requests = self.requests.lock().expect("lock poisoned").clone();
-        serde_json::json!({ "endless_chunks": endless, "requests": requests })
+impl From<Underlay> for UnderlayType {
+    fn from(underlay: Underlay) -> Self {
+        match underlay {
+            Underlay::Udp => Self::Udp,
+            Underlay::Snap => Self::Snap,
+        }
     }
 }
 
@@ -185,18 +197,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let counters = Arc::new(Counters::default());
     let shutdown = CancellationToken::new();
 
-    let ps = minimal_topology(UnderlayType::Udp).await;
-    let control_url = serve_control(counters.clone(), shutdown.clone()).await?;
-    let server = serve_scion(&ps, &args, counters, shutdown.clone()).await?;
+    let io_config = IoConfig::new();
+    if let Some(ip) = args.bind_ip {
+        io_config.set_bind_ip(ip);
+    }
+    if let Some(ip) = args.advertise_ip {
+        // The client's AS only. The server's own AS keeps its bound addresses, which is what lets
+        // this process reach the topology it is hosting while the client reaches it by another
+        // route entirely.
+        io_config.set_advertised_ip(IA132, ip);
+    }
+
+    let ps = minimal_topology_with_io_config(args.underlay.into(), io_config.clone()).await;
+    // Bound before the description is built, served after it: the control API's own address is part
+    // of the description, and the description is what it serves.
+    let control = control::bind(&io_config, args.control_port).await?;
+    let server = Http3Server::start(&ps, &args, counters.clone(), shutdown.clone()).await?;
 
     let description = serde_json::json!({
         "endhost_api_url": ps.endhost_api(IA132).expect("endhost API for IA132").to_string(),
         "auth_token": dev_auth_token(),
-        "base_url": format!("https://{SERVER_NAME}:{}", server.port),
-        "target": server.address,
-        "ca_pem": server.ca_pem,
-        "control_url": control_url,
+        "base_url": format!("https://{}:{}", server::SERVER_NAME, server.port()),
+        "target": server.target(),
+        "ca_pem": server.ca_pem(),
+        "wrong_ca_pem": server.wrong_ca_pem(),
+        "control_url": control.url(),
+        "underlay": args.underlay.name(),
     });
+    control.serve(counters, server, description.clone(), shutdown.clone());
+
     println!("{description}");
     std::io::stdout().flush()?;
 
@@ -204,236 +233,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Standard input closed, shutting down");
     shutdown.cancel();
     Ok(())
-}
-
-/// Everything about the running HTTP/3 server that a client needs.
-struct ServerHandle {
-    port: u16,
-    address: String,
-    ca_pem: String,
-}
-
-async fn serve_scion(
-    ps: &PsSetup,
-    args: &Args,
-    counters: Arc<Counters>,
-    shutdown: CancellationToken,
-) -> Result<ServerHandle, Box<dyn std::error::Error>> {
-    let stack = ScionStackBuilder::new()
-        .with_endhost_api(ps.endhost_api(IA212).expect("endhost API for IA212"))
-        .with_auth_token(dev_auth_token())
-        .build()
-        .await?;
-    let socket = Arc::new(stack.bind(None).await?);
-    let address = socket.local_addr();
-
-    let cert = rcgen::generate_simple_self_signed(vec![SERVER_NAME.to_string()])?;
-    let ca_pem = cert.cert.pem();
-    // Files, because squiche loads a server's own certificate chain and private key from paths and
-    // from nothing else. `QuicConfig::ca_certs_pem` is not the counterpart: it configures trust
-    // anchors, which is what a client verifies against, and the client side of these tests does use
-    // it. Loading an identity from memory needs a squiche addition mirroring
-    // `load_verify_locations_from_memory`.
-    let cert_file = write_temp_file(ca_pem.as_bytes())?;
-    let key_file = write_temp_file(cert.signing_key.serialize_pem().as_bytes())?;
-
-    let mut quic = QuicConfig::builder().verify_peer(false).build();
-    quic.initial_max_streams_bidi = args.max_streams;
-    quic.application_protos = vec![args.alpn.as_bytes().to_vec()];
-    let mut quic = quic.to_quiche_config()?;
-    quic.load_cert_chain_from_pem_file(path_str(&cert_file))?;
-    quic.load_priv_key_from_pem_file(path_str(&key_file))?;
-
-    let router = router(counters);
-    tokio::spawn(async move {
-        // The stack outlives the server: a socket bound from it works only while it is alive. The
-        // key file likewise, since squiche reads it during the handshake.
-        let _stack = stack;
-        let _cert_file = cert_file;
-        let _key_file = key_file;
-        if let Err(error) = scion_h3_axum::ScionH3AxumServer::serve_with_graceful_shutdown(
-            socket, router, quic, shutdown,
-        )
-        .await
-        {
-            tracing::error!(%error, "The HTTP/3 server stopped");
-        }
-    });
-
-    Ok(ServerHandle {
-        port: address.port(),
-        address: address.host().to_string(),
-        ca_pem,
-    })
-}
-
-fn router(counters: Arc<Counters>) -> Router {
-    Router::new()
-        .route("/hello", get(|| async { "world" }))
-        .route("/echo", post(|body: Bytes| async move { body }))
-        .route("/echo-headers", get(echo_headers))
-        .route(
-            "/method",
-            any(|method: Method| async move { method.to_string() }),
-        )
-        .route("/repeated-headers", get(repeated_headers))
-        .route("/status/{code}", get(status))
-        .route("/trailers", get(trailers))
-        .route("/slow", get(slow))
-        .route("/big", get(big))
-        .route("/invalid-utf8", get(invalid_utf8))
-        .route("/endless-body", get(endless_body))
-        .layer(middleware::from_fn_with_state(counters.clone(), count))
-        .with_state(counters)
-}
-
-async fn count(State(counters): State<Arc<Counters>>, request: Request, next: Next) -> Response {
-    let path = request.uri().path().to_owned();
-    let response = next.run(request).await;
-    counters.record_request(&path);
-    response
-}
-
-/// Reports the request's headers, so a test can see what actually reached the server rather than
-/// what it believes it sent.
-async fn echo_headers(headers: HeaderMap) -> Response {
-    let mut fields = Vec::new();
-    for (name, value) in &headers {
-        fields.push(serde_json::json!({
-            "name": name.as_str(),
-            "value": String::from_utf8_lossy(value.as_bytes()),
-        }));
-    }
-    axum::Json(serde_json::Value::Array(fields)).into_response()
-}
-
-/// Sends one field name twice, which a client that keeps response headers in a map keyed by name
-/// cannot represent.
-async fn repeated_headers() -> Response {
-    let mut response = "cookies".into_response();
-    let headers = response.headers_mut();
-    headers.append("set-cookie", HeaderValue::from_static("a=1"));
-    headers.append("set-cookie", HeaderValue::from_static("b=2"));
-    response
-}
-
-async fn status(Path(code): Path<u16>) -> Response {
-    StatusCode::from_u16(code).map_or_else(
-        |_| (StatusCode::BAD_REQUEST, "not a status code").into_response(),
-        |code| (code, "").into_response(),
-    )
-}
-
-/// Sends a trailing header section, which is the one part of a response that cannot be produced by
-/// returning a value from a handler.
-async fn trailers() -> Response {
-    Response::new(Body::new(TrailerBody {
-        data: Some(Bytes::from_static(b"with trailers")),
-        trailers: Some(HeaderMap::from_iter([(
-            HeaderName::from_static("x-checksum"),
-            HeaderValue::from_static("42"),
-        )])),
-    }))
-}
-
-async fn slow(Query(query): Query<BTreeMap<String, String>>) -> Response {
-    let millis = query
-        .get("ms")
-        .and_then(|ms| ms.parse().ok())
-        .unwrap_or(1000);
-    tokio::time::sleep(Duration::from_millis(millis)).await;
-    "eventually".into_response()
-}
-
-async fn big(Query(query): Query<BTreeMap<String, String>>) -> Response {
-    let bytes = query
-        .get("bytes")
-        .and_then(|bytes| bytes.parse().ok())
-        .unwrap_or(1024);
-    Bytes::from(vec![b'x'; bytes]).into_response()
-}
-
-async fn invalid_utf8() -> Response {
-    Bytes::from_static(&[0xff, 0xfe]).into_response()
-}
-
-/// A response body that never ends, counting the chunks it sends.
-///
-/// A client that cancels its request sends `STOP_SENDING`, the transport stops asking this for
-/// more, and the count for that tag stops going up. That is the only way a test can tell a
-/// cancellation that reached the server from one that only looked tidy on the client.
-async fn endless_body(
-    State(counters): State<Arc<Counters>>,
-    Query(query): Query<BTreeMap<String, String>>,
-) -> Response {
-    let tag = query.get("tag").cloned().unwrap_or_default();
-    let chunks = counters.endless_chunks(&tag);
-    let stream = futures::stream::unfold(chunks, |chunks| {
-        async move {
-            tokio::time::sleep(ENDLESS_BODY_INTERVAL).await;
-            chunks.fetch_add(1, Ordering::Relaxed);
-            Some((
-                Ok::<_, std::convert::Infallible>(Bytes::from_static(b"drip")),
-                chunks,
-            ))
-        }
-    });
-    Response::new(Body::from_stream(stream))
-}
-
-/// One data frame followed by a trailing header section.
-struct TrailerBody {
-    data: Option<Bytes>,
-    trailers: Option<HeaderMap>,
-}
-
-impl http_body::Body for TrailerBody {
-    type Data = Bytes;
-    type Error = std::convert::Infallible;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
-        let this = self.get_mut();
-        if let Some(data) = this.data.take() {
-            return Poll::Ready(Some(Ok(http_body::Frame::data(data))));
-        }
-        Poll::Ready(
-            this.trailers
-                .take()
-                .map(|t| Ok(http_body::Frame::trailers(t))),
-        )
-    }
-}
-
-/// Serves the control API on loopback, returning its URL.
-async fn serve_control(
-    counters: Arc<Counters>,
-    shutdown: CancellationToken,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let url = format!("http://{}", listener.local_addr()?);
-
-    let app =
-        Router::new()
-            .route(
-                "/stats",
-                get(|State(counters): State<Arc<Counters>>| {
-                    async move { axum::Json(counters.snapshot()) }
-                }),
-            )
-            .with_state(counters);
-    tokio::spawn(async move {
-        let served = axum::serve(listener, app)
-            .with_graceful_shutdown(async move { shutdown.cancelled().await })
-            .await;
-        if let Err(error) = served {
-            tracing::error!(%error, "The control server stopped");
-        }
-    });
-
-    Ok(url)
 }
 
 /// Resolves when standard input reaches end of file.
@@ -445,15 +244,4 @@ async fn wait_for_stdin_close() {
         }
     })
     .await;
-}
-
-fn write_temp_file(contents: &[u8]) -> std::io::Result<tempfile::NamedTempFile> {
-    let mut file = tempfile::NamedTempFile::new()?;
-    file.as_file_mut().write_all(contents)?;
-    file.as_file_mut().flush()?;
-    Ok(file)
-}
-
-fn path_str(file: &tempfile::NamedTempFile) -> &str {
-    file.path().to_str().expect("a UTF-8 temporary path")
 }

@@ -353,6 +353,7 @@ public class ScionHttp3Client internal constructor(
         private var connectionAttemptDelayMillis: Long? = null
         private var maxOrigins: Int? = null
         private var maxResponseBodyBytes: Long? = null
+        private var networkMonitor: NetworkMonitor? = null
 
         /**
          * Where the client discovers SCION connectivity. Required.
@@ -475,6 +476,14 @@ public class ScionHttp3Client internal constructor(
         }
 
         /**
+         * Watches the network through [monitor] instead of through `ConnectivityManager`.
+         */
+        internal fun networkMonitor(monitor: NetworkMonitor): Builder {
+            networkMonitor = monitor
+            return this
+        }
+
+        /**
          * Builds the client. Performs no I/O.
          *
          * @throws IllegalArgumentException if a setting cannot be right: no endhost API, a URL that
@@ -501,7 +510,7 @@ public class ScionHttp3Client internal constructor(
             return ScionHttp3Client(
                 settings = settings,
                 backends = UniffiHttp3BackendFactory(sharedTrustStore),
-                monitor = ConnectivityNetworkMonitor(context, AndroidLog),
+                monitor = networkMonitor ?: ConnectivityNetworkMonitor(context, AndroidLog),
                 staleness =
                     StalenessTracker(
                         clock = AndroidClock,
