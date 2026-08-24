@@ -20,43 +20,43 @@ edition = "2024"
 
 [workspace.dependencies]
 # Local Crates
-dhsd = { path = "crates/libs/dhsd", version = "0.6.1" }
+dhsd = { path = "crates/libs/dhsd", version = "0.7.0" }
 
-endhost-api-client = { path = "crates/apis/endhost-api/endhost-api-client", version = "0.6.1" }
-endhost-api = { path = "crates/apis/endhost-api/endhost-api", version = "0.6.1" }
-endhost-api-models = { path = "crates/apis/endhost-api/endhost-api-models", version = "0.6.1" }
-endhost-api-protobuf = { path = "crates/apis/endhost-api/endhost-api-protobuf", version = "0.6.1" }
+endhost-api-client = { path = "crates/apis/endhost-api/endhost-api-client", version = "0.7.0" }
+endhost-api = { path = "crates/apis/endhost-api/endhost-api", version = "0.7.0" }
+endhost-api-models = { path = "crates/apis/endhost-api/endhost-api-models", version = "0.7.0" }
+endhost-api-protobuf = { path = "crates/apis/endhost-api/endhost-api-protobuf", version = "0.7.0" }
 
-anapaya-ead-client = { path = "crates/apis/anapaya-ead/anapaya-ead-client", version = "0.6.1" }
-anapaya-ead-api = { path = "crates/apis/anapaya-ead/anapaya-ead-api", version = "0.6.1" }
-anapaya-ead-models = { path = "crates/apis/anapaya-ead/anapaya-ead-models", version = "0.6.1" }
+anapaya-ead-client = { path = "crates/apis/anapaya-ead/anapaya-ead-client", version = "0.7.0" }
+anapaya-ead-api = { path = "crates/apis/anapaya-ead/anapaya-ead-api", version = "0.7.0" }
+anapaya-ead-models = { path = "crates/apis/anapaya-ead/anapaya-ead-models", version = "0.7.0" }
 
-anapaya-hsd-api-protobuf = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf", version = "0.6.1" }
+anapaya-hsd-api-protobuf = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf", version = "0.7.0" }
 
-anapaya-aa-protobuf = { path = "crates/apis/anapaya-aa/anapaya-aa-protobuf", version = "0.6.1" }
+anapaya-aa-protobuf = { path = "crates/apis/anapaya-aa/anapaya-aa-protobuf", version = "0.7.0" }
 
-axum-connect-rpc = { path = "crates/libs/axum-connect-rpc", version = "0.6.1" }
-scion-h3-axum = { path = "crates/libs/scion-h3-axum", version = "0.6.1" }
-scion-sdk-observability = { path = "crates/libs/scion-sdk-observability", version = "0.6.1" }
-scion-quic = { path = "crates/libs/scion-quic", version = "0.6.1" }
-reqwest-connect-rpc = { path = "crates/libs/reqwest-connect-rpc", version = "0.6.1" }
-scion-connect-rpc = { path = "crates/libs/scion-connect-rpc", version = "0.6.1" }
-scion-trc = { path = "crates/libs/scion-trc", version = "0.6.1" }
-scion-sdk-token-validator = { path = "crates/libs/scion-sdk-token-validator", version = "0.6.1" }
-scion-sdk-utils = { path = "crates/libs/scion-sdk-utils", version = "0.6.1" }
+axum-connect-rpc = { path = "crates/libs/axum-connect-rpc", version = "0.7.0" }
+scion-h3-axum = { path = "crates/libs/scion-h3-axum", version = "0.7.0" }
+scion-sdk-observability = { path = "crates/libs/scion-sdk-observability", version = "0.7.0" }
+scion-quic = { path = "crates/libs/scion-quic", version = "0.7.0" }
+reqwest-connect-rpc = { path = "crates/libs/reqwest-connect-rpc", version = "0.7.0" }
+scion-connect-rpc = { path = "crates/libs/scion-connect-rpc", version = "0.7.0" }
+scion-trc = { path = "crates/libs/scion-trc", version = "0.7.0" }
+scion-sdk-token-validator = { path = "crates/libs/scion-sdk-token-validator", version = "0.7.0" }
+scion-sdk-utils = { path = "crates/libs/scion-sdk-utils", version = "0.7.0" }
 
-pocketscion = { path = "crates/pocketscion", version = "0.6.1" }
+pocketscion = { path = "crates/pocketscion", version = "0.7.0" }
 
-scion-protobuf = { path = "crates/libs/scion-protobuf", version = "0.6.1" }
-sciparse = { path = "crates/libs/sciparse", version = "0.6.1" }
-scion-http3 = { path = "crates/libs/scion-http3", version = "0.6.1" }
+scion-protobuf = { path = "crates/libs/scion-protobuf", version = "0.7.0" }
+sciparse = { path = "crates/libs/sciparse", version = "0.7.0" }
+scion-http3 = { path = "crates/libs/scion-http3", version = "0.7.0" }
 
-snap-control = { path = "crates/snap/snap-control", version = "0.6.1" }
-snap-dataplane = { path = "crates/snap/snap-dataplane", version = "0.6.1" }
-snap-tun = { path = "crates/snap/snap-tun", version = "0.6.1" }
-snap-tokens = { path = "crates/snap/snap-tokens", version = "0.6.1" }
+snap-control = { path = "crates/snap/snap-control", version = "0.7.0" }
+snap-dataplane = { path = "crates/snap/snap-dataplane", version = "0.7.0" }
+snap-tun = { path = "crates/snap/snap-tun", version = "0.7.0" }
+snap-tokens = { path = "crates/snap/snap-tokens", version = "0.7.0" }
 
-scion-stack = { path = "crates/scion-stack", version = "0.6.1" }
+scion-stack = { path = "crates/scion-stack", version = "0.7.0" }
 
 # General Dependencies
 aes = "0.8"
