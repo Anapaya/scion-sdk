@@ -13,6 +13,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // For the sample app built against a released AAR rather than against the module here; see
+        // the scionSdkVersion property in hello-scion/build.gradle.kts.
+        mavenLocal()
     }
 }
 
@@ -67,6 +70,9 @@ gradle.extra["sdkVersion"] =
 rootProject.name = "scion-sdk-android"
 
 include(":scion-http3-android")
+
+// The hello-scion sample app.
+include(":hello-scion")
 
 // A plain JVM module, not an Android one: the FFI layer touches no Android API, so its tests run on
 // a desktop JVM against a host-compiled library, with no emulator in the loop. It compiles the

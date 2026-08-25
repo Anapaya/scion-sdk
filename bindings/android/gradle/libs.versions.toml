@@ -20,6 +20,9 @@ gson = "2.11.0"
 jna-android = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+# The Android artifact of the same library, for Dispatchers.Main. The AAR exposes only the core
+# one, so an application adds this itself; the sample app does what a consumer does.
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidx-test-junit" }

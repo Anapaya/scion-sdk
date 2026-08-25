@@ -11,12 +11,13 @@ consumers. This file is about the build.
 
 ABIs: `arm64-v8a` and `x86_64` (the emulator). `armeabi-v7a` is deliberately not built.
 
-Two modules, and the tools that feed them:
+Three modules, and the tools that feed them:
 
 | | |
 | --- | --- |
 | `scion-http3-android` | The Android library: the Kotlin API, the generated bindings, and the cross-compiled libraries, packaged into the AAR. |
 | `scion-http3-jvm-test` | Tests for the bindings, on a desktop JVM. Not published, and not part of the AAR. |
+| `hello-scion` | The sample app: an Android application that sends one request. Not published. |
 | `tools/android.py` | Cross-compiles the shared library for each ABI, and checks both the result and the AAR it ends up in. |
 | `tools/e2e.sh` | Runs the end-to-end tests on an emulator. |
 | `../../tools/uniffi-bindgen` | The binding generator, built from the workspace's pinned `uniffi`. |

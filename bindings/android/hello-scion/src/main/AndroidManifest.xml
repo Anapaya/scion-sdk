@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026 Anapaya Systems
+
+  The test network's control API is plain HTTP on the host, deliberately neither SCION nor TLS, and
+  since Android 9 a cleartext request fails without usesCleartextTraffic. The SCION request itself
+  is HTTP/3 over QUIC and unaffected.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="Hello SCION"
+        android:usesCleartextTraffic="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

@@ -126,22 +126,29 @@ object Fixture {
 
     /**
      * A call on the control API.
+     *
+     * A GET is retried while the device cannot reach the host at all. A POST is sent once.
      */
     private fun control(
         path: String,
         method: String = "GET",
-    ): String =
-        try {
-            send(path, method)
-        } catch (e: IOException) {
-            throw AssertionError(
-                "$controlUrl$path could not be reached. The test server runs on the machine " +
-                    "hosting this emulator rather than on the device, and these tests do not " +
-                    "start it: run them through bindings/android/tools/e2e.sh, or start it " +
-                    "yourself and pass -PfixtureHost and -PfixtureControlPort.",
-                e,
-            )
+    ): String {
+        val expiry = System.nanoTime() + CONTROL_RETRY_WINDOW_MILLIS * 1_000_000L
+        while (true) {
+            try {
+                return send(path, method)
+            } catch (e: IOException) {
+                if (method != "GET" || System.nanoTime() >= expiry) {
+                    throw AssertionError(unreachable(path), e)
+                }
+                Thread.sleep(CONTROL_RETRY_DELAY_MILLIS)
+            }
         }
+    }
+
+    private fun unreachable(path: String): String =
+        "$controlUrl$path could not be reached, and stayed unreachable for " +
+            "${CONTROL_RETRY_WINDOW_MILLIS / 1000} seconds."
 
     /**
      * @throws IOException if the server could not be reached at all.
@@ -176,6 +183,11 @@ object Fixture {
     }
 
     private const val CONTROL_TIMEOUT_MILLIS = 60_000
+
+    // Long enough for the emulator's networking to come back by itself, which takes well under a
+    // second, and short enough that a server nobody started still says so promptly.
+    private const val CONTROL_RETRY_WINDOW_MILLIS = 10_000
+    private const val CONTROL_RETRY_DELAY_MILLIS = 500L
 }
 
 /**
