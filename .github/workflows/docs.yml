@@ -22,6 +22,7 @@ concurrency:
       # `ANCHOR:` marker inside it, breaks the guide without touching a single
       # Markdown file, so those changes have to run this build too.
       - crates/**
+      - bindings/android/hello-scion/**
       - .github/workflows/docs.yml
 jobs:
   build:

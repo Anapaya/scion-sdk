@@ -96,10 +96,25 @@ function extractAnchor(source: string, anchor: string, file: string): string {
         );
     }
     // Keep lines strictly between the markers, dropping any nested anchor markers.
-    return lines
+    const block = lines
         .slice(start + 1, end)
-        .filter((l) => !/ANCHOR(_END)?:/.test(l))
-        .join('\n');
+        .filter((l) => !/ANCHOR(_END)?:/.test(l));
+    return trimBlankEdges(block).join('\n');
+}
+
+/**
+ * Drops blank lines at both ends of an extracted block.
+ *
+ * A marker cannot always sit directly above the code it names: ktlint rejects a comment
+ * immediately above a KDoc, so a Kotlin anchor has to leave a blank line after the marker. That
+ * blank belongs to the marker, not to the sample.
+ */
+function trimBlankEdges(lines: string[]): string[] {
+    let first = 0;
+    let last = lines.length;
+    while (first < last && lines[first].trim() === '') first += 1;
+    while (last > first && lines[last - 1].trim() === '') last -= 1;
+    return lines.slice(first, last);
 }
 
 function extractLineRange(source: string, selector: string, file: string): string {
