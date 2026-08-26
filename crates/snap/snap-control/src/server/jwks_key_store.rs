@@ -356,7 +356,11 @@ mod tests {
     }
 
     /// Creates a store with a 1-hour refresh interval (tests drive fetches via `await_key`).
+    ///
+    /// The store builds a `reqwest::Client`, which panics if no rustls crypto provider is
+    /// installed in the process.
     fn make_store(url: Url) -> (JwksKeyStore, CancellationToken) {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let ct = CancellationToken::new();
         let store = JwksKeyStore::new(url, Duration::from_secs(3600), ct.clone());
         (store, ct)
@@ -379,7 +383,6 @@ mod tests {
 
     #[tokio::test]
     async fn cache_hit_avoids_second_fetch() {
-        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let kid = "test-kid-2";
         let (url, counter) = start_jwks_server(test_jwks_json(kid), None).await;
         let (store, _ct) = make_store(url);
@@ -392,7 +395,6 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_kid_returns_none_after_fetch() {
-        scion_sdk_utils::rustls::select_ring_crypto_provider();
         let (url, _) = start_jwks_server(test_jwks_json("other-kid"), None).await;
         let (store, _ct) = make_store(url);
 
@@ -402,7 +404,6 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_failure_returns_none() {
-        scion_sdk_utils::rustls::select_ring_crypto_provider();
         // Use a port that is not listening.
         let url: Url = "http://127.0.0.1:19999/.well-known/jwks.json"
             .parse()
