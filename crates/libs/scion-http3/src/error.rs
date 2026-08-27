@@ -241,17 +241,22 @@ impl Error {
     /// when *every* candidate rejected us is the failure deterministic, and
     /// therefore not worth retrying.
     pub(crate) fn from_attempt_errors(host: &str, port: u16, errors: Vec<AttemptError>) -> Error {
-        // XXX(shitz): A certificate that fails to validate should be an
+        // XXX(shitz): A chain that fails against the trust anchors should be an
         // `Error::Tls` too, but cannot be recognized here: scion-quic's
         // handshake loop discards the cause and reports
         // `EstablishError::Handshake`, which is what an unreachable peer also
         // produces. Such failures are therefore reported as retryable
-        // `Error::Connect`. Fixing this needs a distinct handshake-failure
-        // variant in scion-quic.
+        // `Error::Connect`. A chain that a caller-supplied verifier refuses is
+        // recognized, because that path keeps its cause.
         let all_tls = !errors.is_empty()
-            && errors
-                .iter()
-                .all(|e| matches!(e, AttemptError::Establish(EstablishError::AlpnMismatch)));
+            && errors.iter().all(|e| {
+                matches!(
+                    e,
+                    AttemptError::Establish(
+                        EstablishError::AlpnMismatch | EstablishError::CertificateRejected(_)
+                    )
+                )
+            });
         let source = Box::new(AllAttemptsFailed { errors });
         if all_tls {
             Error::Tls {
@@ -417,6 +422,8 @@ pub enum BuildRequestError {
 
 #[cfg(test)]
 mod tests {
+    use scion_quic::quic::cert_verifier::CertRejected;
+
     use super::*;
 
     #[test]
@@ -504,6 +511,22 @@ mod tests {
             ],
         );
         assert!(matches!(mixed, Error::Connect { .. }));
+    }
+
+    #[test]
+    fn a_rejected_certificate_is_a_tls_error() {
+        // A verifier that refuses the chain refuses it again on a retry, so the
+        // failure is deterministic rather than a connect failure to retry.
+        let rejected = Error::from_attempt_errors(
+            "example.org",
+            443,
+            vec![AttemptError::Establish(
+                EstablishError::CertificateRejected(CertRejected::new("not the pinned server")),
+            )],
+        );
+        assert!(matches!(rejected, Error::Tls { .. }));
+        assert!(!rejected.is_retryable());
+        assert!(rejected.to_string().contains("example.org"));
     }
 
     #[test]

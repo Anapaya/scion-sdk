@@ -51,7 +51,10 @@ use crate::{
         },
         common::H3_INTERNAL_ERROR,
     },
-    quic::connection::{ConnectionHandle, IsdAsnPair, QuicScionConn, QuicScionConnDriver},
+    quic::{
+        cert_verifier::RejectionReport,
+        connection::{ConnectionHandle, IsdAsnPair, QuicScionConn, QuicScionConnDriver},
+    },
     socket::GenericScionUdpSocket,
 };
 
@@ -72,6 +75,7 @@ pub(crate) async fn connect(
     socket: Arc<dyn GenericScionUdpSocket>,
     server_name: Option<String>,
     mut quiche_config: squiche::Config,
+    rejection: Option<RejectionReport>,
     handshake_timeout: Duration,
     closed: CancellationToken,
     lifetime: Arc<ConnLifetime>,
@@ -100,6 +104,12 @@ pub(crate) async fn connect(
         let conn = match handshake_result {
             Ok(conn) => conn,
             Err(err) => {
+                // A verifier that refused the chain explains the failure better
+                // than the generic TLS error the handshake reports.
+                let err = match rejection.as_ref().and_then(RejectionReport::take) {
+                    Some(rejected) => EstablishError::CertificateRejected(rejected),
+                    None => err,
+                };
                 let _ = tx.send(Err(err));
                 return;
             }

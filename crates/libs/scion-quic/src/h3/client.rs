@@ -312,9 +312,9 @@ impl Http3Client {
             return Ok(conn.clone());
         }
 
-        let quiche_config = self
+        let (quiche_config, rejection) = self
             .config
-            .to_quiche_config()
+            .to_quiche_config_reporting()
             .map_err(EstablishError::Quic)?;
 
         let lifetime = ConnLifetime::new();
@@ -323,6 +323,7 @@ impl Http3Client {
             self.socket.clone(),
             self.server_name.clone(),
             quiche_config,
+            rejection,
             self.config.handshake_timeout,
             self.closed.clone(),
             lifetime.clone(),

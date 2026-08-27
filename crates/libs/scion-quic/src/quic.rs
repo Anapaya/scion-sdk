@@ -16,6 +16,7 @@
 //!
 //! [`server_endpoint`]/[`connection`] are the modern sans-I/O QUIC server stack.
 
+pub mod cert_verifier;
 pub mod config;
 pub mod connection;
 pub mod server_endpoint;

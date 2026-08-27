@@ -5629,9 +5629,9 @@ dependencies = [
 
 [[package]]
 name = "squiche"
-version = "0.29.3-ana.3"
+version = "0.29.3-ana.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4d895ee89c5cdb80f6c95e5561f975e0da68f583da4151ec6d00bdd5028973a"
+checksum = "1b936216d8c3c72af0128824d87656967e60d80fd1bef9549b632c6077bc2e17"
 dependencies = [
  "boring",
  "bytes",

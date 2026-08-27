@@ -20,7 +20,7 @@
 //! client-specific failures — connection *establishment* and *request*
 //! initiation/routing — are captured here.
 
-use crate::{h3::common::H3Error, socket::BoxedSocketError};
+use crate::{h3::common::H3Error, quic::cert_verifier::CertRejected, socket::BoxedSocketError};
 
 /// An error establishing an HTTP/3 connection (the `connect()` bootstrap).
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +35,11 @@ pub enum EstablishError {
     /// The QUIC layer reported an error while connecting.
     #[error("QUIC error: {0}")]
     Quic(squiche::Error),
+    /// The verifier set with
+    /// [`with_cert_verifier`](crate::quic::config::QuicConfigBuilder::with_cert_verifier)
+    /// rejected the peer's certificate chain, and gave this reason.
+    #[error("certificate rejected: {0}")]
+    CertificateRejected(#[source] CertRejected),
     /// The handshake did not complete (the connection closed before becoming
     /// established).
     #[error("handshake failed")]
@@ -79,6 +84,9 @@ impl EstablishError {
                     | squiche::Error::InvalidTransportParam
                 )
             }
+            // The peer sent a chain that the caller's verifier refuses, which it
+            // refuses again on the next attempt.
+            Self::CertificateRejected(_) => false,
             // The connection closed before it was established, which includes the
             // handshake timing out because the remote never answered.
             Self::Handshake => true,
