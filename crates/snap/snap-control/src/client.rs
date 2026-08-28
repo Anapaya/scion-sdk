@@ -108,7 +108,7 @@ impl ControlPlaneApi for CrpcSnapControlClient {
     async fn get_data_plane_address(&self) -> Result<GetDataPlaneAddressResponse, CrpcClientError> {
         let res: proto::GetSnapDataPlaneAddressResponse = self
             .client
-            .unary_request::<proto::GetSnapDataPlaneAddressRequest, proto::GetSnapDataPlaneAddressResponse>(
+            .buffa_unary_request::<proto::GetSnapDataPlaneAddressRequest, proto::GetSnapDataPlaneAddressResponse>(
                 &format!("{SERVICE_PATH}{GET_SNAP_DATA_PLANE_ADDRESS}"),
                 &proto::GetSnapDataPlaneAddressRequest::default(),
             )
@@ -173,9 +173,13 @@ impl ControlPlaneApi for CrpcSnapControlClient {
         initiator_identity: PublicKey,
         psk_share: Option<[u8; 32]>,
     ) -> Result<Option<[u8; 32]>, CrpcClientError> {
-        let res = self.client.unary_request::<proto::RegisterSnapTunIdentityRequest, proto::RegisterSnapTunIdentityResponse>(
+        let res = self.client.buffa_unary_request::<proto::RegisterSnapTunIdentityRequest, proto::RegisterSnapTunIdentityResponse>(
             &format!("{SERVICE_PATH}{REGISTER_SNAPTUN_IDENTITY}"),
-            &proto::RegisterSnapTunIdentityRequest { initiator_static_x25519: initiator_identity.to_bytes().to_vec(), psk_share: psk_share.unwrap_or([0u8;32]).to_vec() },
+            &proto::RegisterSnapTunIdentityRequest {
+                initiator_static_x25519: initiator_identity.to_bytes().to_vec(),
+                psk_share: psk_share.unwrap_or([0u8; 32]).to_vec(),
+                ..Default::default()
+            },
         ).await?;
         let psk_share = if res.psk_share.as_slice() == [0u8; 32] {
             None

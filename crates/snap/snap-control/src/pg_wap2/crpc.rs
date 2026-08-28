@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Protobuf definitions for the SNAP control plane API.
+//! Connect RPC API of the WAP control plane.
+//!
+//! Serves the `anapaya.wap.v1.WapControl` service defined in
+//! `protobuf/anapaya/wap/v1/control_service.proto`, split into three parts:
+//!
+//! * [`model`] - One model per message of the service, plus the
+//!   [`ControlServiceAPIHandler`](model::ControlServiceAPIHandler) that serves them.
+//! * [`convert`] - Translation between the protobuf messages and their models.
+//! * [`api`] - The endpoints, and [`api::nest_crpc_api`] to serve them on a router.
 
-/// Anapaya
-pub mod anapaya {
-    /// Snap
-    pub mod snap {
-        /// Version 1 of the Snap API.
-        pub mod v1 {
-            include!("proto/anapaya.snap.v1.rs");
-        }
-    }
-}
+pub mod api;
+pub mod convert;
+pub mod model;

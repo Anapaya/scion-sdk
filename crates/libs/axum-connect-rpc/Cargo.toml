@@ -10,6 +10,7 @@ keywords = ["SCION", "networking"]
 
 [dependencies]
 axum = { workspace = true }
+buffa = { workspace = true }
 bytes = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }

@@ -49,8 +49,13 @@ fn main() -> anyhow::Result<()> {
         extern_paths: vec![(".proto", "scion_protobuf")],
     };
 
+    let scion_proto_buffa_externs = ExternIncludes {
+        proto_dirs: vec!["crates/libs/scion-protobuf"],
+        extern_paths: vec![(".proto", "::scion_protobuf::buffa::proto")],
+    };
+
     let targets = vec![
-        CompileConfig {
+        ProtoCompileConfig {
             name: "scion-protobuf",
             out_dir: "crates/libs/scion-protobuf/src/proto",
             proto_dirs: vec!["crates/libs/scion-protobuf/"],
@@ -58,8 +63,17 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec![],
             use_tonic: true,
             serde_packages: vec![],
-        },
-        CompileConfig {
+        }
+        .into(),
+        BuffaCompileConfig {
+            name: "scion-protobuf-buffa",
+            generate_connectrpc: true,
+            out_dir: "crates/libs/scion-protobuf/src/buffa",
+            proto_dirs: vec!["crates/libs/scion-protobuf/"],
+            extern_includes: vec![],
+        }
+        .into(),
+        ProtoCompileConfig {
             name: "endhost-api",
             out_dir: "crates/apis/endhost-api/endhost-api-protobuf/src/proto",
             proto_dirs: vec!["crates/apis/endhost-api/endhost-api-protobuf/protobuf"],
@@ -67,8 +81,9 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec!["--experimental_allow_proto3_optional"],
             use_tonic: false,
             serde_packages: vec![],
-        },
-        CompileConfig {
+        }
+        .into(),
+        ProtoCompileConfig {
             name: "endhost-api-discovery",
             out_dir: "crates/apis/anapaya-ead/anapaya-ead-models/src/proto/gen",
             proto_dirs: vec!["crates/apis/anapaya-ead/anapaya-ead-models/protobuf"],
@@ -76,8 +91,9 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec![],
             use_tonic: false,
             serde_packages: vec![".endhost.discovery.v1"],
-        },
-        CompileConfig {
+        }
+        .into(),
+        ProtoCompileConfig {
             name: "hsd-api",
             out_dir: "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf/src/proto",
             proto_dirs: vec!["crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf/protobuf"],
@@ -85,8 +101,9 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec!["--experimental_allow_proto3_optional"],
             use_tonic: false,
             serde_packages: vec![],
-        },
-        CompileConfig {
+        }
+        .into(),
+        ProtoCompileConfig {
             name: "anapaya-aa",
             out_dir: "crates/apis/anapaya-aa/anapaya-aa-protobuf/src/proto",
             proto_dirs: vec!["crates/apis/anapaya-aa/anapaya-aa-protobuf/protobuf"],
@@ -94,17 +111,17 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec![],
             use_tonic: false,
             serde_packages: vec![".anapaya.aa.v1"],
-        },
-        CompileConfig {
+        }
+        .into(),
+        BuffaCompileConfig {
             name: "snap-control",
+            generate_connectrpc: true,
             out_dir: "crates/snap/snap-control/src/proto",
             proto_dirs: vec!["crates/snap/snap-control/protobuf"],
-            extern_includes: vec![],
-            protoc_args: vec![],
-            use_tonic: false,
-            serde_packages: vec![],
-        },
-        CompileConfig {
+            extern_includes: vec![scion_proto_buffa_externs.clone()],
+        }
+        .into(),
+        ProtoCompileConfig {
             name: "edge-tun",
             out_dir: "crates/libs/anapaya-edge-tun/src/proto",
             proto_dirs: vec!["crates/libs/anapaya-edge-tun/protobuf"],
@@ -112,7 +129,8 @@ fn main() -> anyhow::Result<()> {
             protoc_args: vec![],
             use_tonic: false,
             serde_packages: vec![],
-        },
+        }
+        .into(),
     ];
 
     match cli.command {
@@ -130,7 +148,7 @@ fn run_update(targets: Vec<CompileConfig>) -> anyhow::Result<()> {
 
     // Ensure output directories exist
     for target in &targets {
-        fs::create_dir_all(target.out_dir)?;
+        fs::create_dir_all(target.out_dir())?;
     }
 
     for target in &targets {
@@ -221,7 +239,60 @@ fn compare_dirs(gen_dir: &Path, src_dir: &Path) -> anyhow::Result<Vec<PathBuf>> 
     Ok(sorted_diffs)
 }
 
-struct CompileConfig {
+enum CompileConfig {
+    Proto(ProtoCompileConfig),
+    Buffa(BuffaCompileConfig),
+}
+impl From<ProtoCompileConfig> for CompileConfig {
+    fn from(config: ProtoCompileConfig) -> Self {
+        CompileConfig::Proto(config)
+    }
+}
+impl From<BuffaCompileConfig> for CompileConfig {
+    fn from(config: BuffaCompileConfig) -> Self {
+        CompileConfig::Buffa(config)
+    }
+}
+
+impl CompileConfig {
+    fn out_dir(&self) -> &str {
+        match self {
+            CompileConfig::Proto(config) => config.out_dir,
+            CompileConfig::Buffa(config) => config.out_dir,
+        }
+    }
+
+    fn generate(&self) -> anyhow::Result<()> {
+        match self {
+            CompileConfig::Proto(config) => config.compile(config.out_dir),
+            CompileConfig::Buffa(config) => config.compile(config.out_dir),
+        }
+    }
+
+    fn check(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("proto-gen-check-")
+            .tempdir()?;
+
+        let tmp_dir_path = tmp_dir.path();
+        let tmp_dir_str = tmp_dir_path
+            .to_str()
+            .context("failed to convert temp dir path to str")?;
+
+        // Compare generated files with existing ones
+        match self {
+            CompileConfig::Proto(config) => config.compile(tmp_dir_str)?,
+            CompileConfig::Buffa(config) => config.compile(tmp_dir_str)?,
+        }
+
+        // Compare generated files with existing ones
+        let diffs = compare_dirs(tmp_dir_path, Path::new(self.out_dir()))?;
+
+        Ok(diffs)
+    }
+}
+
+struct ProtoCompileConfig {
     /// Name of the target being compiled (for logging purposes)
     name: &'static str,
     /// Output directory for generated files
@@ -263,48 +334,7 @@ struct CompileConfig {
     serde_packages: Vec<&'static str>,
 }
 
-#[derive(Clone)]
-struct ExternIncludes {
-    /// Root directories containing external .proto files
-    proto_dirs: Vec<&'static str>,
-    /// Generate external type mappings.
-    /// (proto package, Rust module path)
-    ///
-    /// E.g., (".proto.control_plane.v1", "scion_protobuf::control_plane::v1")
-    ///
-    /// Allows reusing existing generated code instead of regenerating.
-    extern_paths: Vec<(&'static str, &'static str)>,
-}
-
-impl CompileConfig {
-    /// Generates the protobuf files into the specified output directory.
-    ///
-    /// Will overwrite existing files.
-    pub fn generate(&self) -> anyhow::Result<()> {
-        self.compile(self.out_dir)
-    }
-
-    /// Checks if the generated files are up-to-date without writing them.
-    ///
-    /// If they are not up-to-date, returns a list of differing files.
-    pub fn check(&self) -> anyhow::Result<Vec<PathBuf>> {
-        let tmp_dir = tempfile::Builder::new()
-            .prefix("proto-gen-check-")
-            .tempdir()?;
-
-        let tmp_dir_path = tmp_dir.path();
-        let tmp_dir_str = tmp_dir_path
-            .to_str()
-            .context("failed to convert temp dir path to str")?;
-
-        self.compile(tmp_dir_str)?;
-
-        // Compare generated files with existing ones
-        let diffs = compare_dirs(tmp_dir_path, Path::new(self.out_dir))?;
-
-        Ok(diffs)
-    }
-
+impl ProtoCompileConfig {
     /// Compiles the protobuf files into the specified output directory.
     ///
     /// Uses prost_build, generating only messages.
@@ -368,7 +398,7 @@ impl CompileConfig {
 
         // Gather all .proto files from the specified root directories
         for proto_root in &self.proto_dirs {
-            let files = get_proto_files(proto_root)?;
+            let files = get_files_with_extension(proto_root, "proto")?;
             proto_files.extend(files);
             include_dirs.push(proto_root.to_string());
         }
@@ -405,8 +435,141 @@ impl CompileConfig {
     }
 }
 
-/// Recursively collects all .proto files from the specified root directory.
-fn get_proto_files(proto_root: &str) -> anyhow::Result<Vec<String>> {
+struct BuffaCompileConfig {
+    /// Name of the target being compiled (for logging purposes)
+    name: &'static str,
+    /// Output directory for generated files
+    out_dir: &'static str,
+    /// Whether to generate connectrpc service files in addition to the protobuf messages.
+    generate_connectrpc: bool,
+    /// Root directories containing .proto files
+    ///
+    /// The directories will be searched recursively to find all .proto files.
+    proto_dirs: Vec<&'static str>,
+    /// External includes and their Rust module mappings
+    ///
+    /// Allows reusing existing generated code instead of generating new code.
+    extern_includes: Vec<ExternIncludes>,
+}
+
+impl BuffaCompileConfig {
+    pub fn compile(&self, out_dir: &str) -> anyhow::Result<()> {
+        fs::create_dir_all(out_dir)
+            .with_context(|| format!("failed to create output directory {}", out_dir))?;
+
+        match self.generate_connectrpc {
+            true => {
+                self.connectrpc_config(out_dir)?
+                    .compile()
+                    .map_err(|err| anyhow::anyhow!("failed to compile {}: {err}", self.name))?;
+            }
+            false => {
+                self.buffa_config(out_dir)?
+                    .compile()
+                    .map_err(|err| anyhow::anyhow!("failed to compile {}: {err}", self.name))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn connectrpc_config(&self, out_dir: &str) -> anyhow::Result<connectrpc_build::Config> {
+        let mut proto_files = Vec::new();
+        let mut include_dirs = Vec::new();
+
+        // Gather all .proto files from the specified root directories
+        for proto_root in &self.proto_dirs {
+            let files = get_files_with_extension(proto_root, "proto")?;
+            proto_files.extend(files);
+            include_dirs.push(proto_root.to_string());
+        }
+
+        let mut buffa_config = connectrpc_build::CodeGenConfig::default();
+        buffa_config
+            .map_fields
+            .push((".".to_string(), buffa_build::MapRepr::BTreeMap));
+
+        // Set up extern includes
+        for ext in &self.extern_includes {
+            for proto_root in &ext.proto_dirs {
+                include_dirs.push(proto_root.to_string());
+            }
+
+            // Set extern path mappings
+            for (proto_pkg, rust_mod) in &ext.extern_paths {
+                buffa_config
+                    .extern_paths
+                    .push((proto_pkg.to_string(), rust_mod.to_string()));
+            }
+        }
+
+        // Configure and run the buffa_build compiler
+        let config = connectrpc_build::Config::new()
+            .buffa_config(buffa_config)
+            .files(&proto_files)
+            .out_dir(out_dir)
+            .generate_json(true)
+            .includes(&include_dirs)
+            .emit_rerun_directives(false)
+            .include_file("mod.rs");
+
+        Ok(config)
+    }
+
+    fn buffa_config(&self, out_dir: &str) -> anyhow::Result<buffa_build::Config> {
+        let mut proto_files = Vec::new();
+        let mut include_dirs = Vec::new();
+
+        // Gather all .proto files from the specified root directories
+        for proto_root in &self.proto_dirs {
+            let files = get_files_with_extension(proto_root, "proto")?;
+            proto_files.extend(files);
+            include_dirs.push(proto_root.to_string());
+        }
+
+        // Configure and run the buffa_build compiler
+        let mut config = buffa_build::Config::new()
+            .files(&proto_files)
+            .out_dir(out_dir)
+            .map_type(buffa_build::MapRepr::BTreeMap)
+            .include_file("mod.rs");
+
+        // Set up extern includes
+        for ext in &self.extern_includes {
+            for proto_root in &ext.proto_dirs {
+                include_dirs.push(proto_root.to_string());
+            }
+
+            // Set extern path mappings
+            for (proto_pkg, rust_mod) in &ext.extern_paths {
+                config = config.extern_path(proto_pkg.to_string(), rust_mod.to_string());
+            }
+        }
+
+        config = config.includes(&include_dirs);
+
+        Ok(config)
+    }
+}
+
+#[derive(Clone)]
+struct ExternIncludes {
+    /// Root directories containing external .proto files
+    proto_dirs: Vec<&'static str>,
+    /// Generate external type mappings.
+    /// (proto package, Rust module path)
+    ///
+    /// E.g., (".proto.control_plane.v1", "scion_protobuf::control_plane::v1")
+    ///
+    /// Allows reusing existing generated code instead of regenerating.
+    extern_paths: Vec<(&'static str, &'static str)>,
+}
+
+/// Recursively collects all files from the specified root directory with the given extension.
+fn get_files_with_extension(
+    proto_root: &str,
+    filter_extension: &str,
+) -> anyhow::Result<Vec<String>> {
     let mut proto_files: Vec<String> = walkdir::WalkDir::new(proto_root)
         .into_iter()
         .filter_map(Result::ok)
@@ -414,11 +577,13 @@ fn get_proto_files(proto_root: &str) -> anyhow::Result<Vec<String>> {
             e.file_type().is_file()
                 && e.path()
                     .extension()
-                    .map(|ext| ext == "proto")
+                    .map(|ext| ext == filter_extension)
                     .unwrap_or(false)
         })
         .map(|e| e.path().display().to_string())
         .collect();
+
     proto_files.sort();
+
     Ok(proto_files)
 }

@@ -37,7 +37,8 @@ use sciparse::{
 };
 
 use super::{
-    auth::{AuthSegments, AuthService, GrantedSegmentId},
+    auth::{AuthService, AuthServiceConfig, GrantedSegmentId},
+    crpc::model::AuthSegments,
     paths::PathManager,
     segments::{SegmentManager, SegmentStoreId},
 };
@@ -49,6 +50,13 @@ pub fn sni() -> WapSNI {
 
 pub fn other_sni() -> WapSNI {
     WapSNI::new("id.wap.other.example.com".to_string()).unwrap()
+}
+
+/// The `n`th SNI of an open ended family, each with its own customer domain.
+///
+/// No member of the family collides with [`sni`] or [`other_sni`].
+pub fn nth_sni(n: usize) -> WapSNI {
+    WapSNI::new(format!("id.wap.target{n}.example.com")).unwrap()
 }
 
 /// Interfaces of the up segment used by most tests.
@@ -213,6 +221,28 @@ pub fn other_up_segment(timestamp: u32) -> SignedPathSegment {
     )
 }
 
+/// The `n`th up segment of an open ended family, each with its own fingerprint.
+///
+/// No member of the family collides with the named segments above.
+pub fn nth_up_segment(n: u16) -> SignedPathSegment {
+    segment(
+        0,
+        u8::MAX,
+        &[
+            Hop {
+                ia: core_ia(),
+                ingress: 0,
+                egress: UP_IFS.0 + 100 + n,
+            },
+            Hop {
+                ia: leaf_ia(),
+                ingress: UP_IFS.1 + 100 + n,
+                egress: 0,
+            },
+        ],
+    )
+}
+
 /// A core segment between the two core ASes, the middle of the up-core-down path.
 pub fn core_segment(timestamp: u32) -> SignedPathSegment {
     segment(
@@ -342,13 +372,29 @@ impl Fixture {
     /// Builds the primitives with generous timeouts, so nothing expires unless a test hands one
     /// of them a later point in time.
     pub fn new(fetcher: Arc<MockFetcher>, auth_duration: Duration) -> Self {
-        // The clean interval bounds only matter for `AuthService::run`, which the tests drive by
-        // calling `clean` directly.
-        let auth = AuthService::new(
-            auth_duration,
-            Duration::from_millis(30),
-            Duration::from_secs(120),
-        );
+        Self::with_auth_config(
+            fetcher,
+            AuthServiceConfig {
+                auth_duration,
+                ..Self::auth_config_defaults()
+            },
+        )
+    }
+
+    /// The [`AuthServiceConfig`] a [`Fixture`] uses.
+    pub fn auth_config_defaults() -> AuthServiceConfig {
+        AuthServiceConfig {
+            // The clean interval bounds only matter for `AuthService::run`, which the tests drive
+            // by calling `clean` directly.
+            min_clean_interval: Duration::from_millis(30),
+            max_clean_interval: Duration::from_secs(120),
+            ..AuthServiceConfig::default()
+        }
+    }
+
+    /// Builds the primitives with an [`AuthService`] configured by hand.
+    pub fn with_auth_config(fetcher: Arc<MockFetcher>, auth_config: AuthServiceConfig) -> Self {
+        let auth = AuthService::new(auth_config).expect("a valid AuthServiceConfig");
         let segments = SegmentManager::new(
             MAX_FETCH_INTERVAL,
             MIN_FETCH_INTERVAL,
@@ -367,53 +413,42 @@ impl Fixture {
         }
     }
 
-    /// Grants `segments` to the test client for the test SNI.
+    /// Grants `segments` to the test client for the test SNI, as up segments.
     pub fn grant_non_core(&self, segments: Vec<SignedPathSegment>, now: SystemTime) {
-        self.auth.authorize(
-            client_ip(),
-            HashMap::from([(
-                sni().customer_domain().into(),
-                AuthSegments::new(Vec::new(), segments),
-            )]),
-            now,
-        );
+        self.grant_non_core_to(client_ip(), segments, now);
     }
 
     /// Grants `ip` access to `dst`, without any private segments.
     pub fn grant_target(&self, ip: IpAddr, dst: CustomerDomainRef<'_>, now: SystemTime) {
-        self.auth.authorize(
-            ip,
-            HashMap::from([(dst.into(), AuthSegments::default())]),
-            now,
-        );
+        self.grant_for(ip, dst, AuthSegments::default(), now);
     }
 
-    /// Grants `segments` to `ip` for the test SNI.
+    /// Grants `segments` to `ip` for the test SNI, as up segments.
     pub fn grant_non_core_to(&self, ip: IpAddr, segments: Vec<SignedPathSegment>, now: SystemTime) {
-        self.auth.authorize(
+        self.grant_for(
             ip,
-            HashMap::from([(
-                sni().customer_domain().into(),
-                AuthSegments::new(Vec::new(), segments),
-            )]),
+            sni().customer_domain(),
+            AuthSegments {
+                up_segments: segments,
+                ..AuthSegments::default()
+            },
             now,
         );
     }
 
-    /// Grants `ip` access to `dst` over `core` and `non_core`.
+    /// Grants `ip` access to `dst` over `segments`.
+    ///
+    /// Panics if the grant does not fit.
     pub fn grant_for(
         &self,
         ip: IpAddr,
         dst: CustomerDomainRef<'_>,
-        core: Vec<SignedPathSegment>,
-        non_core: Vec<SignedPathSegment>,
+        segments: AuthSegments,
         now: SystemTime,
     ) {
-        self.auth.authorize(
-            ip,
-            HashMap::from([(dst.into(), AuthSegments::new(core, non_core))]),
-            now,
-        );
+        self.auth
+            .authorize(ip, HashMap::from([(dst.into(), segments)]), now)
+            .expect("the grant fits");
     }
 }
 

@@ -17,3 +17,6 @@ force_multiline_blocks = true # Force multiline closures to be wrapped in a bloc
 # Patterns Formatting
 condense_wildcard_suffixes = true # Replace (a, _, _) = (1,2,3) with (a, ..) = (1,2,3)
 use_field_init_shorthand = true # A{ x: x } becomes A { x }
+
+# Generated Files
+format_generated_files = false # Skip files with an `@generated` marker in the first five lines

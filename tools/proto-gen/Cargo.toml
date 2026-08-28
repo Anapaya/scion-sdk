@@ -12,6 +12,9 @@ clap = { workspace = true, features = ["derive"] }
 pbjson-build = { workspace = true }
 prost-build = { workspace = true }
 
+buffa-build = "0.8"
+connectrpc-build = "0.8"
+
 tempfile = { workspace = true }
 tonic-prost-build = { workspace = true }
 walkdir = { workspace = true }

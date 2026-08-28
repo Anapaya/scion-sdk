@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package anapaya.wap.v1;
+
+import "proto/control_plane/v1/seg.proto";
+
+service WapControl {
+  rpc AuthorizeTargets(AuthorizeTargetsRequest) returns (AuthorizeTargetsResponse);
+}
+
+// Authorizes the clients IP to access a list of targets, with optionally granted segments for each target.
+//
+// Before establishing a connection to the client must call this RPC to authorize the targets it wants to connect to.
+//
+// Authorization is valid for the clients IP address and the WAP ID returned in this response for the duration of the returned expiry time.
+message AuthorizeTargetsRequest {
+  // Map of Target SNI to externally granted segments.
+  map<string, AuthSegments> targets = 1;
+}
+
+// Segments to grant for a given target.
+//
+// Attaching granted segments allows the WAP to use them to build paths to the target.
+// Typical source for these segments is the Hidden Segment Directory (HSD).
+// Segments which are public and already available in the SCION control plane do not need to be granted.
+message AuthSegments {
+  // List of up segments to grant for the target.
+  repeated proto.control_plane.v1.PathSegment up_segments = 1;
+  // List of down segments to grant for the target.
+  repeated proto.control_plane.v1.PathSegment down_segments = 2;
+  // List of core segments to grant for the target.
+  repeated proto.control_plane.v1.PathSegment core_segments = 3;
+}
+
+// The authorization granted for the client IP that sent the AuthorizeTargetsRequest.
+message AuthorizeTargetsResponse {
+  // The reflected IP address of the client making the request.
+  string client_ip = 1;
+  // The ID of the WAP where the authorization request was handled.
+  // For the following Dataplane connections, the same WAP must be used.
+  //
+  // For this, the dataplane connections must use a domain name in the form of:
+  // `<wap_id>.<wap-ns>.<target-domain>` to be able to connect to the given target domain.
+  string wap_id = 2;
+  // The port on which the data plane is listening for connections.
+  uint32 data_plane_port = 3;
+  // The time at which the authorization expires, as a unix epoch in seconds.
+  // The client must re-authorize before this time to continue its connection.
+  uint64 expiry_time = 4;
+}

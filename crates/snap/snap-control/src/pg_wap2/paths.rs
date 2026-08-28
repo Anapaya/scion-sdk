@@ -34,10 +34,9 @@ use sciparse::{
     reexport::tinyvec::ArrayVec,
     segment::{SegmentFp, SignedPathSegment},
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::pg_wap2::{
-    auth::{AuthService, DstGrant, GrantedSegmentId},
+    auth::{AuthService, DstGrant, GrantedSegmentId, SegmentGrantGuard, TargetGrantGuard},
     segments::{PairGuard, SegmentManager, SegmentStoreId, SegmentsIter},
     sni::{CustomerDomainRef, WapSNI},
 };
@@ -235,8 +234,8 @@ impl PathManager {
 
     /// Watches the grants that let `client_ip` use `used` towards `dst_sni`.
     ///
-    /// The returned watch resolves once any of the grants that authorize the path expires, so the
-    /// caller can close the connection.
+    /// The returned watch resolves once any of the grants that authorize the path expires.
+    /// It also guards the target and the private segments of the path from early eviction.
     ///
     /// Returns an error if the client is not authorized for the path in the first place.
     pub fn watch_grants(
@@ -246,20 +245,20 @@ impl PathManager {
         used: &UsedPath,
         now: SystemTime,
     ) -> anyhow::Result<GrantWatch> {
-        let dst_grant = self
+        let target = self
             .0
             .auth
             .watch_grant(client_ip, customer_domain, now)
             .with_context(|| format!("No live grant of {client_ip} for {customer_domain}"))?;
 
-        let mut grants = vec![dst_grant];
+        let mut segments = Vec::new();
 
         for id in used.segments.iter() {
             let SegmentSourceId::Auth(id) = id else {
                 continue;
             };
 
-            grants.push(
+            segments.push(
                 self.0
                     .auth
                     .watch_segment_grant(client_ip, customer_domain, id, now)
@@ -272,7 +271,7 @@ impl PathManager {
             );
         }
 
-        Ok(GrantWatch { grants })
+        Ok(GrantWatch { target, segments })
     }
 
     /// Looks a segment up in the source it came from.
@@ -383,9 +382,13 @@ impl Default for SegmentSourceId {
 }
 
 /// Watches one client's authorization to use a path.
+///
+/// Guards the target and the private segments of the path from eviction.
 pub struct GrantWatch {
-    /// The grants the client needs to keep using the path, first the target grant.
-    grants: Vec<CancellationToken>,
+    /// The client's grant on the target the path leads to.
+    target: TargetGrantGuard,
+    /// The client's grants on the private segments of the path.
+    segments: Vec<SegmentGrantGuard>,
 }
 
 impl GrantWatch {
@@ -394,14 +397,9 @@ impl GrantWatch {
     /// Cancel safe: dropping this future and awaiting it again `still observes an expiry that
     /// happened in between.
     pub async fn expired(&self) {
-        // Only ever empty if a caller built this by hand; `watch_grants` always has the target
-        // grant. `select_all` would panic on an empty iterator.
-        if self.grants.is_empty() {
-            debug_assert!(false, "a grant watch without grants never resolves");
-            std::future::pending::<()>().await;
-        }
-
-        let expiries = self.grants.iter().map(|grant| Box::pin(grant.cancelled()));
+        let expiries = std::iter::once(self.target.expired())
+            .chain(self.segments.iter().map(SegmentGrantGuard::expired))
+            .map(|token| Box::pin(token.cancelled()));
 
         futures::future::select_all(expiries).await;
     }
@@ -447,10 +445,13 @@ mod tests {
     use sciparse::segment::Segments;
 
     use super::*;
-    use crate::pg_wap2::test_util::{
-        Fixture, IDLE_EVICTION_TIME, MAX_FETCH_INTERVAL, MockFetcher, at, client_ip, core_ia,
-        core_segment, core_store_id, down_segment, granted_core_id, granted_id, leaf_ia,
-        non_core_store_id, other_leaf_ia, sni, store_id, up_segment,
+    use crate::pg_wap2::{
+        crpc::model::AuthSegments,
+        test_util::{
+            Fixture, IDLE_EVICTION_TIME, MAX_FETCH_INTERVAL, MockFetcher, at, client_ip, core_ia,
+            core_segment, core_store_id, down_segment, granted_core_id, granted_id, leaf_ia,
+            non_core_store_id, other_leaf_ia, sni, store_id, up_segment,
+        },
     };
 
     #[tokio::test]
@@ -534,8 +535,11 @@ mod tests {
         fixture.grant_for(
             client_ip(),
             sni().customer_domain(),
-            Vec::new(),
-            vec![up_segment(0), down_segment(0)],
+            AuthSegments {
+                up_segments: vec![up_segment(0)],
+                down_segments: vec![down_segment(0)],
+                ..AuthSegments::default()
+            },
             at(0),
         );
 
@@ -578,8 +582,10 @@ mod tests {
         fixture.grant_for(
             client_ip(),
             sni().customer_domain(),
-            vec![core_segment(0)],
-            Vec::new(),
+            AuthSegments {
+                core_segments: vec![core_segment(0)],
+                ..AuthSegments::default()
+            },
             at(0),
         );
 
@@ -635,8 +641,11 @@ mod tests {
         fixture.grant_for(
             client_ip(),
             sni().customer_domain(),
-            Vec::new(),
-            vec![up_segment(600), down_segment(600)],
+            AuthSegments {
+                up_segments: vec![up_segment(600)],
+                down_segments: vec![down_segment(600)],
+                ..AuthSegments::default()
+            },
             refreshed_at,
         );
         fixture.fetcher.set_segments(Segments {

@@ -17,8 +17,10 @@ pub mod api;
 pub mod client;
 pub mod model;
 pub mod pg_wap;
-pub mod proto;
 pub mod server;
+
+#[allow(missing_docs)]
+pub mod proto;
 
 #[doc(hidden)]
 pub mod pg_wap2;

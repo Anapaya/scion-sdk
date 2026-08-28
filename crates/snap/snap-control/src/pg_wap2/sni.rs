@@ -119,7 +119,7 @@ impl std::fmt::Display for WapSNI {
 /// This is the part of a [`WapSNI`] that follows the WAP ID and the namespace, e.g.
 /// `domain.com` for `id.wap.domain.com`. Authorization grants are held per customer domain, so
 /// this is the key a client is authorized against.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CustomerDomain(String);
 
 impl CustomerDomain {

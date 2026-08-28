@@ -14,7 +14,9 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
+buffa = { workspace = true }
 chrono = { workspace = true }
+connectrpc = { workspace = true }
 http = { workspace = true }
 jsonwebtoken = { workspace = true }
 mockall = { workspace = true }
@@ -34,13 +36,14 @@ utoipa = { workspace = true, features = ["yaml", "time", "axum_extras"] }
 utoipa-axum = { workspace = true }
 x25519-dalek = { workspace = true }
 
-# Local dependencies
+# Local dependencies}
 endhost-api = { workspace = true }
 endhost-api-client = { workspace = true }
 endhost-api-models = { workspace = true }
 axum-connect-rpc = { workspace = true }
-scion-sdk-observability = { workspace = true }
 reqwest-connect-rpc = { workspace = true }
+scion-protobuf = { workspace = true }
+scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
 scion-sdk-utils = { workspace = true }
 sciparse = { workspace = true }

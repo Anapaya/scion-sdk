@@ -24,6 +24,9 @@
 //! * [`uplinks::UplinkManager`] - Creates and manages one uplink per (path, WAG) pair, multiplexes
 //!   SNI streams over it, refreshes its path, cleans it when unused or closed.
 //!
+//! Clients reach the control plane over the Connect RPC API in [`crpc`], which is where the
+//! authorizations that [`auth::AuthService`] hands out come from.
+//!
 //! ## Time
 //!
 //! Every operation that depends on the current time takes it as a `now: SystemTime` argument, so
@@ -34,6 +37,7 @@
 //! clock themselves.
 
 pub mod auth;
+pub mod crpc;
 pub mod paths;
 pub mod segments;
 pub mod sni;

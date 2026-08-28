@@ -72,3 +72,6 @@ pub mod crypto {
         include!("proto/proto.crypto.v1.rs");
     }
 }
+
+#[doc(hidden)]
+pub mod buffa;

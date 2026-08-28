@@ -10,8 +10,14 @@ keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
 [dependencies]
+buffa = { workspace = true }
+buffa-types = { workspace = true }
+connectrpc = { workspace = true }
+serde = { workspace = true }
+
 prost = { workspace = true }
 prost-types = { workspace = true }
+
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
 

@@ -10,6 +10,7 @@ keywords = ["SCION", "networking"]
 
 [dependencies]
 async-trait = { workspace = true }
+buffa = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
