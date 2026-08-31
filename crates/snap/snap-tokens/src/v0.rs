@@ -158,6 +158,10 @@ pub fn seeded_dummy_snap_token(seed: String) -> String {
 
 /// Returns a SNAP token with the given UUID and expiry (in seconds).
 /// Uses a constant key pair thus it is insecure and only for testing purposes.
+///
+/// The header carries [`crate::insecure::KID`], so a SNAP that resolves its keys from a JWKS
+/// endpoint accepts the token as soon as that endpoint serves
+/// [`crate::insecure::jwks_document`].
 fn insecure_snap_token(uuid: Uuid, expiry: u64) -> String {
     let (encoding_key, _) = insecure_const_snap_token_key_pair();
     let claims = SnapTokenClaims {
@@ -168,7 +172,9 @@ fn insecure_snap_token(uuid: Uuid, expiry: u64) -> String {
             .as_secs(),
         jti: uuid.to_string(),
     };
-    jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key).unwrap()
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.kid = Some(crate::insecure::KID.to_string());
+    jsonwebtoken::encode(&header, &claims, &encoding_key).unwrap()
 }
 
 /// Returns constant key pair for testing purposes.

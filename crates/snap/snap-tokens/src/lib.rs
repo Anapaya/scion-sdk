@@ -13,6 +13,7 @@
 // limitations under the License.
 //! SNAP token library.
 
+pub mod insecure;
 pub mod v0;
 pub mod v1;
 

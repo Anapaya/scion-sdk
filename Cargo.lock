@@ -5737,6 +5737,7 @@ dependencies = [
 name = "snap-tokens"
 version = "0.7.0"
 dependencies = [
+ "axum",
  "base64 0.22.1",
  "jsonwebtoken",
  "pem",
@@ -5744,6 +5745,8 @@ dependencies = [
  "serde",
  "serde_json",
  "test-log",
+ "tokio",
+ "url",
  "uuid",
 ]
 

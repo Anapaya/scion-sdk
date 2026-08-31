@@ -31,20 +31,24 @@ pub enum SnapTokenVerifyError {
     /// Token carries a `kid` that could not be resolved from the JWKS store.
     #[error("JWKS key not found for kid '{0}'")]
     UnknownKid(String),
+    /// Token carries no `kid` and the verifier has no static key to fall back to.
+    #[error("token carries no kid and the verifier has no static key")]
+    MissingKid,
     /// JWT signature/claims validation failed.
     #[error("token verification failed: {0}")]
     VerificationFailed(jsonwebtoken::errors::Error),
 }
 
-/// Verifies SNAP tokens against either a statically configured key or keys fetched
-/// from a JWKS endpoint.
+/// Verifies SNAP tokens against a statically configured key, keys fetched from a JWKS endpoint,
+/// or both.
 ///
-/// - Tokens **without** a `kid` JWT header claim are verified using the static key.
-/// - Tokens **with** a `kid` are verified using a key resolved from the `JwksKeyStore`. If no JWKS
-///   store is configured, the static key is used as a fallback.
+/// - Tokens **with** a `kid` JWT header claim are verified using a key resolved from the
+///   `JwksKeyStore`. If no JWKS store is configured, the static key is used as a fallback.
+/// - Tokens **without** a `kid` are verified using the static key, and are rejected outright by a
+///   verifier that has none.
 #[derive(Clone)]
 pub struct SnapTokenVerifier {
-    static_key: DecodingKey,
+    static_key: Option<DecodingKey>,
     jwks_store: Option<Arc<JwksKeyStore>>,
     validation: Validation,
 }
@@ -55,8 +59,19 @@ impl SnapTokenVerifier {
     /// store is configured.
     pub fn new(static_key: DecodingKey) -> Self {
         Self {
-            static_key,
+            static_key: Some(static_key),
             jwks_store: None,
+            validation: build_validation(),
+        }
+    }
+
+    /// Creates a verifier that resolves every key from `store`, for a deployment whose tokens all
+    /// carry the `kid` of the key that signed them. A token without one is rejected, since there
+    /// is no key to fall back to.
+    pub fn from_jwks_store(store: Arc<JwksKeyStore>) -> Self {
+        Self {
+            static_key: None,
+            jwks_store: Some(store),
             validation: build_validation(),
         }
     }
@@ -74,7 +89,7 @@ impl SnapTokenVerifier {
     /// - If the JWT header has a `kid` and a JWKS store is configured, the key is resolved from the
     ///   JWKS store.
     /// - Otherwise (no `kid`, or `kid` present but no JWKS store configured), the static key is
-    ///   used.
+    ///   used, and the token is rejected when the verifier has none.
     pub async fn verify(&self, token: &str) -> Result<AnyClaims, SnapTokenVerifyError> {
         let header = decode_header(token).map_err(SnapTokenVerifyError::HeaderDecodeError)?;
 
@@ -85,7 +100,11 @@ impl SnapTokenVerifier {
                     None => return Err(SnapTokenVerifyError::UnknownKid(kid)),
                 }
             }
-            _ => self.static_key.clone(),
+            _ => {
+                self.static_key
+                    .clone()
+                    .ok_or(SnapTokenVerifyError::MissingKid)?
+            }
         };
 
         let token_data = decode::<AnyClaims>(token, &key, &self.validation)
