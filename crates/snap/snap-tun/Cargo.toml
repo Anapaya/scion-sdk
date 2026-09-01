@@ -31,7 +31,7 @@ ed25519-dalek = { workspace = true }
 pem = { workspace = true }
 rcgen = { workspace = true }
 sciparse = { workspace = true }
-mockall = "0.14"
+mockall = { workspace = true }
 socket2 = { workspace = true }
 tokio-util = { workspace = true }
 test-log = { workspace = true }
