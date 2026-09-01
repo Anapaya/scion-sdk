@@ -1,11 +1,19 @@
-too-many-arguments-threshold = 12
+# Keep this file identical in the sibling workspaces:
+#   ./clippy.toml, endhost/anapaya/clippy.toml, endhost/public/clippy.toml
+
+too-many-arguments-threshold = 10
+large-error-threshold = 256
+
 disallowed-methods = [
-    { path = "bincode::deserialize_from", reason = "bincode::deserialize_from() should never be used on untrusted data. It reads a u64 length value from the first 8 bytes of the serialized payload and will then attempt to allocate this number of bytes without any validation." },
-    { path = "std::io::Write::write", reason = "`Write::write()` may not write the entire buffer. Use `Write::write_all()` instead. Or, if you are intentionally using `Write::write()`, use `#[allow(clippy::disallowed_methods)]` to locally disable this check." },
-    { path = "tokio::io::AsyncWriteExt::write", reason = "`AsyncWriteExt::write()` may not write the entire buffer. Use `AsyncWriteExt::write_all()` instead. Or, if you are intentionally using `AsyncWriteExt::write()`, use `#[allow(clippy::disallowed_methods)]` to locally disable this check." },
-    { path = "tokio::task::block_in_place", reason = "`block_in_place()` almost always signals that there is an issue with the overall design. Furthermore, `block_in_place()` panics unless the Tokio scheduler has enough available threads to move tasks. If you are intentionally using `block_in_place()`, use `#[allow(clippy::disallowed_methods)]` to locally disable this check." },
-    { path = "tokio::sync::mpsc::unbounded_channel", reason = "Using an unbounded channel can lead to unbounded memory growth. Please use a bounded channel instead. If you are intentionally using an unbounded channel, use `#[allow(clippy::disallowed_methods)]` to locally disable this check." },
-    { path = "futures::channel::mpsc::unbounded", reason = "Using an unbounded channel most likely will read to unbounded memory growth. Please use a bounded channel instead. If you are intentionally using unbounded channel, use `#[allow(clippy::disallowed_methods)]` to locally disable this check." },
-    { path = "futures_channel::mpsc::unbounded", reason = "Using an unbounded channel most likely will read to unbounded memory growth. Please use a bounded channel instead. If you are intentionally using unbounded channel, use `#[allow(clippy::disallowed_methods)]` to locally disable this check." },
-    { path = "crossbeam_channel::unbounded", reason = "Using an unbounded channel most likely will read to unbounded memory growth. Please use a bounded channel instead. If you are intentionally using unbounded channel, use `#[allow(clippy::disallowed_methods)]` to locally disable this check." },
+    { path = "std::io::Write::write", reason = "`Write::write()` can write a part of the buffer only. Use `Write::write_all()`." },
+    { path = "tokio::io::AsyncWriteExt::write", reason = "`AsyncWriteExt::write()` can write a part of the buffer only. Use `AsyncWriteExt::write_all()`." },
+    { path = "tokio::task::block_in_place", reason = "`block_in_place()` panics if the Tokio scheduler cannot move the other tasks. Use `spawn_blocking()`, or change the design." },
+    { path = "tokio::sync::mpsc::unbounded_channel", reason = "An unbounded channel can grow without a limit. Use `tokio::sync::mpsc::channel()` with a capacity." },
+    { path = "futures_channel::mpsc::unbounded", reason = "An unbounded channel can grow without a limit. Use `futures::channel::mpsc::channel()` with a capacity." },
+    { path = "crossbeam_channel::unbounded", reason = "An unbounded channel can grow without a limit. Use `crossbeam::channel::bounded()` with a capacity." },
+    { path = "std::thread::sleep", reason = "`thread::sleep()` blocks the Tokio worker thread. Use `tokio::time::sleep().await` in the async code." },
+    { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "This function does a blocking DNS lookup. Use `tokio::net::lookup_host()` in the async code." },
+    { path = "tokio::sync::Mutex::blocking_lock", reason = "This function panics in the async context. Use `.lock().await`." },
+    { path = "tokio::sync::mpsc::Receiver::blocking_recv", reason = "This function panics in the async context. Use `.recv().await`." },
+    { path = "tokio::sync::mpsc::Sender::blocking_send", reason = "This function panics in the async context. Use `.send().await`." },
 ]

@@ -927,6 +927,7 @@ mod tests {
 
         // The rate limiter resets against the monotonic clock, which neither tokio's paused
         // time nor a mocked instant reaches from here, so this waits out the reset period.
+        #[allow(clippy::disallowed_methods)]
         std::thread::sleep(Duration::from_millis(1_100));
         snaptun_server.update_timers();
 

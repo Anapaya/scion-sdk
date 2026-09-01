@@ -149,7 +149,6 @@ where
     P: InboundTrafficPolicy<T>,
 {
     /// Create a new [`EdgeTunServerState`].
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         static_private: x25519::StaticSecret,
         rate_limiter: Arc<RateLimiter>,
