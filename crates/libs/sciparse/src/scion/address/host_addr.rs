@@ -618,7 +618,7 @@ pub mod ptest {
         )
             .prop_map(|(id, bytes_vec)| {
                 // Take chunks of 4 bytes to keep alignment
-                let chunks = bytes_vec.chunks_exact(4);
+                let (chunks, _) = bytes_vec.as_chunks::<4>();
                 let mut bytes = ArrayVec::new();
                 for chunk in chunks {
                     for &b in chunk {

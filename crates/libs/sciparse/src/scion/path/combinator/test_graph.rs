@@ -167,7 +167,7 @@ impl Graph {
 
             let mut peer_entries = Vec::new();
             if let Some(links) = self.links.get(&curr_ia) {
-                for (_, link) in links.iter() {
+                for link in links.values() {
                     if !link.peer {
                         continue;
                     }

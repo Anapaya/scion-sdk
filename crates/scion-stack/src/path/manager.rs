@@ -126,10 +126,10 @@ impl Default for MultiPathManagerConfig {
     fn default() -> Self {
         MultiPathManagerConfig {
             max_cached_paths_per_pair: 50,
-            refetch_interval: Duration::from_secs(60 * 30), // 30 minutes
+            refetch_interval: Duration::from_mins(30),
             min_refetch_delay: Duration::from_secs(60),
-            min_expiry_threshold: Duration::from_secs(60 * 5), // 5 minutes
-            max_idle_period: Duration::from_secs(60 * 2),      // 2 minutes
+            min_expiry_threshold: Duration::from_mins(5),
+            max_idle_period: Duration::from_mins(2),
             fetch_failure_backoff: BackoffConfig {
                 minimum_delay_secs: 60.0,
                 maximum_delay_secs: 300.0,

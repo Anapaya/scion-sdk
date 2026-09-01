@@ -397,7 +397,7 @@ impl ScionPath {
             // Collect latencies if available, one per link (total_interfaces - 1) leaving out the
             // last interface which is the destination
             if rpc_path.latency.len() == expected_count_links {
-                for (meta, latency) in interface_meta.iter_mut().zip(rpc_path.latency.into_iter()) {
+                for (meta, latency) in interface_meta.iter_mut().zip(rpc_path.latency) {
                     // A negative latency indicates that no latency is supplied, so we treat it as
                     // None
                     meta.latency = latency.try_into().ok();
@@ -407,10 +407,7 @@ impl ScionPath {
             // Collect bandwidths if available, one per link (total_interfaces - 1) leaving out the
             // last interface which is the destination
             if rpc_path.bandwidth.len() == expected_count_links {
-                for (meta, bandwidth) in interface_meta
-                    .iter_mut()
-                    .zip(rpc_path.bandwidth.into_iter())
-                {
+                for (meta, bandwidth) in interface_meta.iter_mut().zip(rpc_path.bandwidth) {
                     // Bandwith of 0 indicates that no bandwidth is supplied
                     meta.bandwidth = (bandwidth > 0).then_some(bandwidth);
                 }
@@ -418,7 +415,7 @@ impl ScionPath {
 
             // Collect geo info if available, one per interface
             if rpc_path.geo.len() == interface_count {
-                for (meta, geo_info) in interface_meta.iter_mut().zip(rpc_path.geo.into_iter()) {
+                for (meta, geo_info) in interface_meta.iter_mut().zip(rpc_path.geo) {
                     meta.geo_info = GeoCoordinates::try_from_rpc(geo_info);
                 }
             }
@@ -433,8 +430,7 @@ impl ScionPath {
                 // Inter-AS links are at the even indices (0, 2, 4, ...) of the interfaces
                 let egress_iter = interface_meta.iter_mut().step_by(2);
                 if rpc_path.link_type.len() == expected_count_links_inter {
-                    for (egress_meta, link_type) in egress_iter.zip(rpc_path.link_type.into_iter())
-                    {
+                    for (egress_meta, link_type) in egress_iter.zip(rpc_path.link_type) {
                         egress_meta.link = Some(LinkMeta::Egress(link_type.into()));
                     }
                 }
@@ -444,9 +440,7 @@ impl ScionPath {
                 // Intra-AS links are at the odd indices (1, 3, 5, ...) of the interfaces
                 let ingress_iter = interface_meta.iter_mut().skip(1).step_by(2);
                 if rpc_path.internal_hops.len() == expected_count_links_intra {
-                    for (ingress_meta, internal_hops) in
-                        ingress_iter.zip(rpc_path.internal_hops.into_iter())
-                    {
+                    for (ingress_meta, internal_hops) in ingress_iter.zip(rpc_path.internal_hops) {
                         ingress_meta.link = Some(LinkMeta::Ingress {
                             internal_hop_count: internal_hops,
                         });

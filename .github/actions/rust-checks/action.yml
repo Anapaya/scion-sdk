@@ -10,7 +10,7 @@ inputs:
     required: true
   version:
     description: Rust version.
-    default: "nightly-2026-03-12"
+    default: "nightly-2026-08-31"
 
 runs:
   using: composite

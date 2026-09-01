@@ -580,8 +580,8 @@ mod tests {
 
         let mut send_to_network = VecDeque::<WgKind>::new();
 
-        let test_packet0 = test_packet([b'T', b'E', b'S', b'T', b'0']);
-        let test_packet1 = test_packet([b'T', b'E', b'S', b'T', b'1']);
+        let test_packet0 = test_packet(*b"TEST0");
+        let test_packet1 = test_packet(*b"TEST1");
 
         let mut tunn_client0 = Tunn::new(
             static_client0,
@@ -687,7 +687,7 @@ mod tests {
             SnapTunServer::new(static_server, rate_limiter.clone(), Arc::new(TrivialAuthz));
         let mut send_to_network = VecDeque::<WgKind>::new();
 
-        let test_packet = test_packet([b'T', b'E', b'S', b'T']);
+        let test_packet = test_packet(*b"TEST");
 
         let mut tunn_client = Tunn::new(
             static_client,
@@ -759,7 +759,7 @@ mod tests {
         let mut snaptun_server =
             SnapTunServer::new(static_server, rate_limiter.clone(), authz.clone());
         let mut send_to_network = VecDeque::<WgKind>::new();
-        let test_packet = test_packet([b'T', b'E', b'S', b'T']);
+        let test_packet = test_packet(*b"TEST");
 
         let mut tunn_client = Tunn::new(
             static_client,
@@ -830,7 +830,7 @@ mod tests {
         let mut snaptun_server =
             SnapTunServer::new(static_server, rate_limiter, Arc::new(TrivialAuthz));
 
-        let payload = [b'T', b'E', b'S', b'T'];
+        let payload = *b"TEST";
         let test_packet = Scion {
             header: ScionHeader::new(
                 0,
@@ -1031,14 +1031,14 @@ mod tests {
         establish_tunnel(
             &mut snaptun_server,
             &mut tunn_old,
-            &test_packet([b'O', b'L', b'D']),
+            &test_packet(*b"OLD"),
             sockaddr_client,
             &mut send_to_network,
         );
         send_to_network.clear();
 
         let mut tunn_new = client_tunn(static_client_new, static_server_public, rate_limiter);
-        let hs_init = handshake_init_of(&mut tunn_new, test_packet([b'N', b'E', b'W']));
+        let hs_init = handshake_init_of(&mut tunn_new, test_packet(*b"NEW"));
         let result =
             snaptun_server.handle_incoming_packet(hs_init, sockaddr_client, &mut send_to_network);
 
@@ -1076,14 +1076,14 @@ mod tests {
         establish_tunnel(
             &mut snaptun_server,
             &mut tunn_first,
-            &test_packet([b'O', b'N', b'E']),
+            &test_packet(*b"ONE"),
             sockaddr_client,
             &mut send_to_network,
         );
         send_to_network.clear();
 
         // The client restarts with the same static identity and reuses its source port.
-        let second_packet = test_packet([b'T', b'W', b'O']);
+        let second_packet = test_packet(*b"TWO");
         let mut tunn_second = client_tunn(static_client, static_server_public, rate_limiter);
         establish_tunnel(
             &mut snaptun_server,

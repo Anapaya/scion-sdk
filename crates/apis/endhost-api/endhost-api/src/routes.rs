@@ -71,6 +71,8 @@ async fn list_underlays_handler(
     ConnectRpc(response)
 }
 
+// The error is an axum Response. We cannot make it smaller.
+#[allow(clippy::result_large_err)]
 async fn list_segments_handler(
     State(path_service): State<Arc<dyn SegmentsDiscovery>>,
     ConnectRpc(request): ConnectRpc<ListSegmentsRequest>,

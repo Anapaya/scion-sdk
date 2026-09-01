@@ -19,6 +19,8 @@
 //! To regenerate, run `cargo run -p proto-gen -- update` from the workspace
 //! root.
 
+// pbjson-build emits a redundant reference in `write!`. Clippy rejects it.
+#[allow(clippy::useless_borrows_in_formatting)]
 pub mod v1 {
     //! Version 1 of the Anapaya AA service.
     include!("proto/anapaya.aa.v1.rs");

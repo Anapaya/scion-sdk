@@ -109,7 +109,7 @@ impl SegmentRegistry {
 
         output.push_str("Core Segments:\n");
 
-        for (_, segments) in self.core_segments.all_segments.iter() {
+        for segments in self.core_segments.all_segments.values() {
             for segment in segments {
                 output.push_str(&format!("{segment}\n"));
             }
@@ -118,7 +118,7 @@ impl SegmentRegistry {
         for (isd, segments) in &self.isd_segments {
             output.push_str(&format!("ISD {isd} Down Segments: \n"));
 
-            for (_, segments) in segments.all_segments.iter() {
+            for segments in segments.all_segments.values() {
                 for segment in segments {
                     output.push_str(&format!("{segment}\n"));
                 }

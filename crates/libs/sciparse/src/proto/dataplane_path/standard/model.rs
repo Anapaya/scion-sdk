@@ -624,11 +624,9 @@ pub mod ptest {
                         let mut remaining_total_room = max_total;
                         for c in &mut counts {
                             let room = *c - min;
-                            let share = if remaining_total_room > 0 {
-                                room * remaining_cap_room / remaining_total_room
-                            } else {
-                                0
-                            };
+                            let share = (room * remaining_cap_room)
+                                .checked_div(remaining_total_room)
+                                .unwrap_or(0);
                             *c = min + share;
                             remaining_cap_room = remaining_cap_room.saturating_sub(share);
                             remaining_total_room = remaining_total_room.saturating_sub(room);

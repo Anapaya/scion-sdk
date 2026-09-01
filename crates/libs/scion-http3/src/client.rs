@@ -133,7 +133,7 @@ impl Client {
         // years stands in for it (mirroring tokio's internal far_future).
         let deadline = now
             .checked_add(timeout)
-            .unwrap_or_else(|| now + Duration::from_secs(86400 * 365 * 30));
+            .unwrap_or_else(|| now + Duration::from_hours(24 * 365 * 30));
         let (response, connection) = tokio::time::timeout_at(deadline, self.request_head(&request))
             .await
             .map_err(|_| {
