@@ -37,6 +37,14 @@ use ana_gotatun::{
 /// there is a one-to-one relation between a remote socket address (of the
 /// initiator) and a tunnel. The [SnapTunServer] manages that relation.
 ///
+/// ## Socket address and identity
+///
+/// The remote socket address is the address of an endhost, so the server binds
+/// the tunnel to that address and to the static identity that established it.
+/// Only that identity keeps the address. A peer that spoofs the address of
+/// another endhost can therefore neither take the address over nor tear the
+/// tunnel down.
+///
 /// ## Scaling
 ///
 /// The main methods [SnapTunServer::handle_incoming_packet],
@@ -228,6 +236,12 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
     /// Callers on the dataplane hot path can use this to observe forwarded
     /// packets without re-hashing `from` for a second active-tunnel lookup,
     /// while existing callers can keep using [`SnapTunServer::handle_incoming_packet`].
+    ///
+    /// The method resolves the tunnel by `from` before it reads the kind of the
+    /// packet, and it authorizes the identity of that tunnel. It parses and
+    /// authorizes the identity that a handshake initiation carries only for an
+    /// address that holds no tunnel yet. An address that holds a tunnel
+    /// therefore stays with the identity of that tunnel.
     #[tracing::instrument(skip_all, fields(remote = %from))]
     pub fn handle_incoming_packet_with_session(
         &mut self,
@@ -449,7 +463,7 @@ mod tests {
     };
 
     use ana_gotatun::{
-        noise::{Tunn, TunnResult, rate_limiter::RateLimiter},
+        noise::{Tunn, TunnResult, errors::WireGuardError, rate_limiter::RateLimiter},
         packet::{IpNextProtocol, Packet, WgKind},
         x25519,
     };
@@ -927,5 +941,178 @@ mod tests {
             return tunn.handle_incoming_packet(packet);
         }
         TunnResult::Done
+    }
+
+    /// Builds a server, a rate limiter shared with the clients, and an authorization layer that
+    /// holds the given identities. Each identity gets session data named after its index.
+    fn server_with_authorized_identities(
+        identities: &[&x25519::StaticSecret],
+    ) -> (
+        SnapTunServer<MutableAuthz>,
+        Arc<RateLimiter>,
+        x25519::PublicKey,
+    ) {
+        let static_server = x25519::StaticSecret::from([2u8; 32]);
+        let static_server_public = x25519::PublicKey::from(&static_server);
+        let rate_limiter = Arc::new(RateLimiter::new(&static_server_public, 100));
+
+        let authz = Arc::new(MutableAuthz::default());
+        for (index, identity) in identities.iter().enumerate() {
+            authz.set_session_data(
+                *x25519::PublicKey::from(*identity).as_bytes(),
+                session_data_of(index),
+            );
+        }
+
+        (
+            SnapTunServer::new(static_server, rate_limiter.clone(), authz),
+            rate_limiter,
+            static_server_public,
+        )
+    }
+
+    fn session_data_of(index: usize) -> MutableSessionData {
+        let names = ["first", "second"];
+        MutableSessionData {
+            jti: names[index],
+            pssid: names[index],
+            tags: vec![],
+        }
+    }
+
+    fn client_tunn(
+        static_client: x25519::StaticSecret,
+        static_server_public: x25519::PublicKey,
+        rate_limiter: Arc<RateLimiter>,
+    ) -> Tunn {
+        let sockaddr_server: SocketAddr = "10.0.0.1:5001".parse().unwrap();
+        Tunn::new(
+            static_client,
+            static_server_public,
+            None,
+            None,
+            0,
+            rate_limiter,
+            sockaddr_server,
+        )
+    }
+
+    fn handshake_init_of(tunn: &mut Tunn, packet: Packet) -> Packet {
+        let Some(WgKind::HandshakeInit(hs_init)) = tunn.handle_outgoing_packet(packet) else {
+            panic!("expected handshake init")
+        };
+        Packet::copy_from(hs_init.as_bytes())
+    }
+
+    /// A socket address belongs to the identity that established the tunnel on it. A second
+    /// identity must not take that address over, because the address is the address of an
+    /// endhost, and an initiator can spoof it.
+    ///
+    /// The handshake initiation of the second identity goes to the tunnel of the first
+    /// identity, and that tunnel rejects the static key of the initiator with
+    /// [`WireGuardError::WrongKey`]. The server answers nothing and keeps the tunnel. The
+    /// second identity is authorized here, so authorization alone does not earn an address.
+    #[test]
+    fn a_new_identity_cannot_take_over_the_address_of_an_active_tunnel() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let static_client_old = x25519::StaticSecret::from([0u8; 32]);
+        let static_client_new = x25519::StaticSecret::from([1u8; 32]);
+        let identity_old = x25519::PublicKey::from(&static_client_old);
+
+        let (mut snaptun_server, rate_limiter, static_server_public) =
+            server_with_authorized_identities(&[&static_client_old, &static_client_new]);
+        let mut send_to_network = VecDeque::<WgKind>::new();
+
+        let mut tunn_old = client_tunn(
+            static_client_old,
+            static_server_public,
+            rate_limiter.clone(),
+        );
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_old,
+            &test_packet([b'O', b'L', b'D']),
+            sockaddr_client,
+            &mut send_to_network,
+        );
+        send_to_network.clear();
+
+        let mut tunn_new = client_tunn(static_client_new, static_server_public, rate_limiter);
+        let hs_init = handshake_init_of(&mut tunn_new, test_packet([b'N', b'E', b'W']));
+        let result =
+            snaptun_server.handle_incoming_packet(hs_init, sockaddr_client, &mut send_to_network);
+
+        assert!(
+            matches!(result, TunnResult::Err(WireGuardError::WrongKey)),
+            "the handshake of the new identity must not be accepted, got {result:?}"
+        );
+        assert!(
+            send_to_network.is_empty(),
+            "the server must not answer the handshake of the new identity"
+        );
+        assert_eq!(
+            snaptun_server.active_tunnels[&sockaddr_client].peer_static, identity_old,
+            "the address must still hold the tunnel of the first identity"
+        );
+    }
+
+    /// A restarted client that pins its identity gets a new tunnel session on the same address at
+    /// once, and does not have to wait for the old tunnel to expire.
+    #[test]
+    fn the_same_identity_re_establishes_a_tunnel_on_the_same_address() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let static_client = x25519::StaticSecret::from([0u8; 32]);
+        let identity = x25519::PublicKey::from(&static_client);
+
+        let (mut snaptun_server, rate_limiter, static_server_public) =
+            server_with_authorized_identities(&[&static_client]);
+        let mut send_to_network = VecDeque::<WgKind>::new();
+
+        let mut tunn_first = client_tunn(
+            static_client.clone(),
+            static_server_public,
+            rate_limiter.clone(),
+        );
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_first,
+            &test_packet([b'O', b'N', b'E']),
+            sockaddr_client,
+            &mut send_to_network,
+        );
+        send_to_network.clear();
+
+        // The client restarts with the same static identity and reuses its source port.
+        let second_packet = test_packet([b'T', b'W', b'O']);
+        let mut tunn_second = client_tunn(static_client, static_server_public, rate_limiter);
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_second,
+            &second_packet,
+            sockaddr_client,
+            &mut send_to_network,
+        );
+
+        let Some(WgKind::Data(client_data)) = tunn_second.get_queued_packets().next() else {
+            panic!("expected the restarted client to complete the handshake and queue a packet");
+        };
+        let HandleIncomingPacketResult::Forwarded {
+            packet,
+            session_data,
+            ..
+        } = snaptun_server.handle_incoming_packet_with_session(
+            Packet::copy_from(client_data.as_bytes()),
+            sockaddr_client,
+            &mut send_to_network,
+        )
+        else {
+            panic!("expected the packet of the restarted client to be forwarded")
+        };
+        assert_eq!(packet.as_bytes(), second_packet.as_bytes());
+        assert_eq!(session_data.as_ref(), &session_data_of(0));
+        assert_eq!(
+            snaptun_server.active_tunnels[&sockaddr_client].peer_static, identity,
+            "the address must still hold the tunnel of the same identity"
+        );
     }
 }

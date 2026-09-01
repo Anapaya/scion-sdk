@@ -207,9 +207,23 @@ impl SnapTunEndpointState {
     }
 }
 
-/// Snap tunnel endpoint that allows creating new snap tun connections.
-/// It holds one static identity and manages the registration of this identity with all connected
-/// control planes.
+/// Snap tunnel endpoint that allows creating new snap tun connections. It holds one static identity
+/// and manages the registration of this identity with all connected control planes.
+///
+/// The data plane binds a tunnel to the socket address that the endpoint sends from and to the
+/// static identity of the endpoint. Two rules follow for an application that reconnects:
+///
+/// * Reuse the static identity if you reuse the socket address. Store the identity and pass it to
+///   [SnapTunEndpoint::new] again. The data plane then accepts the handshake at once and gives the
+///   endpoint a new tunnel session.
+/// * Use a new socket address if you start with a new static identity. On the old address the data
+///   plane answers no handshake, and it drops the packets of the new identity, until the tunnel of
+///   the old identity expires. That takes several minutes.
+///
+/// An application that lets the socket address and the static identity change together is always
+/// correct. An application that pins its port must also pin its identity.
+/// [SnapTunServer](crate::server::SnapTunServer) documents why the data plane holds an address for
+/// one identity.
 pub struct SnapTunEndpoint {
     state: Arc<SnapTunEndpointState>,
     identity_registration_abort_handle: AbortHandle,
