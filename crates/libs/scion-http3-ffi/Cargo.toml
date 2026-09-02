@@ -12,6 +12,12 @@ repository = "https://github.com/anapaya/scion-sdk"
 # Underscored soname libscion_http3_ffi.so, loaded from Kotlin as
 # System.loadLibrary("scion_http3_ffi"). The rlib is what lets the unit tests
 # link against this crate.
+#
+# Apple links a static library rather than a shared one, and `staticlib` is
+# deliberately not declared here: every plain build would then emit one, which is
+# ~850 MB in the debug directory that the Rust jobs cache. The Apple build asks for
+# it per invocation instead, with `cargo rustc --lib --crate-type staticlib`,
+# which needs no entry in this list.
 name = "scion_http3_ffi"
 crate-type = ["cdylib", "rlib"]
 
@@ -20,11 +26,17 @@ scion-http3 = { workspace = true }
 scion-sdk-utils = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 uniffi = { workspace = true }
 
 [dev-dependencies]
 futures = { workspace = true }
+ntest = { workspace = true }
+# The same topology, server and routes the Kotlin suite runs against, started in
+# the test's own process rather than as a child.
+scion-h3-test-server = { workspace = true }
+test-log = { workspace = true }
 
 [lints]
 workspace = true

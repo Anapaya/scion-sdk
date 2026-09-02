@@ -67,19 +67,20 @@
 //!
 //! So a binding that needs something the others do not gets an *added* export, and the hand-written
 //! library above it hides whatever it does not use; [`internal_panic_for_test`] is the existing
-//! example. Adding one is additive and harms nobody. Forking this crate per platform, by
-//! feature or by `cfg`, is not on the table.
+//! example. Adding one is additive and harms nobody. Forking this crate per platform, by feature or
+//! by `cfg`, is not on the table.
 //!
-//! Cancellation is where that will be needed first, and it is worth knowing why the runtime
-//! strategy above is not what differs. Kotlin's generated code frees a rust future in a `finally`
-//! block, so a cancelled call reaches the drop this crate is built around. Swift's, at the pinned
-//! version, awaits each poll with a non-throwing `withUnsafeContinuation`, never checks
-//! `Task.checkCancellation()`, and frees the future in a `defer` that is only reached once the call
-//! completes; its cancelled branch is a `fatalError("Cancellation not supported yet")`. A cancelled
-//! Swift task therefore runs to completion, and the abort-on-drop guard is inactive rather than
-//! wrong. Owning the runtime helps both equally; delivering cancellation on a binding whose
-//! generated code does not drop the future needs an explicit cancel export, on a function of its
-//! own so that the bindings which do not need it do not change.
+//! Kotlin's generated code frees a rust future in a `finally` block, so a cancelled call reaches
+//! the drop this crate is built around. Swift's awaits each poll with a non-throwing
+//! `withUnsafeContinuation`, never checks `Task.checkCancellation()`, and frees the future in a
+//! `defer` that is only reached once the call completes. Its cancelled branch is a
+//! `fatalError("Cancellation not supported yet")`. A cancelled Swift task therefore runs to
+//! completion, and the abort-on-drop guard is inactive rather than wrong.
+//!
+//! Swift cancels through an added export instead: a [`CancelHandle`] it fires and
+//! [`execute_cancellable`](ScionHttp3Client::execute_cancellable), which performs the same
+//! cancellation a dropped future would and then completes with
+//! [`Cancelled`](ScionHttp3Error::Cancelled).
 
 // The FFI boundary catches panics and turns them into errors. Under panic=abort a panic in Rust
 // would instead take the host application's process down, which is both a worse failure and one
@@ -91,6 +92,7 @@ compile_error!(
      Rust panic from aborting the host process. Build with `--profile mobile`."
 );
 
+mod cancel;
 mod client;
 mod convert;
 mod error;
@@ -98,6 +100,7 @@ mod runtime;
 mod token;
 mod types;
 
+pub use cancel::CancelHandle;
 pub use client::ScionHttp3Client;
 pub use error::{ScionHttp3Error, TimeoutPhase};
 pub use types::{

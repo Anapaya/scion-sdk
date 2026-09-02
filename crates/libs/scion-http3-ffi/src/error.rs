@@ -17,6 +17,10 @@
 //! [`ScionHttp3Error`] mirrors [`scion_http3::Error`] one for one, so that the foreign sealed
 //! hierarchy above it is a rename rather than a reinterpretation. This module holds the whole
 //! mapping; no other layer, in any language, decides what an error means.
+//!
+//! One variant has no counterpart upstream: [`ScionHttp3Error::Cancelled`] reports a cancellation
+//! this crate performed itself, when a [`CancelHandle`](crate::CancelHandle) fired. `scion-http3`
+//! never produces it.
 
 use std::{error::Error as StdError, fmt::Write as _, time::Duration};
 
@@ -68,6 +72,9 @@ impl From<Http3TimeoutPhase> for TimeoutPhase {
 /// The field is called `detail` rather than `message` deliberately: at least one target's generated
 /// error class declares `message` itself (Kotlin's does), and a field of that name does not compile
 /// there. The name is shared, so the tightest constraint decides it.
+///
+/// [`Cancelled`](Self::Cancelled) is the exception to the sentence above about `retryable`: nothing
+/// upstream failed there, so there is no verdict to take, and the variant is never retryable.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum ScionHttp3Error {
     /// Building SCION connectivity (the stack or the resolver) failed.
@@ -174,6 +181,19 @@ pub enum ScionHttp3Error {
         /// The error and its source chain.
         detail: String,
     },
+    /// The caller cancelled the request through its [`CancelHandle`](crate::CancelHandle).
+    ///
+    /// Only [`execute_cancellable`](crate::ScionHttp3Client::execute_cancellable) reports this, so
+    /// only a binding that calls it can see it.
+    ///
+    /// Reported as not retryable. Retrying is a decision the caller who cancelled has already made.
+    #[error("the request was cancelled")]
+    Cancelled {
+        /// Always `false`; see the variant's documentation.
+        retryable: bool,
+        /// What ended the request.
+        detail: String,
+    },
     /// A failure with no counterpart in the taxonomy above.
     ///
     /// Either a failure of the bindings themselves (the runtime could not be built, a foreign
@@ -196,6 +216,15 @@ impl ScionHttp3Error {
         ScionHttp3Error::Internal {
             retryable: false,
             detail: detail.into(),
+        }
+    }
+
+    /// A request that was cancelled, by a [`CancelHandle`](crate::CancelHandle) or by the foreign
+    /// side dropping the call.
+    pub(crate) fn cancelled() -> Self {
+        ScionHttp3Error::Cancelled {
+            retryable: false,
+            detail: "the request was cancelled".to_string(),
         }
     }
 
@@ -227,6 +256,7 @@ impl ScionHttp3Error {
             | ScionHttp3Error::Timeout { retryable, .. }
             | ScionHttp3Error::InvalidRequest { retryable, .. }
             | ScionHttp3Error::Closed { retryable, .. }
+            | ScionHttp3Error::Cancelled { retryable, .. }
             | ScionHttp3Error::Internal { retryable, .. } => *retryable,
         }
     }
@@ -514,6 +544,17 @@ mod tests {
         );
     }
 
+    /// The one variant with no upstream counterpart, so nothing above covers it: a cancellation is
+    /// this crate's own verdict, and it is never retryable.
+    #[test]
+    fn a_cancellation_is_reported_as_itself_and_not_as_retryable() {
+        let error = ScionHttp3Error::cancelled();
+
+        assert!(matches!(error, ScionHttp3Error::Cancelled { .. }));
+        assert!(!error.retryable());
+        assert!(!detail_of(&error).is_empty());
+    }
+
     /// A malformed request must arrive as the same taxonomy the request path uses, not as a
     /// second, parallel one.
     #[test]
@@ -551,6 +592,7 @@ mod tests {
             | ScionHttp3Error::Timeout { detail, .. }
             | ScionHttp3Error::InvalidRequest { detail, .. }
             | ScionHttp3Error::Closed { detail, .. }
+            | ScionHttp3Error::Cancelled { detail, .. }
             | ScionHttp3Error::Internal { detail, .. } => detail,
         }
     }

@@ -55,7 +55,7 @@ use std::sync::Arc;
 use bytes::Buf;
 use http_body::Body;
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use self::{
@@ -209,8 +209,11 @@ impl Http3Client {
     /// The response is returned once the response head arrives. The response body is a streaming
     /// [`H3ResponseBody`] that can be read from it as it arrives.
     ///
-    /// For more complex use cases, requiring precise control over writing the body, use
-    /// [`request_with_writer`](Self::request_with_writer).
+    /// The upload lives as long as the caller's interest in the request. Dropping this future, or
+    /// the response it returned, ends the upload and resets the write side. A caller that must see
+    /// a body through to its end regardless of the response has to drive it itself, with
+    /// [`request_with_writer`](Self::request_with_writer), which is also the entry point for
+    /// anything else needing precise control over the body.
     pub async fn request<B>(
         &self,
         req: http::Request<B>,
@@ -225,13 +228,28 @@ impl Http3Client {
         let (response, writer) = stream::initiate_request(&conn.handle, parts)?;
 
         // Drive the request body on a background task, concurrently with the response.
-        tokio::spawn(async move {
+        //
+        // Held rather than detached, because the task owns the stream's write half and nothing the
+        // caller has would otherwise end it. A caller that drops this future before the head
+        // arrives, which is how a cancelled call reaches this crate, would leave the task parked on
+        // stream capacity for ever: the stream would stay open, its share of the connection's
+        // flow-control window would stay spent, and the next request on the connection could not
+        // send its headers. Aborting it drops the writer, which resets the write side and releases
+        // the stream.
+        let upload = AbortOnDrop::new(tokio::spawn(async move {
             if let Err(e) = pump_request_body(body, writer).await {
                 tracing::debug!(?e, "request body upload failed")
             }
-        });
+        }));
 
-        response.await
+        // Handed to the response body, which is what the caller holds once the head has arrived.
+        // Releasing it here instead would leave the task unowned for the rest of the request, and a
+        // peer that stalls after answering never resets the stream, so the parked pump would keep
+        // the stream and its window for as long as the connection lives. A failed head takes the
+        // other path: the guard is dropped here and the upload with it.
+        let mut response = response.await?;
+        response.body_mut().attach_upload(upload);
+        Ok(response)
     }
 
     /// Ensures a connection is established, and returns it's [`ConnectionToken`].
@@ -361,6 +379,25 @@ impl Http3Client {
         };
         let conn = conn.handle.lock();
         conn.app.streams.len() + conn.app.response_heads.len()
+    }
+}
+
+/// A spawned task that is aborted when this is dropped.
+///
+/// `JoinHandle` detaches its task on drop, which is the opposite of what a body upload wants: see
+/// [`Http3Client::request`].
+pub(crate) struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> AbortOnDrop<T> {
+    pub(crate) fn new(task: JoinHandle<T>) -> Self {
+        Self(task)
+    }
+}
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        // A no-op once the task has finished, so this needs no bookkeeping of its own.
+        self.0.abort();
     }
 }
 

@@ -31,7 +31,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use bytes::Bytes;
@@ -304,6 +304,74 @@ impl HttpService for HangingService {
 
     async fn call(&self, _req: http::Request<H3RequestBody>) -> http::Response<ChunkedBody> {
         std::future::pending().await
+    }
+}
+
+/// Hangs on `/hang` and echoes anything else, so that one connection can carry both a request that
+/// is cancelled and the request that has to work afterwards.
+#[derive(Clone)]
+struct HangOrEchoService;
+
+impl HttpService for HangOrEchoService {
+    type Body = H3RequestBody;
+    type ResponseBody = H3RequestBody;
+
+    async fn call(&self, req: http::Request<H3RequestBody>) -> http::Response<H3RequestBody> {
+        if req.uri().path() == "/hang" {
+            std::future::pending::<()>().await;
+        }
+        http::Response::builder()
+            .status(http::StatusCode::OK)
+            .body(req.into_body())
+            .unwrap()
+    }
+}
+
+/// A response body that yields one chunk and then either finishes or stalls for ever.
+struct MaybeStallBody {
+    chunk: Option<Bytes>,
+    stall: bool,
+}
+
+impl Body for MaybeStallBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        if let Some(chunk) = self.chunk.take() {
+            return Poll::Ready(Some(Ok(Frame::data(chunk))));
+        }
+        if self.stall {
+            // Nothing will ever wake this.
+            return Poll::Pending;
+        }
+        Poll::Ready(None)
+    }
+}
+
+/// Stalls after answering `/stall`, and answers anything else in full.
+///
+/// Neither path drains the request body. One connection therefore carries both the request whose
+/// upload is abandoned and the request that has to work afterwards.
+#[derive(Clone)]
+struct StallOrAnswerService;
+
+impl HttpService for StallOrAnswerService {
+    type Body = H3RequestBody;
+    type ResponseBody = MaybeStallBody;
+
+    async fn call(&self, req: http::Request<H3RequestBody>) -> http::Response<MaybeStallBody> {
+        let stall = req.uri().path() == "/stall";
+        http::Response::builder()
+            .status(http::StatusCode::OK)
+            .body(MaybeStallBody {
+                chunk: Some(Bytes::from_static(b"answered")),
+                stall,
+            })
+            .unwrap()
     }
 }
 
@@ -1454,13 +1522,25 @@ async fn bytes_surfaces_reset_as_error() {
     );
 }
 
-/// Polls `client.tracked_stream_state()` until it reaches zero. Bounded by the
-/// caller's `#[ntest::timeout]`.
+/// How long the client may take to release the per-stream state of a finished stream.
+///
+/// Well inside the `#[ntest::timeout]` of every caller, so that a stream which is never released
+/// fails as itself rather than as a bare test timeout.
+const STREAM_RELEASE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// Polls `client.tracked_stream_state()` until it reaches zero, and says what it saw if it does
+/// not.
 async fn wait_for_released_streams(client: &Http3Client) {
+    let deadline = Instant::now() + STREAM_RELEASE_DEADLINE;
     loop {
-        if client.tracked_stream_state().await == 0 {
+        let tracked = client.tracked_stream_state().await;
+        if tracked == 0 {
             return;
         }
+        assert!(
+            Instant::now() < deadline,
+            "tracked_stream_state() was still {tracked} after {STREAM_RELEASE_DEADLINE:?}."
+        );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
@@ -1662,6 +1742,65 @@ async fn parked_writer_releases_stream_state_on_idle_close() {
         "expected a connection-closed fault, got {:?}",
         result.err()
     );
+
+    wait_for_released_streams(&client).await;
+}
+
+/// A caller that drops its request before the response head arrives leaves nothing behind.
+///
+/// Dropping the future is how a cancelled call reaches this crate. `request` uploads the body from
+/// a task of its own, so nothing the caller holds owns that task: left running, it keeps the
+/// stream's write half open and its share of the connection's window spent for as long as the
+/// connection lives.
+///
+/// The assertion is on the per-stream state, not on a following request. One parked upload holds
+/// one `initial_max_stream_data_bidi_local` of the ten times larger `initial_max_data`, so the
+/// connection has room to spare and a following request succeeds either way: it would say nothing
+/// about the leak.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(30_000)]
+async fn dropping_a_request_mid_upload_releases_its_stream() {
+    let (_server, socket) = spawn_server(HangOrEchoService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    // Warmed up first, so the request below is the only stream in play.
+    post(&client, "/echo", "warm up")
+        .await
+        .expect("the first request");
+
+    // By value, so that the timeout owns the future and drops it when it elapses. A pinned borrow
+    // would outlive the timeout and defer the drop to the end of this test.
+    //
+    // The delay is long enough for the pump to fill the flow-control window and park on it.
+    let responded = tokio::time::timeout(
+        Duration::from_millis(200),
+        client.request(infinite_post("/hang")),
+    )
+    .await
+    .is_ok();
+    assert!(!responded, "the hanging service should not have responded");
+
+    wait_for_released_streams(&client).await;
+}
+
+/// The same, one step later: the caller has the response head and drops the body while the upload
+/// is still parked.
+///
+/// The peer here stalls: it answers, sends one chunk, and then writes nothing further, so it never
+/// notices the `STOP_SENDING` the dropped body sends and never tears the stream down.
+#[test_log::test(tokio::test)]
+#[ntest::timeout(30_000)]
+async fn dropping_a_response_body_mid_upload_releases_its_stream() {
+    let (_server, socket) = spawn_server(StallOrAnswerService, LONG_IDLE);
+    let client = make_client(socket, LONG_IDLE);
+
+    let response = client
+        .request(infinite_post("/stall"))
+        .await
+        .expect("the response head, which does not wait for the body");
+    // Long enough for the pump to fill the flow-control window and park on it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(response);
 
     wait_for_released_streams(&client).await;
 }

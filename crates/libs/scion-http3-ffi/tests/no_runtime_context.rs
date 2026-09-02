@@ -21,12 +21,16 @@
 //! be found by whoever ran a foreign test suite next.
 //!
 //! These tests reproduce the foreign side's conditions instead: a bare `std::thread` and a
-//! futures executor. They are about where the work runs, not about what it returns, so they use
-//! an endhost API that is not there and assert only that the call reports rather than panics.
+//! futures executor. They are about where the work runs, not about what it returns, so they use an
+//! endhost API that is not there and mostly assert only that the call reports rather than panics.
+//! The exception is the already-cancelled call, whose whole claim is that no request was attempted.
 
 use std::thread;
 
-use scion_http3_ffi::{ClientConfig, HttpRequest, ScionHttp3Client, default_client_config};
+use scion_http3_ffi::{
+    CancelHandle, ClientConfig, HttpRequest, ScionHttp3Client, ScionHttp3Error,
+    default_client_config,
+};
 
 /// An endhost API on a port nothing listens on, so the request fails quickly and locally.
 const UNREACHABLE_ENDHOST_API: &str = "http://127.0.0.1:1";
@@ -75,6 +79,36 @@ fn execute_is_pollable_without_a_runtime() {
     assert!(
         result.is_err(),
         "the request reached a server that is not there"
+    );
+}
+
+/// The cancellable export has to poll the same way. Everything it adds, the check of the handle and
+/// the select that awaits it, belongs inside the spawned task, so that the polling thread still
+/// awaits nothing but a result.
+#[test]
+fn execute_cancellable_is_pollable_without_a_runtime() {
+    let result = on_a_foreign_thread(|| {
+        let client = ScionHttp3Client::new(config()).expect("building a client");
+        futures::executor::block_on(client.execute_cancellable(request(), CancelHandle::new()))
+    });
+    assert!(
+        result.is_err(),
+        "the request reached a server that is not there"
+    );
+}
+
+/// And so does the path a fired handle takes, which returns without ever polling the request.
+#[test]
+fn a_cancelled_call_is_pollable_without_a_runtime() {
+    let result = on_a_foreign_thread(|| {
+        let client = ScionHttp3Client::new(config()).expect("building a client");
+        let handle = CancelHandle::new();
+        handle.cancel();
+        futures::executor::block_on(client.execute_cancellable(request(), handle))
+    });
+    assert!(
+        matches!(result, Err(ScionHttp3Error::Cancelled { .. })),
+        "a call whose handle had already fired ended as {result:?}"
     );
 }
 

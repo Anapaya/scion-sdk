@@ -25,12 +25,13 @@
 //! `tokio::spawn` to one of these bodies compiles and then panics at the boundary;
 //! `tests/no_runtime_context.rs` exists to catch that.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use scion_http3::Client;
 use tokio::runtime::Runtime;
 
 use crate::{
+    cancel::CancelHandle,
     convert::collect_response,
     error::Error,
     runtime,
@@ -90,17 +91,32 @@ impl ScionHttp3Client {
     /// thread that dropped it. Whether cancelling a call drops it is a property of the generated
     /// bindings for that language.
     pub async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, Error> {
-        let max_body_bytes = request
-            .max_response_body_bytes
-            .unwrap_or(self.max_response_body_bytes);
-        // Before the work is handed over, so that a request the caller got wrong is reported
-        // without starting anything.
-        let request = request.into_request()?;
+        runtime::spawn(self.runtime, self.work(request)?).await
+    }
 
-        let client = self.inner.clone();
+    /// Issues `request` as [`execute`](Self::execute) does and stops it when `cancel` fires.
+    pub async fn execute_cancellable(
+        &self,
+        request: HttpRequest,
+        cancel: Arc<CancelHandle>,
+    ) -> Result<HttpResponse, Error> {
+        let work = self.work(request)?;
+        // Cloned rather than holding the handle, so that a caller which drops the handle does not
+        // thereby decide anything about the request.
+        let token = cancel.token();
+
         runtime::spawn(self.runtime, async move {
-            let response = client.request(request).await?;
-            collect_response(response, max_body_bytes).await
+            // Nothing is sent if the handle fired before the task ran.
+            if token.is_cancelled() {
+                return Err(Error::cancelled());
+            }
+            // Biased, so a received response wins against a cancellation that arrived in the same
+            // moment.
+            tokio::select! {
+                biased;
+                result = work => result,
+                () = token.cancelled() => Err(Error::cancelled()),
+            }
         })
         .await
     }
@@ -156,6 +172,30 @@ impl ScionHttp3Client {
     pub async fn shutdown(&self) {
         let client = self.inner.clone();
         runtime::spawn_detached(self.runtime, async move { client.close().await }).await;
+    }
+}
+
+impl ScionHttp3Client {
+    /// Converts `request` and returns the future that issues it and collects its body.
+    ///
+    /// Fallible around a future rather than one `async fn`, because the conversion has to happen
+    /// before anything is handed to the runtime: a request the caller got wrong is then reported
+    /// without a task being spawned and without a stream being opened. Both request exports share
+    /// this, so they run the same request and differ only in what they wrap it in.
+    fn work(
+        &self,
+        request: HttpRequest,
+    ) -> Result<impl Future<Output = Result<HttpResponse, Error>> + Send + 'static, Error> {
+        let max_body_bytes = request
+            .max_response_body_bytes
+            .unwrap_or(self.max_response_body_bytes);
+        let request = request.into_request()?;
+        let client = self.inner.clone();
+
+        Ok(async move {
+            let response = client.request(request).await?;
+            collect_response(response, max_body_bytes).await
+        })
     }
 }
 

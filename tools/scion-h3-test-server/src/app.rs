@@ -12,10 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! What the server serves over HTTP/3, and the counters the control API reports.
+//! What the server serves over HTTP/3, and the counters that say what reached it.
 //!
-//! Every route here exists to make a single client behaviour observable; the table in the crate
-//! documentation says which. Nothing in this module knows about SCION.
+//! Every route exists to make a single client behaviour observable. Nothing in this module knows
+//! about SCION.
+//!
+//! | Path | Serves | Useful for |
+//! | --- | --- | --- |
+//! | `GET /hello` | `world` | Liveness, and showing that a connection still works after something else went wrong on it. |
+//! | `POST /echo` | The request body, unchanged | Bodies that survive both directions byte for byte, at any size. Cancelling an upload: see [`Counters::uploaded_bytes`] and [`Counters::uploads_truncated`]. |
+//! | `GET /echo-headers` | The request headers as JSON | What headers actually reached the server, including repeated ones and their order. |
+//! | `* /method` | The request method | Methods arriving unchanged, including ones with no special handling anywhere. |
+//! | `GET /repeated-headers` | Two `set-cookie` fields | Response headers that a map keyed by name cannot represent. |
+//! | `GET /status/{code}` | That status | Status codes arriving unchanged. |
+//! | `GET /trailers` | A body and an `x-checksum` trailer | The trailing header section, which no ordinary handler produces. |
+//! | `GET /slow?ms=` | A response after a delay | Request deadlines. Defaults to a second. |
+//! | `GET /big?bytes=` | That many bytes | Response size limits, and reassembly of a body spanning many frames. Defaults to a kilobyte, and refuses more than [`MAX_BIG_BYTES`] rather than allocating it. |
+//! | `GET /invalid-utf8` | Two bytes that are not UTF-8 | Bodies that must not be decoded on the way through. |
+//! | `GET /endless-body?tag=` | A chunk every [`ENDLESS_BODY_INTERVAL`], forever | Cancellation. See [`Counters::endless_chunks`] and [`Counters::endless_released`]. |
+//! | `GET /reset-stream` | A status, one chunk, then a stream reset | The failure in between a clean response and an unreachable peer, which cannot be provoked from the client side. |
+//!
+//! [`Counters`] is what a caller reads to see what the server saw. `GET /stats` on the binary's
+//! control API reports the same numbers to a harness in another language.
 
 use std::{
     collections::BTreeMap,
@@ -39,7 +57,10 @@ use axum::{
 };
 
 /// How often the endless body produces a chunk.
-const ENDLESS_BODY_INTERVAL: Duration = Duration::from_millis(50);
+///
+/// Public because a test that waits for the count to settle has to know the cadence it is waiting
+/// out, and a copy of this number in the test would drift from it.
+pub const ENDLESS_BODY_INTERVAL: Duration = Duration::from_millis(50);
 
 /// The largest body `/big` will produce.
 ///
@@ -47,7 +68,7 @@ const ENDLESS_BODY_INTERVAL: Duration = Duration::from_millis(50);
 /// that a mistyped `bytes` is answered rather than allocated: the handler builds the whole body in
 /// memory, so one extra digit would take the process down and report itself as the server exiting
 /// halfway through an unrelated test.
-const MAX_BIG_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_BIG_BYTES: usize = 64 * 1024 * 1024;
 
 /// Counters the control API reports, and the routes that move them.
 #[derive(Default)]
@@ -55,9 +76,27 @@ pub struct Counters {
     /// Chunks sent per endless-body tag.
     ///
     /// After a client cancels a request, its tag stops going up, which only happens once
-    /// `STOP_SENDING` has reached the server. That is how a test sees a cancellation arrive. Per
-    /// tag, so that concurrent tests do not read each other's.
+    /// `STOP_SENDING` has reached the server. Per tag, so that concurrent tests do not read each
+    /// other's.
     endless_chunks: Mutex<BTreeMap<String, Arc<AtomicU64>>>,
+    /// Endless bodies the server has let go of, per tag.
+    ///
+    /// The stream is endless, so the server stops producing for one reason only: the transport
+    /// refused a chunk because the client reset the stream. This is therefore that reset, seen
+    /// from the far end, and it says so at once, where a chunk count that stops going up has
+    /// to be watched for a while and cannot tell a reset from a server that stalled.
+    endless_released: Mutex<BTreeMap<String, Arc<AtomicU64>>>,
+    /// Request-body bytes that arrived, per path.
+    ///
+    /// A test that has to cancel an upload in flight waits for this rather than for the head,
+    /// which says only that the request was sent.
+    uploaded_bytes: Mutex<BTreeMap<String, Arc<AtomicU64>>>,
+    /// Request bodies that ended with a transport error rather than end-of-stream, per path.
+    ///
+    /// A client that resets its stream mid-upload moves this. It is the upload direction's
+    /// counterpart to [`Self::endless_released`]: a byte count alone cannot tell a truncated body
+    /// from a slow one.
+    uploads_truncated: Mutex<BTreeMap<String, Arc<AtomicU64>>>,
     /// Completed requests per path, so a test can prove a later request really reached the server.
     requests: Mutex<BTreeMap<String, u64>>,
     /// Requests per path that reached a handler, whether or not they finished.
@@ -67,8 +106,58 @@ pub struct Counters {
 }
 
 impl Counters {
-    fn endless_chunks(&self, tag: &str) -> Arc<AtomicU64> {
-        self.endless_chunks
+    /// Chunks sent so far for `tag`.
+    ///
+    /// Stops going up once the client's `STOP_SENDING` has arrived; see the field.
+    pub fn endless_chunks(&self, tag: &str) -> u64 {
+        self.counter(&self.endless_chunks, tag)
+            .load(Ordering::Relaxed)
+    }
+
+    /// Endless bodies for `tag` the server has let go of; see the field.
+    pub fn endless_released(&self, tag: &str) -> u64 {
+        self.counter(&self.endless_released, tag)
+            .load(Ordering::Relaxed)
+    }
+
+    /// Request-body bytes that have arrived for `path`; see the field.
+    pub fn uploaded_bytes(&self, path: &str) -> u64 {
+        self.counter(&self.uploaded_bytes, path)
+            .load(Ordering::Relaxed)
+    }
+
+    /// Uploads to `path` that were cut off rather than finished; see the field.
+    pub fn uploads_truncated(&self, path: &str) -> u64 {
+        self.counter(&self.uploads_truncated, path)
+            .load(Ordering::Relaxed)
+    }
+
+    /// Requests to `path` that finished.
+    pub fn requests(&self, path: &str) -> u64 {
+        self.requests
+            .lock()
+            .expect("lock poisoned")
+            .get(path)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Requests to `path` that reached a handler, whether or not they finished.
+    pub fn started(&self, path: &str) -> u64 {
+        self.started
+            .lock()
+            .expect("lock poisoned")
+            .get(path)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn counter(
+        &self,
+        counters: &Mutex<BTreeMap<String, Arc<AtomicU64>>>,
+        tag: &str,
+    ) -> Arc<AtomicU64> {
+        counters
             .lock()
             .expect("lock poisoned")
             .entry(tag.to_owned())
@@ -101,17 +190,13 @@ impl Counters {
 
     /// What `GET /stats` reports.
     pub fn snapshot(&self) -> serde_json::Value {
-        let endless: BTreeMap<String, u64> = self
-            .endless_chunks
-            .lock()
-            .expect("lock poisoned")
-            .iter()
-            .map(|(tag, count)| (tag.clone(), count.load(Ordering::Relaxed)))
-            .collect();
         let requests = self.requests.lock().expect("lock poisoned").clone();
         let started = self.started.lock().expect("lock poisoned").clone();
         serde_json::json!({
-            "endless_chunks": endless,
+            "endless_chunks": counts(&self.endless_chunks),
+            "endless_released": counts(&self.endless_released),
+            "uploaded_bytes": counts(&self.uploaded_bytes),
+            "uploads_truncated": counts(&self.uploads_truncated),
             "requests": requests,
             "started": started,
             "restarts": self.restarts.load(Ordering::Relaxed),
@@ -119,11 +204,21 @@ impl Counters {
     }
 }
 
+/// Reads one of the per-key counter maps, for the snapshot.
+fn counts(counters: &Mutex<BTreeMap<String, Arc<AtomicU64>>>) -> BTreeMap<String, u64> {
+    counters
+        .lock()
+        .expect("lock poisoned")
+        .iter()
+        .map(|(key, count)| (key.clone(), count.load(Ordering::Relaxed)))
+        .collect()
+}
+
 /// The application the HTTP/3 server serves.
 pub fn router(counters: Arc<Counters>) -> Router {
     Router::new()
         .route("/hello", get(|| async { "world" }))
-        .route("/echo", post(|body: Bytes| async move { body }))
+        .route("/echo", post(echo))
         .route("/echo-headers", get(echo_headers))
         .route(
             "/method",
@@ -152,6 +247,29 @@ async fn count(State(counters): State<Arc<Counters>>, request: Request, next: Ne
     let response = next.run(request).await;
     counters.record_request(&path);
     response
+}
+
+/// Echoes the request body, recording the bytes that arrived and whether the upload was cut off.
+async fn echo(State(counters): State<Arc<Counters>>, body: Body) -> Response {
+    use futures::StreamExt as _;
+
+    let received = counters.counter(&counters.uploaded_bytes, "/echo");
+    let truncated = counters.counter(&counters.uploads_truncated, "/echo");
+    let mut stream = body.into_data_stream();
+    let mut collected = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else {
+            truncated.fetch_add(1, Ordering::Relaxed);
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        received.fetch_add(
+            u64::try_from(chunk.len()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        collected.extend_from_slice(&chunk);
+    }
+    Bytes::from(collected).into_response()
 }
 
 /// Reports the request's headers, so a test can see what actually reached the server rather than
@@ -248,18 +366,33 @@ async fn endless_body(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
     let tag = query.get("tag").cloned().unwrap_or_default();
-    let chunks = counters.endless_chunks(&tag);
-    let stream = futures::stream::unfold(chunks, |chunks| {
+    let producer = Producer {
+        chunks: counters.counter(&counters.endless_chunks, &tag),
+        released: counters.counter(&counters.endless_released, &tag),
+    };
+    let stream = futures::stream::unfold(producer, |producer| {
         async move {
             tokio::time::sleep(ENDLESS_BODY_INTERVAL).await;
-            chunks.fetch_add(1, Ordering::Relaxed);
+            producer.chunks.fetch_add(1, Ordering::Relaxed);
             Some((
                 Ok::<_, std::convert::Infallible>(Bytes::from_static(b"drip")),
-                chunks,
+                producer,
             ))
         }
     });
     Response::new(Body::from_stream(stream))
+}
+
+/// What one endless body counts, and what it reports when the server drops it.
+struct Producer {
+    chunks: Arc<AtomicU64>,
+    released: Arc<AtomicU64>,
+}
+
+impl Drop for Producer {
+    fn drop(&mut self) {
+        self.released.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// One data frame followed by a trailing header section.

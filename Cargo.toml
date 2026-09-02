@@ -47,6 +47,10 @@ scion-sdk-utils = { path = "crates/libs/scion-sdk-utils", version = "0.7.0" }
 
 pocketscion = { path = "crates/pocketscion", version = "0.7.0" }
 
+# Version-less: the tool is not published, so there is no version to resolve
+# against, and only tests in this workspace depend on it.
+scion-h3-test-server = { path = "tools/scion-h3-test-server" }
+
 scion-protobuf = { path = "crates/libs/scion-protobuf", version = "0.7.0" }
 sciparse = { path = "crates/libs/sciparse", version = "0.7.0" }
 scion-http3 = { path = "crates/libs/scion-http3", version = "0.7.0" }

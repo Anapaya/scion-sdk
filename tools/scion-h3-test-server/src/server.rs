@@ -28,7 +28,7 @@ use tempfile::NamedTempFile;
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::{Args, app};
+use crate::{Options, app};
 
 /// The name in the server certificate, and therefore the host a client must use.
 pub const SERVER_NAME: &str = "localhost";
@@ -75,7 +75,7 @@ impl Http3Server {
     /// Builds a stack in [IA212], binds a socket, and serves on it.
     pub async fn start(
         ps: &PsSetup,
-        args: &Args,
+        options: &Options,
         counters: Arc<app::Counters>,
         shutdown: CancellationToken,
     ) -> Result<Arc<Self>, BoxError> {
@@ -118,8 +118,8 @@ impl Http3Server {
             socket,
             bind_addr,
             router: app::router(counters),
-            max_streams: args.max_streams,
-            alpn: args.alpn.as_bytes().to_vec(),
+            max_streams: options.max_streams,
+            alpn: options.alpn.as_bytes().to_vec(),
             cert_file,
             key_file,
             shutdown,

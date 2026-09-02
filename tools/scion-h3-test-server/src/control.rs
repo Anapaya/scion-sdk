@@ -28,10 +28,9 @@ use axum::{
     routing::{get, post},
 };
 use pocketscion::io_config::IoConfig;
+use scion_h3_test_server::{app::Counters, server::Http3Server};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-
-use crate::{app::Counters, server::Http3Server};
 
 /// A bound control API, before it serves anything.
 ///

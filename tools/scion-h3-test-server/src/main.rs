@@ -45,23 +45,8 @@
 //!
 //! # Request paths
 //!
-//! Served over HTTP/3 in AS 2-ff00:0:212. Each one exists to make a single client behaviour
-//! observable.
-//!
-//! | Path | Serves | Useful for |
-//! | --- | --- | --- |
-//! | `GET /hello` | `world` | Liveness, and showing that a connection still works after something else went wrong on it. |
-//! | `POST /echo` | The request body, unchanged | Bodies that survive both directions byte for byte, at any size. |
-//! | `GET /echo-headers` | The request headers as JSON | What headers actually reached the server, including repeated ones and their order. |
-//! | `* /method` | The request method | Methods arriving unchanged, including ones with no special handling anywhere. |
-//! | `GET /repeated-headers` | Two `set-cookie` fields | Response headers that a map keyed by name cannot represent. |
-//! | `GET /status/{code}` | That status | Status codes arriving unchanged. |
-//! | `GET /trailers` | A body and an `x-checksum` trailer | The trailing header section, which no ordinary handler produces. |
-//! | `GET /slow?ms=` | A response after a delay | Request deadlines. Defaults to a second. |
-//! | `GET /big?bytes=` | That many bytes | Response size limits, and reassembly of a body spanning many frames. Defaults to a kilobyte, and refuses more than 64 MiB rather than allocating it. |
-//! | `GET /invalid-utf8` | Two bytes that are not UTF-8 | Bodies that must not be decoded on the way through. |
-//! | `GET /endless-body?tag=` | A chunk every 50 ms, forever | Cancellation. The count for `tag` stops going up once the client's `STOP_SENDING` arrives, which is the only way to see from outside that a cancelled request reached the server. |
-//! | `GET /reset-stream` | A status, one chunk, then a stream reset | The failure in between a clean response and an unreachable peer, which cannot be provoked from the client side. |
+//! Served over HTTP/3 in AS 2-ff00:0:212. `scion_h3_test_server::app` documents each one and the
+//! client behaviour it exists to make observable.
 //!
 //! # Control API
 //!
@@ -69,58 +54,32 @@
 //!
 //! | Path | Serves |
 //! | --- | --- |
-//! | `GET /stats` | `{"endless_chunks": {tag: count}, "requests": {path: count}, "started": {path: count}, "restarts": count}`. Chunks sent per endless-body tag, requests per path that finished and that merely arrived, and restarts so far. |
+//! | `GET /stats` | Every counter in `scion_h3_test_server::app::Counters`, as JSON, keyed the way that type documents. |
 //! | `GET /info` | The description above, for a harness with no standard output to read. |
 //! | `POST /restart-server` | Stops the HTTP/3 server and starts it again at the same address, with the same certificate. Returns once the new one is serving. |
 //!
 //! # Options
 //!
-//! Two settings exist because the conditions they create cannot be provoked from the client side:
-//! `--max-streams 0` makes every request fail against the peer's concurrent-stream limit, and
-//! `--alpn` set to anything but `h3` makes every connection attempt fail to agree on a protocol.
-//!
-//! `--underlay` picks what carries the traffic. `udp` puts a router in each AS and addresses
-//! endhosts by their own underlay address; `snap` puts a SNAP in each AS and tunnels to it. The
-//! difference matters to a client behind a NAT: over `snap` the endpoint is addressed at the
-//! address the tunnel observed, and over `udp` it is addressed at the one it believes it has, which
-//! nothing outside the NAT can reach.
-//!
-//! `--advertise-ip` separates where the topology listens from where it tells clients it is, which
-//! is what a client on another host needs. It applies to AS 1-ff00:0:132 alone, the one a client
-//! attaches to, and not to the AS the HTTP/3 server sits in. That split is what lets the address be
-//! one only the client can reach, such as an emulator's `10.0.2.2`: this process is a client of its
-//! own topology too, since the server discovers its connectivity the same way anything else does,
-//! and it goes on using the bound addresses of its own AS.
-//!
-//! `--bind-ip` moves where components listen, for a client that reaches this host at an address of
-//! its own rather than through a translation of loopback.
-//!
-//! `--control-port` fixes the control API's port, so that a harness which cannot read the line of
-//! JSON above still knows where to ask for it.
+//! Every option but one is a field of `scion_h3_test_server::Options`, which documents what each
+//! condition is for; [`Args`] is their spelling on a command line. The exception is
+//! `--control-port`, which fixes the port of the control API above, so that a harness which cannot
+//! read the line of JSON still knows where to ask for it.
 
-mod app;
 mod control;
-mod server;
 
 use std::{
     io::{BufRead, Write},
     net::IpAddr,
-    sync::Arc,
 };
 
 use clap::{Parser, ValueEnum};
-use pocketscion::{
-    io_config::IoConfig,
-    util::{
-        dev_auth_token,
-        topologies::{IA132, UnderlayType, minimal::minimal_topology_with_io_config},
-    },
-};
-use tokio_util::sync::CancellationToken;
+use pocketscion::util::topologies::UnderlayType;
+use scion_h3_test_server::{Options, TestServer};
 
-use crate::{app::Counters, server::Http3Server};
-
-/// Everything the topology and the server in it can be told at start-up.
+/// Everything the topology and the server in it can be told at start-up, on the command line.
+///
+/// The same settings as [`Options`], which is what they become; this is only their spelling for a
+/// caller that starts the tool as a process.
 #[derive(Parser)]
 #[command(about = "A PocketSCION topology serving HTTP/3")]
 pub struct Args {
@@ -160,6 +119,18 @@ pub struct Args {
     control_port: u16,
 }
 
+impl Args {
+    fn into_options(self) -> Options {
+        Options {
+            max_streams: self.max_streams,
+            alpn: self.alpn,
+            underlay: self.underlay.into(),
+            bind_ip: self.bind_ip,
+            advertise_ip: self.advertise_ip,
+        }
+    }
+}
+
 /// What carries traffic between the ASes of the topology.
 #[derive(Clone, Copy, ValueEnum)]
 enum Underlay {
@@ -191,47 +162,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     let args = Args::parse();
-    let counters = Arc::new(Counters::default());
-    let shutdown = CancellationToken::new();
+    let control_port = args.control_port;
+    let underlay = args.underlay.name();
+    let options = args.into_options();
 
-    let io_config = IoConfig::new();
-    if let Some(ip) = args.bind_ip {
-        io_config.set_bind_ip(ip);
-    }
-    if let Some(ip) = args.advertise_ip {
-        // The client's AS only. The server's own AS keeps its bound addresses, which is what lets
-        // this process reach the topology it is hosting while the client reaches it by another
-        // route entirely.
-        io_config.set_advertised_ip(IA132, ip);
-    }
-
-    let ps = minimal_topology_with_io_config(args.underlay.into(), io_config.clone()).await;
+    let server = TestServer::start(options).await?;
     // Bound before the description is built, served after it: the control API's own address is part
     // of the description, and the description is what it serves.
-    let control = control::bind(&io_config, args.control_port).await?;
-    let server = Http3Server::start(&ps, &args, counters.clone(), shutdown.clone()).await?;
+    let control = control::bind(server.io_config(), control_port).await?;
 
     let description = serde_json::json!({
-        "endhost_api_url": ps.endhost_api(IA132).expect("endhost API for IA132").to_string(),
-        "auth_token": dev_auth_token(),
-        "base_url": format!("https://{}:{}", server::SERVER_NAME, server.port()),
+        "endhost_api_url": server.endhost_api_url(),
+        "auth_token": server.auth_token(),
+        "base_url": server.base_url(),
         "target": server.target(),
         "ca_pem": server.ca_pem(),
         "wrong_ca_pem": server.wrong_ca_pem(),
         "control_url": control.url(),
-        "underlay": args.underlay.name(),
+        "underlay": underlay,
     });
-    control.serve(counters, server, description.clone(), shutdown.clone());
+    control.serve(
+        server.counters().clone(),
+        server.http3_server().clone(),
+        description.clone(),
+        server.child_shutdown_token(),
+    );
 
     println!("{description}");
     std::io::stdout().flush()?;
 
     wait_for_stdin_close().await;
     tracing::info!("Standard input closed, shutting down");
-    shutdown.cancel();
+    // Dropping it cancels the shutdown token, which is what every task the topology spawned
+    // watches.
+    drop(server);
     Ok(())
 }
 

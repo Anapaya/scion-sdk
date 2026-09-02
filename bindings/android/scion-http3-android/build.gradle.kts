@@ -62,7 +62,19 @@ val buildHostLibrary by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the host shared library, which the bindings are generated from."
     workingDir = cargoWorkspace.asFile
-    commandLine("cargo", "build", "--locked", "--release", "-p", "scion-http3-ffi")
+    // `rustc` rather than `build`, for the one crate type this needs: the manifest also declares
+    // the static library Apple links, and the bindings are generated from the shared one.
+    commandLine(
+        "cargo",
+        "rustc",
+        "--locked",
+        "--release",
+        "--lib",
+        "-p",
+        "scion-http3-ffi",
+        "--crate-type",
+        "cdylib",
+    )
 
     // The output is declared but the task never claims to be up to date. Both halves matter. Cargo
     // decides what to rebuild, far better than a declared input list over the crate graph could, so

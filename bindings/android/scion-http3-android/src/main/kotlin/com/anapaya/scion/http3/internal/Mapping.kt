@@ -111,6 +111,12 @@ internal fun FfiException.toPublic(): ScionHttp3Exception =
             ScionHttp3Exception.InvalidRequest(retryable, detail, this)
         is FfiException.Closed ->
             ScionHttp3Exception.Closed(retryable, detail, this)
+        // Unreachable, and here because the `when` is exhaustive. Only the FFI's
+        // executeCancellable reports a cancellation, and [Http3Backend] declares no cancellable
+        // call, so nothing here can reach one. That seam is what keeps this true, and
+        // ErrorMappingTest fails if a cancellable call is added to it.
+        is FfiException.Cancelled ->
+            ScionHttp3Exception.Internal(retryable, detail, this)
         is FfiException.Internal ->
             ScionHttp3Exception.Internal(retryable, detail, this)
     }

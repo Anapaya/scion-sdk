@@ -29,6 +29,7 @@ use super::StreamRef;
 use crate::{
     h3::{
         client::{
+            AbortOnDrop,
             app::{Http3ClientApp, ResponseHead, ResponseHeadState},
             error::RequestError,
         },
@@ -110,6 +111,10 @@ pub struct H3ResponseBody {
     /// Read-side lifetime guard; its `done` flag suppresses `STOP_SENDING` once
     /// the body has finished cleanly, and its drop tears the read side down.
     read_guard: ReadGuard,
+    /// The task uploading the request body, when
+    /// [`Http3Client::request`](crate::h3::client::Http3Client::request) drives it. `None` when
+    /// the caller owns the writer itself, as with `request_with_writer`.
+    upload: Option<AbortOnDrop<()>>,
 }
 
 impl H3ResponseBody {
@@ -118,7 +123,13 @@ impl H3ResponseBody {
             handle: read_guard.handle(),
             stream_id: read_guard.stream_id(),
             read_guard,
+            upload: None,
         }
+    }
+
+    /// Ties `upload` to this body, so that dropping the response ends the request body upload.
+    pub(crate) fn attach_upload(&mut self, upload: AbortOnDrop<()>) {
+        self.upload = Some(upload);
     }
 
     /// Returns a future that resolves to the next frame of the response body, or

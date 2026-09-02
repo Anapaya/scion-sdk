@@ -1,9 +1,11 @@
 [package]
 name = "scion-h3-test-server"
 edition.workspace = true
-# A tool, not a library, and not published: it exists to be run by test suites,
-# in any language. Keeping it out of scion-http3 keeps a network simulator out of
-# that crate's dependency graph and out of its published tarball.
+# Not published: it exists to be run by test suites, in any language. Keeping it
+# out of scion-http3 keeps a network simulator out of that crate's dependency
+# graph and out of its published tarball. The binary is what a harness in another
+# language starts; the library beside it is for a Rust test in this workspace,
+# which wants the same topology in its own process.
 publish = false
 license = "Apache-2.0"
 description = "A PocketSCION topology serving HTTP/3, for testing clients against a real request path"

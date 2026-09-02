@@ -322,6 +322,11 @@ def build(abis: list[Abi], skip_verify: bool) -> None:
                 "rustc",
                 "--locked",
                 "--lib",
+                # Only the shared library, of the three crate types the manifest declares. The
+                # static library is what Apple links, and building one per ABI would cost a few
+                # hundred megabytes of target directory for something Android never loads.
+                "--crate-type",
+                "cdylib",
                 "-p",
                 CARGO_PACKAGE,
                 "--profile",

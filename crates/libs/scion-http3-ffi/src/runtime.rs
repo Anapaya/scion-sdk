@@ -131,7 +131,7 @@ where
         Err(join) if join.is_panic() => std::panic::resume_unwind(join.into_panic()),
         // The runtime is never shut down, so a cancelled JoinError can only be this future's own
         // abort, which means nothing is left to return the result to.
-        Err(_) => Err(Error::internal("the request was cancelled")),
+        Err(_) => Err(Error::cancelled()),
     }
 }
 

@@ -5152,10 +5152,14 @@ name = "scion-http3-ffi"
 version = "0.0.0"
 dependencies = [
  "futures",
+ "ntest",
+ "scion-h3-test-server",
  "scion-http3",
  "scion-sdk-utils",
+ "test-log",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "tracing",
  "uniffi",
 ]
