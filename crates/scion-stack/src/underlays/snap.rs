@@ -171,9 +171,13 @@ impl UnderlaySocket for SnapUnderlaySocket {
             buf[..packet_size].copy_from_slice(pkt);
         }
 
-        self.inner
-            .try_send(buf)
-            .map_err(ScionSocketSendError::IoError)
+        self.inner.try_send(buf).map_err(|e| {
+            if e.kind() == io::ErrorKind::ConnectionReset {
+                ScionSocketSendError::Closed
+            } else {
+                ScionSocketSendError::IoError(e)
+            }
+        })
     }
 
     async fn writeable(&self) {
@@ -201,8 +205,9 @@ impl UnderlaySocket for SnapUnderlaySocket {
                                     io::ErrorKind::WouldBlock,
                                 )));
                             }
-                            // XXX(uniquefine) this error handling is awkward. But this will only
-                            // happen when the stack is dropped anyway.
+                            // The tunnel driver stopped, for example because the session could
+                            // not be re-established after a network change. The socket is dead
+                            // and the application needs to bind a new one.
                             Err(_) => {
                                 return Err(ScionSocketReceiveError::IoError(io::Error::new(
                                     io::ErrorKind::ConnectionReset,

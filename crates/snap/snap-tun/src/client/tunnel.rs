@@ -19,7 +19,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -40,6 +40,9 @@ use crate::udp_batch::{QueuePacketError, RecvBatchError, UdpBatchReceiver, UdpBa
 
 const HANDSHAKE_RATE_LIMIT: u64 = 20;
 const RECEIVE_BATCH_SIZE: usize = 64;
+
+/// How long the driver tries to re-establish an expired session before it stops.
+const REHANDSHAKE_BUDGET: Duration = Duration::from_secs(600);
 
 /// Error when sending or receiving packets on the SNAP tunnel.
 #[derive(Debug, thiserror::Error)]
@@ -126,6 +129,8 @@ struct SnapTunnelDriver {
     pub sender: UdpBatchSender<RECEIVE_BATCH_SIZE, PACKET_BUF_POOL_SIZE>,
     /// Shared with the [`SnapTunnel`] handle, which exposes it to the application.
     pub discarded_datagrams: Arc<AtomicU64>,
+    /// Set when the driver stops. Shared with the [`SnapTunnel`] handle.
+    pub closed: Arc<AtomicBool>,
 }
 
 impl SnapTunnelDriver {
@@ -168,6 +173,7 @@ impl SnapTunnelDriver {
             sender,
             pool,
             discarded_datagrams: Arc::new(AtomicU64::new(0)),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -239,8 +245,17 @@ impl SnapTunnelDriver {
         }
     }
 
+    /// Drives the tunnel until it stops, then marks the tunnel closed.
     #[instrument(name = "st-client", skip(self), fields(socket_addr= ?self.local_sockaddr))]
     async fn main_loop(mut self) {
+        self.run().await;
+        self.closed.store(true, Ordering::Release);
+        tracing::info!("snap tunnel driver stopped");
+    }
+
+    /// Drives the tunnel. Returns when the consumer of the receive queue is gone or when an
+    /// expired session cannot be re-established on this socket.
+    async fn run(&mut self) {
         let local_sockaddr = self
             .local_sockaddr
             .expect("local address must be set before main_loop()");
@@ -251,30 +266,47 @@ impl SnapTunnelDriver {
                     return;
                 }
                 Err(SnapTunnelDriverError::ConnectionExpired) => {
-                    loop {
-                        let mut backoff = BackoffState::new();
-                        // reset tunnel
-                        *self.tunn.lock().expect("poison") = Self::create_tunn(
-                            self.static_private.clone(),
-                            self.peer_public,
-                            self.dataplane_address,
-                            self.persistent_keepalive_seconds,
-                        );
-                        match self.initiate_connection().await {
-                            Ok(addr) if addr == local_sockaddr => break,
-                            Ok(addr) => {
-                                tracing::error!(expected_addr=?local_sockaddr, new_addr=?addr, "local socket address changed");
-                            }
-                            Err(err) => {
-                                tracing::error!(?err, "error driving tunnel");
-                            }
-                        }
-                        backoff.backoff().await;
+                    if !self.rehandshake(local_sockaddr).await {
+                        return;
                     }
                 }
                 Err(ref e) => tracing::error!(err=?e, "error driving tunnel"),
                 _ => {}
             }
+        }
+    }
+
+    /// Re-establishes an expired session with a fresh handshake.
+    ///
+    /// Returns `true` when the session is back on the same local address. Returns `false` when the
+    /// driver must stop: the data plane assigned a different address, the failure is permanent, or
+    /// [`REHANDSHAKE_BUDGET`] is spent.
+    async fn rehandshake(&mut self, local_sockaddr: SocketAddr) -> bool {
+        let started = Instant::now();
+        let mut backoff = BackoffState::new();
+        loop {
+            *self.tunn.lock().expect("poison") = Self::create_tunn(
+                self.static_private.clone(),
+                self.peer_public,
+                self.dataplane_address,
+                self.persistent_keepalive_seconds,
+            );
+            let result = self.initiate_connection().await;
+            match rehandshake_outcome(local_sockaddr, &result, started.elapsed()) {
+                Recovery::Recovered => return true,
+                Recovery::Retry => {
+                    tracing::warn!(?result, "re-handshake failed, retrying");
+                }
+                Recovery::Stop(reason) => {
+                    tracing::error!(
+                        ?reason,
+                        ?result,
+                        "cannot re-establish snap tunnel, stopping driver"
+                    );
+                    return false;
+                }
+            }
+            backoff.backoff().await;
         }
     }
 
@@ -436,10 +468,50 @@ impl SnapTunnelDriver {
     }
 }
 
+/// What the driver does after one re-handshake attempt.
+#[derive(Debug, PartialEq, Eq)]
+enum Recovery {
+    /// The session is back on the same local address.
+    Recovered,
+    /// Try again after a backoff.
+    Retry,
+    /// Stop the driver.
+    Stop(StopReason),
+}
+
+/// Why the driver stops instead of trying the re-handshake again.
+#[derive(Debug, PartialEq, Eq)]
+enum StopReason {
+    /// The data plane assigned a different local address. The data plane derives the address from
+    /// the source address it observes, so this socket now speaks for a different SCION address
+    /// than the one the application was given.
+    AddressChanged { new_addr: SocketAddr },
+    /// The failure answers the same way on every attempt.
+    PermanentError,
+    /// Transient failures lasted longer than [`REHANDSHAKE_BUDGET`].
+    BudgetExhausted,
+}
+
+/// Decides how the driver continues after a re-handshake attempt that took `elapsed` since the
+/// session expired.
+fn rehandshake_outcome(
+    expected_addr: SocketAddr,
+    result: &Result<SocketAddr, SnapTunnelDriverError>,
+    elapsed: Duration,
+) -> Recovery {
+    match result {
+        Ok(addr) if *addr == expected_addr => Recovery::Recovered,
+        Ok(addr) => Recovery::Stop(StopReason::AddressChanged { new_addr: *addr }),
+        Err(e) if !e.is_transient() => Recovery::Stop(StopReason::PermanentError),
+        Err(_) if elapsed >= REHANDSHAKE_BUDGET => Recovery::Stop(StopReason::BudgetExhausted),
+        Err(_) => Recovery::Retry,
+    }
+}
+
 /// Error when receiving a packet from the SNAP tunnel connection.
 #[derive(Debug, thiserror::Error)]
 pub enum SnapTunnelReceiveError {
-    /// The receive queue is closed.
+    /// The receive queue is closed because the tunnel is closed. See [`SnapTunnel::is_closed`].
     #[error("receive queue closed")]
     ReceiveQueueClosed,
 }
@@ -447,6 +519,11 @@ pub enum SnapTunnelReceiveError {
 type RecvFuture = Pin<Box<dyn Future<Output = Result<BytesMut, async_channel::RecvError>> + Send>>;
 
 /// A SNAP tunnel connection.
+///
+/// A background driver task runs the WireGuard session. Once the driver stops the tunnel is closed
+/// for good: receiving fails with [`SnapTunnelReceiveError::ReceiveQueueClosed`] and sending fails
+/// with an `io::ErrorKind::ConnectionReset` error. See [`SnapTunnel::is_closed`] for when that
+/// happens.
 pub struct SnapTunnel {
     _guard: TunnelGuard,
     tunn: Arc<Mutex<Tunn>>,
@@ -460,6 +537,7 @@ pub struct SnapTunnel {
     /// Cancelled when the socket is dropped.
     driver_task: JoinHandle<()>,
     discarded_datagrams: Arc<AtomicU64>,
+    closed: Arc<AtomicBool>,
 }
 
 impl Drop for SnapTunnel {
@@ -504,6 +582,7 @@ impl SnapTunnel {
             _guard: guard,
             tunn: driver.tunn.clone(),
             discarded_datagrams: driver.discarded_datagrams.clone(),
+            closed: driver.closed.clone(),
             underlay_socket,
             dataplane_address,
             local_sockaddr: socket_addr,
@@ -514,9 +593,14 @@ impl SnapTunnel {
     }
 
     /// Send a packet to the remote server.
-    // xxx(dsd): during a connection reset, packets will be silently dropped.
+    ///
+    /// While a handshake is in progress the packet is queued and sent when the handshake
+    /// completes. Fails with `io::ErrorKind::ConnectionReset` once the tunnel is closed.
     #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= packet.len()))]
     pub async fn send(&self, packet: Packet) -> io::Result<()> {
+        if self.is_closed() {
+            return Err(closed_error());
+        }
         let encapsulated_packet = self.tunn.lock().unwrap().handle_outgoing_packet(packet);
         match encapsulated_packet {
             Some(wg) => {
@@ -543,8 +627,13 @@ impl SnapTunnel {
     }
 
     /// Try to send a packet to the remote server. Returns error of try_send_to.
+    ///
+    /// Fails with `io::ErrorKind::ConnectionReset` once the tunnel is closed.
     #[instrument(name = "st-client", skip_all, fields(socket_addr= ?self.local_sockaddr, payload_len= packet.len()))]
     pub fn try_send(&self, packet: Packet) -> io::Result<()> {
+        if self.is_closed() {
+            return Err(closed_error());
+        }
         match self.tunn.lock().unwrap().handle_outgoing_packet(packet) {
             Some(wg) => {
                 let bytes = match wg {
@@ -568,6 +657,8 @@ impl SnapTunnel {
     }
 
     /// Receive a packet from the remote server.
+    ///
+    /// Fails with [`SnapTunnelReceiveError::ReceiveQueueClosed`] once the tunnel is closed.
     pub async fn recv(&self) -> Result<Bytes, SnapTunnelReceiveError> {
         match self.receive_queue.recv().await {
             Ok(packet) => Ok(packet.into()),
@@ -624,6 +715,18 @@ impl SnapTunnel {
         self.local_sockaddr
     }
 
+    /// Whether the tunnel is closed. A closed tunnel delivers nothing in either direction.
+    ///
+    /// The tunnel closes when the driver stops. The driver stops when the consumer of the receive
+    /// queue is gone, when an expired session cannot be re-established within a fixed budget, when
+    /// a re-handshake fails permanently, or when a re-handshake assigns a different local address.
+    /// The last case happens after the local network changed, because the data plane derives the
+    /// address from the source address it observes. An application that wants to continue then
+    /// connects a new tunnel; see the rules on [`super::SnapTunEndpoint`].
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     /// Check if the socket is writable.
     pub async fn writable(&self) -> io::Result<()> {
         self.underlay_socket.writable().await
@@ -664,19 +767,28 @@ impl BackoffState {
         }
     }
 
-    fn backoff(&mut self) -> impl Future<Output = ()> {
+    /// The delay before the next attempt or `None` when the next attempt is already due.
+    fn next_delay(&mut self) -> Option<Duration> {
         let now = Instant::now();
         let until_next = (self.last + self.exp_backoff.duration(self.attempt as u32))
             .checked_duration_since(now);
         self.attempt += 1;
         self.last = now;
+        until_next
+    }
 
+    fn backoff(&mut self) -> impl Future<Output = ()> {
+        let until_next = self.next_delay();
         async move {
             if let Some(d) = until_next {
                 tokio::time::sleep(d).await;
             }
         }
     }
+}
+
+fn closed_error() -> io::Error {
+    io::Error::new(io::ErrorKind::ConnectionReset, "SNAP tunnel closed")
 }
 
 fn to_bytes(wg: WgKind) -> Packet<[u8]> {
@@ -716,5 +828,85 @@ mod tests {
         // attempt.
         assert!(!SnapTunnelDriverError::WireguardError(WireGuardError::WrongKey).is_transient());
         assert!(!SnapTunnelDriverError::ReceiveQueueClosed.is_transient());
+    }
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn rehandshake_recovers_on_the_same_address() {
+        let expected = addr("192.0.2.1:4000");
+        assert_eq!(
+            rehandshake_outcome(expected, &Ok(expected), Duration::ZERO),
+            Recovery::Recovered
+        );
+    }
+
+    #[test]
+    fn rehandshake_stops_when_the_address_changed() {
+        let expected = addr("192.0.2.1:4000");
+        let new_addr = addr("198.51.100.7:4000");
+        assert_eq!(
+            rehandshake_outcome(expected, &Ok(new_addr), Duration::ZERO),
+            Recovery::Stop(StopReason::AddressChanged { new_addr })
+        );
+    }
+
+    #[test]
+    fn rehandshake_retries_transient_errors_within_the_budget() {
+        let expected = addr("192.0.2.1:4000");
+        let expired = Err(SnapTunnelDriverError::ConnectionExpired);
+        assert_eq!(
+            rehandshake_outcome(expected, &expired, Duration::ZERO),
+            Recovery::Retry
+        );
+        assert_eq!(
+            rehandshake_outcome(
+                expected,
+                &expired,
+                REHANDSHAKE_BUDGET - Duration::from_secs(1)
+            ),
+            Recovery::Retry
+        );
+        let send_failed = Err(SnapTunnelDriverError::SendIoError(io::Error::other("down")));
+        assert_eq!(
+            rehandshake_outcome(expected, &send_failed, Duration::ZERO),
+            Recovery::Retry
+        );
+    }
+
+    #[test]
+    fn rehandshake_stops_when_the_budget_is_spent() {
+        let expected = addr("192.0.2.1:4000");
+        let expired = Err(SnapTunnelDriverError::ConnectionExpired);
+        assert_eq!(
+            rehandshake_outcome(expected, &expired, REHANDSHAKE_BUDGET),
+            Recovery::Stop(StopReason::BudgetExhausted)
+        );
+    }
+
+    #[test]
+    fn rehandshake_stops_on_a_permanent_error() {
+        let expected = addr("192.0.2.1:4000");
+        let gone = Err(SnapTunnelDriverError::ReceiveQueueClosed);
+        assert_eq!(
+            rehandshake_outcome(expected, &gone, Duration::ZERO),
+            Recovery::Stop(StopReason::PermanentError)
+        );
+    }
+
+    #[test]
+    fn backoff_delay_grows_across_attempts() {
+        // The jitter is at most 0.5 s and the base delay grows by at least 1.5 s per attempt, so
+        // consecutive delays of one state are strictly increasing.
+        let mut backoff = BackoffState::new();
+        let first = backoff.next_delay().expect("first attempt waits");
+        let second = backoff.next_delay().expect("second attempt waits");
+        let third = backoff.next_delay().expect("third attempt waits");
+        assert!(
+            first < second && second < third,
+            "{first:?} {second:?} {third:?}"
+        );
     }
 }
