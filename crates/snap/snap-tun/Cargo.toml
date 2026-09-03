@@ -26,6 +26,9 @@ reqwest-connect-rpc = { workspace = true }
 url = { workspace = true }
 zerocopy = { workspace = true }
 
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
+
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
 pem = { workspace = true }

@@ -96,6 +96,46 @@ pub enum QueuePacketError {
     },
 }
 
+/// Creates the `quinn-udp` socket state for `socket`.
+///
+/// On Windows, `quinn-udp` probes for segmentation offload by setting the `UDP_SEND_MSG_SIZE`
+/// socket option and does not clear it again. Left in place, the option makes the kernel
+/// split every datagram sent without a per-transmit segment size into 1500 byte datagrams
+/// instead of refusing an oversized one. The option is cleared here so that segmentation
+/// only happens when a transmit asks for it.
+fn new_socket_state(socket: &UdpSocket) -> io::Result<UdpSocketState> {
+    let state = UdpSocketState::new(UdpSockRef::from(socket))?;
+    #[cfg(windows)]
+    if state.max_gso_segments() > 1 {
+        clear_socket_segment_size(socket)?;
+    }
+    Ok(state)
+}
+
+#[cfg(windows)]
+fn clear_socket_segment_size(socket: &UdpSocket) -> io::Result<()> {
+    use std::{mem, os::windows::io::AsRawSocket};
+
+    use windows_sys::Win32::Networking::WinSock;
+
+    let value: u32 = 0;
+    let rc = unsafe {
+        WinSock::setsockopt(
+            socket.as_raw_socket() as usize,
+            WinSock::IPPROTO_UDP,
+            WinSock::UDP_SEND_MSG_SIZE,
+            &value as *const _ as *const _,
+            mem::size_of_val(&value) as _,
+        )
+    };
+
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// UdpBatchReceiver wraps a standard UDP socket and provides batched receive operations.
 ///
 /// It receives up to `BATCH_SIZE` UDP datagrams in one socket read cycle and is
@@ -126,7 +166,7 @@ impl<const BATCH_SIZE: usize, const BUFFER_SIZE: usize> UdpBatchReceiver<BATCH_S
             BATCH_SIZE <= MAX_BATCH_SIZE,
             "UdpBatchReceiver BATCH_SIZE must not exceed MAX_BATCH_SIZE"
         );
-        let state = UdpSocketState::new(UdpSockRef::from(socket))?;
+        let state = new_socket_state(socket)?;
         let recv_slots = std::array::from_fn(|_| pool.get());
         Ok(Self {
             state,
@@ -267,7 +307,7 @@ impl<const BATCH_SIZE: usize, const MAX_PACKET_SIZE: usize>
             "UdpBatchSender BATCH_SIZE must not exceed MAX_BATCH_SIZE"
         );
         Ok(Self {
-            state: UdpSocketState::new(UdpSockRef::from(socket))?,
+            state: new_socket_state(socket)?,
             queued_packets: VecDeque::with_capacity(BATCH_SIZE),
             scratch: Vec::with_capacity(MAX_PACKET_SIZE * BATCH_SIZE),
             discarded_datagrams: 0,
@@ -612,6 +652,35 @@ mod tests {
             0,
             "taking the count must reset it"
         );
+    }
+
+    /// A single datagram larger than the segment size that `quinn-udp` probes with must
+    /// arrive as one datagram. A segmentation setting left on the socket would split it.
+    #[tokio::test]
+    async fn flush_delivers_a_single_large_datagram_in_one_piece() {
+        const LARGE_PACKET_SIZE: usize = 2048;
+
+        let sender_socket = bound_socket().await;
+        let receiver_socket = bound_socket().await;
+        let target = receiver_socket.local_addr().unwrap();
+        let pool = PacketBufPool::<LARGE_PACKET_SIZE>::new(MAX_BATCH_SIZE + 1);
+        let mut sender =
+            UdpBatchSender::<MAX_BATCH_SIZE, LARGE_PACKET_SIZE>::new(&sender_socket).unwrap();
+        let _receiver =
+            UdpBatchReceiver::<MAX_BATCH_SIZE, LARGE_PACKET_SIZE>::new(&sender_socket, &pool)
+                .unwrap();
+
+        let mut packet = pool.get();
+        packet.truncate(LARGE_PACKET_SIZE);
+        sender.try_queue_packet(packet, target).unwrap();
+        sender.flush(&sender_socket).await.unwrap();
+
+        let mut buf = [0u8; 2 * LARGE_PACKET_SIZE];
+        let (len, _) = receiver_socket.recv_from(&mut buf).await.unwrap();
+
+        assert_eq!(len, LARGE_PACKET_SIZE);
+        assert!(sender.is_empty());
+        assert_eq!(sender.take_discarded_datagrams(), 0);
     }
 
     /// Coalescing must stay within the maximum UDP payload size, which the kernel would
