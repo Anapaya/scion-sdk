@@ -1,13 +1,14 @@
 # SCION HTTP/3 for Apple platforms
 
-The native half of the Swift client: this directory cross-compiles
+The Swift client's package, and the native half under it: this directory cross-compiles
 [`scion-http3-ffi`](../../crates/libs/scion-http3-ffi) as a static library for five Apple targets,
-generates the C header and the module map for it, and assembles the three slices into an
-XCFramework.
+generates the Swift bindings with the C header and the module map, assembles the three slices into
+an XCFramework, and builds the Swift package that consumes it.
 
 | | |
 | --- | --- |
-| `tools/apple.py` | Cross-compiles a static library per target, checks them, assembles the XCFramework, and checks that too. |
+| `scion-http3-swift/` | The Swift package: the facade, the generated bindings, and the tests. See [its README](scion-http3-swift/README.md). |
+| `tools/apple.py` | Cross-compiles a static library per target, checks them, assembles the XCFramework into the package, and checks that too. |
 | `tools/test_apple.py` | Tests for the formats `apple.py` parses. No Xcode needed. |
 | `../../tools/uniffi-bindgen` | The binding generator, built from the workspace's pinned `uniffi`. |
 
@@ -42,7 +43,7 @@ From `endhost/public`:
 
 ```bash
 ./bindings/apple/tools/apple.py build         # all five targets, then checks them
-./bindings/apple/tools/apple.py xcframework   # fuses, generates, assembles, then checks
+./bindings/apple/tools/apple.py xcframework   # fuses, generates, assembles into the package, checks
 ```
 
 `build` takes `--target aarch64-apple-darwin` to build a single target, which is what to use while
@@ -74,11 +75,28 @@ cargo metadata --format-version 1 --no-deps | jq -r '.target_directory'
 | `generated/slices/<slice>/libscion_http3_ffi.a` | The same libraries, fused per slice by `lipo` |
 | `generated/bindings/` | What uniffi-bindgen wrote: the Swift source, the header, the module map |
 | `generated/headers/` | The header and `module.modulemap`, as every slice carries them |
-| `generated/ScionHTTP3UniffiFFI.xcframework` | The XCFramework |
+| `scion-http3-swift/Sources/ScionHTTP3Uniffi/` | The generated Swift, compiled as the package's bindings target |
+| `scion-http3-swift/ScionHTTP3UniffiFFI.xcframework` | The XCFramework, where `Package.swift` looks for it |
 | `<cargo target>/<triple>/mobile/libscion_http3_ffi.a` | Before staging and stripping |
 
-`generated/` is gitignored, and sits outside any Xcode or SwiftPM build directory so that neither
-can delete artifacts it did not produce.
+`generated/`, the generated Swift and the XCFramework are gitignored, as the Kotlin and the native
+libraries are on Android. The last two sit inside the package, because SwiftPM compiles a target
+from under `Sources/` and accepts a local binary target from inside the package only, and outside
+`.build/`, so `swift package clean` cannot delete artifacts SwiftPM did not produce.
+
+## The Swift package
+
+`scion-http3-swift/` is a plain SwiftPM package. Once the XCFramework is in place, everything else
+is `swift`:
+
+```bash
+cd bindings/apple/scion-http3-swift
+swift build
+swift test
+```
+
+The tests start `scion-h3-test-server`, a PocketSCION topology with an HTTP/3 server in it, as a
+child process. To use a server built elsewhere, set `SCION_H3_TEST_SERVER` to its path.
 
 ## Environment
 
@@ -98,7 +116,9 @@ Run the build through the tool rather than invoking `cargo` directly.
 
 [`endhost-public-apple.yml`](../../../../.github/workflows/endhost-public-apple.yml) builds one
 target per job, on `macos-15`, and then assembles and checks the XCFramework in a job of its own.
-It runs nightly, on a pull request that touches the paths it lists, and on manual dispatch.
+That job also builds the package for macOS and for the iOS simulator, and runs the Swift tests
+against a test server the `aarch64-apple-darwin` job built. It runs nightly, on a pull request
+that touches the paths it lists, and on manual dispatch.
 
 ## Troubleshooting
 
@@ -111,4 +131,9 @@ It runs nightly, on a pull request that touches the paths it lists, and on manua
 | `holds objects for MACOS, not only IOS` | Part of the build used the host SDK. Usually `CMAKE_TOOLCHAIN_FILE` or `SDKROOT`; otherwise a stale BoringSSL build directory, which cmake honours over the defines passed to it. Delete `<cargo target>/<triple>` and build again. |
 | `so IPHONEOS_DEPLOYMENT_TARGET did not reach the compiler` | The build did not go through `apple.py`, or a stale BoringSSL build directory was reused. As above. |
 | `rustc reported nothing to link the library against` | The build had nothing to relink and there is no earlier record. Delete `generated/libs/<triple>/` and build again. |
-| `expected one .h and one .modulemap` | The library exports no UniFFI metadata, or `[bindings.swift]` in `uniffi.toml` changed. |
+| `expected one .swift, one .h and one .modulemap` | The library exports no UniFFI metadata, or `[bindings.swift]` in `uniffi.toml` changed. |
+| `Source files for target ScionHTTP3Uniffi should be located under` (SwiftPM) | The generated Swift is not in the package. Run `apple.py xcframework`. |
+| `declares ios 16.0, but the slices are built for 15.0` | `Package.swift` and `apple.py` disagree on a minimum OS. Change both together. |
+| `invalid local binary target path` or `does not contain a binary artifact` (SwiftPM) | The XCFramework is not in the package. Run `apple.py xcframework`. |
+| `did not report its endpoints within 120 s` | The test server did not start. Its standard error is in the test output; run the binary by hand to see more. |
+| `cargo build ... exited` (Swift tests) | The tests could not build the test server. Build it yourself and set `SCION_H3_TEST_SERVER`. |

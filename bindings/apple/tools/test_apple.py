@@ -305,3 +305,69 @@ class SliceTableTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+MANIFEST = """\
+let package = Package(
+    name: "scion-http3-swift",
+    platforms: [.iOS(.v15), .macOS(.v12)],
+    targets: [
+        .binaryTarget(name: "ScionHTTP3UniffiFFI", path: "ScionHTTP3UniffiFFI.xcframework"),
+    ]
+)
+"""
+
+
+class PackageManifestTest(unittest.TestCase):
+    def test_reads_the_platforms(self):
+        self.assertEqual(apple.declared_platforms(MANIFEST), {"ios": "15.0", "macos": "12.0"})
+
+    def test_reads_a_minor_version(self):
+        self.assertEqual(
+            apple.declared_platforms("platforms: [.iOS(.v15_1), .macOS( .v12 )]"),
+            {"ios": "15.1", "macos": "12.0"},
+        )
+
+    def test_reads_the_binary_target(self):
+        self.assertEqual(
+            apple.declared_binary_target(MANIFEST),
+            ("ScionHTTP3UniffiFFI", "ScionHTTP3UniffiFFI.xcframework"),
+        )
+
+    def test_reads_a_binary_target_split_over_lines(self):
+        manifest = '.binaryTarget(\n    name: "A",\n    path: "A.xcframework"\n)'
+        self.assertEqual(apple.declared_binary_target(manifest), ("A", "A.xcframework"))
+
+    def test_ignores_a_release_binary_target(self):
+        manifest = '.binaryTarget(name: "A", url: "https://example.org/A.zip", checksum: "0")'
+        self.assertIsNone(apple.declared_binary_target(manifest))
+
+    def check(self, manifest, module="ScionHTTP3UniffiFFI"):
+        report = apple.Report()
+        with unittest.mock.patch("builtins.print"):
+            apple.check_manifest(report, manifest, module)
+        return report.failures
+
+    def test_accepts_what_the_tool_builds(self):
+        self.assertEqual(self.check(MANIFEST), 0)
+
+    def test_refuses_a_platform_above_the_slices(self):
+        self.assertEqual(self.check(MANIFEST.replace(".v15", ".v16")), 1)
+
+    def test_refuses_a_platform_below_the_slices(self):
+        self.assertEqual(self.check(MANIFEST.replace(".v12", ".v11")), 1)
+
+    def test_refuses_a_missing_platform(self):
+        self.assertEqual(self.check(MANIFEST.replace(", .macOS(.v12)", "")), 1)
+
+    def test_refuses_a_binary_target_named_after_another_module(self):
+        self.assertEqual(self.check(MANIFEST, module="SomethingElseFFI"), 1)
+
+    def test_refuses_a_binary_target_from_another_path(self):
+        self.assertEqual(self.check(MANIFEST.replace("ScionHTTP3UniffiFFI.xcframework", "x")), 1)
+
+    def test_skips_the_module_comparison_without_a_module(self):
+        self.assertEqual(self.check(MANIFEST, module=None), 0)
+
+    def test_the_checked_in_manifest_passes(self):
+        self.assertEqual(self.check(apple.PACKAGE_MANIFEST.read_text()), 0)

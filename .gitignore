@@ -33,9 +33,14 @@ Desktop.ini
 # Node / pnpm (documentation preview tooling)
 node_modules/
 
-# Apple bindings (the static libraries, the generated bindings and the assembled
-# XCFramework, all written into generated/)
+# Apple bindings (the static libraries and the generated bindings, written into
+# generated/; SwiftPM output; and the generated Swift and the XCFramework that
+# apple.py writes into the package)
 bindings/apple/generated/
+bindings/apple/scion-http3-swift/Sources/ScionHTTP3Uniffi/
+bindings/apple/scion-http3-swift/.build/
+bindings/apple/scion-http3-swift/.swiftpm/
+bindings/apple/scion-http3-swift/*.xcframework/
 
 # Android bindings (Gradle output, and the native libraries and bindings that
 # non-Gradle steps write into generated/)

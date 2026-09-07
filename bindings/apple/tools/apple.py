@@ -6,9 +6,9 @@ Four subcommands:
 
     build               cross-compile scion-http3-ffi as a static library for each Rust target
     verify              check the staged static libraries
-    xcframework         fuse the fat slices, generate the header and the module map, assemble the
-                        XCFramework, and check it
-    verify-xcframework  check an assembled XCFramework on its own
+    xcframework         fuse the fat slices, generate the bindings, assemble the XCFramework
+                        into the Swift package, and check it
+    verify-xcframework  check an assembled XCFramework, and the package manifest against it
 
 Everything here needs macOS with Xcode. See ../README.md for prerequisites and troubleshooting.
 """
@@ -42,6 +42,10 @@ SLICES_DIR = GENERATED_DIR / "slices"
 BINDINGS_DIR = GENERATED_DIR / "bindings"
 # The header directory every slice carries.
 HEADERS_DIR = GENERATED_DIR / "headers"
+
+PACKAGE_DIR = APPLE_DIR / "scion-http3-swift"
+PACKAGE_MANIFEST = PACKAGE_DIR / "Package.swift"
+GENERATED_SWIFT_DIR = PACKAGE_DIR / "Sources" / "ScionHTTP3Uniffi"
 
 CARGO_PACKAGE = "scion-http3-ffi"
 CARGO_PROFILE = "mobile"
@@ -152,8 +156,8 @@ SLICES: tuple[Slice, ...] = (
 )
 
 # Named after the C module uniffi generates, which is what `Package.swift` declares its
-# `binaryTarget` as.
-XCFRAMEWORK = GENERATED_DIR / "ScionHTTP3UniffiFFI.xcframework"
+# `binaryTarget` as. Gitignored there.
+XCFRAMEWORK = PACKAGE_DIR / "ScionHTTP3UniffiFFI.xcframework"
 
 # Xcode reads a static library's module map from this name inside the slice's header directory,
 # whatever uniffi called the file.
@@ -702,15 +706,23 @@ def generate_bindings() -> tuple[Path, Path]:
         cwd=WORKSPACE_ROOT,
     )
 
+    sources = sorted(BINDINGS_DIR.glob("*.swift"))
     headers = sorted(BINDINGS_DIR.glob("*.h"))
     module_maps = sorted(BINDINGS_DIR.glob("*.modulemap"))
-    if len(headers) != 1 or len(module_maps) != 1:
+    if len(sources) != 1 or len(headers) != 1 or len(module_maps) != 1:
         raise Failure(
-            f"expected one .h and one .modulemap in {BINDINGS_DIR}, found {len(headers)} and "
-            f"{len(module_maps)}.\n"
+            f"expected one .swift, one .h and one .modulemap in {BINDINGS_DIR}, found "
+            f"{len(sources)}, {len(headers)} and {len(module_maps)}.\n"
             "      The library exports no UniFFI metadata, or the [bindings.swift] section in\n"
             f"      {UNIFFI_CONFIG} changed."
         )
+
+    if GENERATED_SWIFT_DIR.exists():
+        shutil.rmtree(GENERATED_SWIFT_DIR)
+    GENERATED_SWIFT_DIR.mkdir(parents=True)
+    source = GENERATED_SWIFT_DIR / sources[0].name
+    shutil.copy2(sources[0], source)
+    print(f"    {source.relative_to(APPLE_DIR)}")
 
     if HEADERS_DIR.exists():
         shutil.rmtree(HEADERS_DIR)
@@ -730,6 +742,72 @@ def module_name(module_map: str) -> str | None:
     """The module a module map declares, which is the name Swift imports."""
     match = MODULE_DECLARATION.search(module_map)
     return match.group(1) if match else None
+
+
+# `.iOS(.v15)` or `.macOS(.v12_4)` in the `platforms:` list of Package.swift.
+PLATFORM_DECLARATION = re.compile(r"\.(iOS|macOS)\(\s*\.v(\d+)(?:_(\d+))?\s*\)")
+
+# A `binaryTarget` with a local path, as the manifest declares between releases.
+BINARY_TARGET = re.compile(r'\.binaryTarget\(\s*name:\s*"([^"]+)"\s*,\s*path:\s*"([^"]+)"')
+
+
+def declared_platforms(manifest: str) -> dict[str, str]:
+    """The minimum OS version Package.swift declares per platform, keyed like the XCFramework."""
+    found = {}
+    for match in PLATFORM_DECLARATION.finditer(manifest):
+        name, major, minor = match.groups()
+        found[name.lower()] = f"{major}.{minor or 0}"
+    return found
+
+
+def declared_binary_target(manifest: str) -> tuple[str, str] | None:
+    """The name and the local path of the binary target Package.swift declares, if any."""
+    match = BINARY_TARGET.search(manifest)
+    return (match.group(1), match.group(2)) if match else None
+
+
+def check_manifest(report: Report, manifest: str, module: str | None) -> None:
+    """Checks what Package.swift and this tool have to agree on.
+
+    `module` is what the module map in the XCFramework declares, or None if no slice could be
+    read.
+    """
+    print(f"==> {PACKAGE_MANIFEST.name}")
+    declared = declared_platforms(manifest)
+    expected = {platform.xcframework_platform: platform.deployment_target for platform in PLATFORMS}
+    for name, floor in sorted(expected.items()):
+        found = declared.get(name)
+        if found is None:
+            report.fail(
+                f"{PACKAGE_MANIFEST} declares no {name} platform, so SwiftPM assumes its own\n"
+                f"      default rather than the {floor} the slices are built for."
+            )
+        elif version_tuple(found) == version_tuple(floor):
+            report.ok(f"declares {name} {found}, what the slices are built for")
+        else:
+            report.fail(
+                f"{PACKAGE_MANIFEST} declares {name} {found}, but the slices are built for\n"
+                f"      {floor}. Change both together: an application in between would either\n"
+                "      link a library that cannot run there, or be refused one that could."
+            )
+
+    binary = declared_binary_target(manifest)
+    if binary is None:
+        report.fail(f"{PACKAGE_MANIFEST} declares no binaryTarget with a local path")
+        return
+    name, path = binary
+    if module is not None and name != module:
+        report.fail(
+            f'{PACKAGE_MANIFEST} names the binary target "{name}", but the module map declares\n'
+            f"      {module}, which is what the generated Swift imports."
+        )
+    elif path != XCFRAMEWORK.name:
+        report.fail(
+            f'{PACKAGE_MANIFEST} takes the binary target from "{path}", but this tool writes\n'
+            f"      {XCFRAMEWORK.name}."
+        )
+    else:
+        report.ok(f"takes {name} from {path}")
 
 
 def xcframework(output: Path) -> None:
@@ -785,8 +863,8 @@ def check_xcframework_slice(
     output: Path,
     entry: Slice,
     plist_entry: dict[str, object] | None,
-) -> str | None:
-    """Checks one slice, and returns the name of the header it carries."""
+) -> tuple[str, str | None] | None:
+    """Checks one slice, and returns the header it carries and the module that header is."""
     print(f"==> {entry.identifier}")
     platform = entry.platform
 
@@ -846,7 +924,7 @@ def check_xcframework_slice(
         report.fail(f"{module_map} declares module {name} but does not name {header_name}")
     else:
         report.ok(f"imports as {name}, through {header_name}")
-    return header_name
+    return header_name, name
 
 
 def verify_xcframework(output: Path) -> None:
@@ -862,17 +940,23 @@ def verify_xcframework(output: Path) -> None:
     print(f"Checking {output}")
     report = Report()
     entries = check_xcframework_plist(report, output)
-    headers = {
+    carried = {
         check_xcframework_slice(report, output, entry, entries.get(entry.identifier))
         for entry in SLICES
-    }
+    } - {None}
 
-    if len(headers - {None}) > 1:
+    headers = {header for header, _ in carried}
+    if len(headers) > 1:
         report.fail(
-            "the slices carry different headers: "
-            f"{', '.join(sorted(name for name in headers if name))}.\n"
+            f"the slices carry different headers: {', '.join(sorted(headers))}.\n"
             "      They were not generated by one run."
         )
+    modules = {module for _, module in carried if module}
+
+    if not PACKAGE_MANIFEST.is_file():
+        report.fail(f"{PACKAGE_MANIFEST} does not exist")
+    else:
+        check_manifest(report, PACKAGE_MANIFEST.read_text(), min(modules) if modules else None)
     summarise(report, output.name)
 
 
@@ -909,7 +993,10 @@ def main(argv: list[str] | None = None) -> int:
         "xcframework", help="fuse the slices and assemble the XCFramework"
     )
     xcframework_parser.add_argument(
-        "--output", type=Path, default=XCFRAMEWORK, help="where to write it"
+        "--output",
+        type=Path,
+        default=XCFRAMEWORK,
+        help="where to write it (default: inside the Swift package, where Package.swift looks)",
     )
 
     verify_xcframework_parser = subcommands.add_parser(
