@@ -33,6 +33,10 @@ Desktop.ini
 # Node / pnpm (documentation preview tooling)
 node_modules/
 
+# Apple bindings (the static libraries, the generated bindings and the assembled
+# XCFramework, all written into generated/)
+bindings/apple/generated/
+
 # Android bindings (Gradle output, and the native libraries and bindings that
 # non-Gradle steps write into generated/)
 bindings/android/.gradle/

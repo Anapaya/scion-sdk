@@ -30,3 +30,9 @@ runs:
       with:
         key: ${{ inputs.key }}
         path: ${{ inputs.path }}
+    - name: Save cache (GitHub-hosted macOS)
+      if: runner.os == 'macOS' && runner.environment == 'github-hosted' && inputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        key: ${{ inputs.key }}
+        path: ${{ inputs.path }}

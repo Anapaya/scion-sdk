@@ -1,0 +1,27 @@
+# Copyright 2026 Anapaya Systems
+name: Select Xcode
+description: >
+  Select a pinned Xcode on a macOS runner.
+
+inputs:
+  xcode-version:
+    description: The Xcode version to select.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode ${{ inputs.xcode-version }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        developer="/Applications/Xcode_${{ inputs.xcode-version }}.app/Contents/Developer"
+        if [[ ! -d "$developer" ]]; then
+          echo "::error::Xcode ${{ inputs.xcode-version }} is not installed on this runner." >&2
+          echo "Installed:" >&2
+          ls -d /Applications/Xcode*.app >&2
+          exit 1
+        fi
+        sudo xcode-select -s "$developer"
+        xcodebuild -version
+        xcodebuild -showsdks
