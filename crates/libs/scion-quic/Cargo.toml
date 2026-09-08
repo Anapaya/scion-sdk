@@ -22,29 +22,29 @@ http = { workspace = true }
 http-body = { workspace = true }
 prometheus = { workspace = true }
 ring = { workspace = true }
-squiche = { workspace = true }
 sciparse = { workspace = true }
+squiche = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+security-framework = { workspace = true }
+
 [dev-dependencies]
 chacha20 = { workspace = true, features = ["rng"] }
+ntest = { workspace = true }
+rcgen = { workspace = true }
 # Self-dependency so the crate's own integration tests get the `test-util`
 # feature without forcing it on downstream users. Deliberately not inherited
 # from the workspace: that carries a version, and `cargo package` resolves a
 # versioned dev-dep against crates.io, where no published release has this
 # feature yet. Version-less dev-deps are dropped from the published manifest.
 scion-quic = { path = ".", features = ["test-util"] }
-ntest = { workspace = true }
-rcgen = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 tokio-quiche = { workspace = true }
-
-[target.'cfg(target_vendor = "apple")'.dependencies]
-security-framework = { workspace = true }
 
 [lints]
 workspace = true

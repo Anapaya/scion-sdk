@@ -8,6 +8,9 @@ description = "SCION endhost API discovery"
 repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 
+[package.metadata.cargo-shear]
+ignored = ["tokio", "async-trait"]
+
 [dependencies]
 # Local Dependencies
 anapaya-ead-models = { workspace = true }
@@ -20,9 +23,6 @@ axum-client-ip = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true } # only used in doc-tests
 tokio = { workspace = true }       # only used in doc-tests
-
-[package.metadata.cargo-shear]
-ignored = ["tokio", "async-trait"]
 
 [lints]
 workspace = true

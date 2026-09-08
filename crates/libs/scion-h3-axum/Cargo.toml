@@ -8,7 +8,6 @@ description = "SCION SDK Axum HTTP/3 server"
 repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 
-
 [dependencies]
 axum = { workspace = true }
 scion-quic = { workspace = true }

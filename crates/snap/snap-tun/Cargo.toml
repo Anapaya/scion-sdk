@@ -16,14 +16,14 @@ async-trait = { workspace = true }
 bitfield-struct = { workspace = true }
 bytes = { workspace = true }
 quinn-udp = { workspace = true }
+reqwest-connect-rpc = { workspace = true }
 rustls = { workspace = true }
 scion-sdk-utils = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-x509-cert = { workspace = true }
-reqwest-connect-rpc = { workspace = true }
 url = { workspace = true }
+x509-cert = { workspace = true }
 zerocopy = { workspace = true }
 
 [target."cfg(windows)".dependencies]
@@ -31,13 +31,13 @@ windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true }
+mockall = { workspace = true }
 pem = { workspace = true }
 rcgen = { workspace = true }
 sciparse = { workspace = true }
-mockall = { workspace = true }
 socket2 = { workspace = true }
-tokio-util = { workspace = true }
 test-log = { workspace = true }
+tokio-util = { workspace = true }
 
 [[bench]]
 name = "udp_batch"

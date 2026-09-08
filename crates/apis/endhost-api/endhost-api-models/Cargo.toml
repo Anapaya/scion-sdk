@@ -15,8 +15,8 @@ sciparse = { workspace = true }
 # Global Dependencies
 async-trait = { workspace = true }
 serde = { workspace = true }
-url = { workspace = true }
 thiserror = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true

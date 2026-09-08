@@ -26,11 +26,11 @@ url = { workspace = true }
 
 [dev-dependencies]
 ntest = { workspace = true }
+rcgen = { workspace = true }
 # Version-less on purpose: `cargo package` resolves a versioned dev-dep against
 # crates.io, where no published scion-quic has `test-util`. Version-less
 # dev-deps are dropped from the published manifest instead.
 scion-quic = { path = "../scion-quic", features = ["test-util"] }
-rcgen = { workspace = true }
 squiche = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }

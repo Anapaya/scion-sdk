@@ -9,6 +9,12 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
+[package.metadata.cargo-shear]
+ignored = ["prost-types"]
+
+[lib]
+bench = false
+
 [dependencies]
 buffa = { workspace = true }
 buffa-types = { workspace = true }
@@ -21,11 +27,5 @@ prost-types = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
 
-[lib]
-bench = false
-
 [lints]
 workspace = true
-
-[package.metadata.cargo-shear]
-ignored = ["prost-types"]

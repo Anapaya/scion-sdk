@@ -11,19 +11,19 @@ keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
 [dependencies]
+axum-connect-rpc = { workspace = true }
 # Local Dependencies
 dhsd = { workspace = true }
-axum-connect-rpc = { workspace = true }
-scion-h3-axum = { workspace = true }
-scion-sdk-observability = { workspace = true }
 scion-connect-rpc = { workspace = true }
+scion-h3-axum = { workspace = true }
 scion-quic = { workspace = true }
+scion-sdk-observability = { workspace = true }
 scion-sdk-token-validator = { workspace = true }
-scion-trc = { workspace = true }
 scion-sdk-utils = { workspace = true }
+scion-trc = { workspace = true }
 
-sciparse = { workspace = true }
 scion-protobuf = { workspace = true }
+sciparse = { workspace = true }
 
 snap-control = { workspace = true }
 snap-dataplane = { workspace = true }
@@ -58,8 +58,8 @@ reqwest = { workspace = true, features = ["json", "blocking"] }
 rustls = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
 serde_with = { workspace = true, features = ["base64"] }
+serde_yaml_ng = { workspace = true }
 simple-mermaid = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
@@ -77,7 +77,6 @@ utoipa-redoc = { workspace = true, features = ["axum"] }
 uuid = { workspace = true, features = ["serde", "v4"] }
 x25519-dalek = { workspace = true }
 x509-cert = { workspace = true }
-
 
 [dev-dependencies]
 endhost-api-client = { workspace = true }

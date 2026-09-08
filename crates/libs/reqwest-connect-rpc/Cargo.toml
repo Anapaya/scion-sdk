@@ -12,14 +12,14 @@ keywords = ["SCION", "networking"]
 async-trait = { workspace = true }
 buffa = { workspace = true }
 bytes = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
 prost = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 
 [lints]

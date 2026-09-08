@@ -8,18 +8,18 @@ description = "Protobuf definitions for the SCION endhost API"
 repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 
-[dependencies]
-url = { workspace = true }
-async-trait = { workspace = true }
-thiserror = { workspace = true }
-
-prost = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
-
 [features]
 # The serde impls are implemented on the prost types, so they share its gate.
 protobuf = ["prost", "serde"]
 default = ["protobuf"]
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+
+prost = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [lints]
 workspace = true

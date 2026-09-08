@@ -37,10 +37,10 @@ utoipa-axum = { workspace = true }
 x25519-dalek = { workspace = true }
 
 # Local dependencies}
+axum-connect-rpc = { workspace = true }
 endhost-api = { workspace = true }
 endhost-api-client = { workspace = true }
 endhost-api-models = { workspace = true }
-axum-connect-rpc = { workspace = true }
 reqwest-connect-rpc = { workspace = true }
 scion-protobuf = { workspace = true }
 scion-sdk-observability = { workspace = true }
@@ -52,10 +52,10 @@ snap-tun = { workspace = true }
 
 futures = { workspace = true }
 
-[lints]
-workspace = true
-
 [dev-dependencies]
 base64 = { workspace = true }
 ed25519-dalek = { workspace = true }
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

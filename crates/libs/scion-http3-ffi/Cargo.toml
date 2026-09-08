@@ -8,6 +8,9 @@ license = "Apache-2.0"
 description = "C ABI shared library for the SCION HTTP/3 client, built for Android and iOS"
 repository = "https://github.com/anapaya/scion-sdk"
 
+[package.metadata.release]
+publish = false
+
 [lib]
 # Underscored soname libscion_http3_ffi.so, loaded from Kotlin as
 # System.loadLibrary("scion_http3_ffi"). The rlib is what lets the unit tests
@@ -40,6 +43,3 @@ test-log = { workspace = true }
 
 [lints]
 workspace = true
-
-[package.metadata.release]
-publish = false

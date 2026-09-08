@@ -8,12 +8,15 @@ description = "SCION endhost API"
 repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 
+[package.metadata.cargo-shear]
+ignored = ["tokio", "async-trait"]
+
 [dependencies]
+axum-connect-rpc = { workspace = true }
 # Local Dependencies
 endhost-api-models = { workspace = true }
 endhost-api-protobuf = { workspace = true }
 sciparse = { workspace = true }
-axum-connect-rpc = { workspace = true }
 
 # Global Dependencies
 axum = { workspace = true }
@@ -22,9 +25,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true } # only used in doc-tests
 tokio = { workspace = true } # only used in doc-tests
-
-[package.metadata.cargo-shear]
-ignored = ["tokio", "async-trait"]
 
 [lints]
 workspace = true

@@ -10,6 +10,10 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
+[features]
+default = ["proptest"]
+proptest = ["dep:proptest", "dep:proptest-derive"]
+fuzz = []
 
 [dependencies]
 aes = { workspace = true }
@@ -30,11 +34,6 @@ utoipa = { workspace = true }
 # Feature: proptest
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
-
-[features]
-default = ["proptest"]
-proptest = ["dep:proptest", "dep:proptest-derive"]
-fuzz = []
 
 [dev-dependencies]
 base64 = { workspace = true }

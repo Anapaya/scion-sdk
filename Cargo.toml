@@ -22,13 +22,13 @@ edition = "2024"
 # Local Crates
 dhsd = { path = "crates/libs/dhsd", version = "0.7.0" }
 
-endhost-api-client = { path = "crates/apis/endhost-api/endhost-api-client", version = "0.7.0" }
 endhost-api = { path = "crates/apis/endhost-api/endhost-api", version = "0.7.0" }
+endhost-api-client = { path = "crates/apis/endhost-api/endhost-api-client", version = "0.7.0" }
 endhost-api-models = { path = "crates/apis/endhost-api/endhost-api-models", version = "0.7.0" }
 endhost-api-protobuf = { path = "crates/apis/endhost-api/endhost-api-protobuf", version = "0.7.0" }
 
-anapaya-ead-client = { path = "crates/apis/anapaya-ead/anapaya-ead-client", version = "0.7.0" }
 anapaya-ead-api = { path = "crates/apis/anapaya-ead/anapaya-ead-api", version = "0.7.0" }
+anapaya-ead-client = { path = "crates/apis/anapaya-ead/anapaya-ead-client", version = "0.7.0" }
 anapaya-ead-models = { path = "crates/apis/anapaya-ead/anapaya-ead-models", version = "0.7.0" }
 
 anapaya-hsd-api-protobuf = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf", version = "0.7.0" }
@@ -36,14 +36,14 @@ anapaya-hsd-api-protobuf = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api
 anapaya-aa-protobuf = { path = "crates/apis/anapaya-aa/anapaya-aa-protobuf", version = "0.7.0" }
 
 axum-connect-rpc = { path = "crates/libs/axum-connect-rpc", version = "0.7.0" }
-scion-h3-axum = { path = "crates/libs/scion-h3-axum", version = "0.7.0" }
-scion-sdk-observability = { path = "crates/libs/scion-sdk-observability", version = "0.7.0" }
-scion-quic = { path = "crates/libs/scion-quic", version = "0.7.0" }
 reqwest-connect-rpc = { path = "crates/libs/reqwest-connect-rpc", version = "0.7.0" }
 scion-connect-rpc = { path = "crates/libs/scion-connect-rpc", version = "0.7.0" }
-scion-trc = { path = "crates/libs/scion-trc", version = "0.7.0" }
+scion-h3-axum = { path = "crates/libs/scion-h3-axum", version = "0.7.0" }
+scion-quic = { path = "crates/libs/scion-quic", version = "0.7.0" }
+scion-sdk-observability = { path = "crates/libs/scion-sdk-observability", version = "0.7.0" }
 scion-sdk-token-validator = { path = "crates/libs/scion-sdk-token-validator", version = "0.7.0" }
 scion-sdk-utils = { path = "crates/libs/scion-sdk-utils", version = "0.7.0" }
+scion-trc = { path = "crates/libs/scion-trc", version = "0.7.0" }
 
 pocketscion = { path = "crates/pocketscion", version = "0.7.0" }
 
@@ -51,14 +51,14 @@ pocketscion = { path = "crates/pocketscion", version = "0.7.0" }
 # against, and only tests in this workspace depend on it.
 scion-h3-test-server = { path = "tools/scion-h3-test-server" }
 
+scion-http3 = { path = "crates/libs/scion-http3", version = "0.7.0" }
 scion-protobuf = { path = "crates/libs/scion-protobuf", version = "0.7.0" }
 sciparse = { path = "crates/libs/sciparse", version = "0.7.0" }
-scion-http3 = { path = "crates/libs/scion-http3", version = "0.7.0" }
 
 snap-control = { path = "crates/snap/snap-control", version = "0.7.0" }
 snap-dataplane = { path = "crates/snap/snap-dataplane", version = "0.7.0" }
-snap-tun = { path = "crates/snap/snap-tun", version = "0.7.0" }
 snap-tokens = { path = "crates/snap/snap-tokens", version = "0.7.0" }
+snap-tun = { path = "crates/snap/snap-tun", version = "0.7.0" }
 
 scion-stack = { path = "crates/scion-stack", version = "0.7.0" }
 
@@ -73,21 +73,22 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["http2"] }
 axum-client-ip = "1.3.1"
 axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
-bitfield-struct = "0.13.0"
 base64 = "0.23.1"
+bitfield-struct = "0.13.0"
+bitflags = "2.10"
 buffa = { version = "0.8" }
-buffa-types = { version = "0.8" , features = ["json"] }
+buffa-types = { version = "0.8", features = ["json"] }
 byteorder = "1.5"
 bytes = "1.10"
-bitflags = "2.10"
+chacha20 = { version = "0.10.2" }
 chrono = { version = "0.4", features = ["serde"] }
 clap = "4.5"
 cmac = "0.7"
 cms = "0.2"
 connectrpc = { version = "0.8", features = ["axum"] }
 criterion = "0.8"
-derive_more = { version = "2.0", features = ["display", "deref"] }
 der = { version = "0.7", features = ["pem", "derive"] }
+derive_more = { version = "2.0", features = ["display", "deref"] }
 ecdsa = { version = "0.16", features = ["arithmetic"] }
 ed25519-dalek = { version = "2.1", features = ["pkcs8", "pem"] }
 foldhash = "0.2"
@@ -99,10 +100,10 @@ http-body = "1.0"
 ipnet = "2.11"
 jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
 mockall = "0.15"
-num-traits = "0.2"
 ntest = "0.9"
-paste = "1.0"
+num-traits = "0.2"
 p256 = "0.13"
+paste = "1.0"
 pbjson = "0.9"
 pbjson-build = "0.9"
 pem = "4.0"
@@ -114,9 +115,8 @@ prost-build = "0.14"
 prost-types = "0.14"
 quinn-udp = "0.6.1"
 rand = "0.10"
-rayon = "1.12"
-chacha20 = { version = "0.10.2" }
 rand_xorshift = "0.5"
+rayon = "1.12"
 rcgen = "0.14"
 regex = "1.12.2"
 reqwest = { version = "0.13", features = [
@@ -145,7 +145,7 @@ squiche = "0.29.3-ana.4"
 tempfile = "3.23"
 test-log = { version = "0.2", features = ["trace"] }
 thiserror = "2.0"
-tinyvec = { version = "1.10", features = ["alloc"]}
+tinyvec = { version = "1.10", features = ["alloc"] }
 tokio = { version = "1.45", features = ["full"] }
 # Stock (BoringSSL/quiche-based) async QUIC implementation, used in tests to
 # exercise the squiche-based server endpoint against an established peer.
@@ -160,8 +160,8 @@ tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-bunyan-formatter = "0.3"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
 tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "time"] }
 # Pinned exactly, not by caret. Cancelling a Kotlin coroutine drops the exported
 # Rust future, which is the whole of our HTTP/3 cancellation, but that is an
 # implementation property of the generated Kotlin's `finally { rust_future_free(..) }`
@@ -180,7 +180,6 @@ x509-cert = "0.2"
 zerocopy = { version = "0.8.27", features = ["std", "derive"] }
 zeroize = { version = "1.8.2", features = ["zeroize_derive"] }
 
-
 [workspace.lints.clippy]
 mem_forget = "deny"
 
@@ -191,12 +190,7 @@ missing_docs = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [workspace.metadata.cargo-shear]
-ignored = [
-    "foldhash",
-    "anapaya-ead-api",
-    "anapaya-ead-client",
-    "serde_yaml_ng"
-]
+ignored = ["foldhash", "anapaya-ead-api", "anapaya-ead-client", "serde_yaml_ng"]
 
 [profile.ci]
 inherits = "dev"            # https://doc.rust-lang.org/cargo/reference/profiles.html#dev

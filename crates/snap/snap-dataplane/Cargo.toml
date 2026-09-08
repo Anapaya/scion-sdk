@@ -12,7 +12,6 @@ categories = ["network-programming"]
 [dependencies]
 ana-gotatun = { workspace = true }
 anyhow = { workspace = true }
-x25519-dalek = { workspace = true }
 prometheus = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
@@ -22,13 +21,13 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 utoipa = { workspace = true, features = ["yaml", "time"] }
+x25519-dalek = { workspace = true }
 
 # Local dependencies
-sciparse = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-utils = { workspace = true }
+sciparse = { workspace = true }
 snap-tun = { workspace = true }
-
 
 [lints]
 workspace = true
