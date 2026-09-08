@@ -37,6 +37,8 @@ pub enum EstablishError {
     Quic(squiche::Error),
     /// The verifier set with
     /// [`with_cert_verifier`](crate::quic::config::QuicConfigBuilder::with_cert_verifier)
+    /// or
+    /// [`with_platform_verifier`](crate::quic::config::QuicConfigBuilder::with_platform_verifier)
     /// rejected the peer's certificate chain, and gave this reason.
     #[error("certificate rejected: {0}")]
     CertificateRejected(#[source] CertRejected),

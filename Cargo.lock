@@ -5163,6 +5163,7 @@ dependencies = [
  "ring",
  "scion-quic",
  "sciparse",
+ "security-framework",
  "squiche",
  "tempfile",
  "test-log",

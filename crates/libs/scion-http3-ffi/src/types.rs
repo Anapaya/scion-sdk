@@ -110,11 +110,13 @@ pub enum Underlay {
 /// Trust anchors for validating server certificates.
 #[derive(Debug, Clone, uniffi::Enum)]
 pub enum TrustAnchors {
-    /// Whatever the TLS stack trusts on its own, which is nothing this crate configures.
+    /// The platform's own trust.
     ///
-    /// How useful that is varies by platform, and on some it is not useful at all: Android keeps
-    /// its system anchors in a keystore rather than in a file or directory the TLS stack can
-    /// find, so the library above these bindings reads them and passes them as
+    /// On Apple targets the platform evaluates each server chain against the system trust store.
+    /// Elsewhere this crate configures nothing, and the TLS stack trusts what it loads from its
+    /// default locations. How useful that is varies by platform, and on some it is not useful at
+    /// all: Android keeps its system anchors in a keystore rather than in a file or directory the
+    /// TLS stack can find, so the library above these bindings reads them and passes them as
     /// [`TrustAnchors::Pem`].
     SystemDefault,
     /// Anchors supplied in memory, as a PEM bundle.

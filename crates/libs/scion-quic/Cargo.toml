@@ -43,5 +43,8 @@ tempfile = { workspace = true }
 test-log = { workspace = true }
 tokio-quiche = { workspace = true }
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+security-framework = { workspace = true }
+
 [lints]
 workspace = true

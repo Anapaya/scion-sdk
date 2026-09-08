@@ -450,3 +450,32 @@ async fn the_verifier_may_be_set_before_verify_peer() {
     let err = get(&client).await.expect_err("handshake should fail");
     assert_rejected_with(&err, "no thanks");
 }
+
+/// The platform verifier receives the chain of a real handshake together with
+/// the name the connection was opened with. The test CA is not in the system
+/// trust store, so the platform rejects the chain, and the reason names the
+/// server.
+#[cfg(target_vendor = "apple")]
+#[test_log::test(tokio::test)]
+#[ntest::timeout(15_000)]
+async fn the_platform_verifier_rejects_the_test_ca_and_names_the_server() {
+    let (_server, socket) = spawn_server();
+
+    let client = make_client(
+        socket,
+        QuicConfig::builder()
+            .verify_peer(true)
+            .with_platform_verifier()
+            .build(),
+    );
+
+    let err = get(&client).await.expect_err("handshake should fail");
+    let RequestError::Establish(EstablishError::CertificateRejected(rejected)) = &err else {
+        panic!("unexpected error: {err:?}");
+    };
+
+    assert!(
+        rejected.message().contains(SERVER_NAME),
+        "the reason does not name the server: {rejected}"
+    );
+}

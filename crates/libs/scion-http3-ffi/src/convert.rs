@@ -225,7 +225,7 @@ fn validated_udp(udp: UdpConfig) -> Result<ValidatedUdp, Error> {
 fn quic_config(trust: &TrustAnchors) -> Result<QuicConfig, Error> {
     let builder = QuicConfig::builder();
     let builder = match trust {
-        TrustAnchors::SystemDefault => builder,
+        TrustAnchors::SystemDefault => builder.with_platform_verifier(),
         TrustAnchors::Pem { pem } => builder.ca_certs_pem(pem.clone()),
         TrustAnchors::CaCertsFile { path } => builder.ca_certs_file(path.clone()),
         TrustAnchors::CaCertsDir { path } => builder.ca_certs_dir(path.clone()),

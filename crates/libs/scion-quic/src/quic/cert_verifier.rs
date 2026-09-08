@@ -18,12 +18,19 @@
 //! in place of the trust anchors that
 //! [`QuicConfigBuilder`](super::config::QuicConfigBuilder) otherwise loads. See
 //! [`QuicConfigBuilder::with_cert_verifier`](super::config::QuicConfigBuilder::with_cert_verifier).
+//!
+//! On Apple targets the `apple` module holds a verifier that uses the platform
+//! trust. [`QuicConfigBuilder::with_platform_verifier`](super::config::QuicConfigBuilder::with_platform_verifier)
+//! sets it.
 
 use std::{
     error::Error,
     panic::{self, AssertUnwindSafe},
     sync::{Arc, Mutex, PoisonError},
 };
+
+#[cfg(target_vendor = "apple")]
+pub mod apple;
 
 /// Decides whether the peer's certificate chain is trusted.
 ///
@@ -32,8 +39,9 @@ use std::{
 /// [`QuicConfigBuilder`](super::config::QuicConfigBuilder) have nothing to
 /// load. iOS is the case in point: an application can ask the system to
 /// evaluate a chain through `SecTrust`, but it cannot enumerate the anchor set.
-/// A verifier also expresses a trust decision that a set of anchors cannot,
-/// such as certificate pinning.
+/// [`QuicConfigBuilder::with_platform_verifier`](super::config::QuicConfigBuilder::with_platform_verifier)
+/// sets such a verifier on Apple targets. A verifier also expresses a trust
+/// decision that a set of anchors cannot, such as certificate pinning.
 ///
 /// A closure of the same shape implements this trait, so a verifier needs a
 /// type of its own only when it carries state.

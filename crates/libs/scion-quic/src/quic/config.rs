@@ -63,7 +63,9 @@ pub struct QuicConfig {
     /// [`ca_certs_file`](Self::ca_certs_file) and
     /// [`ca_certs_pem`](Self::ca_certs_pem) are not consulted while one is set.
     /// See
-    /// [`QuicConfigBuilder::with_cert_verifier`](QuicConfigBuilder::with_cert_verifier).
+    /// [`QuicConfigBuilder::with_cert_verifier`](QuicConfigBuilder::with_cert_verifier)
+    /// and
+    /// [`QuicConfigBuilder::with_platform_verifier`](QuicConfigBuilder::with_platform_verifier).
     pub cert_verifier: Option<Arc<dyn CertVerifier>>,
     /// Optional list of signature algorithm preferences for certificate verification.
     /// If set, overrides the default list. Use `squiche::SIGN_ED25519` (0x0807) to
@@ -258,6 +260,40 @@ mod tests {
             .unwrap();
         assert!(report.is_none());
     }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn with_platform_verifier_installs_a_verifier() {
+        let config = QuicConfig::builder().with_platform_verifier().build();
+
+        assert!(config.cert_verifier.is_some());
+    }
+
+    #[cfg(not(target_vendor = "apple"))]
+    #[test]
+    fn with_platform_verifier_has_no_effect() {
+        let config = QuicConfig::builder().with_platform_verifier().build();
+        assert!(config.cert_verifier.is_none());
+
+        let config = QuicConfig::builder()
+            .with_cert_verifier(rejecting_verifier())
+            .with_platform_verifier()
+            .build();
+        assert!(config.cert_verifier.is_some());
+    }
+}
+
+/// The verifier that `with_platform_verifier` sets on this target.
+#[cfg(target_vendor = "apple")]
+fn platform_verifier() -> Option<Arc<dyn CertVerifier>> {
+    Some(Arc::new(cert_verifier::apple::PlatformVerifier::new()))
+}
+
+/// The verifier that `with_platform_verifier` sets on this target: none, so
+/// the call has no effect.
+#[cfg(not(target_vendor = "apple"))]
+fn platform_verifier() -> Option<Arc<dyn CertVerifier>> {
+    None
 }
 
 /// Builder for [`QuicConfig`].
@@ -333,7 +369,9 @@ impl QuicConfigBuilder {
     ///
     /// Use this where the platform does not let an application read its trust
     /// anchors, so that [`ca_certs_pem`](Self::ca_certs_pem) and the two path
-    /// based sources have nothing to load.
+    /// based sources have nothing to load. On Apple targets,
+    /// [`with_platform_verifier`](Self::with_platform_verifier) sets a
+    /// ready-made verifier that uses the system trust.
     ///
     /// A verifier replaces the built-in validation rather than adding to it.
     /// While one is set, the anchors of
@@ -354,7 +392,9 @@ impl QuicConfigBuilder {
     /// `the certificate verifier panicked` as the reason. It never unwinds into
     /// the TLS library.
     ///
-    /// Calling this twice keeps the last verifier.
+    /// Calling this twice keeps the last verifier. So does a later call to
+    /// [`with_platform_verifier`](Self::with_platform_verifier) on a target
+    /// that has a platform verifier.
     ///
     /// ## Examples
     ///
@@ -378,6 +418,51 @@ impl QuicConfigBuilder {
     #[must_use]
     pub fn with_cert_verifier(mut self, verifier: impl CertVerifier) -> Self {
         self.config.cert_verifier = Some(Arc::new(verifier));
+        self
+    }
+
+    /// Verifies the peer's certificate chain with the platform's own trust
+    /// evaluation, in place of the trust anchors.
+    ///
+    /// On Apple targets this sets the `PlatformVerifier` of the
+    /// `cert_verifier::apple` module. It evaluates the chain with `SecTrust`
+    /// against the system trust store, with an SSL policy for the server name,
+    /// and with network fetching disabled. The rules of
+    /// [`with_cert_verifier`](Self::with_cert_verifier) apply. The anchors of
+    /// [`ca_certs_file`](Self::ca_certs_file),
+    /// [`ca_certs_dir`](Self::ca_certs_dir) and
+    /// [`ca_certs_pem`](Self::ca_certs_pem) are not consulted and a verifier
+    /// set earlier is replaced. The reason for a rejection reaches the caller
+    /// as
+    /// [`EstablishError::CertificateRejected`](crate::h3::client::EstablishError::CertificateRejected).
+    ///
+    /// [`verify_peer`](Self::verify_peer) still decides whether a rejection is
+    /// fatal. With `verify_peer(false)` the platform verifier runs and its
+    /// rejection is ignored.
+    ///
+    /// On other targets there is no platform verifier yet and the call has no
+    /// effect. A verifier set with
+    /// [`with_cert_verifier`](Self::with_cert_verifier) stays in place.
+    /// Without one, the built-in validation applies, which trusts the
+    /// certificates the TLS library loads from its default locations: the
+    /// system store on Linux and on Windows, and nothing on Android, where the
+    /// anchors have to come from [`ca_certs_pem`](Self::ca_certs_pem).
+    ///
+    /// ## Examples
+    ///
+    /// ```
+    /// use scion_quic::quic::config::QuicConfig;
+    ///
+    /// let config = QuicConfig::builder()
+    ///     .verify_peer(true)
+    ///     .with_platform_verifier()
+    ///     .build();
+    /// ```
+    #[must_use]
+    pub fn with_platform_verifier(mut self) -> Self {
+        if let Some(verifier) = platform_verifier() {
+            self.config.cert_verifier = Some(verifier);
+        }
         self
     }
 
