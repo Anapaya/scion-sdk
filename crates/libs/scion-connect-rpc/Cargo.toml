@@ -10,11 +10,11 @@ keywords = ["HTTP3", "QUIC", "RPC"]
 
 [dependencies]
 async-trait = { workspace = true }
+buffa = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
-prost = { workspace = true }
 scion-quic = { workspace = true }
 sciparse = { workspace = true }
 serde = { workspace = true }

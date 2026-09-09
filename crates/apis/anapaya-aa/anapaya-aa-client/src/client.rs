@@ -14,7 +14,9 @@
 
 //! Client for the Anapaya AA (Auth/n Auth/z) AuthService.
 
-use anapaya_aa_protobuf::v1::{AuthenticateByKeyRequest, AuthenticateByKeyResponse, Metadata};
+use anapaya_aa_protobuf::proto::anapaya::aa::v1::{
+    AuthenticateByKeyRequest, AuthenticateByKeyResponse, Metadata,
+};
 use reqwest_connect_rpc::client::{CrpcClient, CrpcClientError};
 
 /// Anapaya AA base path.
@@ -94,7 +96,7 @@ impl AaAuthClient for CrpcAaAuthClient {
 
         Ok(AuthResult {
             snap_token: resp.snap_token,
-            metadata: resp.metadata,
+            metadata: resp.metadata.into_option(),
         })
     }
 }

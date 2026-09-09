@@ -16,13 +16,13 @@
 
 use std::borrow::Cow;
 
+use buffa::{DecodeError, Message};
+use buffa_types::Timestamp;
 use ecdsa::signature::{
     self,
     hazmat::{PrehashSigner, PrehashVerifier},
 };
-use prost::{DecodeError, Message};
-use prost_types::Timestamp;
-use scion_protobuf::control_plane::v1::VerificationKeyId;
+use scion_protobuf::proto::control_plane::v1::VerificationKeyID;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use thiserror::Error;
@@ -80,8 +80,8 @@ pub enum ValidateError {
 /// Signed protobuf message.
 ///
 /// The Message is composed of:
-/// - HeaderAndBody: [HeaderAndBodyInternal](scion_protobuf::crypto::v1::HeaderAndBodyInternal)
-///   Where:
+/// - HeaderAndBody:
+///   [HeaderAndBodyInternal](scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal) Where:
 ///   - Header: Contains signature metadata such as the signature algorithm, key identifier,
 ///     timestamp, and optional metadata.
 ///   - Body: A encoded protobuf message containing the actual content being signed
@@ -114,37 +114,38 @@ impl SignedMessage {
         key: &'a p256::ecdsa::SigningKey,
         digest_algo: DigestAlgorithm,
         timestamp: u32,
-        verification_key_id: Option<VerificationKeyId>,
+        verification_key_id: Option<VerificationKeyID>,
         associated_data: (usize, impl IntoIterator<Item = &'a [u8]>),
-        message: &impl prost::Message,
-        metadata: &impl prost::Message,
+        message: &impl buffa::Message,
+        metadata: &impl buffa::Message,
     ) -> signature::Result<SignedMessage> {
         let signature_algorithm = match digest_algo {
             DigestAlgorithm::Sha256 => {
-                scion_protobuf::crypto::v1::SignatureAlgorithm::EcdsaWithSha256
+                scion_protobuf::proto::crypto::v1::SignatureAlgorithm::EcdsaWithSha256
             }
             DigestAlgorithm::Sha384 => {
-                scion_protobuf::crypto::v1::SignatureAlgorithm::EcdsaWithSha384
+                scion_protobuf::proto::crypto::v1::SignatureAlgorithm::EcdsaWithSha384
             }
             DigestAlgorithm::Sha512 => {
-                scion_protobuf::crypto::v1::SignatureAlgorithm::EcdsaWithSha512
+                scion_protobuf::proto::crypto::v1::SignatureAlgorithm::EcdsaWithSha512
             }
         };
 
         let verification_key_id = verification_key_id.map(|k| k.encode_to_vec());
 
-        let header = scion_protobuf::crypto::v1::Header {
-            signature_algorithm: signature_algorithm as i32,
+        let header = scion_protobuf::proto::crypto::v1::Header {
+            signature_algorithm: signature_algorithm.into(),
             verification_key_id: verification_key_id.unwrap_or_default(),
-            timestamp: Some(Timestamp {
+            timestamp: buffa::MessageField::some(Timestamp {
                 seconds: timestamp as i64,
                 nanos: 0,
+                ..Default::default()
             }),
             associated_data_length: associated_data.0 as i32,
             metadata: metadata.encode_to_vec(),
         };
 
-        let header_and_body = scion_protobuf::crypto::v1::HeaderAndBodyInternal {
+        let header_and_body = scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal {
             header: header.encode_to_vec(),
             body: message.encode_to_vec(),
         };
@@ -182,7 +183,7 @@ impl SignedMessage {
     ///
     /// ## Parameters
     /// - `key_provider`: A function taking the content of `header.verification_key_id` and returns
-    ///   the corresponding `p256::ecdsa::VerifyingKey` if available. The `VerificationKeyId` is
+    ///   the corresponding `p256::ecdsa::VerifyingKey` if available. The `VerificationKeyID` is
     ///   extracted from the message header, and can be used to look up the appropriate key for
     ///   signature verification. If the header does not include a key id, the function will be
     ///   called with an empty slice.
@@ -193,16 +194,19 @@ impl SignedMessage {
         &'a self,
         key_provider: impl Fn(&[u8]) -> Result<p256::ecdsa::VerifyingKey, ValidateError>,
         associated_data: (usize, impl IntoIterator<Item = &'a [u8]>),
-    ) -> Result<(scion_protobuf::crypto::v1::Header, Vec<u8>), ValidateError> {
+    ) -> Result<(scion_protobuf::proto::crypto::v1::Header, Vec<u8>), ValidateError> {
         {
             // Check header
-            let header_and_body = scion_protobuf::crypto::v1::HeaderAndBodyInternal::decode(
-                &self.header_and_body[..],
-            )
-            .map_err(|_| ValidateError::InvalidHeaderAndBody)?;
+            let header_and_body =
+                scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal::decode_from_slice(
+                    &self.header_and_body,
+                )
+                .map_err(|_| ValidateError::InvalidHeaderAndBody)?;
 
-            let header = scion_protobuf::crypto::v1::Header::decode(&header_and_body.header[..])
-                .map_err(|_| ValidateError::InvalidHeader)?;
+            let header = scion_protobuf::proto::crypto::v1::Header::decode_from_slice(
+                &header_and_body.header,
+            )
+            .map_err(|_| ValidateError::InvalidHeader)?;
 
             let verification_key = key_provider(&header.verification_key_id[..])?;
 
@@ -213,18 +217,14 @@ impl SignedMessage {
                 });
             }
 
-            let algo = match scion_protobuf::crypto::v1::SignatureAlgorithm::try_from(
-                header.signature_algorithm,
-            )
-            .ok()
-            {
-                Some(scion_protobuf::crypto::v1::SignatureAlgorithm::EcdsaWithSha256) => {
+            let algo = match header.signature_algorithm.as_known() {
+                Some(scion_protobuf::proto::crypto::v1::SignatureAlgorithm::EcdsaWithSha256) => {
                     DigestAlgorithm::Sha256
                 }
-                Some(scion_protobuf::crypto::v1::SignatureAlgorithm::EcdsaWithSha384) => {
+                Some(scion_protobuf::proto::crypto::v1::SignatureAlgorithm::EcdsaWithSha384) => {
                     DigestAlgorithm::Sha384
                 }
-                Some(scion_protobuf::crypto::v1::SignatureAlgorithm::EcdsaWithSha512) => {
+                Some(scion_protobuf::proto::crypto::v1::SignatureAlgorithm::EcdsaWithSha512) => {
                     DigestAlgorithm::Sha512
                 }
                 _ => return Err(ValidateError::InvalidDigestAlgorithm),
@@ -267,16 +267,16 @@ impl SignedMessage {
         associated_data: (usize, impl IntoIterator<Item = &'a [u8]>),
     ) -> Result<(Body, Option<Metadata>), ValidateError>
     where
-        Body: prost::Message + Default,
-        Metadata: prost::Message + Default,
+        Body: buffa::Message,
+        Metadata: buffa::Message,
     {
         let (header, body) = self.validate(key_provider, associated_data)?;
 
-        let body = Body::decode(&body[..]).map_err(|_| ValidateError::InvalidBody)?;
+        let body = Body::decode_from_slice(&body).map_err(|_| ValidateError::InvalidBody)?;
 
         let metadata = if !header.metadata.is_empty() {
             Some(
-                Metadata::decode(&header.metadata[..])
+                Metadata::decode_from_slice(&header.metadata)
                     .map_err(|_| ValidateError::InvalidMetadata)?,
             )
         } else {
@@ -294,17 +294,20 @@ impl SignedMessage {
         &self,
     ) -> Result<(Body, Option<Metadata>), DecodeError>
     where
-        Body: prost::Message + Default,
-        Metadata: prost::Message + Default,
+        Body: buffa::Message,
+        Metadata: buffa::Message,
     {
         let header_and_body =
-            scion_protobuf::crypto::v1::HeaderAndBodyInternal::decode(&self.header_and_body[..])?;
-        let header = scion_protobuf::crypto::v1::Header::decode(&header_and_body.header[..])?;
+            scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal::decode_from_slice(
+                &self.header_and_body,
+            )?;
+        let header =
+            scion_protobuf::proto::crypto::v1::Header::decode_from_slice(&header_and_body.header)?;
 
-        let body = Body::decode(&header_and_body.body[..])?;
+        let body = Body::decode_from_slice(&header_and_body.body)?;
 
         let metadata = if !header.metadata.is_empty() {
-            Some(Metadata::decode(&header.metadata[..])?)
+            Some(Metadata::decode_from_slice(&header.metadata)?)
         } else {
             None
         };
@@ -316,8 +319,8 @@ impl SignedMessage {
 impl SignedMessage {
     /// Converts this signed message into the protobuf representation used for RPCs.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::crypto::v1::SignedMessage {
-        scion_protobuf::crypto::v1::SignedMessage {
+    pub fn into_rpc(self) -> scion_protobuf::proto::crypto::v1::SignedMessage {
+        scion_protobuf::proto::crypto::v1::SignedMessage {
             header_and_body: self.header_and_body,
             signature: self.signature,
         }
@@ -325,20 +328,20 @@ impl SignedMessage {
 
     /// Converts from the protobuf representation of a signed message to this struct.
     #[inline]
-    pub fn from_rpc(value: scion_protobuf::crypto::v1::SignedMessage) -> Self {
+    pub fn from_rpc(value: scion_protobuf::proto::crypto::v1::SignedMessage) -> Self {
         Self {
             header_and_body: value.header_and_body,
             signature: value.signature,
         }
     }
 }
-impl From<scion_protobuf::crypto::v1::SignedMessage> for SignedMessage {
+impl From<scion_protobuf::proto::crypto::v1::SignedMessage> for SignedMessage {
     #[inline]
-    fn from(value: scion_protobuf::crypto::v1::SignedMessage) -> Self {
+    fn from(value: scion_protobuf::proto::crypto::v1::SignedMessage) -> Self {
         SignedMessage::from_rpc(value)
     }
 }
-impl From<SignedMessage> for scion_protobuf::crypto::v1::SignedMessage {
+impl From<SignedMessage> for scion_protobuf::proto::crypto::v1::SignedMessage {
     #[inline]
     fn from(signed: SignedMessage) -> Self {
         signed.into_rpc()
@@ -358,21 +361,21 @@ fn hash<D: Digest>(msg: &[u8], data: impl IntoIterator<Item: AsRef<[u8]>>) -> Ve
 
 #[cfg(test)]
 mod test {
+    use buffa::Message;
     use ecdsa::signature::rand_core::OsRng;
-    use prost::Message;
 
     use super::*;
 
     fn test_data() -> (
         p256::ecdsa::SigningKey,
-        VerificationKeyId,
+        VerificationKeyID,
         Vec<u8>,
-        scion_protobuf::control_plane::v1::SegmentsRequest,
-        scion_protobuf::control_plane::v1::SegmentsRequest,
+        scion_protobuf::proto::control_plane::v1::SegmentsRequest,
+        scion_protobuf::proto::control_plane::v1::SegmentsRequest,
     ) {
         let key = p256::ecdsa::SigningKey::random(&mut OsRng);
         let key_id: Vec<u8> = key.to_bytes()[..16].to_vec();
-        let key_id = VerificationKeyId {
+        let key_id = VerificationKeyID {
             isd_as: 1,
             subject_key_id: key_id.clone(),
             trc_base: 125,
@@ -380,11 +383,11 @@ mod test {
         };
 
         let assoc_data = "hello crypto".as_bytes().to_vec();
-        let message = scion_protobuf::control_plane::v1::SegmentsRequest {
+        let message = scion_protobuf::proto::control_plane::v1::SegmentsRequest {
             src_isd_as: 1,
             dst_isd_as: 2,
         };
-        let metadata = scion_protobuf::control_plane::v1::SegmentsRequest {
+        let metadata = scion_protobuf::proto::control_plane::v1::SegmentsRequest {
             src_isd_as: 2,
             dst_isd_as: 3,
         };
@@ -394,10 +397,10 @@ mod test {
 
     fn signed_message_with_metadata(
         key: &p256::ecdsa::SigningKey,
-        key_id: VerificationKeyId,
+        key_id: VerificationKeyID,
         assoc_data: &Vec<u8>,
-        message: &scion_protobuf::control_plane::v1::SegmentsRequest,
-        metadata: &scion_protobuf::control_plane::v1::SegmentsRequest,
+        message: &scion_protobuf::proto::control_plane::v1::SegmentsRequest,
+        metadata: &scion_protobuf::proto::control_plane::v1::SegmentsRequest,
     ) -> SignedMessage {
         SignedMessage::sign(
             key,
@@ -419,8 +422,8 @@ mod test {
 
         let verifying_key = key.verifying_key();
         let validation_result = signed_message
-            .decode_validated::<scion_protobuf::control_plane::v1::SegmentsRequest, scion_protobuf::control_plane::v1::SegmentsRequest>(             |encoded_key_id| {
-                    let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+            .decode_validated::<scion_protobuf::proto::control_plane::v1::SegmentsRequest, scion_protobuf::proto::control_plane::v1::SegmentsRequest>(             |encoded_key_id| {
+                    let decoded_key_id = VerificationKeyID::decode_from_slice(encoded_key_id)
                         .map_err(|_| ValidateError::InvalidValidationKeyId)?;
                     if decoded_key_id != key_id {
                         return Err(ValidateError::KeyMissing(format!(
@@ -459,10 +462,11 @@ mod test {
             signed_message_with_metadata(&key, key_id.clone(), &assoc_data, &message, &metadata);
 
         let mut tampered = signed_message.clone();
-        let mut header_and_body = scion_protobuf::crypto::v1::HeaderAndBodyInternal::decode(
-            &tampered.header_and_body[..],
-        )
-        .expect("failed to decode header and body");
+        let mut header_and_body =
+            scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal::decode_from_slice(
+                &tampered.header_and_body,
+            )
+            .expect("failed to decode header and body");
         if let Some(byte) = header_and_body.body.first_mut() {
             *byte ^= 0x01;
         } else {
@@ -473,7 +477,7 @@ mod test {
         let verifying_key = key.verifying_key();
         let result = tampered.validate(
             |encoded_key_id| {
-                let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                let decoded_key_id = VerificationKeyID::decode_from_slice(encoded_key_id)
                     .map_err(|_| ValidateError::InvalidValidationKeyId)?;
                 if decoded_key_id != key_id {
                     return Err(ValidateError::KeyMissing(
@@ -523,7 +527,7 @@ mod test {
         let wrong_assoc_data = "wrong data".as_bytes().to_vec();
         let result = signed_message.validate(
             |encoded_key_id| {
-                let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                let decoded_key_id = VerificationKeyID::decode_from_slice(encoded_key_id)
                     .map_err(|_| ValidateError::InvalidValidationKeyId)?;
                 if decoded_key_id != key_id {
                     return Err(ValidateError::KeyMissing(
@@ -558,7 +562,7 @@ mod test {
         let verifying_key = key.verifying_key();
         let result = signed_message.validate(
             |encoded_key_id| {
-                let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                let decoded_key_id = VerificationKeyID::decode_from_slice(encoded_key_id)
                     .map_err(|_| ValidateError::InvalidValidationKeyId)?;
                 if decoded_key_id != key_id {
                     return Err(ValidateError::KeyMissing(
@@ -582,10 +586,11 @@ mod test {
         let signed_message =
             signed_message_with_metadata(&key, key_id, &assoc_data, &message, &metadata);
 
-        let mut header_and_body = scion_protobuf::crypto::v1::HeaderAndBodyInternal::decode(
-            &signed_message.header_and_body[..],
-        )
-        .expect("failed to decode header and body");
+        let mut header_and_body =
+            scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal::decode_from_slice(
+                &signed_message.header_and_body,
+            )
+            .expect("failed to decode header and body");
         header_and_body.body = vec![0xff];
         let invalid_body_message = SignedMessage {
             header_and_body: header_and_body.encode_to_vec(),
@@ -593,8 +598,8 @@ mod test {
         };
 
         let decode_result = invalid_body_message.decode_unvalidated::<
-            scion_protobuf::control_plane::v1::SegmentsRequest,
-            scion_protobuf::control_plane::v1::SegmentsRequest,
+            scion_protobuf::proto::control_plane::v1::SegmentsRequest,
+            scion_protobuf::proto::control_plane::v1::SegmentsRequest,
         >();
 
         assert!(decode_result.is_err());
@@ -606,12 +611,14 @@ mod test {
         let signed_message =
             signed_message_with_metadata(&key, key_id, &assoc_data, &message, &metadata);
 
-        let mut header_and_body = scion_protobuf::crypto::v1::HeaderAndBodyInternal::decode(
-            &signed_message.header_and_body[..],
-        )
-        .expect("failed to decode header and body");
-        let mut header = scion_protobuf::crypto::v1::Header::decode(&header_and_body.header[..])
-            .expect("failed to decode header");
+        let mut header_and_body =
+            scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal::decode_from_slice(
+                &signed_message.header_and_body,
+            )
+            .expect("failed to decode header and body");
+        let mut header =
+            scion_protobuf::proto::crypto::v1::Header::decode_from_slice(&header_and_body.header)
+                .expect("failed to decode header");
         header.metadata = vec![0xff];
         header_and_body.header = header.encode_to_vec();
         let invalid_metadata_message = SignedMessage {
@@ -620,8 +627,8 @@ mod test {
         };
 
         let decode_result = invalid_metadata_message.decode_unvalidated::<
-            scion_protobuf::control_plane::v1::SegmentsRequest,
-            scion_protobuf::control_plane::v1::SegmentsRequest,
+            scion_protobuf::proto::control_plane::v1::SegmentsRequest,
+            scion_protobuf::proto::control_plane::v1::SegmentsRequest,
         >();
 
         assert!(decode_result.is_err());
@@ -635,9 +642,9 @@ mod test {
 
         let verifying_key = key.verifying_key();
         let result = signed_message
-            .decode_validated::<scion_protobuf::control_plane::v1::SegmentsRequest, ()>(
+            .decode_validated::<scion_protobuf::proto::control_plane::v1::SegmentsRequest, buffa_types::Empty>(
                 |encoded_key_id| {
-                    let decoded_key_id = VerificationKeyId::decode(encoded_key_id)
+                    let decoded_key_id = VerificationKeyID::decode_from_slice(encoded_key_id)
                         .map_err(|_| ValidateError::InvalidValidationKeyId)?;
                     if decoded_key_id != key_id {
                         return Err(ValidateError::KeyMissing(

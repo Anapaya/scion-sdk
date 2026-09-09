@@ -15,4 +15,3 @@
 //! SCION Daemon service API.
 
 pub mod crpc;
-pub mod grpc;

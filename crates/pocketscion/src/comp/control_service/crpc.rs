@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use scion_connect_rpc::client::{ConnectRpcClient, CrpcClient};
-use scion_protobuf::control_plane::v1::{BeaconRequest, BeaconResponse};
+use scion_protobuf::proto::control_plane::v1::{BeaconRequest, BeaconResponse};
 use sciparse::{dataplane_path::model::DpPath, identifier::isd_asn::IsdAsn};
 use url::Url;
 

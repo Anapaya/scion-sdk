@@ -42,93 +42,68 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Common extern paths for SCION protobufs
-    //
-    // When depending on scion-protobuf, add as extern_includes.
-    let scion_proto_externs = ExternIncludes {
-        proto_dirs: vec!["crates/libs/scion-protobuf"],
-        extern_paths: vec![(".proto", "scion_protobuf")],
-    };
-
     let scion_proto_buffa_externs = ExternIncludes {
         proto_dirs: vec!["crates/libs/scion-protobuf"],
-        extern_paths: vec![(".proto", "::scion_protobuf::buffa::proto")],
+        extern_paths: vec![(".proto", "::scion_protobuf::proto")],
     };
 
     let targets = vec![
-        ProtoCompileConfig {
-            name: "scion-protobuf",
+        BuffaCompileConfig {
+            name: "scion-protobuf-buffa",
+            // The SCION control plane services are reached over gRPC, which the connectrpc
+            // clients speak; `segment-lister` uses the segment lookup client.
+            generate_connectrpc: true,
             out_dir: "crates/libs/scion-protobuf/src/proto",
             proto_dirs: vec!["crates/libs/scion-protobuf/"],
             extern_includes: vec![],
-            protoc_args: vec![],
-            use_tonic: true,
-            serde_packages: vec![],
         }
         .into(),
         BuffaCompileConfig {
-            name: "scion-protobuf-buffa",
-            generate_connectrpc: true,
-            out_dir: "crates/libs/scion-protobuf/src/buffa",
-            proto_dirs: vec!["crates/libs/scion-protobuf/"],
-            extern_includes: vec![],
-        }
-        .into(),
-        ProtoCompileConfig {
             name: "endhost-api",
+            generate_connectrpc: false,
             out_dir: "crates/apis/endhost-api/endhost-api-protobuf/src/proto",
             proto_dirs: vec!["crates/apis/endhost-api/endhost-api-protobuf/protobuf"],
-            extern_includes: vec![scion_proto_externs.clone()],
-            protoc_args: vec!["--experimental_allow_proto3_optional"],
-            use_tonic: false,
-            serde_packages: vec![],
+            extern_includes: vec![scion_proto_buffa_externs.clone()],
         }
         .into(),
-        ProtoCompileConfig {
+        BuffaCompileConfig {
             name: "endhost-api-discovery",
-            out_dir: "crates/apis/anapaya-ead/anapaya-ead-models/src/proto/gen",
+            generate_connectrpc: false,
+            out_dir: "crates/apis/anapaya-ead/anapaya-ead-models/src/proto",
             proto_dirs: vec!["crates/apis/anapaya-ead/anapaya-ead-models/protobuf"],
             extern_includes: vec![],
-            protoc_args: vec![],
-            use_tonic: false,
-            serde_packages: vec![".endhost.discovery.v1"],
         }
         .into(),
-        ProtoCompileConfig {
+        BuffaCompileConfig {
             name: "hsd-api",
+            generate_connectrpc: false,
             out_dir: "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf/src/proto",
             proto_dirs: vec!["crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf/protobuf"],
-            extern_includes: vec![scion_proto_externs.clone()],
-            protoc_args: vec!["--experimental_allow_proto3_optional"],
-            use_tonic: false,
-            serde_packages: vec![],
+            extern_includes: vec![scion_proto_buffa_externs.clone()],
         }
         .into(),
-        ProtoCompileConfig {
+        BuffaCompileConfig {
             name: "anapaya-aa",
+            generate_connectrpc: false,
             out_dir: "crates/apis/anapaya-aa/anapaya-aa-protobuf/src/proto",
             proto_dirs: vec!["crates/apis/anapaya-aa/anapaya-aa-protobuf/protobuf"],
             extern_includes: vec![],
-            protoc_args: vec![],
-            use_tonic: false,
-            serde_packages: vec![".anapaya.aa.v1"],
         }
         .into(),
         BuffaCompileConfig {
             name: "snap-control",
-            generate_connectrpc: true,
+            generate_connectrpc: false,
             out_dir: "crates/snap/snap-control/src/proto",
             proto_dirs: vec!["crates/snap/snap-control/protobuf"],
             extern_includes: vec![scion_proto_buffa_externs.clone()],
         }
         .into(),
-        ProtoCompileConfig {
+        BuffaCompileConfig {
             name: "edge-tun",
+            generate_connectrpc: false,
             out_dir: "crates/libs/anapaya-edge-tun/src/proto",
             proto_dirs: vec!["crates/libs/anapaya-edge-tun/protobuf"],
             extern_includes: vec![],
-            protoc_args: vec![],
-            use_tonic: false,
-            serde_packages: vec![],
         }
         .into(),
     ];
@@ -149,6 +124,15 @@ fn run_update(targets: Vec<CompileConfig>) -> anyhow::Result<()> {
     // Ensure output directories exist
     for target in &targets {
         fs::create_dir_all(target.out_dir())?;
+    }
+
+    // clean output directories before generating new files
+    for target in &targets {
+        let out_dir = Path::new(target.out_dir());
+
+        if out_dir.exists() {
+            fs::remove_dir_all(out_dir)?;
+        }
     }
 
     for target in &targets {
@@ -240,13 +224,7 @@ fn compare_dirs(gen_dir: &Path, src_dir: &Path) -> anyhow::Result<Vec<PathBuf>> 
 }
 
 enum CompileConfig {
-    Proto(ProtoCompileConfig),
     Buffa(BuffaCompileConfig),
-}
-impl From<ProtoCompileConfig> for CompileConfig {
-    fn from(config: ProtoCompileConfig) -> Self {
-        CompileConfig::Proto(config)
-    }
 }
 impl From<BuffaCompileConfig> for CompileConfig {
     fn from(config: BuffaCompileConfig) -> Self {
@@ -257,14 +235,12 @@ impl From<BuffaCompileConfig> for CompileConfig {
 impl CompileConfig {
     fn out_dir(&self) -> &str {
         match self {
-            CompileConfig::Proto(config) => config.out_dir,
             CompileConfig::Buffa(config) => config.out_dir,
         }
     }
 
     fn generate(&self) -> anyhow::Result<()> {
         match self {
-            CompileConfig::Proto(config) => config.compile(config.out_dir),
             CompileConfig::Buffa(config) => config.compile(config.out_dir),
         }
     }
@@ -281,7 +257,6 @@ impl CompileConfig {
 
         // Compare generated files with existing ones
         match self {
-            CompileConfig::Proto(config) => config.compile(tmp_dir_str)?,
             CompileConfig::Buffa(config) => config.compile(tmp_dir_str)?,
         }
 
@@ -289,149 +264,6 @@ impl CompileConfig {
         let diffs = compare_dirs(tmp_dir_path, Path::new(self.out_dir()))?;
 
         Ok(diffs)
-    }
-}
-
-struct ProtoCompileConfig {
-    /// Name of the target being compiled (for logging purposes)
-    name: &'static str,
-    /// Output directory for generated files
-    out_dir: &'static str,
-    /// Root directories containing .proto files
-    ///
-    /// The directories will be searched recursively to find all .proto files.
-    proto_dirs: Vec<&'static str>,
-    /// External includes and their Rust module mappings
-    ///
-    /// Allows reusing existing generated code instead of generating new code.
-    extern_includes: Vec<ExternIncludes>,
-    /// Additional arguments to pass to protoc
-    protoc_args: Vec<&'static str>,
-    /// If true, use tonic to generate gRPC service code.
-    /// If false, use prost to generate only message code.
-    use_tonic: bool,
-    /// Which messages additionally get canonical protobuf-JSON serde impls, so
-    /// that the service can also be called with the Connect JSON codec. Empty
-    /// disables it.
-    ///
-    /// Each entry is matched as a prefix of a message's fully-qualified proto
-    /// name, so `".anapaya.aa.v1"` selects every message in that package, and
-    /// `""` would select all of them. Entries name proto packages, not Rust
-    /// modules or crates.
-    ///
-    /// Output goes to one `<proto.package>.serde.rs` per package, alongside the
-    /// prost `<proto.package>.rs`; the crate must `include!` both.
-    ///
-    /// Enable this for services reachable from a web browser, which cannot
-    /// encode protobuf without a codec of its own. The impls follow the proto3
-    /// JSON mapping, so `bytes` become base64 strings and 64-bit integers become
-    /// strings, rather than the byte arrays and lossy numbers a plain serde
-    /// derive would emit.
-    ///
-    /// A crate enabling this needs a `serde` dependency, and additionally
-    /// `pbjson` once any of its messages has a numeric, `bytes`, or enum field —
-    /// those are the ones whose generated code calls pbjson's helpers.
-    serde_packages: Vec<&'static str>,
-}
-
-impl ProtoCompileConfig {
-    /// Compiles the protobuf files into the specified output directory.
-    ///
-    /// Uses prost_build, generating only messages.
-    fn compile(&self, out_dir: &str) -> anyhow::Result<()> {
-        let (mut config, include_dirs, proto_files) = self.prost_config(out_dir)?;
-
-        fs::create_dir_all(out_dir)
-            .with_context(|| format!("failed to create output directory {}", out_dir))?;
-
-        if self.serde_packages.is_empty() {
-            config
-                .compile_protos(&proto_files, &include_dirs)
-                .with_context(|| format!("failed to compile {}", self.name))?;
-            return Ok(());
-        }
-
-        // pbjson-build works from a descriptor set, which prost_build can emit
-        // as a side effect. Keep it in a temp dir: `out_dir` is a checked-in
-        // source directory, and `check` diffs it against generated output.
-        let descriptor_dir = tempfile::Builder::new()
-            .prefix("proto-gen-descriptor-")
-            .tempdir()?;
-        let descriptor_path = descriptor_dir.path().join("descriptor.bin");
-
-        config
-            .file_descriptor_set_path(&descriptor_path)
-            .compile_protos(&proto_files, &include_dirs)
-            .with_context(|| format!("failed to compile {}", self.name))?;
-
-        let descriptor = fs::read(&descriptor_path)
-            .with_context(|| format!("failed to read descriptor set for {}", self.name))?;
-
-        pbjson_build::Builder::new()
-            .register_descriptors(&descriptor)
-            .with_context(|| format!("failed to register descriptors for {}", self.name))?
-            .out_dir(out_dir)
-            // Skip unknown fields instead of failing, matching both the
-            // protobuf codec and connect-go's JSON codec. Without this a client
-            // that sends a field the server does not know yet gets a 400.
-            // `ignore_unknown_enum_variants` is the same knob for enum values,
-            // needed once any message here gains an enum field.
-            .ignore_unknown_fields()
-            .build(&self.serde_packages)
-            .with_context(|| format!("failed to generate serde impls for {}", self.name))?;
-
-        Ok(())
-    }
-
-    /// Compiles the protobuf files into the specified output directory.
-    ///
-    /// Uses prost_build, generating only message code without gRPC services.
-    ///
-    /// Returns
-    /// (Config, include, proto_files)
-    fn prost_config(
-        &self,
-        out_dir: &str,
-    ) -> anyhow::Result<(prost_build::Config, Vec<String>, Vec<String>)> {
-        let mut proto_files = Vec::new();
-        let mut include_dirs = Vec::new();
-
-        // Gather all .proto files from the specified root directories
-        for proto_root in &self.proto_dirs {
-            let files = get_files_with_extension(proto_root, "proto")?;
-            proto_files.extend(files);
-            include_dirs.push(proto_root.to_string());
-        }
-
-        // Configure and run the prost_build compiler
-        let mut config = prost_build::Config::new();
-        config.out_dir(out_dir);
-
-        for arg in &self.protoc_args {
-            config.protoc_arg(arg);
-        }
-
-        // Set up extern includes
-        for ext in &self.extern_includes {
-            // Gather extern .proto files
-            for proto_root in &ext.proto_dirs {
-                include_dirs.push(proto_root.to_string());
-            }
-            // Set extern path mappings
-            for (proto_pkg, rust_mod) in &ext.extern_paths {
-                config.extern_path(proto_pkg.to_string(), rust_mod.to_string());
-            }
-        }
-
-        // If using tonic, set up the service generator
-        // Tonic uses prost under the hood, and inserts itself as service generator.
-        // So we can just get the tonic service generator and set it here.
-        if self.use_tonic {
-            let svc_gen = tonic_prost_build::configure().service_generator();
-            config.service_generator(svc_gen);
-        }
-
-        Ok((config, include_dirs, proto_files))
     }
 }
 
@@ -488,6 +320,7 @@ impl BuffaCompileConfig {
         buffa_config
             .map_fields
             .push((".".to_string(), buffa_build::MapRepr::BTreeMap));
+        buffa_config.preserve_unknown_fields = false;
 
         // Set up extern includes
         for ext in &self.extern_includes {
@@ -532,6 +365,8 @@ impl BuffaCompileConfig {
             .files(&proto_files)
             .out_dir(out_dir)
             .map_type(buffa_build::MapRepr::BTreeMap)
+            .generate_json(true)
+            .preserve_unknown_fields(false)
             .include_file("mod.rs");
 
         // Set up extern includes
@@ -559,7 +394,7 @@ struct ExternIncludes {
     /// Generate external type mappings.
     /// (proto package, Rust module path)
     ///
-    /// E.g., (".proto.control_plane.v1", "scion_protobuf::control_plane::v1")
+    /// E.g., (".proto.control_plane.v1", "scion_protobuf::proto::control_plane::v1")
     ///
     /// Allows reusing existing generated code instead of regenerating.
     extern_paths: Vec<(&'static str, &'static str)>,

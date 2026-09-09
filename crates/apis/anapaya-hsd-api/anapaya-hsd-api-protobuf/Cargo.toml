@@ -14,7 +14,8 @@ scion-protobuf = { workspace = true }
 sciparse = { workspace = true }
 
 # Global Dependencies
-prost = { workspace = true }
+buffa = { workspace = true, features = ["json"] }
+serde = { workspace = true }
 
 [lints]
 workspace = true

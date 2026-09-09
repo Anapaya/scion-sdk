@@ -49,7 +49,7 @@ use endhost_api::routes::{
     ENDHOST_API_V1, LIST_SEGMENTS, LIST_UNDERLAYS, SEGMENTS_SERVICE, UNDERLAY_SERVICE,
 };
 use endhost_api_models::underlays::Underlays;
-use endhost_api_protobuf::v1::{
+use endhost_api_protobuf::proto::scion::endhost::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
 use reqwest_connect_rpc::{

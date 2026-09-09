@@ -15,7 +15,11 @@
 //! Endhost API discovery models
 
 #[cfg(feature = "protobuf")]
+#[allow(missing_docs)]
 pub mod proto;
+
+#[cfg(feature = "protobuf")]
+pub mod convert;
 
 mod model;
 pub use model::*;

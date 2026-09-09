@@ -137,7 +137,7 @@ pub mod epic {
 
         /// Creates a new [EpicAuths] instance from a protobuf message.
         #[inline]
-        pub fn from_rpc(value: scion_protobuf::daemon::v1::EpicAuths) -> Self {
+        pub fn from_rpc(value: scion_protobuf::proto::daemon::v1::EpicAuths) -> Self {
             Self {
                 phop_authenticator: value.auth_phvf,
                 lhop_authenticator: value.auth_lhvf,
@@ -146,19 +146,23 @@ pub mod epic {
 
         /// Converts this [EpicAuths] instance into a protobuf message.
         #[inline]
-        pub fn to_rpc(&self) -> scion_protobuf::daemon::v1::EpicAuths {
-            scion_protobuf::daemon::v1::EpicAuths {
+        pub fn to_rpc(&self) -> scion_protobuf::proto::daemon::v1::EpicAuths {
+            scion_protobuf::proto::daemon::v1::EpicAuths {
                 auth_phvf: self.phop_authenticator.clone(),
                 auth_lhvf: self.lhop_authenticator.clone(),
             }
         }
     }
-    impl_from!(scion_protobuf::daemon::v1::EpicAuths, EpicAuths, |v| {
-        EpicAuths::from_rpc(v)
-    });
-    impl_from!(EpicAuths, scion_protobuf::daemon::v1::EpicAuths, |v| {
-        v.to_rpc()
-    });
+    impl_from!(
+        scion_protobuf::proto::daemon::v1::EpicAuths,
+        EpicAuths,
+        |v| EpicAuths::from_rpc(v)
+    );
+    impl_from!(
+        EpicAuths,
+        scion_protobuf::proto::daemon::v1::EpicAuths,
+        |v| v.to_rpc()
+    );
 }
 
 /// Geographic coordinates of a location, including latitude, longitude, and an optional
@@ -193,7 +197,9 @@ pub mod geo {
         /// Returns None if all fields are empty or zero, indicating that no geographic information
         /// is available.
         #[inline]
-        pub fn try_from_rpc(value: scion_protobuf::daemon::v1::GeoCoordinates) -> Option<Self> {
+        pub fn try_from_rpc(
+            value: scion_protobuf::proto::daemon::v1::GeoCoordinates,
+        ) -> Option<Self> {
             if value.latitude == 0.0 && value.longitude == 0.0 && value.address.is_empty() {
                 return None;
             }
@@ -212,8 +218,8 @@ pub mod geo {
 
         /// Converts this [GeoCoordinates] instance into a protobuf message.
         #[inline]
-        pub fn to_rpc(&self) -> scion_protobuf::daemon::v1::GeoCoordinates {
-            scion_protobuf::daemon::v1::GeoCoordinates {
+        pub fn to_rpc(&self) -> scion_protobuf::proto::daemon::v1::GeoCoordinates {
+            scion_protobuf::proto::daemon::v1::GeoCoordinates {
                 latitude: self.latitude,
                 longitude: self.longitude,
                 address: self.address.clone().unwrap_or_default(),
@@ -222,7 +228,7 @@ pub mod geo {
     }
     impl_from!(
         GeoCoordinates,
-        scion_protobuf::daemon::v1::GeoCoordinates,
+        scion_protobuf::proto::daemon::v1::GeoCoordinates,
         |v| v.to_rpc()
     );
 }
@@ -254,7 +260,7 @@ pub mod path_interface {
         /// Creates a new [PathInterface] instance from a protobuf message.
         #[inline]
         pub fn try_from_rpc(
-            value: scion_protobuf::daemon::v1::PathInterface,
+            value: scion_protobuf::proto::daemon::v1::PathInterface,
         ) -> Result<Self, FromRpcError> {
             Ok(Self {
                 isd_asn: value.isd_as.into(),
@@ -267,8 +273,8 @@ pub mod path_interface {
 
         /// Converts this [PathInterface] instance into a protobuf message.
         #[inline]
-        pub fn to_rpc(&self) -> scion_protobuf::daemon::v1::PathInterface {
-            scion_protobuf::daemon::v1::PathInterface {
+        pub fn to_rpc(&self) -> scion_protobuf::proto::daemon::v1::PathInterface {
+            scion_protobuf::proto::daemon::v1::PathInterface {
                 isd_as: self.isd_asn.into(),
                 id: self.id as u64,
             }
@@ -282,14 +288,16 @@ pub mod path_interface {
     }
     impl_from!(
         PathInterface,
-        scion_protobuf::daemon::v1::PathInterface,
+        scion_protobuf::proto::daemon::v1::PathInterface,
         |v| v.to_rpc()
     );
-    impl TryFrom<scion_protobuf::daemon::v1::PathInterface> for PathInterface {
+    impl TryFrom<scion_protobuf::proto::daemon::v1::PathInterface> for PathInterface {
         type Error = FromRpcError;
 
         #[inline]
-        fn try_from(value: scion_protobuf::daemon::v1::PathInterface) -> Result<Self, Self::Error> {
+        fn try_from(
+            value: scion_protobuf::proto::daemon::v1::PathInterface,
+        ) -> Result<Self, Self::Error> {
             Self::try_from_rpc(value)
         }
     }

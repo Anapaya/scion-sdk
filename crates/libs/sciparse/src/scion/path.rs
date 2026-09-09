@@ -18,10 +18,10 @@
 //! They contain the encoded dataplane path and optional metadata about the path, such as expiration
 //! time, MTU, and interfaces used by the path.
 
-use std::{collections::HashMap, fmt::Display, net::SocketAddr};
+use std::{collections::BTreeMap, fmt::Display, net::SocketAddr};
 
-use prost_types::Timestamp;
-use scion_protobuf::daemon::v1 as rpc;
+use buffa_types::Timestamp;
+use scion_protobuf::proto::daemon::v1 as rpc;
 
 use crate::{
     core::view::View,
@@ -349,7 +349,8 @@ impl ScionPath {
 
         let next_hop = rpc_path
             .interface
-            .and_then(|intf| intf.address)
+            .into_option()
+            .and_then(|intf| intf.address.into_option())
             .map(|addr| addr.address.parse())
             .transpose()
             .map_err(|err| {
@@ -385,6 +386,7 @@ impl ScionPath {
 
             let expiration: u64 = rpc_path
                 .expiration
+                .into_option()
                 .map(|ts| ts.seconds)
                 .ok_or("RPC payload missing expiration timestamp")?
                 as u64;
@@ -431,7 +433,7 @@ impl ScionPath {
                 let egress_iter = interface_meta.iter_mut().step_by(2);
                 if rpc_path.link_type.len() == expected_count_links_inter {
                     for (egress_meta, link_type) in egress_iter.zip(rpc_path.link_type) {
-                        egress_meta.link = Some(LinkMeta::Egress(link_type.into()));
+                        egress_meta.link = Some(LinkMeta::Egress(link_type.to_i32().into()));
                     }
                 }
             }
@@ -483,13 +485,17 @@ impl ScionPath {
         };
 
         rpc_path.raw = self.dp_path.as_slice().to_vec();
-        rpc_path.interface = self.next_hop.map(|addr| {
-            rpc::Interface {
-                address: Some(rpc::Underlay {
-                    address: addr.to_string(),
-                }),
-            }
-        });
+        rpc_path.interface = self
+            .next_hop
+            .map(|addr| {
+                rpc::Interface {
+                    address: Some(rpc::Underlay {
+                        address: addr.to_string(),
+                    })
+                    .into(),
+                }
+            })
+            .into();
 
         if let Some(meta) = &self.metadata {
             rpc_path.mtu = meta.mtu as u32;
@@ -497,8 +503,10 @@ impl ScionPath {
                 //XXX(ake): Let's see if we are still using unix epoch at ~292 billion CE
                 seconds: meta.expiration.try_into().unwrap_or(i64::MAX),
                 nanos: 0,
-            });
-            rpc_path.epic_auths = meta.epic_auth.clone().map(|auth| auth.to_rpc());
+                ..Default::default()
+            })
+            .into();
+            rpc_path.epic_auths = meta.epic_auth.clone().map(|auth| auth.to_rpc()).into();
 
             if let Some(if_meta) = &meta.interfaces {
                 rpc_path.interfaces = if_meta
@@ -516,18 +524,20 @@ impl ScionPath {
                     .map(|latency| {
                         match latency.latency {
                             Some(latency) => {
-                                prost_types::Duration {
+                                buffa_types::Duration {
                                     // XXX(ake): I hope most links won't have multiple hundered
                                     // years of latency.
                                     seconds: latency.as_secs().try_into().unwrap_or(i64::MAX),
                                     nanos: latency.subsec_nanos().try_into().unwrap_or(i32::MAX),
+                                    ..Default::default()
                                 }
                             }
                             // XXX(ake): a negative value indicates that no latency is supplied
                             None => {
-                                prost_types::Duration {
+                                buffa_types::Duration {
                                     seconds: -1,
                                     nanos: 0,
+                                    ..Default::default()
                                 }
                             }
                         }
@@ -553,8 +563,8 @@ impl ScionPath {
                     .iter()
                     .map(|meta| {
                         match &meta.link {
-                            Some(LinkMeta::Egress(link_type)) => link_type.to_i32(),
-                            _ => LinkType::Unset.to_i32(),
+                            Some(LinkMeta::Egress(link_type)) => link_type.to_i32().into(),
+                            _ => LinkType::Unset.to_i32().into(),
                         }
                     })
                     .collect();
@@ -586,7 +596,7 @@ impl ScionPath {
             internal_hops: rpc_path.internal_hops,
             notes: rpc_path.notes,
             epic_auths: rpc_path.epic_auths,
-            discovery_information: HashMap::default(), // TODO: add support for discovery info
+            discovery_information: BTreeMap::default(), // TODO: add support for discovery info
         }
     }
 }

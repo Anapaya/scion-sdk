@@ -13,84 +13,50 @@
 // limitations under the License.
 
 //! Control service for looking up segments
-use std::{collections::HashMap, fmt::Debug, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Debug,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Context;
-use axum::{Router, extract::State, routing::post};
-use axum_connect_rpc::{
-    error::{CrpcError, CrpcErrorCode},
-    extractor::ConnectRpc,
-};
+use axum::Router;
+use buffa::Enumeration;
 use chrono::Utc;
-use scion_protobuf::control_plane::v1::{
-    SegmentsRequest, SegmentsResponse,
-    segment_lookup_service_server::{SegmentLookupService, SegmentLookupServiceServer},
-    segments_response::Segments,
+use connectrpc::{
+    ConnectError, Encodable, RequestContext, Response, ServiceRequest, ServiceResult,
+};
+use scion_protobuf::proto::control_plane::v1::{
+    SegmentsRequest, SegmentsResponse, segments_response::Segments,
 };
 use sciparse::{dataplane_path::standard::types::EXP_TIME_UNIT, identifier::isd_asn::IsdAsn};
 use tokio::task::spawn_blocking;
 
 use crate::state::PocketScionState;
 
-const SERVICE_PATH: &str = "/proto.control_plane.v1.SegmentLookupService";
-
-/// Nests the SegmentLookupService routes into the provided `router`.
+/// Serves the SegmentLookupService on `router`, for Connect-RPC and gRPC clients.
+///
+/// The generated dispatcher answers every path under the service, so it takes the router's
+/// fallback. Add explicit routes to `router` before this call to keep them.
 pub fn nest_api(router: Router, service: PsSegmentLookupService) -> Router {
-    router.nest(
-        SERVICE_PATH,
-        Router::new()
-            .route("/Segments", post(lookup_segments))
-            .with_state(service),
-    )
+    let dispatcher = connectrpc::Router::new().add_service(Arc::new(service));
+    router.fallback_service(dispatcher.into_axum_service())
 }
 
-/// Builds a tonic gRPC server for the segment lookup service.
-pub fn grpc_server(
-    service: PsSegmentLookupService,
-) -> SegmentLookupServiceServer<PsSegmentLookupGrpcService> {
-    SegmentLookupServiceServer::new(PsSegmentLookupGrpcService { inner: service })
-}
-
-/// Tonic gRPC adapter delegating to [PsSegmentLookupService].
-#[derive(Clone)]
-pub struct PsSegmentLookupGrpcService {
-    inner: PsSegmentLookupService,
-}
-
-#[tonic::async_trait]
-impl SegmentLookupService for PsSegmentLookupGrpcService {
-    async fn segments(
-        &self,
-        request: tonic::Request<SegmentsRequest>,
-    ) -> Result<tonic::Response<SegmentsResponse>, tonic::Status> {
-        let res = self
-            .inner
-            .lookup_segments(request.into_inner())
-            .await
-            .inspect_err(|e| tracing::error!("Error looking up segments: {:?}", e))
-            .map_err(|e| tonic::Status::internal(format!("Failed to lookup segments: {:?}", e)))?;
-
-        Ok(tonic::Response::new(res))
-    }
-}
-
-/// Handler for the ListSegments endpoint of the SegmentLookupService.
-pub async fn lookup_segments(
-    State(svc): State<PsSegmentLookupService>,
-    req: ConnectRpc<SegmentsRequest>,
-) -> Result<ConnectRpc<SegmentsResponse>, CrpcError> {
-    let res = svc
-        .lookup_segments(req.into_inner())
-        .await
-        .inspect_err(|e| tracing::error!("Error looking up segments: {:?}", e))
-        .map_err(|e| {
-            CrpcError::new(
-                CrpcErrorCode::Internal,
-                format!("Failed to lookup segments: {:?}", e),
-            )
+impl scion_protobuf::proto::control_plane::v1::SegmentLookupService for PsSegmentLookupService {
+    async fn segments<'a>(
+        &'a self,
+        _ctx: RequestContext,
+        request: ServiceRequest<'_, SegmentsRequest>,
+    ) -> ServiceResult<impl Encodable<SegmentsResponse> + Send + use<'a>> {
+        let request = request.to_owned_message();
+        let response = self.lookup_segments(request).await.map_err(|error| {
+            tracing::error!(?error, "Error looking up segments");
+            ConnectError::internal(format!("Failed to lookup segments: {error:?}"))
         })?;
-
-    Ok(ConnectRpc(res))
+        Response::ok(response)
+    }
 }
 
 /// Service for looking up segments
@@ -176,15 +142,15 @@ impl PsSegmentLookupService {
 
             let path_segment = res.into_path_segments(topology, Utc::now(), 0, EXP_UNITS)?;
 
-            let mut segments: HashMap<i32, Segments> = HashMap::new();
+            let mut segments: BTreeMap<i32, Segments> = BTreeMap::new();
             segments.insert(
-                scion_protobuf::control_plane::v1::SegmentType::Up.into(),
+                scion_protobuf::proto::control_plane::v1::SegmentType::Up.to_i32(),
                 Segments {
                     segments: path_segment.up.into_iter().map(|s| s.into_rpc()).collect(),
                 },
             );
             segments.insert(
-                scion_protobuf::control_plane::v1::SegmentType::Core.into(),
+                scion_protobuf::proto::control_plane::v1::SegmentType::Core.to_i32(),
                 Segments {
                     segments: path_segment
                         .core
@@ -194,7 +160,7 @@ impl PsSegmentLookupService {
                 },
             );
             segments.insert(
-                scion_protobuf::control_plane::v1::SegmentType::Down.into(),
+                scion_protobuf::proto::control_plane::v1::SegmentType::Down.to_i32(),
                 Segments {
                     segments: path_segment
                         .down

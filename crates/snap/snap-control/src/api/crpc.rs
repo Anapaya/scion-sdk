@@ -24,7 +24,7 @@ use axum::{
 };
 use axum_connect_rpc::{
     error::{CrpcError, CrpcErrorCode},
-    extractor::BuffaConnectRpc,
+    extractor::ConnectRpc,
 };
 use scion_sdk_token_validator::validator::Token;
 use snap_tokens::AnyClaims;
@@ -197,16 +197,15 @@ async fn get_snap_data_plane_address_handler(
     State(rendezvous_hasher): State<Arc<dyn SnapDataPlaneResolver>>,
     _snap_token: Extension<AnyClaims>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
-    BuffaConnectRpc(_request): BuffaConnectRpc<GetSnapDataPlaneAddressRequest>,
-) -> Result<BuffaConnectRpc<GetSnapDataPlaneAddressResponse>, CrpcError> {
+    ConnectRpc(_request): ConnectRpc<GetSnapDataPlaneAddressRequest>,
+) -> Result<ConnectRpc<GetSnapDataPlaneAddressResponse>, CrpcError> {
     let addr = rendezvous_hasher.get_data_plane_address(addr.ip())?;
-    Ok(BuffaConnectRpc(GetSnapDataPlaneAddressResponse {
+    Ok(ConnectRpc(GetSnapDataPlaneAddressResponse {
         address: addr.address.to_string(),
         snap_tun_control_address: addr
             .snap_tun_control_address
             .map(|address| address.to_string()),
         snap_static_x25519: addr.snap_static_x25519.map(|key| key.to_bytes().to_vec()),
-        ..Default::default()
     }))
 }
 
@@ -214,8 +213,8 @@ async fn register_snaptun_identity_handler(
     State(identity_registry): State<Arc<dyn SnapTunIdentityRegistry>>,
     snap_token: Extension<AnyClaims>,
     ConnectInfo(_): ConnectInfo<std::net::SocketAddr>,
-    BuffaConnectRpc(request): BuffaConnectRpc<RegisterSnapTunIdentityRequest>,
-) -> Result<BuffaConnectRpc<RegisterSnapTunIdentityResponse>, CrpcError> {
+    ConnectRpc(request): ConnectRpc<RegisterSnapTunIdentityRequest>,
+) -> Result<ConnectRpc<RegisterSnapTunIdentityResponse>, CrpcError> {
     let now = SystemTime::now();
     let lifetime = snap_token.0.exp_time().duration_since(now).map_err(|_| {
         CrpcError::new(
@@ -263,9 +262,8 @@ async fn register_snaptun_identity_handler(
     {
         tracing::info!(key, "re-registered identity");
     }
-    Ok(BuffaConnectRpc(RegisterSnapTunIdentityResponse {
+    Ok(ConnectRpc(RegisterSnapTunIdentityResponse {
         // XXX(uniquefine): PSK is not yet supported.
         psk_share: [0u8; 32].to_vec(),
-        ..Default::default()
     }))
 }

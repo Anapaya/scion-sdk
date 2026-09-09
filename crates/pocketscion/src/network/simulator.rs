@@ -326,9 +326,9 @@ mod test {
 
     mod svc_resolution {
 
-        use std::{io::Cursor, net::SocketAddr};
+        use std::net::SocketAddr;
 
-        use scion_protobuf::control_plane::v1::{
+        use scion_protobuf::proto::control_plane::v1::{
             ServiceResolutionRequest, ServiceResolutionResponse,
         };
         use sciparse::{
@@ -377,13 +377,13 @@ mod test {
                 .build(0)
                 .path();
 
-            use prost::Message;
+            use buffa::Message;
 
             let mut req_packet = ScionUdpPacket::new(
                 ScionSocketAddr::new(src_addr.isd_asn(), src_addr.host(), 12345),
                 ScionSocketAddr::new(dst_addr.isd_asn, dst_addr.host.into(), 54321),
                 path.dp_path().to_model(),
-                ServiceResolutionRequest {}.encode_to_vec(),
+                ServiceResolutionRequest::default().encode_to_vec(),
             )
             .into_raw()
             .try_encode_to_owned_view()
@@ -402,7 +402,7 @@ mod test {
                 "Expected a Standard path in the response"
             );
 
-            let rsp = ServiceResolutionResponse::decode(Cursor::new(&udp.payload.payload))
+            let rsp = ServiceResolutionResponse::decode_from_slice(&udp.payload.payload)
                 .expect("Should decode ServiceResolutionResponse");
 
             let ip = rsp

@@ -80,7 +80,7 @@ impl RequestError {
 /// Trait for a Connect-RPC client.
 #[async_trait::async_trait]
 pub trait ConnectRpcClient {
-    /// Make a unary Connect-RPC request.
+    /// Make a unary Connect-RPC request with a [`buffa`] message.
     async fn unary_request<Req, Res>(
         &self,
         method: http::Method,
@@ -88,8 +88,8 @@ pub trait ConnectRpcClient {
         request: &Req,
     ) -> Result<Res, RequestError>
     where
-        Req: prost::Message,
-        Res: prost::Message + Default;
+        Req: buffa::Message,
+        Res: buffa::Message;
 }
 
 /// Remote endpoint for a Connect-RPC client, consisting of a SCION socket address and a socket for
@@ -387,7 +387,6 @@ impl CrpcClient {
 
 #[async_trait::async_trait]
 impl ConnectRpcClient for CrpcClient {
-    /// Make a unary Connect-RPC request.
     async fn unary_request<Req, Res>(
         &self,
         method: Method,
@@ -395,10 +394,34 @@ impl ConnectRpcClient for CrpcClient {
         req: &Req,
     ) -> Result<Res, RequestError>
     where
-        Req: prost::Message,
-        Res: prost::Message + Default,
+        Req: buffa::Message,
+        Res: buffa::Message,
     {
-        let request_body = Bytes::from(req.encode_to_vec());
+        let body = self
+            .unary_round_trip(method, url, req.encode_to_vec())
+            .await?;
+
+        Res::decode_from_slice(&body).map_err(|e| {
+            RequestError::DecodeError {
+                context: "error decoding response body".into(),
+                source: e.into(),
+                body: Some(body),
+            }
+        })
+    }
+}
+
+impl CrpcClient {
+    /// Sends an encoded unary request and returns the encoded response body.
+    ///
+    /// Codec agnostic: the caller encodes the request and decodes the response.
+    async fn unary_round_trip(
+        &self,
+        method: Method,
+        url: Url,
+        request_body: Vec<u8>,
+    ) -> Result<Vec<u8>, RequestError> {
+        let request_body = Bytes::from(request_body);
 
         tracing::debug!(
             ?method,
@@ -449,13 +472,7 @@ impl ConnectRpcClient for CrpcClient {
             "received Connect-RPC response"
         );
 
-        Res::decode(&body[..]).map_err(|e| {
-            RequestError::DecodeError {
-                context: "error decoding response body".into(),
-                source: e.into(),
-                body: Some(body),
-            }
-        })
+        Ok(body)
     }
 }
 

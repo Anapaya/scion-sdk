@@ -16,7 +16,7 @@
 //! Simulates a specific routers dispatching or SCMP request behaviour
 
 use anyhow::{Context, bail};
-use scion_protobuf::control_plane::v1::{ServiceResolutionResponse, Transport};
+use scion_protobuf::proto::control_plane::v1::{ServiceResolutionResponse, Transport};
 use sciparse::{
     address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
     core::{model::Model, view::View},
@@ -132,7 +132,7 @@ impl LocalNetworkSimulation<'_> {
         if let ScionAddr::Svc(dst_svc) = dest_addr {
             // XXX: This is usually not done in the router, but the control service, for simplicity
             // we do it here.
-            use prost::Message;
+            use buffa::Message;
 
             if let Some(transports) = self
                 .receivers

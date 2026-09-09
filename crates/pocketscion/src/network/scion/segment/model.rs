@@ -21,7 +21,7 @@ use std::{
 use anyhow::{Context, bail};
 use chrono::{DateTime, Utc};
 use p256::pkcs8::DecodePrivateKey;
-use scion_protobuf::control_plane::v1::VerificationKeyId;
+use scion_protobuf::proto::control_plane::v1::VerificationKeyID;
 use scion_trc::trc::der_int_to_u64;
 use sciparse::{
     dataplane_path::standard::types::HopFieldMac,
@@ -139,7 +139,7 @@ impl LinkSegment {
                     )
                 })?;
 
-            let key_id = VerificationKeyId {
+            let key_id = VerificationKeyID {
                 isd_as: hop_as.isd_as().to_u64(),
                 subject_key_id: key_id.clone(),
                 trc_base: der_int_to_u64(&trc.raw_trc_payload().id.base_number)?,
@@ -234,11 +234,11 @@ pub enum SegmentType {
 }
 impl SegmentType {
     /// Converts to the protobuf representation of SegmentType.
-    pub fn to_rpc(&self) -> scion_protobuf::control_plane::v1::SegmentType {
+    pub fn to_rpc(&self) -> scion_protobuf::proto::control_plane::v1::SegmentType {
         match self {
-            SegmentType::Core => scion_protobuf::control_plane::v1::SegmentType::Core,
-            SegmentType::Up => scion_protobuf::control_plane::v1::SegmentType::Up,
-            SegmentType::Down => scion_protobuf::control_plane::v1::SegmentType::Down,
+            SegmentType::Core => scion_protobuf::proto::control_plane::v1::SegmentType::Core,
+            SegmentType::Up => scion_protobuf::proto::control_plane::v1::SegmentType::Up,
+            SegmentType::Down => scion_protobuf::proto::control_plane::v1::SegmentType::Down,
         }
     }
 }

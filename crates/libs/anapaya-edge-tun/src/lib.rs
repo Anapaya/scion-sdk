@@ -25,6 +25,7 @@ pub mod data;
 /// Packet fragmentation and reassembly for edge-tun tunnels.
 pub mod fragmenting;
 /// Protobuf definitions
+#[allow(missing_docs)]
 pub mod proto;
 /// High-level edge-tun client tunnel orchestration.
 pub mod tunnel;

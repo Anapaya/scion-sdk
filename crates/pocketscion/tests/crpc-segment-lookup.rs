@@ -30,7 +30,7 @@ use pocketscion::{
     util::{addr_to_http_url, path_providers::ManualPathProvider},
 };
 use scion_connect_rpc::client::{ConnectRpcClient, CrpcClient, RemoteEndpoint};
-use scion_protobuf::control_plane::v1::{SegmentsRequest, SegmentsResponse};
+use scion_protobuf::proto::control_plane::v1::{SegmentsRequest, SegmentsResponse};
 use scion_quic::quic::config::QuicConfig;
 use sciparse::{
     address::ip_socket_addr::ScionSocketIpAddr, dataplane_path::model::DpPath,
@@ -119,7 +119,9 @@ async fn control_service_crpc_lookup() -> anyhow::Result<()> {
 
     assert_eq!(
         rsp.segments
-            .get(&scion_protobuf::control_plane::v1::SegmentType::Core.into())
+            .get(&buffa::Enumeration::to_i32(
+                &scion_protobuf::proto::control_plane::v1::SegmentType::Core,
+            ))
             .unwrap()
             .segments
             .len(),

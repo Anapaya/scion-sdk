@@ -573,7 +573,7 @@ async fn test_unknown_path_returns_error() {
             "https://localhost/anapaya.edgetun.v1/unknown_method"
                 .parse()
                 .unwrap(),
-            &GetDataPlaneConfigurationRequest {},
+            &GetDataPlaneConfigurationRequest::default(),
         )
         .await;
 

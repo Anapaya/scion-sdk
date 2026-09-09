@@ -21,20 +21,13 @@ use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, bail};
 use axum_connect_rpc::error::CrpcError;
-use scion_protobuf::daemon::v1::{
-    self as proto, AsRequest, daemon_service_server::DaemonServiceServer,
-};
+use scion_protobuf::proto::daemon::v1::{self as proto, ASRequest};
 use sciparse::identifier::isd_asn::IsdAsn;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tonic::service::Routes;
 use utoipa::ToSchema;
 
-use crate::{
-    comp::daemon::{api::grpc::DaemonGrpcApi, model::DaemonService},
-    io_config::IoConfig,
-    state::PocketScionState,
-};
+use crate::{comp::daemon::model::DaemonService, io_config::IoConfig, state::PocketScionState};
 
 /// SCION Daemon service implementation through PocketScion
 pub struct PsDaemonService {
@@ -68,10 +61,7 @@ impl PsDaemonService {
             io_config,
         });
 
-        let grpc_api = DaemonGrpcApi::new(svc.clone());
-
-        let grpc_router = Routes::new(DaemonServiceServer::new(grpc_api)).into_axum_router();
-        let app = axum::Router::new().merge(grpc_router);
+        let app = api::crpc::nest_api(axum::Router::new(), svc.clone());
 
         // Start the server
 
@@ -204,8 +194,8 @@ impl DaemonService for PsDaemonService {
     }
 
     /// Return information about an AS.
-    async fn as_info(&self, req: proto::AsRequest) -> Result<proto::AsResponse, CrpcError> {
-        let AsRequest { isd_as } = req;
+    async fn as_info(&self, req: proto::ASRequest) -> Result<proto::ASResponse, CrpcError> {
+        let ASRequest { isd_as } = req;
         let state_guard = self.state.read();
         let topo = &state_guard.topology;
 
@@ -225,7 +215,7 @@ impl DaemonService for PsDaemonService {
         /// The MTU is not currently stored in the topology, so we return a default value for now.
         const DEFAULT_MTU: u16 = 1500;
 
-        let res = proto::AsResponse {
+        let res = proto::ASResponse {
             isd_as: isd_as.to_u64(),
             core: tas.is_core(),
             mtu: DEFAULT_MTU as u32,
@@ -255,9 +245,10 @@ impl DaemonService for PsDaemonService {
                 (
                     if_id as u64,
                     proto::Interface {
-                        address: Some(proto::Underlay {
+                        address: proto::Underlay {
                             address: ip.to_string(),
-                        }),
+                        }
+                        .into(),
                     },
                 )
             })
@@ -303,8 +294,8 @@ impl DaemonService for PsDaemonService {
     /// DRKeyASHost returns a key that matches the request.
     async fn dr_key_as_host(
         &self,
-        _req: proto::DrKeyAsHostRequest,
-    ) -> Result<proto::DrKeyAsHostResponse, CrpcError> {
+        _req: proto::DRKeyASHostRequest,
+    ) -> Result<proto::DRKeyASHostResponse, CrpcError> {
         Err(CrpcError::new(
             axum_connect_rpc::error::CrpcErrorCode::Unimplemented,
             "not implemented".to_string(),
@@ -314,8 +305,8 @@ impl DaemonService for PsDaemonService {
     /// DRKeyHostAS returns a key that matches the request.
     async fn dr_key_host_as(
         &self,
-        _req: proto::DrKeyHostAsRequest,
-    ) -> Result<proto::DrKeyHostAsResponse, CrpcError> {
+        _req: proto::DRKeyHostASRequest,
+    ) -> Result<proto::DRKeyHostASResponse, CrpcError> {
         Err(CrpcError::new(
             axum_connect_rpc::error::CrpcErrorCode::Unimplemented,
             "not implemented".to_string(),
@@ -325,8 +316,8 @@ impl DaemonService for PsDaemonService {
     /// DRKeyHostHost returns a key that matches the request.
     async fn dr_key_host_host(
         &self,
-        _req: proto::DrKeyHostHostRequest,
-    ) -> Result<proto::DrKeyHostHostResponse, CrpcError> {
+        _req: proto::DRKeyHostHostRequest,
+    ) -> Result<proto::DRKeyHostHostResponse, CrpcError> {
         Err(CrpcError::new(
             axum_connect_rpc::error::CrpcErrorCode::Unimplemented,
             "not implemented".to_string(),

@@ -46,4 +46,3 @@ pub use self::__buffa::view::RegisterSnapTunIdentityResponseView;
 pub use self::__buffa::view::RegisterSnapTunIdentityResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;
-include!("anapaya.snap.v1.control_service.__connect.rs");

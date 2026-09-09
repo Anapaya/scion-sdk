@@ -19,10 +19,10 @@
 
 use std::{convert::Infallible, net::Ipv4Addr, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
+use buffa::Message as _;
 use bytes::Bytes;
 use http::{Method, StatusCode};
 use http_body::{Body, Frame};
-use prost::Message as _;
 use scion_connect_rpc::client::{ConnectRpcClient, CrpcClient, RemoteEndpoint};
 use scion_quic::{
     h3::server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
@@ -41,11 +41,49 @@ use url::Url;
 
 const SERVICE_URL: &str = "https://localhost/test.v1.EchoService/Echo";
 
-/// A tiny prost message used for the echo round-trip.
-#[derive(Clone, PartialEq, prost::Message)]
+/// A tiny buffa message used for the echo round-trip.
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Echo {
-    #[prost(string, tag = "1")]
     value: String,
+}
+
+buffa::impl_default_instance!(Echo);
+
+// Manually implement the buffa::Message trait since there is no derive
+impl buffa::Message for Echo {
+    fn compute_size(&self, _cache: &mut buffa::SizeCache) -> u32 {
+        if self.value.is_empty() {
+            0
+        } else {
+            1 + buffa::types::string_encoded_len(&self.value) as u32
+        }
+    }
+
+    fn write_to(&self, _cache: &mut buffa::SizeCache, buf: &mut impl bytes::BufMut) {
+        if !self.value.is_empty() {
+            buffa::types::put_string_field(1, &self.value, buf);
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        tag: buffa::encoding::Tag,
+        buf: &mut impl bytes::Buf,
+        ctx: buffa::DecodeContext<'_>,
+    ) -> Result<(), buffa::DecodeError> {
+        match tag.field_number() {
+            1 => {
+                buffa::encoding::check_wire_type(tag, buffa::encoding::WireType::LengthDelimited)?;
+                buffa::types::merge_string(&mut self.value, buf)?;
+            }
+            _ => buffa::encoding::skip_field_depth(tag, buf, ctx.depth())?,
+        }
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.value.clear();
+    }
 }
 
 /// A SCION socket that silently drops everything it sends and never receives, simulating a remote
@@ -128,7 +166,7 @@ impl HttpService for EchoService {
 
     async fn call(&self, req: http::Request<H3RequestBody>) -> http::Response<FullBody> {
         let body = read_request_body(req.into_body()).await;
-        let echo = Echo::decode(&body[..]).unwrap_or_default();
+        let echo = <Echo as buffa::Message>::decode_from_slice(&body).unwrap_or_default();
         let response = Echo {
             value: format!("{}{}", self.prefix, echo.value),
         };

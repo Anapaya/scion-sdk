@@ -41,4 +41,3 @@ pub use self::__buffa::view::AuthorizeTargetsResponseView;
 pub use self::__buffa::view::AuthorizeTargetsResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;
-include!("anapaya.wap.v1.control_service.__connect.rs");

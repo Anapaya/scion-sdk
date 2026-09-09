@@ -32,7 +32,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anapaya_aa_protobuf::v1::Metadata;
+use anapaya_aa_protobuf::proto::anapaya::aa::v1::Metadata;
 use async_trait::async_trait;
 use reqwest_connect_rpc::token_source::{
     TokenSourceError,

@@ -153,8 +153,7 @@ dependencies = [
 name = "anapaya-aa-protobuf"
 version = "0.7.0"
 dependencies = [
- "pbjson",
- "prost",
+ "buffa",
  "serde",
 ]
 
@@ -188,7 +187,7 @@ name = "anapaya-ead-models"
 version = "0.7.0"
 dependencies = [
  "async-trait",
- "prost",
+ "buffa",
  "serde",
  "thiserror 2.0.20",
  "url",
@@ -201,6 +200,7 @@ dependencies = [
  "ana-gotatun",
  "async-channel",
  "async-trait",
+ "buffa",
  "byteorder",
  "bytes",
  "chacha20 0.10.2",
@@ -209,7 +209,6 @@ dependencies = [
  "ipnet",
  "ntest",
  "prometheus",
- "prost",
  "rand 0.10.2",
  "rand_xorshift 0.5.0",
  "rcgen",
@@ -218,6 +217,7 @@ dependencies = [
  "scion-sdk-observability",
  "scion-sdk-utils",
  "sciparse",
+ "serde",
  "serde_json",
  "squiche",
  "tempfile",
@@ -246,9 +246,10 @@ dependencies = [
 name = "anapaya-hsd-api-protobuf"
 version = "0.7.0"
 dependencies = [
- "prost",
+ "buffa",
  "scion-protobuf",
  "sciparse",
+ "serde",
 ]
 
 [[package]]
@@ -426,9 +427,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.43"
+version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3976abdc8fe7d1133d43d304afd42abdf5bc3e1319d263d223bde07b5efc4be8"
+checksum = "515a1f282e33d55983c499d7e9e87082e81cbc32974825bf9032f928392d5844"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -511,7 +512,6 @@ dependencies = [
  "axum",
  "buffa",
  "bytes",
- "prost",
  "serde",
  "serde_json",
  "utoipa",
@@ -1188,9 +1188,9 @@ dependencies = [
 
 [[package]]
 name = "compression-codecs"
-version = "0.4.38"
+version = "0.4.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2548391e9c1929c21bf6aa2680af86fe4c1b33e6cea9ac1cfeec0bd11218cf"
+checksum = "2fe67f2944eef52fc7b106b8c9450d243a88701a0c065f7f57235e76abaed7df"
 dependencies = [
  "compression-core",
  "flate2",
@@ -1201,9 +1201,9 @@ dependencies = [
 
 [[package]]
 name = "compression-core"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
+checksum = "6e8ccc4ea9f6acc32d102c0f6d471d11d913ad15f20c04de743374861fa1d414"
 
 [[package]]
 name = "concurrent-queue"
@@ -1231,6 +1231,8 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "percent-encoding",
  "pin-project",
  "serde",
@@ -1920,10 +1922,11 @@ dependencies = [
 name = "endhost-api-protobuf"
 version = "0.7.0"
 dependencies = [
+ "buffa",
  "endhost-api-models",
- "prost",
  "scion-protobuf",
  "sciparse",
+ "serde",
  "url",
 ]
 
@@ -2087,12 +2090,6 @@ name = "find-msvc-tools"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
-
-[[package]]
-name = "fixedbitset"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flagset"
@@ -3451,12 +3448,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multimap"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
-
-[[package]]
 name = "neli"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3808,28 +3799,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
-name = "pbjson"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8edd1efdd8ab23ba9cb9ace3d9987a72663d5d7c9f74fa00b51d6213645cf6c"
-dependencies = [
- "base64 0.22.1",
- "serde",
-]
-
-[[package]]
-name = "pbjson-build"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ed4d5c6ae95e08ac768883c8401cf0e8deb4e6e1d6a4e1fd3d2ec4f0ec63200"
-dependencies = [
- "heck",
- "itertools 0.14.0",
- "prost",
- "prost-types",
-]
-
-[[package]]
 name = "pem"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3863,17 +3832,6 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "petgraph"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
-dependencies = [
- "fixedbitset",
- "hashbrown 0.15.5",
- "indexmap 2.14.1",
-]
 
 [[package]]
 name = "pin-project"
@@ -4016,7 +3974,10 @@ dependencies = [
  "axum-connect-rpc",
  "axum-server",
  "base64 0.23.1",
+ "buffa",
+ "buffa-types",
  "chrono",
+ "connectrpc",
  "derive_more",
  "dhsd",
  "ecdsa",
@@ -4031,7 +3992,6 @@ dependencies = [
  "p256",
  "paste",
  "pem 4.0.0",
- "prost",
  "rayon",
  "rcgen",
  "reqwest",
@@ -4057,9 +4017,7 @@ dependencies = [
  "test-log",
  "thiserror 2.0.20",
  "tokio",
- "tokio-stream",
  "tokio-util",
- "tonic",
  "tower",
  "tracing",
  "url",
@@ -4310,27 +4268,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-build"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
-dependencies = [
- "heck",
- "itertools 0.14.0",
- "log",
- "multimap",
- "petgraph",
- "prettyplease",
- "prost",
- "prost-types",
- "pulldown-cmark",
- "pulldown-cmark-to-cmark",
- "regex",
- "syn 2.0.119",
- "tempfile",
-]
-
-[[package]]
 name = "prost-derive"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4344,15 +4281,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-types"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
-dependencies = [
- "prost",
-]
-
-[[package]]
 name = "proto-gen"
 version = "0.0.0"
 dependencies = [
@@ -4360,10 +4288,7 @@ dependencies = [
  "buffa-build",
  "clap",
  "connectrpc-build",
- "pbjson-build",
- "prost-build",
  "tempfile",
- "tonic-prost-build",
  "walkdir",
 ]
 
@@ -4385,26 +4310,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
 dependencies = [
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "pulldown-cmark"
-version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
-dependencies = [
- "bitflags 2.13.1",
- "memchr",
- "unicase",
-]
-
-[[package]]
-name = "pulldown-cmark-to-cmark"
-version = "22.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab1ad36992cead65f02aa399a373a42730922f1525d988172634fdefdecb8a60"
-dependencies = [
- "pulldown-cmark",
 ]
 
 [[package]]
@@ -4755,7 +4660,6 @@ dependencies = [
  "async-trait",
  "buffa",
  "bytes",
- "prost",
  "rand 0.10.2",
  "reqwest",
  "serde",
@@ -5034,12 +4938,12 @@ name = "scion-connect-rpc"
 version = "0.7.0"
 dependencies = [
  "async-trait",
+ "buffa",
  "bytes",
  "futures",
  "http",
  "http-body",
  "ntest",
- "prost",
  "rcgen",
  "scion-quic",
  "sciparse",
@@ -5140,11 +5044,7 @@ dependencies = [
  "buffa",
  "buffa-types",
  "connectrpc",
- "prost",
- "prost-types",
  "serde",
- "tonic",
- "tonic-prost",
 ]
 
 [[package]]
@@ -5255,7 +5155,6 @@ dependencies = [
  "mockall",
  "ntest",
  "pocketscion",
- "prost",
  "rand 0.10.2",
  "rcgen",
  "reqwest",
@@ -5300,6 +5199,8 @@ dependencies = [
  "aes",
  "base64 0.23.1",
  "bitflags 2.13.1",
+ "buffa",
+ "buffa-types",
  "bytes",
  "cmac",
  "criterion",
@@ -5307,8 +5208,6 @@ dependencies = [
  "p256",
  "proptest",
  "proptest-derive",
- "prost",
- "prost-types",
  "scion-protobuf",
  "sciparse",
  "serde",
@@ -5775,7 +5674,6 @@ dependencies = [
  "base64 0.23.1",
  "buffa",
  "chrono",
- "connectrpc",
  "ed25519-dalek",
  "endhost-api",
  "endhost-api-client",
@@ -5785,7 +5683,6 @@ dependencies = [
  "jsonwebtoken",
  "mockall",
  "prometheus",
- "prost",
  "reqwest",
  "reqwest-connect-rpc",
  "scc",
@@ -6424,10 +6321,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
 dependencies = [
  "async-trait",
- "axum",
  "base64 0.22.1",
  "bytes",
- "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -6436,7 +6331,6 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "socket2",
  "sync_wrapper",
  "tokio",
  "tokio-stream",
@@ -6444,18 +6338,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "tonic-build"
-version = "0.14.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c68f61875ac5293cf72e6c8cf0158086428c82c37229e98c840878f1706b0322"
-dependencies = [
- "prettyplease",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -6467,22 +6349,6 @@ dependencies = [
  "bytes",
  "prost",
  "tonic",
-]
-
-[[package]]
-name = "tonic-prost-build"
-version = "0.14.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "654e5643eff75d7f8c99197ce1440ed19a3474eada74c12bbac488b2cafdae27"
-dependencies = [
- "prettyplease",
- "proc-macro2",
- "prost-build",
- "prost-types",
- "quote",
- "syn 2.0.119",
- "tempfile",
- "tonic-build",
 ]
 
 [[package]]
@@ -6731,12 +6597,6 @@ name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
-
-[[package]]
-name = "unicase"
-version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
 
 [[package]]
 name = "unicode-ident"

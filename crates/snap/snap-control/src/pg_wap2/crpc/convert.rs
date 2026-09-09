@@ -17,7 +17,7 @@
 
 use std::{collections::BTreeMap, time::UNIX_EPOCH};
 
-use scion_protobuf::buffa::proto::control_plane::v1 as buffa_cp;
+use scion_protobuf::proto::control_plane::v1 as buffa_cp;
 use sciparse::{rpc::FromRpcError, segment::SignedPathSegment};
 
 use crate::{
@@ -107,28 +107,15 @@ fn parse_segments(
     segments
         .into_iter()
         .map(|segment| {
-            to_prost(&segment)
-                .and_then(SignedPathSegment::try_from_rpc)
-                .map_err(|source| {
-                    ConvertError::InvalidSegment {
-                        target: target.to_owned(),
-                        kind,
-                        source,
-                    }
-                })
+            SignedPathSegment::try_from_rpc(segment).map_err(|source| {
+                ConvertError::InvalidSegment {
+                    target: target.to_owned(),
+                    kind,
+                    source,
+                }
+            })
         })
         .collect()
-}
-
-/// Re-encodes a buffa message as the prost message of the same protobuf type.
-// TODO: This is awful and needs to be replaced when we get rid of prost.
-fn to_prost<B, P>(message: &B) -> Result<P, FromRpcError>
-where
-    B: buffa::Message,
-    P: prost::Message + Default,
-{
-    P::decode(message.encode_to_vec().as_slice())
-        .map_err(|err| FromRpcError::new(format!("failed to decode as a prost message: {err}")))
 }
 
 impl From<model::AuthorizeTargetsResponse> for rpc::AuthorizeTargetsResponse {
@@ -144,7 +131,6 @@ impl From<model::AuthorizeTargetsResponse> for rpc::AuthorizeTargetsResponse {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            ..Default::default()
         }
     }
 }
@@ -162,16 +148,7 @@ mod tests {
             targets: [(sni().customer_domain().as_str().to_owned(), segments)]
                 .into_iter()
                 .collect(),
-            ..Default::default()
         }
-    }
-
-    /// Re-encodes a prost message as the buffa message of the same protobuf type.
-    ///
-    /// The inverse of [`to_prost`], for turning what `sciparse` produces into what the service
-    /// carries.
-    fn to_buffa<P: prost::Message, B: buffa::Message>(message: &P) -> B {
-        B::decode_from_slice(&message.encode_to_vec()).expect("the same wire format decodes")
     }
 
     fn fingerprints(segments: &[SignedPathSegment]) -> Vec<sciparse::segment::SegmentFp> {
@@ -186,10 +163,9 @@ mod tests {
         let (up, down, core) = (up_segment(0), down_segment(0), core_segment(0));
 
         let converted = request(rpc::AuthSegments {
-            up_segments: vec![to_buffa(&up.clone().into_rpc())],
-            down_segments: vec![to_buffa(&down.clone().into_rpc())],
-            core_segments: vec![to_buffa(&core.clone().into_rpc())],
-            ..Default::default()
+            up_segments: vec![up.clone().into_rpc()],
+            down_segments: vec![down.clone().into_rpc()],
+            core_segments: vec![core.clone().into_rpc()],
         })
         .try_into_model()
         .expect("the request is convertible");
@@ -223,7 +199,6 @@ mod tests {
             targets: [("not a domain".to_owned(), rpc::AuthSegments::default())]
                 .into_iter()
                 .collect(),
-            ..Default::default()
         }
         .try_into_model()
         .expect_err("a target that is not a domain is rejected");
@@ -240,7 +215,6 @@ mod tests {
             up_segments: vec![buffa_cp::PathSegment {
                 segment_info: vec![0xff, 0xff],
                 as_entries: Vec::new(),
-                ..Default::default()
             }],
             ..rpc::AuthSegments::default()
         })
@@ -269,7 +243,6 @@ mod tests {
                 wap_id: "wap-1".to_owned(),
                 data_plane_port: 8443,
                 expiry_time: 1_800,
-                ..Default::default()
             }
         );
     }

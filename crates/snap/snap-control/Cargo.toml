@@ -14,14 +14,12 @@ anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
-buffa = { workspace = true }
+buffa = { workspace = true, features = ["json"] }
 chrono = { workspace = true }
-connectrpc = { workspace = true }
 http = { workspace = true }
 jsonwebtoken = { workspace = true }
 mockall = { workspace = true }
 prometheus = { workspace = true }
-prost = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 scc = { workspace = true }
 serde = { workspace = true }

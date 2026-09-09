@@ -85,7 +85,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = "4.5"
 cmac = "0.7"
 cms = "0.2"
-connectrpc = { version = "0.8", features = ["axum"] }
+connectrpc = { version = "0.8", features = ["axum", "client"] }
 criterion = "0.8"
 der = { version = "0.7", features = ["pem", "derive"] }
 derive_more = { version = "2.0", features = ["display", "deref"] }
@@ -104,15 +104,10 @@ ntest = "0.9"
 num-traits = "0.2"
 p256 = "0.13"
 paste = "1.0"
-pbjson = "0.9"
-pbjson-build = "0.9"
 pem = "4.0"
 prometheus = { version = "0.14", features = ["process"] }
 proptest = "1.9"
 proptest-derive = "0.8"
-prost = "0.14"
-prost-build = "0.14"
-prost-types = "0.14"
 quinn-udp = "0.6.1"
 rand = "0.10"
 rand_xorshift = "0.5"
@@ -150,11 +145,7 @@ tokio = { version = "1.45", features = ["full"] }
 # Stock (BoringSSL/quiche-based) async QUIC implementation, used in tests to
 # exercise the squiche-based server endpoint against an established peer.
 tokio-quiche = { version = "0.19", default-features = false }
-tokio-stream = { version = "0.1", features = ["net"] }
 tokio-util = "0.7"
-tonic = { version = "0.14", features = ["router"] }
-tonic-prost = "0.14"
-tonic-prost-build = "0.14"
 tower = { version = "0.5", features = ["limit", "load-shed", "timeout"] }
 tower-http = { version = "0.7", features = ["cors", "trace"] }
 tracing = "0.1"

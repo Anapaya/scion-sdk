@@ -12,6 +12,7 @@ keywords = ["SCION", "networking", "tunnel", "QUIC"]
 ana-gotatun = { workspace = true }
 async-channel = { workspace = true }
 async-trait = { workspace = true }
+buffa = { workspace = true, features = ["json"] }
 byteorder = { workspace = true }
 bytes = { workspace = true }
 chacha20 = { workspace = true }
@@ -19,7 +20,6 @@ http = { workspace = true }
 http-body = { workspace = true }
 ipnet = { workspace = true }
 prometheus = { workspace = true }
-prost = { workspace = true }
 rand = { workspace = true }
 rand_xorshift = { workspace = true }
 scion-connect-rpc = { workspace = true }
@@ -27,6 +27,7 @@ scion-quic = { workspace = true }
 scion-sdk-observability = { workspace = true }
 scion-sdk-utils = { workspace = true }
 sciparse = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

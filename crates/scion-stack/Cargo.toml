@@ -10,12 +10,6 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
-# If you believe cargo-machete has detected an unused dependency incorrectly,
-# you can add the dependency to the list of dependencies to ignore in the
-# `[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.
-[package.metadata.cargo-shear]
-ignored = ["prost"]
-
 [dependencies]
 ana-gotatun = { workspace = true }
 anapaya-ead-client = { workspace = true }
@@ -28,7 +22,6 @@ endhost-api-client = { workspace = true }
 foldhash = { workspace = true }
 futures = { workspace = true }
 hickory-resolver = { workspace = true }
-prost = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 reqwest-connect-rpc = { workspace = true }

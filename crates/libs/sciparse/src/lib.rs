@@ -119,11 +119,11 @@ pub mod util;
 
 /// Re-exports of dependencies for users of this library
 pub mod reexport {
+    pub use buffa;
+    pub use buffa_types;
     pub use p256;
     #[cfg(feature = "proptest")]
     pub use proptest;
-    pub use prost;
-    pub use prost_types;
     pub use scion_protobuf as protobuf;
     pub use tinyvec;
 }

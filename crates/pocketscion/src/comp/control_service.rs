@@ -23,7 +23,9 @@ use std::{
 
 use anyhow::{Context, bail};
 use scion_h3_axum::ScionH3AxumServer;
-use scion_protobuf::control_plane::v1::{ServiceResolutionRequest, ServiceResolutionResponse};
+use scion_protobuf::proto::control_plane::v1::{
+    ServiceResolutionRequest, ServiceResolutionResponse,
+};
 use scion_quic::quic::config::QuicConfig;
 use sciparse::{
     address::{host_addr::ServiceAddr, socket_addr::ScionSocketAddr},
@@ -168,20 +170,20 @@ impl ControlService {
         });
 
         if let Some(listener) = host_socket_listener {
-            // Serve the segment lookup gRPC control service on a real host socket.
+            // Serve the segment lookup control service on a real host socket.
             let host_addr = listener.local_addr().ok();
-            let grpc_service = segment_lookup::grpc_server(segment_lookup_svc);
+            let host_app = segment_lookup::nest_api(axum::Router::new(), segment_lookup_svc);
+            let listener = listener
+                .into_std()
+                .context("Failed to convert host TCP listener to std")?;
+            let server = axum_server::from_tcp(listener)
+                .context("Failed to create host server from TCP listener")?;
             task::spawn(async move {
-                tracing::info!(%isd_asn, ?host_addr, "Control service gRPC listening on host");
-                let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
-                match tonic::transport::Server::builder()
-                    .add_service(grpc_service)
-                    .serve_with_incoming(incoming)
-                    .await
-                {
-                    Ok(_) => tracing::info!("Control service gRPC server stopped gracefully"),
+                tracing::info!(%isd_asn, ?host_addr, "Control service listening on host");
+                match server.serve(host_app.into_make_service()).await {
+                    Ok(_) => tracing::info!("Control service host server stopped gracefully"),
                     Err(e) => {
-                        tracing::error!("Control service gRPC server stopped with error: {:?}", e)
+                        tracing::error!("Control service host server stopped with error: {:?}", e)
                     }
                 }
             });
@@ -225,7 +227,7 @@ impl ControlService {
             (this_as, peer_as_if)
         };
 
-        let payload = ServiceResolutionRequest {};
+        let payload = ServiceResolutionRequest::default();
         let path = OneHopPath::new(
             egress_interface.if_id,
             // We just use the if id for the segment id, in Reality, should be random
@@ -249,7 +251,7 @@ impl ControlService {
             "Sending service resolution request",
         );
 
-        let payload = prost::Message::encode_to_vec(&payload);
+        let payload = buffa::Message::encode_to_vec(&payload);
 
         match sock.try_send(destination, path.into(), payload, ScionNetworkTime::now()) {
             Ok(_) => {}
@@ -264,8 +266,9 @@ impl ControlService {
             .await
             .context("Failed to receive service resolution response from network simulator")??;
 
-        let res: ServiceResolutionResponse = prost::Message::decode(res_pkt.udp().payload())
-            .context("Failed to decode service resolution response payload")?;
+        let res: ServiceResolutionResponse =
+            buffa::Message::decode_from_slice(res_pkt.udp().payload())
+                .context("Failed to decode service resolution response payload")?;
 
         tracing::debug!(
             peer_as = %peer_as_if.isd_as,

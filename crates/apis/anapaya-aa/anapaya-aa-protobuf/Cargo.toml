@@ -9,8 +9,7 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking", "Anapaya"]
 
 [dependencies]
-pbjson = { workspace = true }
-prost = { workspace = true }
+buffa = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 
 [lints]

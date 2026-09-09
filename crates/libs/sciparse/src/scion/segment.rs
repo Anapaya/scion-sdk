@@ -27,7 +27,7 @@ use std::{
 };
 
 use ecdsa::signature;
-use scion_protobuf::control_plane::v1::VerificationKeyId;
+use scion_protobuf::proto::control_plane::v1::VerificationKeyID;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -310,13 +310,13 @@ impl UnsignedPathSegment {
     /// Converts the unsigned path segment into a signed path segment by signing each AS entry.
     ///
     /// ### Parameters
-    /// * `key_provider`: A function taking the local ISD-AS of an ASEntry and returning the signing
+    /// * `key_provider`: A function taking the local ISD-AS of an AsEntry and returning the signing
     ///   key and optional key ID to sign the entry.
     /// * `timestamp`: The timestamp to include in the signature header of each AS entry.
     #[inline]
     pub fn try_into_signed_segment(
         self,
-        key_provider: impl Fn(IsdAsn) -> Option<(p256::ecdsa::SigningKey, Option<VerificationKeyId>)>,
+        key_provider: impl Fn(IsdAsn) -> Option<(p256::ecdsa::SigningKey, Option<VerificationKeyID>)>,
         timestamp: u32,
     ) -> Result<PathSegment<SignedAsEntry>, signature::Error> {
         let mut signed_segment = PathSegment::<SignedAsEntry> {
@@ -355,7 +355,7 @@ impl SignedPathSegment {
     /// * `segment_id`: The segment ID to include in the segment info
     /// * `as_entries`: The AS entries to include in the path segment. These will be signed using
     ///   the provided key provider.
-    /// * `key_provider`: A function taking the local ISD-AS of an ASEntry and returning the signing
+    /// * `key_provider`: A function taking the local ISD-AS of an AsEntry and returning the signing
     ///   key, optional key ID, and MAC key to sign the entry.
     #[inline]
     pub fn new(
@@ -415,7 +415,7 @@ impl SignedPathSegment {
         &mut self,
         mut entry: AsEntry,
         key: &p256::ecdsa::SigningKey,
-        key_id: Option<VerificationKeyId>,
+        key_id: Option<VerificationKeyID>,
         mac_key: &ForwardingKey,
         timestamp: u32,
     ) -> Result<(), signature::Error> {
@@ -432,7 +432,7 @@ impl SignedPathSegment {
         &mut self,
         entry: AsEntry,
         key: &p256::ecdsa::SigningKey,
-        key_id: Option<VerificationKeyId>,
+        key_id: Option<VerificationKeyID>,
         timestamp: u32,
     ) -> Result<(), signature::Error> {
         // Create a signature for the AS entry using the provided signing key, key ID, timestamp,
@@ -502,7 +502,7 @@ pub struct EntryKeyInfo {
     pub key: p256::ecdsa::SigningKey,
     /// An optional key ID to include in the signature header. This can be used by the verifier to
     /// select the correct key for verification.
-    pub key_id: Option<VerificationKeyId>,
+    pub key_id: Option<VerificationKeyID>,
     /// The MAC key to use for calculating the MAC of the AS entry.
     pub mac_key: ForwardingKey,
 }
@@ -577,41 +577,44 @@ impl AsEntry {
     pub fn signature(
         &self,
         key: &p256::ecdsa::SigningKey,
-        key_id: Option<VerificationKeyId>,
+        key_id: Option<VerificationKeyID>,
         timestamp: u32,
         path_segment: &PathSegment<SignedAsEntry>,
     ) -> Result<SignedMessage, signature::Error> {
-        let body = scion_protobuf::control_plane::v1::AsEntrySignedBody {
+        let body = scion_protobuf::proto::control_plane::v1::ASEntrySignedBody {
             isd_as: self.local.to_u64(),
             next_isd_as: self.next.to_u64(),
-            hop_entry: Some(scion_protobuf::control_plane::v1::HopEntry {
-                hop_field: Some(scion_protobuf::control_plane::v1::HopField {
+            hop_entry: Some(scion_protobuf::proto::control_plane::v1::HopEntry {
+                hop_field: Some(scion_protobuf::proto::control_plane::v1::HopField {
                     ingress: self.hop_entry.hop_field.cons_ingress as u64,
                     egress: self.hop_entry.hop_field.cons_egress as u64,
                     exp_time: self.hop_entry.hop_field.expiration_units as u32,
                     mac: self.hop_entry.hop_field.mac.to_vec(),
-                }),
+                })
+                .into(),
                 ingress_mtu: self.hop_entry.ingress_mtu as u32,
-            }),
+            })
+            .into(),
             peer_entries: self
                 .peer_entries
                 .iter()
                 .map(|peer| {
-                    scion_protobuf::control_plane::v1::PeerEntry {
+                    scion_protobuf::proto::control_plane::v1::PeerEntry {
                         peer_isd_as: peer.peer.to_u64(),
                         peer_interface: peer.peer_interface as u64,
                         peer_mtu: peer.peer_mtu as u32,
-                        hop_field: Some(scion_protobuf::control_plane::v1::HopField {
+                        hop_field: Some(scion_protobuf::proto::control_plane::v1::HopField {
                             ingress: peer.hop_field.cons_ingress as u64,
                             egress: peer.hop_field.cons_egress as u64,
                             exp_time: peer.hop_field.expiration_units as u32,
                             mac: peer.hop_field.mac.to_vec(),
-                        }),
+                        })
+                        .into(),
                     }
                 })
                 .collect(),
             mtu: self.mtu,
-            extensions: None, // Todo: support extensions
+            extensions: None.into(), // Todo: support extensions
         };
 
         SignedMessage::sign(
@@ -621,7 +624,7 @@ impl AsEntry {
             key_id,
             self.associated_data(path_segment),
             &body,
-            &(),
+            &buffa_types::Empty::default(),
         )
     }
 
@@ -664,7 +667,7 @@ impl std::fmt::Display for AsEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "ASEntry[local: {}, next: {}, mtu: {}, hop: {}, peers: {}]",
+            "AsEntry[local: {}, next: {}, mtu: {}, hop: {}, peers: {}]",
             self.local,
             self.next,
             self.mtu,
@@ -751,9 +754,9 @@ impl SegmentInfo {
     /// Creates a new Info with the given timestamp and segment ID.
     #[inline]
     pub fn new(timestamp: u32, segment_id: u16) -> Self {
-        use prost::Message;
+        use buffa::Message;
 
-        let proto_info = scion_protobuf::control_plane::v1::SegmentInformation {
+        let proto_info = scion_protobuf::proto::control_plane::v1::SegmentInformation {
             timestamp: timestamp as i64,
             segment_id: segment_id as u32,
         }
@@ -965,9 +968,9 @@ impl std::fmt::Display for SegmentsPage {
 mod tests {
 
     use base64::prelude::BASE64_STANDARD;
+    use buffa::Message;
     use ecdsa::signature::rand_core::OsRng;
     use p256::pkcs8::DecodePublicKey;
-    use prost::Message;
 
     use super::*;
     use crate::scion::identifier::{asn::Asn, isd::Isd};
@@ -986,7 +989,7 @@ mod tests {
             .decode(PATH_SEGMENT_BASE64)
             .expect("failed to decode path segment");
         let path_segment =
-            scion_protobuf::control_plane::v1::PathSegment::decode(&path_segment[..])
+            scion_protobuf::proto::control_plane::v1::PathSegment::decode_from_slice(&path_segment)
                 .expect("failed to decode path segment protobuf");
         let path_segment =
             SignedPathSegment::try_from_rpc(path_segment).expect("failed to convert path segment");

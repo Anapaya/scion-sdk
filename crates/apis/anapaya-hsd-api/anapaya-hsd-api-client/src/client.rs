@@ -30,7 +30,9 @@
 //!     .await;
 //! ```
 
-use anapaya_hsd_api_protobuf::hsd::segments::v1::{ListSegmentsRequest, ListSegmentsResponse};
+use anapaya_hsd_api_protobuf::proto::anapaya::scion::hsd::segments::v1::{
+    ListSegmentsRequest, ListSegmentsResponse,
+};
 use scion_connect_rpc::{
     Method,
     client::{ConnectRpcClient, RequestError},

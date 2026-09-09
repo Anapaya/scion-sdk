@@ -14,7 +14,7 @@
 
 //! Segment RPC types and conversions.
 
-use prost::Message;
+use buffa::{Enumeration, Message};
 
 use crate::{
     dataplane_path::standard::types::HopFieldMac,
@@ -28,8 +28,8 @@ use crate::{
 impl SegmentHopField {
     /// Converts to a protobuf hop field message.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::control_plane::v1::HopField {
-        scion_protobuf::control_plane::v1::HopField {
+    pub fn into_rpc(self) -> scion_protobuf::proto::control_plane::v1::HopField {
+        scion_protobuf::proto::control_plane::v1::HopField {
             exp_time: self.expiration_units as u32,
             ingress: self.cons_ingress as u64,
             egress: self.cons_egress as u64,
@@ -40,7 +40,7 @@ impl SegmentHopField {
     /// Tries to convert from a protobuf hop field message.
     #[inline]
     pub fn try_from_rpc(
-        hop_field: scion_protobuf::control_plane::v1::HopField,
+        hop_field: scion_protobuf::proto::control_plane::v1::HopField,
     ) -> Result<Self, FromRpcError> {
         if hop_field.mac.len() != 6 {
             return Err("Invalid MAC length in HopField".into());
@@ -67,17 +67,17 @@ impl SegmentHopField {
         })
     }
 }
-impl From<SegmentHopField> for scion_protobuf::control_plane::v1::HopField {
+impl From<SegmentHopField> for scion_protobuf::proto::control_plane::v1::HopField {
     #[inline]
     fn from(hop_field: SegmentHopField) -> Self {
         hop_field.into_rpc()
     }
 }
-impl TryFrom<scion_protobuf::control_plane::v1::HopField> for SegmentHopField {
+impl TryFrom<scion_protobuf::proto::control_plane::v1::HopField> for SegmentHopField {
     type Error = FromRpcError;
     #[inline]
     fn try_from(
-        hop_field: scion_protobuf::control_plane::v1::HopField,
+        hop_field: scion_protobuf::proto::control_plane::v1::HopField,
     ) -> Result<Self, Self::Error> {
         SegmentHopField::try_from_rpc(hop_field)
     }
@@ -86,17 +86,17 @@ impl TryFrom<scion_protobuf::control_plane::v1::HopField> for SegmentHopField {
 impl HopEntry {
     /// Converts to a protobuf hop entry message.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::control_plane::v1::HopEntry {
-        scion_protobuf::control_plane::v1::HopEntry {
+    pub fn into_rpc(self) -> scion_protobuf::proto::control_plane::v1::HopEntry {
+        scion_protobuf::proto::control_plane::v1::HopEntry {
             ingress_mtu: self.ingress_mtu as u32,
-            hop_field: Some(self.hop_field.into_rpc()),
+            hop_field: Some(self.hop_field.into_rpc()).into(),
         }
     }
 
     /// Tries to convert from a protobuf hop entry message.
     #[inline]
     pub fn try_from_rpc(
-        entry: scion_protobuf::control_plane::v1::HopEntry,
+        entry: scion_protobuf::proto::control_plane::v1::HopEntry,
     ) -> Result<Self, FromRpcError> {
         Ok(HopEntry {
             ingress_mtu: entry
@@ -110,16 +110,18 @@ impl HopEntry {
         })
     }
 }
-impl From<HopEntry> for scion_protobuf::control_plane::v1::HopEntry {
+impl From<HopEntry> for scion_protobuf::proto::control_plane::v1::HopEntry {
     #[inline]
     fn from(entry: HopEntry) -> Self {
         entry.into_rpc()
     }
 }
-impl TryFrom<scion_protobuf::control_plane::v1::HopEntry> for HopEntry {
+impl TryFrom<scion_protobuf::proto::control_plane::v1::HopEntry> for HopEntry {
     type Error = FromRpcError;
     #[inline]
-    fn try_from(entry: scion_protobuf::control_plane::v1::HopEntry) -> Result<Self, Self::Error> {
+    fn try_from(
+        entry: scion_protobuf::proto::control_plane::v1::HopEntry,
+    ) -> Result<Self, Self::Error> {
         HopEntry::try_from_rpc(entry)
     }
 }
@@ -127,19 +129,19 @@ impl TryFrom<scion_protobuf::control_plane::v1::HopEntry> for HopEntry {
 impl PeerEntry {
     /// Converts to a protobuf peer entry message.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::control_plane::v1::PeerEntry {
-        scion_protobuf::control_plane::v1::PeerEntry {
+    pub fn into_rpc(self) -> scion_protobuf::proto::control_plane::v1::PeerEntry {
+        scion_protobuf::proto::control_plane::v1::PeerEntry {
             peer_isd_as: self.peer.into(),
             peer_interface: self.peer_interface as u64,
             peer_mtu: self.peer_mtu as u32,
-            hop_field: Some(self.hop_field.into_rpc()),
+            hop_field: Some(self.hop_field.into_rpc()).into(),
         }
     }
 
     /// Tries to convert from a protobuf peer entry message.
     #[inline]
     pub fn try_from_rpc(
-        entry: scion_protobuf::control_plane::v1::PeerEntry,
+        entry: scion_protobuf::proto::control_plane::v1::PeerEntry,
     ) -> Result<Self, FromRpcError> {
         Ok(PeerEntry {
             peer: entry.peer_isd_as.into(),
@@ -158,16 +160,18 @@ impl PeerEntry {
         })
     }
 }
-impl From<PeerEntry> for scion_protobuf::control_plane::v1::PeerEntry {
+impl From<PeerEntry> for scion_protobuf::proto::control_plane::v1::PeerEntry {
     #[inline]
     fn from(entry: PeerEntry) -> Self {
         entry.into_rpc()
     }
 }
-impl TryFrom<scion_protobuf::control_plane::v1::PeerEntry> for PeerEntry {
+impl TryFrom<scion_protobuf::proto::control_plane::v1::PeerEntry> for PeerEntry {
     type Error = FromRpcError;
     #[inline]
-    fn try_from(entry: scion_protobuf::control_plane::v1::PeerEntry) -> Result<Self, Self::Error> {
+    fn try_from(
+        entry: scion_protobuf::proto::control_plane::v1::PeerEntry,
+    ) -> Result<Self, Self::Error> {
         PeerEntry::try_from_rpc(entry)
     }
 }
@@ -175,8 +179,8 @@ impl TryFrom<scion_protobuf::control_plane::v1::PeerEntry> for PeerEntry {
 impl SegmentInfo {
     /// Converts to a protobuf segment information message.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::control_plane::v1::SegmentInformation {
-        scion_protobuf::control_plane::v1::SegmentInformation {
+    pub fn into_rpc(self) -> scion_protobuf::proto::control_plane::v1::SegmentInformation {
+        scion_protobuf::proto::control_plane::v1::SegmentInformation {
             timestamp: self.timestamp as i64,
             segment_id: self.segment_id as u32,
         }
@@ -185,7 +189,7 @@ impl SegmentInfo {
     /// Tries to convert from a protobuf segment information message.
     #[inline]
     pub fn try_from_rpc(
-        info: scion_protobuf::control_plane::v1::SegmentInformation,
+        info: scion_protobuf::proto::control_plane::v1::SegmentInformation,
     ) -> Result<Self, FromRpcError> {
         Ok(SegmentInfo::new(
             info.timestamp
@@ -197,17 +201,17 @@ impl SegmentInfo {
         ))
     }
 }
-impl From<SegmentInfo> for scion_protobuf::control_plane::v1::SegmentInformation {
+impl From<SegmentInfo> for scion_protobuf::proto::control_plane::v1::SegmentInformation {
     #[inline]
     fn from(info: SegmentInfo) -> Self {
         info.into_rpc()
     }
 }
-impl TryFrom<scion_protobuf::control_plane::v1::SegmentInformation> for SegmentInfo {
+impl TryFrom<scion_protobuf::proto::control_plane::v1::SegmentInformation> for SegmentInfo {
     type Error = FromRpcError;
     #[inline]
     fn try_from(
-        info: scion_protobuf::control_plane::v1::SegmentInformation,
+        info: scion_protobuf::proto::control_plane::v1::SegmentInformation,
     ) -> Result<Self, Self::Error> {
         SegmentInfo::try_from_rpc(info)
     }
@@ -216,28 +220,30 @@ impl TryFrom<scion_protobuf::control_plane::v1::SegmentInformation> for SegmentI
 impl SignedAsEntry {
     /// Converts to a protobuf AS entry message.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::control_plane::v1::AsEntry {
-        scion_protobuf::control_plane::v1::AsEntry {
-            signed: Some(self.signed.into_rpc()),
+    pub fn into_rpc(self) -> scion_protobuf::proto::control_plane::v1::ASEntry {
+        scion_protobuf::proto::control_plane::v1::ASEntry {
+            signed: Some(self.signed.into_rpc()).into(),
             // Todo: We should be able to fill this in
-            unsigned: None,
+            unsigned: None.into(),
         }
     }
 
     /// Tries to convert from a protobuf AS entry message.
     #[inline]
     pub fn try_from_rpc(
-        entry: scion_protobuf::control_plane::v1::AsEntry,
+        entry: scion_protobuf::proto::control_plane::v1::ASEntry,
     ) -> Result<Self, FromRpcError> {
         let signed = entry.signed.ok_or("Missing Signed Message")?;
-        let hdr_and_body = scion_protobuf::crypto::v1::HeaderAndBodyInternal::decode(
-            signed.header_and_body.as_ref(),
-        )
-        .map_err(|_| "Failed to decode Signed Header and Body")?;
+        let hdr_and_body =
+            scion_protobuf::proto::crypto::v1::HeaderAndBodyInternal::decode_from_slice(
+                &signed.header_and_body,
+            )
+            .map_err(|_| "Failed to decode Signed Header and Body")?;
         let unverified_body = hdr_and_body.body;
-        let entry =
-            scion_protobuf::control_plane::v1::AsEntrySignedBody::decode(unverified_body.as_ref())
-                .map_err(|_| "Failed to decode AsEntrySignedBody")?;
+        let entry = scion_protobuf::proto::control_plane::v1::ASEntrySignedBody::decode_from_slice(
+            &unverified_body,
+        )
+        .map_err(|_| "Failed to decode ASEntrySignedBody")?;
 
         Ok(SignedAsEntry {
             entry: AsEntry {
@@ -257,16 +263,18 @@ impl SignedAsEntry {
         })
     }
 }
-impl From<SignedAsEntry> for scion_protobuf::control_plane::v1::AsEntry {
+impl From<SignedAsEntry> for scion_protobuf::proto::control_plane::v1::ASEntry {
     #[inline]
     fn from(as_entry: SignedAsEntry) -> Self {
         as_entry.into_rpc()
     }
 }
-impl TryFrom<scion_protobuf::control_plane::v1::AsEntry> for SignedAsEntry {
+impl TryFrom<scion_protobuf::proto::control_plane::v1::ASEntry> for SignedAsEntry {
     type Error = FromRpcError;
     #[inline]
-    fn try_from(entry: scion_protobuf::control_plane::v1::AsEntry) -> Result<Self, Self::Error> {
+    fn try_from(
+        entry: scion_protobuf::proto::control_plane::v1::ASEntry,
+    ) -> Result<Self, Self::Error> {
         SignedAsEntry::try_from_rpc(entry)
     }
 }
@@ -274,8 +282,8 @@ impl TryFrom<scion_protobuf::control_plane::v1::AsEntry> for SignedAsEntry {
 impl SignedPathSegment {
     /// Converts to a protobuf path segment message.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::control_plane::v1::PathSegment {
-        scion_protobuf::control_plane::v1::PathSegment {
+    pub fn into_rpc(self) -> scion_protobuf::proto::control_plane::v1::PathSegment {
+        scion_protobuf::proto::control_plane::v1::PathSegment {
             segment_info: self.info.into_rpc().encode_to_vec(),
             as_entries: self.as_entries.into_iter().map(Into::into).collect(),
         }
@@ -284,12 +292,13 @@ impl SignedPathSegment {
     /// Tries to convert from a protobuf path segment message.
     #[inline]
     pub fn try_from_rpc(
-        segment: scion_protobuf::control_plane::v1::PathSegment,
+        segment: scion_protobuf::proto::control_plane::v1::PathSegment,
     ) -> Result<Self, FromRpcError> {
-        let segment_info = scion_protobuf::control_plane::v1::SegmentInformation::decode(
-            segment.segment_info.as_slice(),
-        )
-        .map_err(|_| "Failed to decode segment info")?;
+        let segment_info =
+            scion_protobuf::proto::control_plane::v1::SegmentInformation::decode_from_slice(
+                &segment.segment_info,
+            )
+            .map_err(|_| "Failed to decode segment info")?;
 
         Ok(Self {
             info: segment_info.try_into()?,
@@ -301,35 +310,37 @@ impl SignedPathSegment {
         })
     }
 }
-impl From<SignedPathSegment> for scion_protobuf::control_plane::v1::PathSegment {
+impl From<SignedPathSegment> for scion_protobuf::proto::control_plane::v1::PathSegment {
     #[inline]
     fn from(value: SignedPathSegment) -> Self {
         value.into_rpc()
     }
 }
-impl TryFrom<scion_protobuf::control_plane::v1::PathSegment> for SignedPathSegment {
+impl TryFrom<scion_protobuf::proto::control_plane::v1::PathSegment> for SignedPathSegment {
     type Error = FromRpcError;
     #[inline]
     fn try_from(
-        segment: scion_protobuf::control_plane::v1::PathSegment,
+        segment: scion_protobuf::proto::control_plane::v1::PathSegment,
     ) -> Result<Self, Self::Error> {
         SignedPathSegment::try_from_rpc(segment)
     }
 }
 
-type RpcSegments =
-    std::collections::HashMap<i32, scion_protobuf::control_plane::v1::segments_response::Segments>;
+type RpcSegments = std::collections::BTreeMap<
+    i32,
+    scion_protobuf::proto::control_plane::v1::segments_response::Segments,
+>;
 
 impl Segments {
     /// Converts to protobuf segments grouped by type.
     pub fn into_rpc(
         self,
-    ) -> std::collections::HashMap<
+    ) -> std::collections::BTreeMap<
         i32,
-        scion_protobuf::control_plane::v1::segments_response::Segments,
+        scion_protobuf::proto::control_plane::v1::segments_response::Segments,
     > {
-        use scion_protobuf::control_plane::v1::{SegmentType, segments_response};
-        let mut segments = std::collections::HashMap::new();
+        use scion_protobuf::proto::control_plane::v1::{SegmentType, segments_response};
+        let mut segments = std::collections::BTreeMap::new();
         if !self.up_segments.is_empty() {
             segments.insert(
                 SegmentType::Up as i32,
@@ -364,9 +375,10 @@ impl Segments {
         let mut core_segments = Vec::new();
         for (segment_type, segments) in value {
             let segment_type =
-                match scion_protobuf::control_plane::v1::SegmentType::try_from(segment_type) {
-                    Ok(t) => t,
-                    Err(_err) => {
+                match scion_protobuf::proto::control_plane::v1::SegmentType::from_i32(segment_type)
+                {
+                    Some(t) => t,
+                    None => {
                         // Skip unrecognized segment types
                         continue;
                     }
@@ -374,16 +386,16 @@ impl Segments {
             for path_segment in segments.segments {
                 let segment = path_segment.try_into()?;
                 match segment_type {
-                    scion_protobuf::control_plane::v1::SegmentType::Up => {
+                    scion_protobuf::proto::control_plane::v1::SegmentType::Up => {
                         up_segments.push(segment);
                     }
-                    scion_protobuf::control_plane::v1::SegmentType::Core => {
+                    scion_protobuf::proto::control_plane::v1::SegmentType::Core => {
                         core_segments.push(segment);
                     }
-                    scion_protobuf::control_plane::v1::SegmentType::Down => {
+                    scion_protobuf::proto::control_plane::v1::SegmentType::Down => {
                         down_segments.push(segment);
                     }
-                    scion_protobuf::control_plane::v1::SegmentType::Unspecified => {
+                    scion_protobuf::proto::control_plane::v1::SegmentType::Unspecified => {
                         // Skip unrecognized segment types
                         continue;
                     }
@@ -407,9 +419,9 @@ impl TryFrom<RpcSegments> for Segments {
     type Error = FromRpcError;
     #[inline]
     fn try_from(
-        value: std::collections::HashMap<
+        value: std::collections::BTreeMap<
             i32,
-            scion_protobuf::control_plane::v1::segments_response::Segments,
+            scion_protobuf::proto::control_plane::v1::segments_response::Segments,
         >,
     ) -> Result<Self, Self::Error> {
         Segments::try_from_rpc(value)
@@ -419,8 +431,8 @@ impl TryFrom<RpcSegments> for Segments {
 impl SegmentsPage {
     /// Converts to a protobuf segments response message.
     #[inline]
-    pub fn into_rpc(self) -> scion_protobuf::control_plane::v1::SegmentsResponse {
-        scion_protobuf::control_plane::v1::SegmentsResponse {
+    pub fn into_rpc(self) -> scion_protobuf::proto::control_plane::v1::SegmentsResponse {
+        scion_protobuf::proto::control_plane::v1::SegmentsResponse {
             segments: self.segments.into_rpc(),
             deprecated_signed_revocations: Vec::new(),
         }
@@ -429,7 +441,7 @@ impl SegmentsPage {
     /// Tries to convert from a protobuf segments response message.
     #[inline]
     pub fn try_from_rpc(
-        value: scion_protobuf::control_plane::v1::SegmentsResponse,
+        value: scion_protobuf::proto::control_plane::v1::SegmentsResponse,
     ) -> Result<Self, FromRpcError> {
         Ok(Self {
             segments: Segments::try_from_rpc(value.segments)?,
@@ -438,17 +450,17 @@ impl SegmentsPage {
         })
     }
 }
-impl From<SegmentsPage> for scion_protobuf::control_plane::v1::SegmentsResponse {
+impl From<SegmentsPage> for scion_protobuf::proto::control_plane::v1::SegmentsResponse {
     #[inline]
     fn from(page: SegmentsPage) -> Self {
         page.into_rpc()
     }
 }
-impl TryFrom<scion_protobuf::control_plane::v1::SegmentsResponse> for SegmentsPage {
+impl TryFrom<scion_protobuf::proto::control_plane::v1::SegmentsResponse> for SegmentsPage {
     type Error = FromRpcError;
     #[inline]
     fn try_from(
-        value: scion_protobuf::control_plane::v1::SegmentsResponse,
+        value: scion_protobuf::proto::control_plane::v1::SegmentsResponse,
     ) -> Result<Self, Self::Error> {
         SegmentsPage::try_from_rpc(value)
     }

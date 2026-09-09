@@ -12,7 +12,6 @@ keywords = ["SCION", "networking"]
 async-trait = { workspace = true }
 buffa = { workspace = true }
 bytes = { workspace = true }
-prost = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

@@ -18,7 +18,7 @@ use sciparse::{
     segment::{Segments, SignedPathSegment},
 };
 
-use crate::hsd::segments::v1::ListSegmentsResponse;
+use crate::proto::anapaya::scion::hsd::segments::v1::ListSegmentsResponse;
 
 impl From<Segments> for ListSegmentsResponse {
     fn from(segments: Segments) -> Self {

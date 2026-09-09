@@ -27,7 +27,7 @@ use axum::{
 };
 use axum_connect_rpc::{
     error::{CrpcError, CrpcErrorCode},
-    extractor::BuffaConnectRpcAny,
+    extractor::ConnectRpcAny,
 };
 
 use crate::{
@@ -56,8 +56,8 @@ pub fn nest_crpc_api(router: Router, handler: Arc<dyn ControlServiceAPIHandler>)
 async fn authorize_targets_handler(
     State(handler): State<Arc<dyn ControlServiceAPIHandler>>,
     ConnectInfo(client): ConnectInfo<SocketAddr>,
-    request: BuffaConnectRpcAny<rpc::AuthorizeTargetsRequest>,
-) -> Result<BuffaConnectRpcAny<rpc::AuthorizeTargetsResponse>, CrpcError> {
+    request: ConnectRpcAny<rpc::AuthorizeTargetsRequest>,
+) -> Result<ConnectRpcAny<rpc::AuthorizeTargetsResponse>, CrpcError> {
     // One timestamp for the whole request, so everything it grants expires together.
     let now = SystemTime::now();
 
@@ -70,7 +70,7 @@ async fn authorize_targets_handler(
 
     // The grant goes to the address the request came from, not to one the request could name.
     match handler.authorize_targets(client.ip(), request, now) {
-        Ok(res) => Ok(BuffaConnectRpcAny::from_parts(res.into(), codec)),
+        Ok(res) => Ok(ConnectRpcAny::from_parts(res.into(), codec)),
         Err(e) => {
             tracing::info!(%client, ?e, "Authorization request failed");
 
@@ -226,7 +226,6 @@ mod tests {
             )]
             .into_iter()
             .collect(),
-            ..Default::default()
         }
     }
 
@@ -251,7 +250,6 @@ mod tests {
                 wap_id: WAP_ID.to_owned(),
                 data_plane_port: u32::from(DATA_PLANE_PORT),
                 expiry_time: EXPIRY_SECS,
-                ..Default::default()
             }
         );
 

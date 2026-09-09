@@ -13,20 +13,21 @@
 // limitations under the License.
 //! Conversions between endhost API protobuf types and endhost API models.
 
+use buffa::MessageField;
 use sciparse::{
     rpc::FromRpcError,
     segment::{Segments, SegmentsPage, SignedPathSegment},
 };
 
-use crate::v1::{
+use crate::proto::scion::endhost::v1::{
     ListSegmentsResponse, ListUnderlaysResponse, Router, Snap, SnapUnderlay, UdpUnderlay,
 };
 
 impl From<endhost_api_models::underlays::Underlays> for ListUnderlaysResponse {
     fn from(underlays: endhost_api_models::underlays::Underlays) -> Self {
         ListUnderlaysResponse {
-            udp: Some(UdpUnderlay::from(underlays.udp_underlay)),
-            snap: Some(SnapUnderlay::from(underlays.snap_underlay)),
+            udp: MessageField::some(UdpUnderlay::from(underlays.udp_underlay)),
+            snap: MessageField::some(SnapUnderlay::from(underlays.snap_underlay)),
         }
     }
 }
@@ -35,11 +36,11 @@ impl TryFrom<ListUnderlaysResponse> for endhost_api_models::underlays::Underlays
     type Error = url::ParseError;
     fn try_from(response: ListUnderlaysResponse) -> Result<Self, Self::Error> {
         Ok(endhost_api_models::underlays::Underlays {
-            udp_underlay: match response.udp {
+            udp_underlay: match response.udp.into_option() {
                 Some(udp) => udp.routers.into_iter().map(Into::into).collect(),
                 None => Vec::new(),
             },
-            snap_underlay: match response.snap {
+            snap_underlay: match response.snap.into_option() {
                 Some(snap) => {
                     snap.snaps
                         .into_iter()

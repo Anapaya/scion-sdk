@@ -24,7 +24,7 @@ use std::{
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use scion_protobuf::control_plane::v1::BeaconRequest;
+use scion_protobuf::proto::control_plane::v1::BeaconRequest;
 use sciparse::{
     address::host_addr::ServiceAddr, dataplane_path::view::ScionDpPathViewExt,
     identifier::isd_asn::IsdAsn,
@@ -378,7 +378,7 @@ pub enum InterfaceBeaconAction {
     /// After beacons are sent, the beacon state should be marked with `mark_success` or
     /// `mark_failure` the state machine should be ticked again to schedule the next send time
     /// based on whether sending was successful or not.
-    SendBeacons(Vec<scion_protobuf::control_plane::v1::BeaconRequest>),
+    SendBeacons(Vec<scion_protobuf::proto::control_plane::v1::BeaconRequest>),
     /// Wait until the given time and tick again to check if beacons should be sent
     Wait(SystemTime),
 }
@@ -464,7 +464,7 @@ impl BeaconGen {
         topology: &ScionTopology,
         timestamp: DateTime<Utc>,
         hop_expiry_units: u8,
-    ) -> anyhow::Result<Vec<scion_protobuf::control_plane::v1::BeaconRequest>> {
+    ) -> anyhow::Result<Vec<scion_protobuf::proto::control_plane::v1::BeaconRequest>> {
         const MIN_CHUNK_PER_THREAD: usize = 10;
 
         let egress_link = topology
@@ -567,7 +567,7 @@ impl BeaconGen {
             topology: &ScionTopology,
             timestamp: DateTime<Utc>,
             hop_expiry_units: u8,
-        ) -> anyhow::Result<Vec<scion_protobuf::control_plane::v1::BeaconRequest>>
+        ) -> anyhow::Result<Vec<scion_protobuf::proto::control_plane::v1::BeaconRequest>>
         where
             IterType: ParallelIterator<Item = &'data LinkSegment>,
         {
@@ -587,8 +587,8 @@ impl BeaconGen {
 
                     match path_segment {
                         Ok(path_segment) => {
-                            Ok(scion_protobuf::control_plane::v1::BeaconRequest {
-                                segment: Some(path_segment.into()),
+                            Ok(scion_protobuf::proto::control_plane::v1::BeaconRequest {
+                                segment: path_segment.into_rpc().into(),
                             })
                         }
                         Err(e) => Err(e.context("Failed to generate beacon for segment")),
@@ -607,7 +607,7 @@ impl BeaconGen {
         topology: &ScionTopology,
         timestamp: DateTime<Utc>,
         hop_expiry_units: u8,
-    ) -> anyhow::Result<scion_protobuf::control_plane::v1::BeaconRequest> {
+    ) -> anyhow::Result<scion_protobuf::proto::control_plane::v1::BeaconRequest> {
         let link = topology
             .scion_link(&sending_as_interface.isd_as, sending_as_interface.if_id)
             .context("Given interface does not exist in topology")?
@@ -632,8 +632,8 @@ impl BeaconGen {
             .to_path_segment(topology, timestamp, segment_id, hop_expiry_units, true)
             .context("Failed to convert segment to path segment for beacon generation")?;
 
-        let beacon_req = scion_protobuf::control_plane::v1::BeaconRequest {
-            segment: Some(path_segment.into()),
+        let beacon_req = scion_protobuf::proto::control_plane::v1::BeaconRequest {
+            segment: path_segment.into_rpc().into(),
         };
 
         Ok(beacon_req)

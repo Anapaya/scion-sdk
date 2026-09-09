@@ -15,7 +15,7 @@
 //! Trait for the SCION Daemon service.
 
 use axum_connect_rpc::error::CrpcError;
-use scion_protobuf::daemon::v1 as proto;
+use scion_protobuf::proto::daemon::v1 as proto;
 
 /// The prefix for all methods of the SCION Daemon service.
 pub const SERVICE_PREFIX: &str = "proto.daemon.v1.DaemonService";
@@ -44,7 +44,7 @@ pub trait DaemonService: Send + Sync + 'static {
     async fn paths(&self, request: proto::PathsRequest) -> Result<proto::PathsResponse, CrpcError>;
 
     /// Return information about an AS.
-    async fn as_info(&self, request: proto::AsRequest) -> Result<proto::AsResponse, CrpcError>;
+    async fn as_info(&self, request: proto::ASRequest) -> Result<proto::ASResponse, CrpcError>;
 
     /// Return the underlay addresses associated with the specified interfaces.
     async fn interfaces(
@@ -70,18 +70,18 @@ pub trait DaemonService: Send + Sync + 'static {
     /// DRKeyASHost returns a key that matches the request.
     async fn dr_key_as_host(
         &self,
-        request: proto::DrKeyAsHostRequest,
-    ) -> Result<proto::DrKeyAsHostResponse, CrpcError>;
+        request: proto::DRKeyASHostRequest,
+    ) -> Result<proto::DRKeyASHostResponse, CrpcError>;
 
     /// DRKeyHostAS returns a key that matches the request.
     async fn dr_key_host_as(
         &self,
-        request: proto::DrKeyHostAsRequest,
-    ) -> Result<proto::DrKeyHostAsResponse, CrpcError>;
+        request: proto::DRKeyHostASRequest,
+    ) -> Result<proto::DRKeyHostASResponse, CrpcError>;
 
     /// DRKeyHostHost returns a key that matches the request.
     async fn dr_key_host_host(
         &self,
-        request: proto::DrKeyHostHostRequest,
-    ) -> Result<proto::DrKeyHostHostResponse, CrpcError>;
+        request: proto::DRKeyHostHostRequest,
+    ) -> Result<proto::DRKeyHostHostResponse, CrpcError>;
 }

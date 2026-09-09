@@ -41,7 +41,10 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 axum-server = { workspace = true }
 base64 = { workspace = true }
+buffa = { workspace = true, features = ["json"] }
+buffa-types = { workspace = true }
 chrono = { workspace = true }
+connectrpc = { workspace = true }
 derive_more = { workspace = true }
 ecdsa = { workspace = true }
 ed25519-dalek = { workspace = true }
@@ -51,7 +54,6 @@ jsonwebtoken = { workspace = true }
 p256 = { workspace = true }
 paste = { workspace = true }
 pem = { workspace = true, features = ["serde"] }
-prost = { workspace = true }
 rayon = { workspace = true }
 rcgen = { workspace = true, features = ["x509-parser", "pem"] }
 reqwest = { workspace = true, features = ["json", "blocking"] }
@@ -65,9 +67,7 @@ tempfile = { workspace = true }
 test-log = { workspace = true, features = ["trace"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
-tonic = { workspace = true }
 tower = { workspace = true, features = ["limit", "buffer"] }
 tracing = { workspace = true }
 url = { workspace = true }
@@ -82,7 +82,6 @@ x509-cert = { workspace = true }
 endhost-api-client = { workspace = true }
 ntest = { workspace = true }
 snap-tokens = { workspace = true }
-tonic = { workspace = true }
 
 [lints]
 workspace = true

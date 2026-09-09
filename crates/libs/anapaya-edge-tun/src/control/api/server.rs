@@ -21,12 +21,12 @@
 use std::{convert::Infallible, future::poll_fn, net::IpAddr, pin::Pin, sync::Arc, task::Poll};
 
 use ana_gotatun::x25519;
+use buffa::Message;
 use bytes::Bytes;
 use http::{Request, Response};
 use http_body::{Body, Frame};
 use ipnet::IpNet;
 use prometheus::IntGauge;
-use prost::Message;
 use scion_connect_rpc::error::{CrpcError, CrpcErrorCode};
 use scion_quic::{
     h3::server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
@@ -314,7 +314,7 @@ fn handle_get_data_plane_configuration<C: EdgeTunControlPlane>(
     body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let _request = GetDataPlaneConfigurationRequest::decode(body).map_err(|e| {
+    let _request = GetDataPlaneConfigurationRequest::decode_from_slice(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
             format!("failed to decode request: {e}"),
@@ -335,7 +335,7 @@ fn handle_register_edge_tun_identity<C: EdgeTunControlPlane>(
     body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let request = RegisterEdgeTunIdentityRequest::decode(body).map_err(|e| {
+    let request = RegisterEdgeTunIdentityRequest::decode_from_slice(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
             format!("failed to decode request: {e}"),
@@ -371,7 +371,7 @@ fn handle_address_assign<C: EdgeTunControlPlane>(
     body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let request = AddressAssignRequest::decode(body).map_err(|e| {
+    let request = AddressAssignRequest::decode_from_slice(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
             format!("failed to decode request: {e}"),
@@ -408,7 +408,7 @@ fn handle_get_route_advertisement<C: EdgeTunControlPlane>(
     body: &[u8],
     control_plane: &C,
 ) -> Result<Vec<u8>, CrpcError> {
-    let request = GetRouteAdvertisementRequest::decode(body).map_err(|e| {
+    let request = GetRouteAdvertisementRequest::decode_from_slice(body).map_err(|e| {
         CrpcError::new(
             CrpcErrorCode::InvalidArgument,
             format!("failed to decode request: {e}"),

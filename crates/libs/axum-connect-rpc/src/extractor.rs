@@ -13,11 +13,9 @@
 // limitations under the License.
 //! Connect RPC axum extractors.
 //!
-//! The extractors themselves live in one submodule per protobuf
-//! implementation, [`prost`] and [`buffa`]. This module holds what they share:
-//! content type handling, the [`Codec`] negotiation and the
-//! [`ConnectRpcRejection`] envelopes. The `prost` extractors are re-exported
-//! here, as they are the default.
+//! This module holds the content type handling, the [`Codec`] negotiation and
+//! the [`ConnectRpcRejection`] envelopes; the extractors themselves are
+//! re-exported from a private submodule.
 
 use axum::{
     extract::rejection::BytesRejection,
@@ -27,11 +25,9 @@ use axum::{
 
 use crate::error::{CrpcError, CrpcErrorCode};
 
-pub mod buffa;
-pub mod prost;
+mod buffa;
 
-pub use buffa::{BuffaConnectRpc, BuffaConnectRpcAny};
-pub use prost::{ConnectRpc, ConnectRpcAny, CrpcOrJson};
+pub use buffa::{ConnectRpc, ConnectRpcAny, CrpcOrJson};
 
 // Expected content type for Connect RPC requests.
 const APPLICATION_PROTO: &str = "application/proto";

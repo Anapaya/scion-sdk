@@ -126,7 +126,7 @@ impl<C: ConnectRpcClient> EdgeTunControlPlaneClient<C> {
             .unary_request::<GetDataPlaneConfigurationRequest, GetDataPlaneConfigurationResponse>(
                 Method::POST,
                 url,
-                &GetDataPlaneConfigurationRequest {},
+                &GetDataPlaneConfigurationRequest::default(),
             )
             .await?;
 

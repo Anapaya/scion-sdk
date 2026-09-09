@@ -12,7 +12,6 @@ keywords = ["SCION", "networking"]
 axum = { workspace = true }
 buffa = { workspace = true }
 bytes = { workspace = true }
-prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 utoipa = { workspace = true }

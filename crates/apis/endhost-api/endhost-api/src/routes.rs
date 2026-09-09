@@ -18,7 +18,7 @@ use std::sync::Arc;
 use axum::{extract::State, response::IntoResponse, routing::post};
 use axum_connect_rpc::extractor::ConnectRpc;
 use endhost_api_models::{SegmentsDiscovery, SegmentsError, UnderlayDiscovery};
-use endhost_api_protobuf::v1::{
+use endhost_api_protobuf::proto::scion::endhost::v1::{
     ListSegmentsRequest, ListSegmentsResponse, ListUnderlaysRequest, ListUnderlaysResponse,
 };
 use sciparse::identifier::isd_asn::IsdAsn;
