@@ -109,6 +109,9 @@ Language bindings live outside `crates/`:
 - [bindings/android/](bindings/android/): Packages the SCION HTTP/3 client into an Android library
   (AAR), cross-compiling [scion-http3-ffi](crates/libs/scion-http3-ffi/) for `arm64-v8a` and
   `x86_64`.
+- [bindings/apple/](bindings/apple/): Packages the SCION HTTP/3 client into a Swift package for iOS
+  and macOS, cross-compiling [scion-http3-ffi](crates/libs/scion-http3-ffi/) into an XCFramework
+  with a hand-written Swift facade on top.
 
 ## Contributing
 

@@ -20,8 +20,8 @@
 //! | Path | Serves | Useful for |
 //! | --- | --- | --- |
 //! | `GET /hello` | `world` | Liveness, and showing that a connection still works after something else went wrong on it. |
-//! | `POST /echo` | The request body, unchanged | Bodies that survive both directions byte for byte, at any size. Cancelling an upload: see [`Counters::uploaded_bytes`] and [`Counters::uploads_truncated`]. |
-//! | `GET /echo-headers` | The request headers as JSON | What headers actually reached the server, including repeated ones and their order. |
+//! | `POST /echo?read-interval-ms=` | The request body, unchanged | Bodies that survive both directions byte for byte, at any size. Cancelling an upload: see [`Counters::uploaded_bytes`] and [`Counters::uploads_truncated`]. A non-zero interval paces the reads, which holds the upload open for as long as a test needs. |
+//! | `GET|POST /echo-headers` | The request headers as JSON | What headers actually reached the server, including repeated ones and their order. `POST` also shows the headers a request body brings with it, such as its `content-type`. |
 //! | `* /method` | The request method | Methods arriving unchanged, including ones with no special handling anywhere. |
 //! | `GET /repeated-headers` | Two `set-cookie` fields | Response headers that a map keyed by name cannot represent. |
 //! | `GET /status/{code}` | That status | Status codes arriving unchanged. |
@@ -219,7 +219,7 @@ pub fn router(counters: Arc<Counters>) -> Router {
     Router::new()
         .route("/hello", get(|| async { "world" }))
         .route("/echo", post(echo))
-        .route("/echo-headers", get(echo_headers))
+        .route("/echo-headers", get(echo_headers).post(echo_headers))
         .route(
             "/method",
             any(|method: Method| async move { method.to_string() }),
@@ -250,9 +250,17 @@ async fn count(State(counters): State<Arc<Counters>>, request: Request, next: Ne
 }
 
 /// Echoes the request body, recording the bytes that arrived and whether the upload was cut off.
-async fn echo(State(counters): State<Arc<Counters>>, body: Body) -> Response {
+async fn echo(
+    State(counters): State<Arc<Counters>>,
+    Query(query): Query<BTreeMap<String, String>>,
+    body: Body,
+) -> Response {
     use futures::StreamExt as _;
 
+    let interval = query
+        .get("read-interval-ms")
+        .and_then(|ms| ms.parse().ok())
+        .map_or(Duration::ZERO, Duration::from_millis);
     let received = counters.counter(&counters.uploaded_bytes, "/echo");
     let truncated = counters.counter(&counters.uploads_truncated, "/echo");
     let mut stream = body.into_data_stream();
@@ -268,6 +276,9 @@ async fn echo(State(counters): State<Arc<Counters>>, body: Body) -> Response {
             Ordering::Relaxed,
         );
         collected.extend_from_slice(&chunk);
+        if !interval.is_zero() {
+            tokio::time::sleep(interval).await;
+        }
     }
     Bytes::from(collected).into_response()
 }

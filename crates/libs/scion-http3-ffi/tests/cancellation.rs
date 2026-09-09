@@ -60,13 +60,14 @@ fn client(server: &TestServer) -> Arc<ScionHttp3Client> {
     .expect("building a client")
 }
 
-/// A request body big enough that it is still being sent when the head has arrived.
+/// A request body big enough that the server is still taking it when the cancellation lands.
 ///
-/// The counter that says the head arrived is moved by a middleware, which runs before the handler
-/// takes the body, so a cancellation triggered by it lands during the upload. The assertion does
-/// not rest on that timing, though: the server records a request only once it has the whole body,
-/// so a count that stays put is what proves the upload was cut off.
+/// The server records a request only once it has the whole body, so a count that stays put is what
+/// proves the upload was cut off.
 const UPLOAD_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+/// How long the server waits between reads of an upload it is meant to hold open.
+const UPLOAD_READ_INTERVAL_MS: u64 = 50;
 
 /// A request for `path`, addressed rather than resolved: the topology serves no TSAR records, so
 /// the address comes from the request and the port from the URL.
@@ -315,7 +316,10 @@ async fn cancelling_while_the_request_body_is_sent_ends_the_upload() {
     let upload = HttpRequest {
         method: "POST".to_string(),
         body: Some(vec![b'x'; UPLOAD_BODY_BYTES]),
-        ..request(&server, "/echo")
+        ..request(
+            &server,
+            &format!("/echo?read-interval-ms={UPLOAD_READ_INTERVAL_MS}"),
+        )
     };
     let call = client.execute_cancellable(upload, handle.clone());
     let cancel = async {

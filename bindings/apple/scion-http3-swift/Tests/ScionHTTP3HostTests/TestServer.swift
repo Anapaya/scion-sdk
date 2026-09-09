@@ -59,9 +59,68 @@ final class TestServer {
         self.stdin = stdin
     }
 
+    /// The counters the server keeps read over its control API.
+    struct Stats: Decodable {
+        let endlessChunks: [String: Int]
+        let endlessReleased: [String: Int]
+        let uploadedBytes: [String: Int]
+        let uploadsTruncated: [String: Int]
+        let requests: [String: Int]
+        let started: [String: Int]
+        let restarts: Int
+
+        enum CodingKeys: String, CodingKey {
+            case endlessChunks = "endless_chunks"
+            case endlessReleased = "endless_released"
+            case uploadedBytes = "uploaded_bytes"
+            case uploadsTruncated = "uploads_truncated"
+            case requests
+            case started
+            case restarts
+        }
+    }
+
+    /// How long `waitUntil` polls before it gives up.
+    static let waitDeadline: TimeInterval = 30
+
     /// A URL on this server.
     func url(_ path: String) -> String {
         endpoints.baseUrl + path
+    }
+
+    /// Reads the counters. Plain HTTP over TCP to the control API, never SCION.
+    func stats() async throws -> Stats {
+        let (data, _) = try await URLSession.shared.data(
+            from: URL(string: endpoints.controlUrl + "/stats")!)
+        return try JSONDecoder().decode(Stats.self, from: data)
+    }
+
+    /// Stops the HTTP/3 server and starts it again at the same address, which a client sees as a
+    /// reconnect.
+    func restartServer() async throws {
+        var request = URLRequest(url: URL(string: endpoints.controlUrl + "/restart-server")!)
+        request.httpMethod = "POST"
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw Failure("restarting the server failed: \(response)")
+        }
+    }
+
+    /// Polls the counters until `condition` holds, or fails naming `what` did not happen.
+    func waitUntil(
+        _ what: String, deadline: TimeInterval = waitDeadline,
+        _ condition: (Stats) -> Bool
+    ) async throws {
+        let end = Date().addingTimeInterval(deadline)
+        while true {
+            if condition(try await stats()) {
+                return
+            }
+            if Date() > end {
+                throw Failure("\(what) did not happen within \(Int(deadline)) s")
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
 
     /// Starts a server with the given extra arguments.

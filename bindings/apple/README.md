@@ -95,8 +95,15 @@ swift build
 swift test
 ```
 
-The tests start `scion-h3-test-server`, a PocketSCION topology with an HTTP/3 server in it, as a
-child process. To use a server built elsewhere, set `SCION_H3_TEST_SERVER` to its path.
+The package has two test targets. `ScionHTTP3Tests` runs the facade against a fake backend, with no
+server and no call into the native library, in seconds. `ScionHTTP3HostTests` runs the raw bindings
+and the facade against the real library: it starts `scion-h3-test-server`, a PocketSCION topology
+with an HTTP/3 server in it, as a child process. To use a server built elsewhere, set
+`SCION_H3_TEST_SERVER` to its path. To run one target only:
+
+```bash
+swift test --filter ScionHTTP3Tests
+```
 
 ## Environment
 

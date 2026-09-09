@@ -26,6 +26,7 @@ let package = Package(
         // A tagged release replaces the path with the URL of the zip attached to the release and
         // its checksum.
         .binaryTarget(name: "ScionHTTP3UniffiFFI", path: "ScionHTTP3UniffiFFI.xcframework"),
-        .testTarget(name: "ScionHTTP3UniffiTests", dependencies: ["ScionHTTP3Uniffi"]),
+        .testTarget(name: "ScionHTTP3Tests", dependencies: ["ScionHTTP3", "ScionHTTP3Uniffi"]),
+        .testTarget(name: "ScionHTTP3HostTests", dependencies: ["ScionHTTP3", "ScionHTTP3Uniffi"]),
     ]
 )
