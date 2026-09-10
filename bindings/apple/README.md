@@ -8,6 +8,7 @@ an XCFramework, and builds the Swift package that consumes it.
 | | |
 | --- | --- |
 | `scion-http3-swift/` | The Swift package: the facade, the generated bindings, and the tests. See [its README](scion-http3-swift/README.md). |
+| `hello-scion/` | The sample app: an iOS application that sends one HTTP request. See [its README](hello-scion/README.md). |
 | `tools/apple.py` | Cross-compiles a static library per target, checks them, assembles the XCFramework into the package, and checks that too. |
 | `tools/test_apple.py` | Tests for the formats `apple.py` parses. No Xcode needed. |
 | `../../tools/uniffi-bindgen` | The binding generator, built from the workspace's pinned `uniffi`. |

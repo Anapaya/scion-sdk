@@ -18,12 +18,15 @@ let rooms = try await client.get("https://chat.example.org/rooms").body.string()
 
 ## Adding it
 
-Every [release](https://github.com/Anapaya/scion-sdk/releases) carries the Swift package with a
-binary XCFramework, and `Package.swift` points at that release:
+Every [release](https://github.com/Anapaya/scion-sdk/releases) carries the Swift package as
+`scion-http3-swift-<version>.zip`. Its `Package.swift` names the binary XCFramework on the same
+release by URL and checksum, and SwiftPM downloads it. Download the package zip and unpack it. In
+Xcode, choose **File > Add Package Dependencies > Add Local...** and select the unpacked package. In
+a `Package.swift`, point at it as a local package:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Anapaya/scion-http3-swift", from: "<version>"),
+    .package(path: "libs/scion-http3-swift"),
 ],
 targets: [
     .target(name: "App", dependencies: [.product(name: "ScionHTTP3", package: "scion-http3-swift")]),

@@ -23,6 +23,8 @@ concurrency:
       # Markdown file, so those changes have to run this build too.
       - crates/**
       - bindings/android/hello-scion/**
+      - bindings/apple/hello-scion/**
+      - bindings/apple/scion-http3-swift/Tests/**
       - .github/workflows/docs.yml
 jobs:
   build:

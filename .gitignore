@@ -38,6 +38,8 @@ node_modules/
 # apple.py writes into the package)
 bindings/apple/generated/
 bindings/apple/scion-http3-swift/Sources/ScionHTTP3Uniffi/
+
+bindings/apple/hello-scion/HelloScion.xcodeproj/
 bindings/apple/scion-http3-swift/.build/
 bindings/apple/scion-http3-swift/.swiftpm/
 bindings/apple/scion-http3-swift/*.xcframework/

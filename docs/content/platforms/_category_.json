@@ -1,0 +1,9 @@
+{
+  "label": "Platforms",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "title": "Platforms",
+    "description": "The SCION HTTP/3 client as a prebuilt library for app platforms: an Android library and a Swift package for iOS. Each guide takes an app developer from nothing to a request over SCION on an emulator or a simulator."
+  }
+}

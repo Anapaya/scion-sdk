@@ -75,6 +75,7 @@ final class FacadeCancellationTests: XCTestCase {
     }
 
     func testCancellingBeforeTheResponseHeadLeavesTheConnectionUsable() async throws {
+        // ANCHOR: cancel
         let request = try facadeRequest(server, "/slow?ms=600000")
         let client = self.client!
         let task = Task { try await client.execute(request) }
@@ -86,6 +87,7 @@ final class FacadeCancellationTests: XCTestCase {
         assertCancelled(await task.result)
 
         try await assertHelloWorks()
+        // ANCHOR_END: cancel
     }
 
     func testATaskCancelledBeforeTheCallSendsNothing() async throws {

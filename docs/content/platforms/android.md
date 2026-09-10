@@ -1,6 +1,6 @@
 ---
 title: Android
-sidebar_position: 3
+sidebar_position: 1
 description: From nothing to an HTTP/3 request over SCION from an Android emulator.
 ---
 
@@ -192,8 +192,8 @@ Cancellation needs nothing special: cancel the coroutine, and the request is can
 - **The library README** —
   [`bindings/android/scion-http3-android/README.md`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/android/scion-http3-android)
   is the reference for the whole API, including request bodies, headers and trailers.
-- **The concepts pages** — [addressing](concepts/addressing.md) explains what
-  `2-ff00:0:212,127.0.0.1` means, and [transport underlays](concepts/transport-underlays.md)
+- **The concepts pages** — [addressing](../concepts/addressing.md) explains what
+  `2-ff00:0:212,127.0.0.1` means, and [transport underlays](../concepts/transport-underlays.md)
   explains the `--underlay` option above.
 - **The sample app** —
   [`bindings/android/hello-scion`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/android/hello-scion)
