@@ -215,7 +215,7 @@ this package, including a suite that runs against a real SCION topology.
 | `Sources/ScionHTTP3Uniffi` | The Swift that `uniffi-bindgen` generates from `scion-http3-ffi`. Not checked in; `apple.py xcframework` writes it. |
 | `ScionHTTP3UniffiFFI.xcframework` | The static library with its C header, one slice per platform. Not checked in; `apple.py xcframework` writes it. |
 | `Tests/ScionHTTP3Tests` | The facade against a fake backend: configuration mapping, cancellation plumbing, staleness rules, lifecycle. No server, no native call. |
-| `Tests/ScionHTTP3HostTests` | The raw bindings and the facade against the real library and a `scion-h3-test-server` the tests start themselves. |
+| `Tests/ScionHTTP3HostTests` | The raw bindings and the facade against the real library and a `scion-h3-test-server`. On macOS the tests start it themselves; in an iOS simulator they attach to one that `tools/e2e.sh` started. |
 
 `ScionHTTP3Uniffi` is not a product of this package, and the facade imports it with
 `internal import`, so no generated type can appear in the facade's API. Inside the facade, only

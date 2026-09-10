@@ -113,10 +113,11 @@ final class FacadeEndToEndTests: XCTestCase {
     }
 
     func testASecondRequestReusesTheConnection() async throws {
+        let before = try await server.stats().requests["/hello"] ?? 0
         _ = try await client.execute(facadeRequest(server, "/hello"))
         _ = try await client.execute(facadeRequest(server, "/hello"))
-        let stats = try await server.stats()
-        XCTAssertEqual(stats.requests["/hello"], 2)
+        let after = try await server.stats().requests["/hello"] ?? 0
+        XCTAssertEqual(after, before + 2)
     }
 
     func testARequestAfterAServerRestartReachesTheServerAgain() async throws {

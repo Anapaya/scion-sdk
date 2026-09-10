@@ -105,6 +105,72 @@ with an HTTP/3 server in it, as a child process. To use a server built elsewhere
 swift test --filter ScionHTTP3Tests
 ```
 
+The host tests can also attach to a server that is already running instead of starting one: set
+`SCION_H3_TEST_SERVER_CONTROL_URL` to its control API, for example `http://127.0.0.1:7443` for a
+server started with `--control-port 7443`. The two tests that need a server with other options
+are skipped then.
+
+## Testing on the simulator
+
+```bash
+./bindings/apple/tools/e2e.sh                           # everything
+./bindings/apple/tools/e2e.sh FacadeCancellationTests   # one class
+```
+
+The host tests, `ScionHTTP3HostTests`, run in an iOS simulator. The unit tests are left to
+`swift test`.
+
+A test in the simulator cannot start a process, so the script starts the test server on this
+machine, boots a simulator, and runs `xcodebuild test` with the package scheme in it. The tests
+read everything, the endhost API, the token, the server's SCION address, and its certificate,
+from the server's `GET /info` at `http://127.0.0.1:7443`. The simulator shares this machine's
+network, so no address translation is involved. Only the port is agreed in advance;
+`FIXTURE_CONTROL_PORT` changes it for a second run beside a first one and the tests learn the new
+one from the environment `xcodebuild` hands them.
+
+The script needs the XCFramework and the generated bindings in the package, which
+`apple.py xcframework` writes and it builds the test server with cargo unless
+`SCION_H3_TEST_SERVER` names one. It picks an iPhone on the newest installed iOS runtime, or the
+simulator `SIMULATOR_UDID` names.
+
+## Testing on a device
+
+You need a Mac and an iPhone on the same network, a signing team, and the LAN address of the Mac,
+`<lan-ip>` below.
+
+1. Start the test server on the Mac, on the LAN address, so that the phone can reach every
+   component of the topology:
+
+   ```bash
+   cargo run --release -p scion-h3-test-server -- --bind-ip <lan-ip> --control-port 7443
+   ```
+
+2. Run the suite on the phone, telling it where the control API is:
+
+   ```bash
+   cd bindings/apple/scion-http3-swift
+   TEST_RUNNER_SCION_H3_TEST_SERVER_CONTROL_URL=http://<lan-ip>:7443 \
+       xcodebuild test -scheme scion-http3-swift-Package \
+       -destination 'platform=iOS,id=<device-udid>' \
+       -allowProvisioningUpdates DEVELOPMENT_TEAM=<team-id>
+   ```
+
+   iOS asks once whether the test host may find and connect to devices on the local network.
+   Accept it. iOS drops the traffic of an application that was refused.
+
+3. Handover. With the phone on Wi-Fi, run the suite once so that connectivity exists, then turn
+   Wi-Fi off in Control Center while a request is in flight. The expected outcome: the request in
+   flight fails with a retryable error, the facade logs `the network path changed`, and the next
+   request succeeds over cellular without any call to `reset()`. Cellular must be able to reach
+   `<lan-ip>` for this; a phone hotspot with the Mac on it is the simplest arrangement.
+
+4. Suspension. Make a request, press the home button, wait five minutes, and return. The expected
+   outcome: the first request either succeeds or fails with a retryable error and the request
+   after it succeeds. Nothing hangs for longer than the connect timeout.
+
+5. MTU. Over cellular, fetch `/big?bytes=1048576` and compare the byte count to the request. The
+   expected outcome: the full body arrives, and the facade's log shows no retries.
+
 ## Environment
 
 > [!WARNING]
@@ -124,8 +190,10 @@ Run the build through the tool rather than invoking `cargo` directly.
 [`endhost-public-apple.yml`](../../../../.github/workflows/endhost-public-apple.yml) builds one
 target per job, on `macos-15`, and then assembles and checks the XCFramework in a job of its own.
 That job also builds the package for macOS and for the iOS simulator, and runs the Swift tests
-against a test server the `aarch64-apple-darwin` job built. It runs nightly, on a pull request
-that touches the paths it lists, and on manual dispatch.
+against a test server the `aarch64-apple-darwin` job built. A third job runs `tools/e2e.sh`: the
+same tests in an iOS simulator, against the packed XCFramework the second job uploaded. On a
+failure it uploads `build/e2e/` without the derived data. The workflow runs nightly, on a pull
+request that touches the paths it lists, and on manual dispatch.
 
 ## Troubleshooting
 
@@ -144,3 +212,8 @@ that touches the paths it lists, and on manual dispatch.
 | `invalid local binary target path` or `does not contain a binary artifact` (SwiftPM) | The XCFramework is not in the package. Run `apple.py xcframework`. |
 | `did not report its endpoints within 120 s` | The test server did not start. Its standard error is in the test output; run the binary by hand to see more. |
 | `cargo build ... exited` (Swift tests) | The tests could not build the test server. Build it yourself and set `SCION_H3_TEST_SERVER`. |
+| `could not be reached, and stayed unreachable for 10 s` | The tests were told to attach to a server, and nothing answers at that control API. On the simulator, run the tests through `tools/e2e.sh`, which starts one. |
+| `needs a server started with ...` (a skipped test) | Expected when attached: that test needs a server with other options and runs on the host only. |
+| `The XCFramework or the generated bindings are missing` | `tools/e2e.sh` does not assemble the XCFramework. Run `apple.py xcframework`. |
+| `scheme scion-http3-swift-Package not found` | SwiftPM's synthesized scheme has another name in this Xcode. The message lists what it found; pass it by editing `SCHEME` in `tools/e2e.sh`. |
+| `no available iPhone simulator` | Install an iOS runtime in Xcode's Settings, or name a simulator in `SIMULATOR_UDID`. |

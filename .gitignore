@@ -41,6 +41,7 @@ bindings/apple/scion-http3-swift/Sources/ScionHTTP3Uniffi/
 bindings/apple/scion-http3-swift/.build/
 bindings/apple/scion-http3-swift/.swiftpm/
 bindings/apple/scion-http3-swift/*.xcframework/
+bindings/apple/build/
 
 # Android bindings (Gradle output, and the native libraries and bindings that
 # non-Gradle steps write into generated/)

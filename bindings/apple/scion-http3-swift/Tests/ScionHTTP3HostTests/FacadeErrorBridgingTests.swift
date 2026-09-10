@@ -61,6 +61,17 @@ final class FacadeErrorBridgingTests: XCTestCase {
         XCTAssertFalse(retryable)
     }
 
+    func testAStreamTheServerResetsMidBodyReportsStreamReset() async throws {
+        let server = try TestServer.start()
+        defer { server.stop() }
+        let client = try facadeClientFor(server)
+        defer { Task { await client.shutdown() } }
+
+        let error = await thrown { try await client.execute(facadeRequest(server, "/reset-stream")) }
+            as? ScionHttp3Error
+        guard case .streamReset? = error else { return XCTFail("\(String(describing: error))") }
+    }
+
     func testAServerAllowingNoRequestStreamsReportsTheConnectionLimit() async throws {
         let server = try TestServer.start(arguments: ["--max-streams", "0"])
         defer { server.stop() }

@@ -56,14 +56,21 @@ final class FacadeCancellationTests: XCTestCase {
         let body = Data(repeating: 0x61, count: 2 * 1024 * 1024)
         let request = try facadeRequest(
             server, "/echo?read-interval-ms=50", method: .post, body: .bytes(body))
+        let before = try await server.stats()
+        let uploaded = before.uploadedBytes["/echo"] ?? 0
+        let truncated = before.uploadsTruncated["/echo"] ?? 0
         let client = self.client!
         let task = Task { try await client.execute(request) }
 
-        try await server.waitUntil("the upload to start") { ($0.uploadedBytes["/echo"] ?? 0) > 0 }
+        try await server.waitUntil("the upload to start") {
+            ($0.uploadedBytes["/echo"] ?? 0) > uploaded
+        }
         task.cancel()
         assertCancelled(await task.result)
 
-        try await server.waitUntil("the upload to end") { ($0.uploadsTruncated["/echo"] ?? 0) > 0 }
+        try await server.waitUntil("the upload to end") {
+            ($0.uploadsTruncated["/echo"] ?? 0) > truncated
+        }
         try await assertHelloWorks()
     }
 
