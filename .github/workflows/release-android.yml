@@ -136,8 +136,8 @@ jobs:
           repo=bindings/android/scion-http3-android/build/maven-repo
           (cd "$repo" && python3 -m zipfile -c "$out/scion-http3-android-$VERSION-maven.zip" com)
           # Globbed on the artifact prefix rather than on everything, so the sums file cannot list
-          # itself.
-          (cd "$out" && sha256sum scion-http3-android-* > SHA256SUMS)
+          # itself. Named per platform: the Apple workflow uploads its own to the same release.
+          (cd "$out" && sha256sum scion-http3-android-* > SHA256SUMS-android)
           echo "dir=$out" >> "$GITHUB_OUTPUT"
           ls -l "$out"
       - name: Attach the assets to the release

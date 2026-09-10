@@ -60,7 +60,7 @@ dependencies {
 The `@aar` on JNA matters: that artifact carries JNA's native libraries for each Android ABI, and the
 plain jar does not.
 
-Each release also carries a sources jar, and a `SHA256SUMS` covering every asset.
+Each release also carries a sources jar, and a `SHA256SUMS-android` covering every Android asset.
 
 Requirements: `minSdk` 24, JDK 17 to build. The AAR ships `arm64-v8a` and `x86_64`, so it runs on
 current devices and on the emulator, but not on a 32-bit-only ARM device. It brings the `INTERNET` and

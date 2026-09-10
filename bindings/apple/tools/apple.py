@@ -2,13 +2,15 @@
 # Copyright 2026 Anapaya Systems
 """Build and check the SCION HTTP/3 static libraries for Apple platforms.
 
-Four subcommands:
+Five subcommands:
 
     build               cross-compile scion-http3-ffi as a static library for each Rust target
     verify              check the staged static libraries
     xcframework         fuse the fat slices, generate the bindings, assemble the XCFramework
                         into the Swift package, and check it
     verify-xcframework  check an assembled XCFramework, and the package manifest against it
+    release             assemble the assets a GitHub release carries: the XCFramework as the
+                        zip a binary target downloads and the package pointing at it
 
 Everything here needs macOS with Xcode. See ../README.md for prerequisites and troubleshooting.
 """
@@ -25,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -53,6 +56,11 @@ LIBRARY = "libscion_http3_ffi.a"
 MANIFEST_NAME = "build-manifest.json"
 
 UNIFFI_CONFIG = WORKSPACE_ROOT / "crates/libs/scion-http3-ffi/uniffi.toml"
+
+# All crates in the workspace share the same version.
+VERSION_CRATE = "scion-stack"
+RELEASE_URL_BASE = "https://github.com/Anapaya/scion-sdk/releases/download/v{version}"
+CHECKSUMS_NAME = "SHA256SUMS-apple"
 
 # The version handshake uniffi's scaffolding exports.
 EXPORTED_SYMBOL = "ffi_scion_http3_ffi_uniffi_contract_version"
@@ -200,8 +208,7 @@ def xcrun(*args: object) -> str:
 
 
 @functools.cache
-def cargo_target_dir() -> Path:
-    """Where cargo puts build output, according to cargo."""
+def cargo_metadata() -> dict[str, object]:
     metadata = subprocess.run(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"],
         check=True,
@@ -209,7 +216,20 @@ def cargo_target_dir() -> Path:
         text=True,
         cwd=WORKSPACE_ROOT,
     ).stdout
-    return Path(json.loads(metadata)["target_directory"])
+    return json.loads(metadata)
+
+
+def cargo_target_dir() -> Path:
+    """Where cargo puts build output."""
+    return Path(str(cargo_metadata()["target_directory"]))
+
+
+def workspace_version() -> str:
+    """The SDK version."""
+    for package in cargo_metadata()["packages"]:  # type: ignore[union-attr]
+        if package["name"] == VERSION_CRATE:
+            return str(package["version"])
+    raise Failure(f"the workspace has no {VERSION_CRATE} crate to take the version from")
 
 
 def sha256_of(path: Path) -> str:
@@ -960,6 +980,106 @@ def verify_xcframework(output: Path) -> None:
     summarise(report, output.name)
 
 
+LOCAL_BINARY_TARGET = re.compile(r'(\.binaryTarget\(\s*name:\s*"[^"]+"\s*,\s*)path:\s*"[^"]+"')
+
+
+def release_manifest(manifest: str, url: str, checksum: str) -> str:
+    """Package.swift with its binary target pointing at a released zip instead of a local path."""
+    released, count = LOCAL_BINARY_TARGET.subn(
+        lambda match: f'{match.group(1)}url: "{url}", checksum: "{checksum}"', manifest
+    )
+    if count != 1:
+        raise Failure(
+            f"{PACKAGE_MANIFEST.name} declares {count} binary target(s) with a local path, not one,\n"
+            "      so this tool cannot tell which one the released zip stands in for."
+        )
+    return released
+
+
+def checksums_text(paths: list[Path]) -> str:
+    return "".join(f"{sha256_of(path)}  {path.name}\n" for path in paths)
+
+
+def zip_directory(directory: Path, output: Path) -> None:
+    output.unlink(missing_ok=True)
+    subprocess.run(
+        ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", directory.name, str(output)],
+        cwd=directory.parent,
+        check=True,
+    )
+
+
+def release(version: str | None, url_base: str | None, output: Path) -> None:
+    """Assembles the release assets from the XCFramework and the generated Swift in the package."""
+    require_macos()
+    found = workspace_version()
+    if version is None:
+        version = found
+    elif version != found:
+        raise Failure(
+            f"the release is {version}, but the workspace is {found}. The tag and the tree it\n"
+            "      points at disagree; a release built from it would carry the wrong version."
+        )
+    if not any(GENERATED_SWIFT_DIR.glob("*.swift")):
+        raise Failure(
+            f"{GENERATED_SWIFT_DIR} holds no generated Swift. Run `apple.py xcframework` first."
+        )
+    verify_xcframework(XCFRAMEWORK)
+
+    # Absolute, because the zips are written from other working directories.
+    output = output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    zip_name = f"{XCFRAMEWORK.stem}-{version}.xcframework.zip"
+    framework_zip = output / zip_name
+    print(f"==> Zipping {XCFRAMEWORK.name}")
+    zip_directory(XCFRAMEWORK, framework_zip)
+    if not framework_zip.is_file():
+        raise Failure(f"ditto reported success but {framework_zip} does not exist")
+    checksum = subprocess.run(
+        ["swift", "package", "compute-checksum", str(framework_zip)],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=PACKAGE_DIR,
+    ).stdout.strip()
+    url = f"{(url_base or RELEASE_URL_BASE.format(version=version)).rstrip('/')}/{zip_name}"
+
+    print(f"==> Staging {PACKAGE_DIR.name}")
+    package_zip = output / f"{PACKAGE_DIR.name}-{version}.zip"
+    with tempfile.TemporaryDirectory() as staging:
+        staged = Path(staging) / PACKAGE_DIR.name
+        shutil.copytree(
+            PACKAGE_DIR,
+            staged,
+            ignore=shutil.ignore_patterns(".build", ".swiftpm", XCFRAMEWORK.name, ".DS_Store"),
+        )
+        (staged / PACKAGE_MANIFEST.name).write_text(
+            release_manifest(PACKAGE_MANIFEST.read_text(), url, checksum)
+        )
+        dumped = subprocess.run(
+            ["swift", "package", "dump-package"],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=staged,
+        )
+        if dumped.returncode != 0:
+            raise Failure(
+                f"the released {PACKAGE_MANIFEST.name} does not parse:\n"
+                + reported_output(dumped.stderr or dumped.stdout)
+            )
+        zip_directory(staged, package_zip)
+
+    (output / CHECKSUMS_NAME).write_text(checksums_text([framework_zip, package_zip]))
+
+    print()
+    print(f"Release assets for {version} in {output}:")
+    for path in (framework_zip, package_zip, output / CHECKSUMS_NAME):
+        print(f"  {path.name}  ({path.stat().st_size} bytes)")
+    print(f"The binary target points at {url}")
+    print(f"with SwiftPM checksum {checksum}")
+
+
 def main(argv: list[str] | None = None) -> int:
     sys.stdout.reconfigure(line_buffering=True)
 
@@ -1009,6 +1129,24 @@ def main(argv: list[str] | None = None) -> int:
         help="the XCFramework to check (default: the one `xcframework` assembles)",
     )
 
+    release_parser = subcommands.add_parser("release", help="assemble the release assets")
+    release_parser.add_argument(
+        "--version",
+        help="the version the release is tagged with, which must be the workspace's "
+        "(default: the workspace's, unchecked)",
+    )
+    release_parser.add_argument(
+        "--url-base",
+        help="where the release's assets are downloaded from, which the released Package.swift "
+        f"points its binary target at (default: {RELEASE_URL_BASE})",
+    )
+    release_parser.add_argument(
+        "--output",
+        type=Path,
+        default=GENERATED_DIR / "release",
+        help="the directory to write the assets to (default: generated/release)",
+    )
+
     args = parser.parse_args(argv)
 
     try:
@@ -1018,6 +1156,8 @@ def main(argv: list[str] | None = None) -> int:
             verify([TARGETS[name] for name in args.target or TARGETS])
         elif args.command == "xcframework":
             xcframework(args.output)
+        elif args.command == "release":
+            release(args.version, args.url_base, args.output)
         else:
             verify_xcframework(args.xcframework)
     except Failure as failure:
@@ -1027,9 +1167,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {' '.join(str(a) for a in error.cmd)} failed", file=sys.stderr)
         return error.returncode or 1
     except FileNotFoundError as error:
-        # cargo, rustup or xcrun is not on PATH. Reported like any other prerequisite rather than
-        # as a traceback.
-        print(f"error: {error.filename or error} is not installed or not on PATH", file=sys.stderr)
+        print(
+            f"error: {error.filename or error} was not found. A tool by that name is not "
+            "installed or not on PATH.",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

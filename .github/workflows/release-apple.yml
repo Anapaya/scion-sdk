@@ -1,0 +1,157 @@
+# Copyright 2026 Anapaya Systems
+#
+# Builds the SCION HTTP/3 Swift package from a release tag and attaches it to that release: the
+# XCFramework as the zip a SwiftPM binary target downloads, and the package with its manifest
+# pointing at that zip.
+name: Release Apple
+"on":
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing release tag to build and upload, for example v0.7.0.
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  XCODE_VERSION: "26.3"
+  TAG: ${{ inputs.tag || github.ref_name }}
+jobs:
+  version:
+    name: apple/version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Check the workspace version matches the tag
+        id: version
+        run: |
+          set -euo pipefail
+          expected="${TAG#v}"
+          found=$(cargo metadata --format-version 1 --no-deps | python3 -c '
+          import json, sys
+          for package in json.load(sys.stdin)["packages"]:
+              if package["name"] == "scion-stack":
+                  print(package["version"])
+          ')
+          if [[ "$found" != "$expected" ]]; then
+            echo "$TAG points at a tree whose workspace version is $found, not $expected." >&2
+            exit 1
+          fi
+          echo "version=$found" >> "$GITHUB_OUTPUT"
+
+  build-slice:
+    name: apple/${{ matrix.target }}
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-apple-ios
+          - aarch64-apple-ios-sim
+          - x86_64-apple-ios
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Select Xcode
+        uses: ./.github/actions/select-xcode
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
+      - name: Install the Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Check the native build prerequisites
+        run: |
+          set -euo pipefail
+          # boring-sys compiles the BoringSSL it vendors with cmake.
+          cmake --version
+          python3 --version
+          df -h /
+      - name: Cross-compile the static library
+        run: ./bindings/apple/tools/apple.py build --target ${{ matrix.target }} --skip-verify
+      - name: Verify the static library
+        run: ./bindings/apple/tools/apple.py verify --target ${{ matrix.target }}
+      - name: Upload the static library
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-lib-${{ matrix.target }}
+          path: bindings/apple/generated/libs/
+          if-no-files-found: error
+
+  release-xcframework:
+    name: apple/xcframework
+    needs:
+      - version
+      - build-slice
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Select Xcode
+        uses: ./.github/actions/select-xcode
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Setup protoc
+        uses: ./.github/actions/setup-protoc
+      - name: Download the static libraries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: apple-lib-*
+          merge-multiple: true
+          path: bindings/apple/generated/libs
+      - name: Verify the static libraries
+        run: ./bindings/apple/tools/apple.py verify
+      - name: Assemble the XCFramework
+        run: ./bindings/apple/tools/apple.py xcframework
+      - name: Build the Swift package
+        working-directory: bindings/apple/scion-http3-swift
+        run: swift build
+      - name: Assemble the release assets
+        id: assets
+        run: |
+          set -euo pipefail
+          ./bindings/apple/tools/apple.py release --version "$VERSION" \
+            --url-base "${{ github.server_url }}/${{ github.repository }}/releases/download/$TAG" \
+            --output "$RUNNER_TEMP/assets"
+          echo "dir=$RUNNER_TEMP/assets" >> "$GITHUB_OUTPUT"
+      - name: Attach the assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIR: ${{ steps.assets.outputs.dir }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" > /dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes "Release $TAG"
+          gh release upload "$TAG" "$DIR"/* --clobber

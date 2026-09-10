@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pathlib
 import subprocess
+import tempfile
 import unittest
 import unittest.mock
 
@@ -371,3 +372,60 @@ class PackageManifestTest(unittest.TestCase):
 
     def test_the_checked_in_manifest_passes(self):
         self.assertEqual(self.check(apple.PACKAGE_MANIFEST.read_text()), 0)
+
+
+class ReleaseManifestTest(unittest.TestCase):
+    URL = "https://example.org/v1.2.3/ScionHTTP3UniffiFFI-1.2.3.xcframework.zip"
+    CHECKSUM = "0" * 64
+
+    def test_points_the_binary_target_at_the_zip(self):
+        released = apple.release_manifest(MANIFEST, self.URL, self.CHECKSUM)
+        self.assertIn(
+            f'.binaryTarget(name: "ScionHTTP3UniffiFFI", url: "{self.URL}", '
+            f'checksum: "{self.CHECKSUM}")',
+            released,
+        )
+        self.assertNotIn("path:", released)
+
+    def test_leaves_everything_else_alone(self):
+        released = apple.release_manifest(MANIFEST, self.URL, self.CHECKSUM)
+        self.assertEqual(apple.declared_platforms(released), apple.declared_platforms(MANIFEST))
+        self.assertEqual(released.count("\n"), MANIFEST.count("\n"))
+
+    def test_the_result_is_what_the_local_check_ignores(self):
+        released = apple.release_manifest(MANIFEST, self.URL, self.CHECKSUM)
+        self.assertIsNone(apple.declared_binary_target(released))
+
+    def test_rewrites_a_binary_target_split_over_lines(self):
+        manifest = '.binaryTarget(\n    name: "A",\n    path: "A.xcframework"\n)'
+        self.assertEqual(
+            apple.release_manifest(manifest, self.URL, self.CHECKSUM),
+            f'.binaryTarget(\n    name: "A",\n    url: "{self.URL}", checksum: "{self.CHECKSUM}"\n)',
+        )
+
+    def test_refuses_a_manifest_without_a_local_binary_target(self):
+        manifest = '.binaryTarget(name: "A", url: "https://example.org/A.zip", checksum: "0")'
+        with self.assertRaises(apple.Failure):
+            apple.release_manifest(manifest, self.URL, self.CHECKSUM)
+
+    def test_refuses_two_local_binary_targets(self):
+        manifest = MANIFEST + '.binaryTarget(name: "B", path: "B.xcframework")'
+        with self.assertRaises(apple.Failure):
+            apple.release_manifest(manifest, self.URL, self.CHECKSUM)
+
+    def test_the_checked_in_manifest_can_be_released(self):
+        released = apple.release_manifest(
+            apple.PACKAGE_MANIFEST.read_text(), self.URL, self.CHECKSUM
+        )
+        self.assertIn(self.CHECKSUM, released)
+
+
+class ChecksumsTextTest(unittest.TestCase):
+    def test_writes_the_format_shasum_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "a.zip"
+            path.write_bytes(b"abc")
+            self.assertEqual(
+                apple.checksums_text([path]),
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  a.zip\n",
+            )

@@ -44,6 +44,7 @@ From `endhost/public`:
 ```bash
 ./bindings/apple/tools/apple.py build         # all five targets, then checks them
 ./bindings/apple/tools/apple.py xcframework   # fuses, generates, assembles into the package, checks
+./bindings/apple/tools/apple.py release       # zips the XCFramework and the package for a release
 ```
 
 `build` takes `--target aarch64-apple-darwin` to build a single target, which is what to use while
@@ -77,6 +78,7 @@ cargo metadata --format-version 1 --no-deps | jq -r '.target_directory'
 | `generated/headers/` | The header and `module.modulemap`, as every slice carries them |
 | `scion-http3-swift/Sources/ScionHTTP3Uniffi/` | The generated Swift, compiled as the package's bindings target |
 | `scion-http3-swift/ScionHTTP3UniffiFFI.xcframework` | The XCFramework, where `Package.swift` looks for it |
+| `generated/release/` | What `release` writes: the assets a GitHub release carries, see *Releases* |
 | `<cargo target>/<triple>/mobile/libscion_http3_ffi.a` | Before staging and stripping |
 
 `generated/`, the generated Swift and the XCFramework are gitignored, as the Kotlin and the native
@@ -190,10 +192,28 @@ Run the build through the tool rather than invoking `cargo` directly.
 [`endhost-public-apple.yml`](../../../../.github/workflows/endhost-public-apple.yml) builds one
 target per job, on `macos-15`, and then assembles and checks the XCFramework in a job of its own.
 That job also builds the package for macOS and for the iOS simulator, and runs the Swift tests
-against a test server the `aarch64-apple-darwin` job built. A third job runs `tools/e2e.sh`: the
-same tests in an iOS simulator, against the packed XCFramework the second job uploaded. On a
-failure it uploads `build/e2e/` without the derived data. The workflow runs nightly, on a pull
-request that touches the paths it lists, and on manual dispatch.
+against a test server the `aarch64-apple-darwin` job built. Additionally, itassembles the release
+assets with `apple.py release`, so that a break there shows on a pull request and not at release
+time. A third job runs `tools/e2e.sh`: the same tests in an iOS simulator, against the XCFramework
+zip from those assets. On a failure it uploads `build/e2e/` without the derived data. The workflow
+runs nightly, on a pull request that touches the paths it lists, and on manual dispatch.
+
+## Releases
+
+Every SDK release carries the Swift package as assets, next to the Android library and the crates.
+Pushing a release tag runs [`release-apple.yml`](../../.github/workflows/release-apple.yml), which
+checks that the workspace version matches the tag, cross-compiles the five targets, assembles the
+XCFramework, builds the package against it, runs `apple.py release`, and uploads what it wrote:
+
+| Asset | Contents |
+| --- | --- |
+| `ScionHTTP3UniffiFFI-<version>.xcframework.zip` | The XCFramework, zipped the way a SwiftPM binary target downloads it |
+| `scion-http3-swift-<version>.zip` | This package with the generated bindings in it, and `Package.swift` pointing at the zip above by URL and SwiftPM checksum |
+| `SHA256SUMS-apple` | Checksums of both. |
+
+The package carries no version of its own. It is released under the version of the Cargo
+workspace, read from the `scion-stack` crate, so a tag that does not match the tree fails the
+workflow.
 
 ## Troubleshooting
 
