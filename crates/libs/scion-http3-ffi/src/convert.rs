@@ -36,8 +36,8 @@ use crate::{
     error::Error,
     token::SharedToken,
     types::{
-        ClientConfig, DiscoveryConfig, Header, HttpRequest, HttpResponse, SnapConfig, TrustAnchors,
-        UdpConfig, Underlay,
+        ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse, SnapConfig,
+        TrustAnchors, UdpConfig, Underlay,
     },
 };
 
@@ -71,6 +71,15 @@ impl ClientConfig {
         // out unauthenticated, which is what a client configured without a token wants.
         if let Some(token) = auth_token {
             config = config.with_auth_token_source(token);
+        }
+
+        for DnsOverride { host, addresses } in self.dns_overrides {
+            if addresses.is_empty() {
+                return Err(Error::invalid_request(format!(
+                    "the DNS override for `{host}` has no addresses"
+                )));
+            }
+            config = config.with_dns_override(host, parse_addresses(&addresses)?);
         }
 
         if let Some(underlay) = self.preferred_underlay {
@@ -248,24 +257,24 @@ impl HttpRequest {
         if let Some(body) = self.body {
             builder = builder.body(body);
         }
-        if !self.targets.is_empty() {
-            let targets = self
-                .targets
-                .iter()
-                .map(|target| {
-                    target.parse::<ScionIpAddr>().map_err(|e| {
-                        Error::invalid_request(format!("invalid target address `{target}`: {e}"))
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            builder = builder.targets(targets);
-        }
         if let Some(timeout_ms) = self.request_timeout_ms {
             builder = builder.request_timeout(Duration::from_millis(timeout_ms));
         }
 
         Ok(builder.build()?)
     }
+}
+
+/// Parses a list of SCION addresses.
+fn parse_addresses(addresses: &[String]) -> Result<Vec<ScionIpAddr>, Error> {
+    addresses
+        .iter()
+        .map(|address| {
+            address.parse::<ScionIpAddr>().map_err(|e| {
+                Error::invalid_request(format!("invalid SCION address `{address}`: {e}"))
+            })
+        })
+        .collect()
 }
 
 /// Collects a response into the record that crosses the boundary.
@@ -337,7 +346,6 @@ mod tests {
             url: url.to_string(),
             headers: vec![],
             body: None,
-            targets: vec![],
             request_timeout_ms: None,
             max_response_body_bytes: None,
         }
@@ -358,7 +366,6 @@ mod tests {
                 },
             ],
             body: Some(b"payload".to_vec()),
-            targets: vec!["2-ff00:0:212,127.0.0.1".to_string()],
             request_timeout_ms: Some(1_500),
             ..request("https://example.org:8443/rooms")
         }
@@ -370,7 +377,6 @@ mod tests {
         assert_eq!(built.headers().get("accept").unwrap(), "application/json");
         assert_eq!(built.headers().get("x-trace").unwrap(), "abc");
         assert_eq!(built.body().as_ref(), b"payload");
-        assert_eq!(built.targets().expect("targets").len(), 1);
         assert_eq!(
             built.request_timeout(),
             Some(Duration::from_millis(1_500)),
@@ -408,14 +414,6 @@ mod tests {
         .into_request()
         .expect_err("an invalid method is not a request");
         assert!(matches!(bad_method, Error::InvalidRequest { .. }));
-
-        let bad_target = HttpRequest {
-            targets: vec!["not-an-address".to_string()],
-            ..request("https://example.org/")
-        }
-        .into_request()
-        .expect_err("an invalid target is not a request");
-        assert!(matches!(bad_target, Error::InvalidRequest { .. }));
 
         // From `scion-http3`'s own builder rather than from this crate, which is the point: the
         // two must not develop separate opinions about what a valid request is.
@@ -530,5 +528,31 @@ mod tests {
             &validated_snap(tuned.snap).expect("no identity"),
             &validated_udp(tuned.udp).expect("no addresses"),
         ));
+    }
+
+    /// A DNS override is checked when the client is built, so a mistake in it is reported there
+    /// and not as a resolution failure on the first request.
+    #[test]
+    fn a_malformed_dns_override_is_rejected() {
+        let config = |addresses: Vec<&str>| {
+            ClientConfig {
+                dns_overrides: vec![DnsOverride {
+                    host: "pinned.example".to_string(),
+                    addresses: addresses.into_iter().map(str::to_string).collect(),
+                }],
+                ..ClientConfig::with_defaults("https://endhost-api.invalid".to_string())
+            }
+            .into_client_config(None)
+        };
+
+        assert!(matches!(
+            config(vec!["not-an-address"]).expect_err("an invalid address"),
+            Error::InvalidRequest { .. }
+        ));
+        assert!(matches!(
+            config(vec![]).expect_err("an empty override"),
+            Error::InvalidRequest { .. }
+        ));
+        config(vec!["2-ff00:0:212,127.0.0.1"]).expect("a valid override");
     }
 }

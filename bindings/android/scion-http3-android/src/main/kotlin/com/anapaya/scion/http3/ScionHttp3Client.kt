@@ -353,6 +353,7 @@ public class ScionHttp3Client internal constructor(
         private var connectionAttemptDelayMillis: Long? = null
         private var maxOrigins: Int? = null
         private var maxResponseBodyBytes: Long? = null
+        private val dnsOverrides = mutableMapOf<String, List<ScionAddress>>()
         private var networkMonitor: NetworkMonitor? = null
 
         /**
@@ -476,6 +477,32 @@ public class ScionHttp3Client internal constructor(
         }
 
         /**
+         * Resolves [host] to [addresses] instead of through DNS.
+         *
+         * This is for a host that has no TSAR records, for example a test server on a local
+         * topology. The override applies to the host of a request URL and to a CONNECT authority.
+         * The addresses carry no port. The port and the name the certificate has to match still
+         * come from the URL. A second call for the same host replaces the earlier addresses.
+         *
+         * @throws IllegalArgumentException if [host] is blank or [addresses] is empty.
+         */
+        public fun dnsOverride(
+            host: String,
+            addresses: List<ScionAddress>,
+        ): Builder {
+            require(host.isNotBlank()) { "a DNS override needs a host" }
+            require(addresses.isNotEmpty()) { "the DNS override for \"$host\" has no addresses" }
+            dnsOverrides[host] = addresses.toList()
+            return this
+        }
+
+        /** As [dnsOverride], for a host with one address. */
+        public fun dnsOverride(
+            host: String,
+            address: ScionAddress,
+        ): Builder = dnsOverride(host, listOf(address))
+
+        /**
          * Watches the network through [monitor] instead of through `ConnectivityManager`.
          */
         internal fun networkMonitor(monitor: NetworkMonitor): Builder {
@@ -505,6 +532,7 @@ public class ScionHttp3Client internal constructor(
                     connectionAttemptDelayMillis = connectionAttemptDelayMillis,
                     maxOrigins = maxOrigins,
                     maxResponseBodyBytes = maxResponseBodyBytes,
+                    dnsOverrides = dnsOverrides.toMap(),
                 )
             warnIfVerificationDisabled(trust, AndroidDebugGuard(context), AndroidLog)
             return ScionHttp3Client(

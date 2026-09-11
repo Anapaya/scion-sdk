@@ -15,6 +15,7 @@ final class FacadeStalenessTests: XCTestCase {
         var configuration = ScionHttp3Client.Configuration(
             endhostApi: server.endpoints.endhostApiUrl, authToken: server.endpoints.authToken)
         configuration.trust = try .pinned(Data(server.endpoints.caPem.utf8))
+        configuration.dnsOverrides = ["localhost": [try ScionAddress(server.endpoints.target)]]
         configuration.connectTimeout = 15
         // Short, so that a client which did not rebuild fails while someone is still watching.
         configuration.requestTimeout = 5

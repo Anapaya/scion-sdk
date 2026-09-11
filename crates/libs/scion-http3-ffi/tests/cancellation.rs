@@ -21,8 +21,8 @@ use std::{
 
 use scion_h3_test_server::{Options, TestServer};
 use scion_http3_ffi::{
-    CancelHandle, ClientConfig, HttpRequest, HttpResponse, ScionHttp3Client, ScionHttp3Error,
-    TrustAnchors, default_client_config,
+    CancelHandle, ClientConfig, DnsOverride, HttpRequest, HttpResponse, ScionHttp3Client,
+    ScionHttp3Error, TrustAnchors, default_client_config,
 };
 use test_log::test;
 
@@ -48,13 +48,18 @@ async fn test_server() -> TestServer {
         .expect("starting the test server")
 }
 
-/// A client for the topology: its endhost API, its development token, and its certificate trusted.
+/// A client for the topology: its endhost API, its development token, its certificate trusted,
+/// and `localhost` resolved to the server, because the topology serves no TSAR records.
 fn client(server: &TestServer) -> Arc<ScionHttp3Client> {
     ScionHttp3Client::new(ClientConfig {
         auth_token: Some(server.auth_token()),
         trust: TrustAnchors::Pem {
             pem: server.ca_pem().as_bytes().to_vec(),
         },
+        dns_overrides: vec![DnsOverride {
+            host: "localhost".to_string(),
+            addresses: vec![server.target()],
+        }],
         ..default_client_config(server.endhost_api_url().to_string())
     })
     .expect("building a client")
@@ -69,15 +74,13 @@ const UPLOAD_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// How long the server waits between reads of an upload it is meant to hold open.
 const UPLOAD_READ_INTERVAL_MS: u64 = 50;
 
-/// A request for `path`, addressed rather than resolved: the topology serves no TSAR records, so
-/// the address comes from the request and the port from the URL.
+/// A request for `path`, resolved through the client's `localhost` override.
 fn request(server: &TestServer, path: &str) -> HttpRequest {
     HttpRequest {
         method: "GET".to_string(),
         url: server.url(path),
         headers: vec![],
         body: None,
-        targets: vec![server.target()],
         // Long enough that no deadline can be mistaken for a cancellation: a request that ends
         // because it timed out reports `Timeout`, and every assertion below names what it wants.
         request_timeout_ms: Some(NEVER_MS),

@@ -13,6 +13,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 
 internal const val TEST_TIMEOUT_MILLIS = 180_000L
@@ -53,11 +54,17 @@ object Fixture {
     /** The server's SCION address, for addressing it without a resolver. */
     val target: ScionAddress by lazy { ScionAddress.parse(info.target) }
 
+    /** The server's host, as it appears in [url]. */
+    val host: String by lazy { URI(info.baseUrl).host }
+
     /** A URL on the server. */
     fun url(path: String): String = info.baseUrl + path
 
     /**
      * A client that can reach the server, with everything but the trust anchors already set.
+     *
+     * The topology has no TSAR records, so the server's host is resolved through a DNS override.
+     * What resolution does with real records is not this tier's question.
      */
     fun clientBuilder(): ScionHttp3Client.Builder =
         ScionHttp3Client
@@ -65,23 +72,18 @@ object Fixture {
             .endhostApi(info.endhostApiUrl)
             .authToken(info.authToken)
             .trust(TrustAnchors.pinned(info.caPem.toByteArray()))
+            .dnsOverride(host, target)
             .connectTimeoutMillis(30_000)
             .requestTimeoutMillis(60_000)
 
     /** A client trusting the certificate the server presents. */
     fun client(): ScionHttp3Client = clientBuilder().build()
 
-    /**
-     * A request to [path] on the server, addressed by SCION address rather than by name.
-     *
-     * The topology has no TSAR records, so every request that is meant to succeed goes through the
-     * target escape hatch. What resolution does with real records is not this tier's question.
-     */
+    /** A request to [path] on the server. */
     fun request(path: String): ScionHttp3Request.Builder =
         ScionHttp3Request
             .Builder()
             .url(url(path))
-            .target(target)
 
     /** Requests for [path] that reached a handler, whether or not they finished. */
     fun requestsStarted(path: String): Long = counter("started", path)
@@ -190,11 +192,6 @@ object Fixture {
     private const val CONTROL_RETRY_DELAY_MILLIS = 500L
 }
 
-/**
- * `GET [path]` on the test server.
- *
- * Not [ScionHttp3Client.get], which resolves the URL's host: the topology has no TSAR records, so
- * every request goes through [Fixture.request] and its address override.
- */
+/** `GET [path]` on the test server. */
 internal suspend fun ScionHttp3Client.getFromFixture(path: String): ScionHttp3Response =
     newCall(Fixture.request(path).build()).execute()

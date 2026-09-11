@@ -37,7 +37,7 @@
 //! | `endhost_api_url` | The endhost API of AS 1-ff00:0:132, where a client discovers its connectivity. |
 //! | `auth_token` | The topology's development token, for the endhost API and the SNAP control plane. |
 //! | `base_url` | Where the server is, as a URL: `https://localhost:<port>`. |
-//! | `target` | The server's SCION address, without a port. The topology has no TSAR records, so a client either resolves `localhost` itself or passes this as an address override. |
+//! | `target` | The server's SCION address, without a port. The topology has no TSAR records, so a client configures this as the DNS override for `localhost`. |
 //! | `ca_pem` | The self-signed certificate the server presents, to be trusted as an anchor. |
 //! | `wrong_ca_pem` | A second self-signed certificate that signs nothing here, for a client that must fail to verify. |
 //! | `control_url` | The control API below. |

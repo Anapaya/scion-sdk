@@ -86,6 +86,9 @@ final class ClientConstructionTests: XCTestCase {
         rejected("32-byte") { $0.snap.staticIdentity = Data(repeating: 1, count: 31) }
         rejected("outbound IP") { $0.udp.outboundIps = ["10.0.0.5", " "] }
         rejected("nextHopResolverFetchInterval") { $0.udp.nextHopResolverFetchInterval = 0 }
+        rejected("dnsOverrides") { $0.dnsOverrides = ["example.org": []] }
+        let address = try! ScionAddress("1-ff00:0:110,10.0.0.1")
+        rejected("dnsOverrides") { $0.dnsOverrides = [" ": [address]] }
     }
 
     func testTheIdleThresholdFollowsTheConfiguration() throws {

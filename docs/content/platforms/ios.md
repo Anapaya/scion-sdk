@@ -95,6 +95,12 @@ I/O. The first request is what brings connectivity up. The initializer throws
 `ScionHttp3Error.invalidConfiguration` for a setting that cannot be correct, for example a timeout
 that is not positive.
 
+`dnsOverrides` is for a host that has no SCION address records, for example the server of the test
+network. It maps a host to the SCION addresses the client connects to, instead of a DNS lookup. The
+key is the host as it appears in the URL of a request. The addresses have no port: the port and the
+name that the certificate must match still come from the URL. A host with several addresses is
+raced. A real server with published records needs no entry here.
+
 The sample reads the five values from the control API of the test network, in
 [`LocalNetwork.swift`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/apple/hello-scion/HelloScion/LocalNetwork.swift),
 because the network selects them when it starts. Your own app has them in its configuration.
@@ -106,9 +112,8 @@ A request is a value. Build it, execute it, and read the response:
 ```swift reference="@sdk/bindings/apple/hello-scion/HelloScion/HelloScion.swift#request" title="HelloScion.swift"
 ```
 
-`target` is for a server that has no SCION address records. It sets the address the client sends
-the request to, and nothing else. The port and the name that the certificate must match still come
-from the URL. To offer several addresses, set `targets` instead. The client then races them.
+The request names the server by its URL only. The client finds the address of the host in
+`dnsOverrides`, because the test network publishes no records for it.
 
 Run the app and press the button. You see:
 

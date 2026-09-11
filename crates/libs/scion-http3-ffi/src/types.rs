@@ -70,10 +70,6 @@ pub struct HttpRequest {
     /// `None` and an empty vector are equivalent.
     #[uniffi(default)]
     pub body: Option<Vec<u8>>,
-    /// SCION addresses to use instead of resolving the URL's host, without ports: the port always
-    /// comes from the URL. An empty list resolves normally.
-    #[uniffi(default)]
-    pub targets: Vec<String>,
     /// Overrides the client's request timeout for this request.
     #[uniffi(default)]
     pub request_timeout_ms: Option<u64>,
@@ -223,6 +219,9 @@ pub struct ClientConfig {
     pub udp: UdpConfig,
     /// Trust anchors for server certificates.
     pub trust: TrustAnchors,
+    /// Hosts resolved to fixed addresses instead of through DNS.
+    #[uniffi(default)]
+    pub dns_overrides: Vec<DnsOverride>,
     /// Timeout for establishing a connection to an origin.
     pub connect_timeout_ms: u64,
     /// Default timeout for a whole request, including body collection.
@@ -241,6 +240,16 @@ pub struct ClientConfig {
     pub max_response_body_bytes: u64,
 }
 
+/// A host that is resolved to fixed addresses instead of through DNS, for a host that has no
+/// TSAR records. Applies to request URLs and to `CONNECT` authorities alike.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct DnsOverride {
+    /// The host, as it appears in a URL or an authority.
+    pub host: String,
+    /// SCION addresses in the form `<isd>-<as>,<ip>`, without a port. Must not be empty.
+    pub addresses: Vec<String>,
+}
+
 impl ClientConfig {
     /// The configuration `scion-http3` would apply on its own, for the given endhost API.
     pub(crate) fn with_defaults(endhost_api_url: String) -> Self {
@@ -252,6 +261,7 @@ impl ClientConfig {
             snap: SnapConfig::default(),
             udp: UdpConfig::default(),
             trust: TrustAnchors::SystemDefault,
+            dns_overrides: vec![],
             connect_timeout_ms: millis(DEFAULT_CONNECT_TIMEOUT),
             request_timeout_ms: millis(DEFAULT_REQUEST_TIMEOUT),
             idle_connection_timeout_ms: millis(DEFAULT_IDLE_CONNECTION_TIMEOUT),

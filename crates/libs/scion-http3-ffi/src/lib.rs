@@ -104,8 +104,8 @@ pub use cancel::CancelHandle;
 pub use client::ScionHttp3Client;
 pub use error::{ScionHttp3Error, TimeoutPhase};
 pub use types::{
-    ClientConfig, DiscoveryConfig, Header, HttpRequest, HttpResponse, SnapConfig, TrustAnchors,
-    UdpConfig, Underlay,
+    ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse, SnapConfig,
+    TrustAnchors, UdpConfig, Underlay,
 };
 
 // No namespace argument: the namespace then follows the crate name, which keeps the shared

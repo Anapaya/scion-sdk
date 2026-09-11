@@ -65,6 +65,22 @@ final class ConfigMappingTests: XCTestCase {
         XCTAssertEqual(milliseconds(1.25), 1_250)
     }
 
+    func testDnsOverridesCrossAsTextSortedByHost() throws {
+        let one = try ScionAddress("1-ff00:0:110,10.0.0.1")
+        let two = try ScionAddress("1-ff00:0:110,10.0.0.2")
+        let three = try ScionAddress("1-ff00:0:111,10.0.0.3")
+        var configuration = configuration()
+        configuration.dnsOverrides = ["b.example": [one], "a.example": [two, three]]
+        let overrides = try ClientSettings(configuration).applyTo(base).dnsOverrides
+        XCTAssertEqual(
+            overrides,
+            [
+                FfiDnsOverride(host: "a.example", addresses: [two.description, three.description]),
+                FfiDnsOverride(host: "b.example", addresses: [one.description]),
+            ])
+        XCTAssertTrue(try settings().applyTo(base).dnsOverrides.isEmpty)
+    }
+
     func testPinnedAnchorsCrossAsTheirBytes() throws {
         let settings = try settings(trust: .pinned(validPem))
         XCTAssertEqual(settings.applyTo(base).trust, .pem(pem: validPem))

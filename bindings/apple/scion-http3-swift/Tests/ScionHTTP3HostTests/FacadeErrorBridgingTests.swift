@@ -4,17 +4,31 @@ import XCTest
 
 /// Each failure the stack reports, provoked for real and read back as the facade's case.
 final class FacadeErrorBridgingTests: XCTestCase {
-    func testAMalformedTargetIsRefusedBeforeAnythingIsSent() async throws {
+    func testAMalformedDnsOverrideIsRefusedBeforeAnythingIsSent() async throws {
         let server = try TestServer.start()
         defer { server.stop() }
-        let client = try facadeClientFor(server)
+        let client = try facadeClientFor(server) {
+            $0.dnsOverrides = ["localhost": [try ScionAddress("1-ff00:0:110,nonsense")]]
+        }
         defer { Task { await client.shutdown() } }
 
-        var request = ScionHttp3Request(url: server.url("/hello"))
-        request.targets = [try ScionAddress("1-ff00:0:110,nonsense")]
+        let request = ScionHttp3Request(url: server.url("/hello"))
         let error = await thrown { try await client.execute(request) } as? ScionHttp3Error
         guard case .invalidRequest? = error else { return XCTFail("\(String(describing: error))") }
         XCTAssertFalse(error?.isRetryable ?? true)
+    }
+
+    func testAHostWithNoDnsOverrideIsNotResolved() async throws {
+        let server = try TestServer.start()
+        defer { server.stop() }
+        let client = try facadeClientFor(server) {
+            $0.dnsOverrides = [:]
+            $0.connectTimeout = shortConnectTimeout
+        }
+        defer { Task { await client.shutdown() } }
+
+        let error = await thrown { try await client.get(server.url("/hello")) } as? ScionHttp3Error
+        assertTheHostCouldNotBeReached(error)
     }
 
     func testARequestAfterShutdownIsClosed() async throws {

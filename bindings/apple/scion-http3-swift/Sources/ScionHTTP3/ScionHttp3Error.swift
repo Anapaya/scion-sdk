@@ -28,8 +28,8 @@ public enum ScionHttp3Error: Error, Sendable, Equatable {
 
     /// The request's host has no usable SCION address records.
     ///
-    /// Either the name does not resolve, or it resolves to nothing this client can reach. Set
-    /// `ScionHttp3Request.target` to address a host that has no records at all.
+    /// Either the name does not resolve, or it resolves to nothing this client can reach. Add the
+    /// host to `ScionHttp3Client.Configuration.dnsOverrides` if it has no records at all.
     case resolution(host: String, detail: String, retryable: Bool)
 
     /// Reaching the origin failed: the socket, the QUIC handshake, or the peer refusing.

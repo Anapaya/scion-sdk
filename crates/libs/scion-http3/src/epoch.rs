@@ -127,14 +127,7 @@ impl Epoch {
     pub(crate) async fn build(config: &Config) -> Result<Epoch, Error> {
         let resolver: Arc<dyn ScionDnsResolver> = match &config.resolver {
             Some(resolver) => resolver.clone(),
-            None => {
-                Arc::new(ScionTxtDnsResolver::new().map_err(|e| {
-                    Error::StackBuild {
-                        retryable: false,
-                        source: Box::new(e),
-                    }
-                })?)
-            }
+            None => default_resolver(config)?,
         };
 
         let mut builder =
@@ -212,5 +205,43 @@ impl Epoch {
         // connection, and on a dead network a serial sweep would make every
         // origin wait out the ones ahead of it.
         futures::future::join_all(clients.iter().map(|client| client.close())).await;
+    }
+}
+
+/// The default resolver: the system DNS configuration, with the configured
+/// overrides applied.
+fn default_resolver(config: &Config) -> Result<Arc<dyn ScionDnsResolver>, Error> {
+    let resolver = ScionTxtDnsResolver::new().map_err(|e| {
+        Error::StackBuild {
+            retryable: false,
+            source: Box::new(e),
+        }
+    })?;
+    Ok(Arc::new(
+        resolver.with_overrides(config.dns_overrides.iter().cloned()),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn dns_overrides_reach_the_default_resolver() {
+        let addr = ScionIpAddr::new(
+            "1-ff00:0:110".parse().unwrap(),
+            Ipv4Addr::new(10, 0, 0, 1).into(),
+        );
+        let config = Config::new("https://endhost-api.invalid".parse().unwrap())
+            .with_dns_override("Pinned.example", vec![addr]);
+
+        let resolver = default_resolver(&config).unwrap();
+
+        assert_eq!(
+            resolver.resolve("pinned.example").await.unwrap(),
+            vec![addr]
+        );
     }
 }

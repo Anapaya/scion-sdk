@@ -9,6 +9,7 @@ import com.anapaya.scion.http3.ScionHttp3Client
 import com.anapaya.scion.http3.ScionHttp3Request
 import com.anapaya.scion.http3.TrustAnchors
 import java.io.Closeable
+import java.net.URI
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -32,6 +33,8 @@ class HelloScion(
             .endhostApi(network.endhostApiUrl)
             .authToken(network.authToken)
             .trust(TrustAnchors.pinned(network.caPem.toByteArray()))
+            // The test network publishes no records for its server, so resolve its host directly.
+            .dnsOverride(URI(network.baseUrl).host, ScionAddress.parse(network.target))
             .connectTimeout(30.seconds)
             .requestTimeout(60.seconds)
             .build()
@@ -45,8 +48,6 @@ class HelloScion(
             ScionHttp3Request
                 .Builder()
                 .url("${network.baseUrl}/hello")
-                // The test network publishes no records for its server, so address it directly.
-                .target(ScionAddress.parse(network.target))
                 .get()
                 .build()
 

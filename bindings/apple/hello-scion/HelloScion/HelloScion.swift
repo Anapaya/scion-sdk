@@ -22,6 +22,8 @@ final class HelloScion: Sendable {
             endhostApi: network.endhostApiUrl,
             authToken: network.authToken)
         configuration.trust = try .pinned(Data(network.caPem.utf8))
+        // The test network publishes no records for its server, so pin its address.
+        configuration.dnsOverrides = ["localhost": [try ScionAddress(network.target)]]
         configuration.connectTimeout = 30
         configuration.requestTimeout = 60
         client = try ScionHttp3Client(configuration: configuration)
@@ -31,10 +33,7 @@ final class HelloScion: Sendable {
     // ANCHOR: request
     /// `GET /hello`, which the test server answers with `world`.
     func hello() async throws -> Reply {
-        var request = ScionHttp3Request(url: network.baseUrl + "/hello")
-        // The test network publishes no records for its server, so address it directly.
-        request.target = try ScionAddress(network.target)
-
+        let request = ScionHttp3Request(url: network.baseUrl + "/hello")
         let response = try await client.execute(request)
         return Reply(code: response.code, body: try await response.body.string())
     }

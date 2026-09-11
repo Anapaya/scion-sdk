@@ -60,29 +60,17 @@ public struct ScionHttp3Request: Sendable, Equatable {
     /// The body or nil when the request sends none.
     public var body: ScionHttp3RequestBody?
 
-    /// Addresses to send the request to instead of resolving the URL's host. Empty means resolve.
-    ///
-    /// Several addresses are raced as if resolution had returned them all.
-    public var targets: [ScionAddress]
-
     /// Overrides the client's request timeout for this request.
     public var requestTimeout: TimeInterval?
 
     /// Overrides the client's response-body limit for this request.
     public var maxResponseBodyBytes: Int?
 
-    /// Sends this request to one address instead of resolving the URL's host.
-    public var target: ScionAddress? {
-        get { targets.first }
-        set { targets = newValue.map { [$0] } ?? [] }
-    }
-
     public init(url: String, method: Method = .get, body: ScionHttp3RequestBody? = nil) {
         self.url = url
         self.method = method
         self.headers = ScionHttp3Headers()
         self.body = body
-        self.targets = []
     }
 
     /// Throws `ScionHttp3Error.invalidRequest` for the first thing the stack cannot be given.

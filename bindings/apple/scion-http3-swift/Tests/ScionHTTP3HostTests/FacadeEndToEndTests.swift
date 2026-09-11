@@ -93,22 +93,24 @@ final class FacadeEndToEndTests: XCTestCase {
     }
 
     func testTheShorthandsWork() async throws {
-        let impatient = try facadeClientFor(server) { $0.connectTimeout = shortConnectTimeout }
-        defer { Task { await impatient.shutdown() } }
+        let got = try await client.get(server.url("/hello"))
+        XCTAssertEqual(got.code, 200)
+        let text = try await got.body.string()
+        XCTAssertEqual(text, "world")
 
-        let error = await thrown { try await impatient.get(server.url("/hello")) }
-            as? ScionHttp3Error
-        assertTheHostCouldNotBeReached(error)
+        let posted = try await client.post(server.url("/echo"), body: .text("ping"))
+        XCTAssertEqual(posted.code, 200)
+        let echoed = try await posted.body.string()
+        XCTAssertEqual(echoed, "ping")
     }
 
     func testWarmUpEstablishesConnectivityAheadOfTheFirstRequest() async throws {
-        let impatient = try facadeClientFor(server) { $0.connectTimeout = shortConnectTimeout }
-        defer { Task { await impatient.shutdown() } }
+        try await client.warmUp(server.url("/"))
+        // Connectivity exists, and no request was sent to build it.
+        let stats = try await server.stats()
+        XCTAssertNil(stats.requests["/"])
 
-        let error = await thrown { try await impatient.warmUp(server.url("/")) } as? ScionHttp3Error
-        assertTheHostCouldNotBeReached(error)
-        // Connectivity was built for the attempt, and the client is still usable.
-        let response = try await impatient.execute(facadeRequest(server, "/hello"))
+        let response = try await client.execute(facadeRequest(server, "/hello"))
         XCTAssertEqual(response.code, 200)
     }
 

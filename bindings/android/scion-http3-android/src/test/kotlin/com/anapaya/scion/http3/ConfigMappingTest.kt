@@ -6,6 +6,7 @@ import com.anapaya.scion.http3.internal.ClientSettings
 import com.anapaya.scion.http3.internal.applyTo
 import com.anapaya.scion.http3.uniffi.ClientConfig
 import com.anapaya.scion.http3.uniffi.DiscoveryConfig
+import com.anapaya.scion.http3.uniffi.DnsOverride
 import com.anapaya.scion.http3.uniffi.Underlay
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -61,6 +62,8 @@ class ConfigMappingTest {
                 connectionAttemptDelayMillis = 444,
                 maxOrigins = 5,
                 maxResponseBodyBytes = 6_666,
+                dnsOverrides =
+                    mapOf("pinned.example" to listOf(ScionAddress.parse("1-ff00:0:110,10.0.0.1"))),
             )
 
         val config = settings.applyTo(base, FfiTrustAnchors.InsecureNoVerify)
@@ -73,6 +76,8 @@ class ConfigMappingTest {
                 snap = FfiSnapConfig(dpIndex = 3u),
                 udp = FfiUdpConfig(outboundIps = listOf("10.0.0.5")),
                 trust = FfiTrustAnchors.InsecureNoVerify,
+                dnsOverrides =
+                    listOf(DnsOverride("pinned.example", listOf("1-ff00:0:110,10.0.0.1"))),
                 connectTimeoutMs = 1_111u,
                 requestTimeoutMs = 2_222u,
                 idleConnectionTimeoutMs = 3_333u,
@@ -113,6 +118,32 @@ class ConfigMappingTest {
             ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
 
         assertEquals(90_000uL, config.requestTimeoutMs)
+    }
+
+    @Test
+    fun `DNS overrides cross one per host, sorted by host`() {
+        val config =
+            ClientSettings(
+                endhostApiUrl = "https://endhost-api.example.org",
+                trust = TrustAnchors.systemDefault(),
+                dnsOverrides =
+                    mapOf(
+                        "b.example" to listOf(ScionAddress.parse("1-ff00:0:110,10.0.0.2")),
+                        "a.example" to
+                            listOf(
+                                ScionAddress.parse("1-ff00:0:110,10.0.0.1"),
+                                ScionAddress.parse("1-ff00:0:110,[::1]"),
+                            ),
+                    ),
+            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
+
+        assertEquals(
+            listOf(
+                DnsOverride("a.example", listOf("1-ff00:0:110,10.0.0.1", "1-ff00:0:110,[::1]")),
+                DnsOverride("b.example", listOf("1-ff00:0:110,10.0.0.2")),
+            ),
+            config.dnsOverrides,
+        )
     }
 
     @Test

@@ -51,21 +51,6 @@ final class RequestMappingTests: XCTestCase {
         XCTAssertTrue(request.headers.isEmpty, "the value itself stays as the caller wrote it")
     }
 
-    func testTargetsCrossAsTextWithoutPorts() throws {
-        var request = request()
-        request.target = try ScionAddress("1-ff00:0:110,10.0.0.1")
-        XCTAssertEqual(try ffiRequest(from: request).targets, ["1-ff00:0:110,10.0.0.1"])
-
-        request.targets = [
-            try ScionAddress("1-ff00:0:110,10.0.0.1"), try ScionAddress("1-ff00:0:110,10.0.0.2"),
-        ]
-        XCTAssertEqual(try ffiRequest(from: request).targets.count, 2)
-        XCTAssertEqual(request.target?.description, "1-ff00:0:110,10.0.0.1")
-
-        request.target = nil
-        XCTAssertTrue(request.targets.isEmpty)
-    }
-
     func testOverridesAreAbsentUnlessSet() throws {
         let plain = try ffiRequest(from: request())
         XCTAssertNil(plain.requestTimeoutMs)

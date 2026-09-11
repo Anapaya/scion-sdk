@@ -593,23 +593,6 @@ mod tests {
 
     #[test(tokio::test)]
     #[ntest::timeout(10_000)]
-    async fn target_bypasses_the_resolver() {
-        let (router, _) = test_router();
-        let harness = TestServerHarness::new(router);
-        let (client, _) = harness_client(harness, Arc::new(FailingResolver), test_config());
-
-        let request = Request::post(url("localhost", "/echo"))
-            .body("ping")
-            .target(server_scion_ip())
-            .build()
-            .unwrap();
-        let response = client.request(request).await.unwrap();
-        let (body, _) = response.text(Some(1024)).await.unwrap();
-        assert_eq!(body, "ping");
-    }
-
-    #[test(tokio::test)]
-    #[ntest::timeout(10_000)]
     async fn resolution_failure_surfaces_as_retryable_resolution_error() {
         let (router, _) = test_router();
         let harness = TestServerHarness::new(router);

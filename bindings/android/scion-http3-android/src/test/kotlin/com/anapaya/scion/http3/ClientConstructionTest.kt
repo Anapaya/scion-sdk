@@ -219,6 +219,24 @@ class ClientConstructionTest {
     }
 
     @Test
+    fun `a DNS override with no addresses or no host is rejected`() {
+        assertThrows<IllegalArgumentException> {
+            ClientSettings(
+                endhostApiUrl = "https://endhost-api.example.org",
+                trust = TrustAnchors.systemDefault(),
+                dnsOverrides = mapOf("pinned.example" to emptyList()),
+            )
+        }
+        assertThrows<IllegalArgumentException> {
+            ClientSettings(
+                endhostApiUrl = "https://endhost-api.example.org",
+                trust = TrustAnchors.systemDefault(),
+                dnsOverrides = mapOf(" " to listOf(ScionAddress.parse("1-ff00:0:110,10.0.0.1"))),
+            )
+        }
+    }
+
+    @Test
     fun `disabling verification is loud, and louder in a release build`() {
         val debuggable = RecordingLog()
         warnIfVerificationDisabled(

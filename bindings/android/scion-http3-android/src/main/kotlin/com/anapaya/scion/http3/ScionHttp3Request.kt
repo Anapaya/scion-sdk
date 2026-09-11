@@ -32,8 +32,6 @@ public class ScionHttp3Request internal constructor(
     public val headers: ScionHttp3Headers,
     /** The body, or null when the request sends none. */
     public val body: ScionHttp3RequestBody?,
-    /** Addresses to use instead of resolving [url]'s host. Empty means resolve it. */
-    public val targets: List<ScionAddress>,
     /** Overrides the client's request timeout for this request; null keeps it. */
     public val requestTimeoutMillis: Long?,
     /** Overrides the client's response-body limit for this request; null keeps it. */
@@ -57,7 +55,6 @@ public class ScionHttp3Request internal constructor(
         private var method: String = "GET"
         private var headers = ScionHttp3Headers.Builder()
         private var body: ScionHttp3RequestBody? = null
-        private val targets = mutableListOf<ScionAddress>()
         private var requestTimeoutMillis: Long? = null
         private var maxResponseBodyBytes: Long? = null
 
@@ -68,7 +65,6 @@ public class ScionHttp3Request internal constructor(
             method = request.method
             headers = request.headers.newBuilder()
             body = request.body
-            targets += request.targets
             requestTimeoutMillis = request.requestTimeoutMillis
             maxResponseBodyBytes = request.maxResponseBodyBytes
         }
@@ -150,28 +146,6 @@ public class ScionHttp3Request internal constructor(
             return this
         }
 
-        /**
-         * Sends this request to [target] instead of resolving the URL's host.
-         *
-         * The escape hatch, for a host that has no SCION address records: a server on a local
-         * PocketSCION topology, or one reached before its records exist. Call it more than once to
-         * offer several addresses, which are then raced as if resolution had returned them all.
-         *
-         * The URL keeps its host and port, and both still determine `:authority` and the
-         * certificate that is accepted, so this changes only *where* the request is sent.
-         */
-        public fun target(target: ScionAddress): Builder {
-            targets += target
-            return this
-        }
-
-        /** Replaces the targets, emptying them when given an empty list. */
-        public fun targets(targets: List<ScionAddress>): Builder {
-            this.targets.clear()
-            this.targets += targets
-            return this
-        }
-
         /** Overrides the client's request timeout for this request. Must be positive. */
         public fun requestTimeout(timeout: Duration): Builder =
             requestTimeoutMillis(timeout.inWholeMilliseconds)
@@ -219,7 +193,6 @@ public class ScionHttp3Request internal constructor(
                 method = method,
                 headers = headers,
                 body = body,
-                targets = targets.toList(),
                 requestTimeoutMillis = requestTimeoutMillis,
                 maxResponseBodyBytes = maxResponseBodyBytes,
             )

@@ -15,6 +15,7 @@
 package com.anapaya.scion.http3.internal
 
 import com.anapaya.scion.http3.PreferredUnderlay
+import com.anapaya.scion.http3.ScionAddress
 import com.anapaya.scion.http3.SnapConfig
 import com.anapaya.scion.http3.TrustAnchors
 import com.anapaya.scion.http3.UdpConfig
@@ -45,6 +46,7 @@ internal class ClientSettings(
     val connectionAttemptDelayMillis: Long? = null,
     val maxOrigins: Int? = null,
     val maxResponseBodyBytes: Long? = null,
+    val dnsOverrides: Map<String, List<ScionAddress>> = emptyMap(),
 ) {
     init {
         validateEndhostApiUrl(endhostApiUrl)
@@ -58,6 +60,10 @@ internal class ClientSettings(
         }
         maxResponseBodyBytes?.let {
             require(it > 0) { "maxResponseBody has to be positive, got $it bytes" }
+        }
+        dnsOverrides.forEach { (host, addresses) ->
+            require(host.isNotBlank()) { "a DNS override needs a host" }
+            require(addresses.isNotEmpty()) { "the DNS override for \"$host\" has no addresses" }
         }
     }
 

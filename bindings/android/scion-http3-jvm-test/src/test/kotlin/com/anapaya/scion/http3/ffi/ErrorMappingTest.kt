@@ -43,13 +43,17 @@ class ErrorMappingTest {
                 assertThrows<ScionHttp3Exception.InvalidRequest> {
                     client.execute(requestTo(server, "/hello") { it.copy(method = "not a method") })
                 }
-                assertThrows<ScionHttp3Exception.InvalidRequest> {
-                    client.execute(
-                        requestTo(server, "/hello") { it.copy(targets = listOf("nonsense")) },
-                    )
-                }
             }
         }
+
+    @Test
+    fun `a DNS override that is not an address is rejected when the client is built`() {
+        val malformed =
+            assertThrows<ScionHttp3Exception.InvalidRequest> {
+                clientFor(server) { it.copy(dnsOverrides = listOf(server.dnsOverride("nonsense"))) }
+            }
+        assertFalse(malformed.retryable)
+    }
 
     @Test
     fun `requesting after shutdown reports a closed client`(): Unit =
@@ -110,16 +114,21 @@ class ErrorMappingTest {
     @Test
     fun `an address nothing answers on times out rather than failing fast`(): Unit =
         runBlocking {
-            clientFor(server) { it.copy(connectTimeoutMs = 3_000u) }.use { client ->
-                // A well-formed SCION address in the topology's other AS, where nothing is bound.
-                // Over SCION there is nothing to refuse a connection, so this is what "unreachable"
-                // looks like: the connect deadline expires with no attempt having failed.
-                val unreachable = server.endpoints.target.substringBefore(",") + ",127.0.0.2"
+            // A well-formed SCION address in the topology's other AS, where nothing is bound.
+            // Over SCION there is nothing to refuse a connection, so this is what "unreachable"
+            // looks like: the connect deadline expires with no attempt having failed.
+            val unreachable = server.endpoints.target.substringBefore(",") + ",127.0.0.2"
+            val client =
+                clientFor(server) {
+                    it.copy(
+                        connectTimeoutMs = 3_000u,
+                        dnsOverrides = listOf(server.dnsOverride(unreachable)),
+                    )
+                }
+            client.use {
                 val timeout =
                     assertThrows<ScionHttp3Exception.Timeout> {
-                        client.execute(
-                            requestTo(server, "/hello") { it.copy(targets = listOf(unreachable)) },
-                        )
+                        client.execute(requestTo(server, "/hello"))
                     }
                 assertEquals(TimeoutPhase.CONNECT, timeout.phase)
                 assertTrue(timeout.retryable)
@@ -131,6 +140,7 @@ class ErrorMappingTest {
         runBlocking {
             val config =
                 defaultClientConfig("http://127.0.0.1:1").copy(
+                    dnsOverrides = listOf(server.dnsOverride()),
                     connectTimeoutMs = 3_000u,
                     requestTimeoutMs = 10_000u,
                 )

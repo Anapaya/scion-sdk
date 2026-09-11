@@ -28,6 +28,7 @@ import com.anapaya.scion.http3.uniffi.Header
 import com.anapaya.scion.http3.uniffi.HttpRequest
 import com.anapaya.scion.http3.uniffi.HttpResponse
 import com.anapaya.scion.http3.uniffi.Underlay
+import com.anapaya.scion.http3.uniffi.DnsOverride as FfiDnsOverride
 import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
 import com.anapaya.scion.http3.uniffi.SnapConfig as FfiSnapConfig
 import com.anapaya.scion.http3.uniffi.TimeoutPhase as FfiTimeoutPhase
@@ -49,7 +50,6 @@ internal fun ScionHttp3Request.toFfi(): HttpRequest =
         // Absent and empty are different below: absent sends no body at all, where an empty one
         // sends a body of zero bytes. Preserve which the caller chose.
         body = body?.bytesNoCopy(),
-        targets = targets.map { it.toString() },
         requestTimeoutMs = requestTimeoutMillis?.toULong(),
         maxResponseBodyBytes = maxResponseBodyBytes?.toULong(),
     )
@@ -146,6 +146,10 @@ internal fun ClientSettings.applyTo(
         snap = snap?.toFfi() ?: base.snap,
         udp = udp?.toFfi() ?: base.udp,
         trust = trust,
+        dnsOverrides =
+            dnsOverrides.toSortedMap().map { (host, addresses) ->
+                FfiDnsOverride(host = host, addresses = addresses.map { it.toString() })
+            },
         connectTimeoutMs = connectTimeoutMillis?.toULong() ?: base.connectTimeoutMs,
         requestTimeoutMs = requestTimeoutMillis?.toULong() ?: base.requestTimeoutMs,
         idleConnectionTimeoutMs =

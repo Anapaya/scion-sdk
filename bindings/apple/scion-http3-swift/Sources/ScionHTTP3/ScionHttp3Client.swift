@@ -67,6 +67,14 @@ public final class ScionHttp3Client: Sendable {
         /// Which authorities a server certificate is checked against. The system's, unless set.
         public var trust: TrustAnchors = .systemDefault
 
+        /// Hosts that resolve to fixed SCION addresses instead of through DNS.
+        ///
+        /// This is for a host that has no TSAR records, for example a test server on a local
+        /// topology. The key is the host as it appears in a request URL or in a CONNECT authority.
+        /// The value is the addresses the client connects to, without a port: the port comes from
+        /// the URL. A list with several addresses is raced. A list cannot be empty.
+        public var dnsOverrides: [String: [ScionAddress]] = [:]
+
         /// How long establishing connectivity to an origin may take, in seconds.
         public var connectTimeout: TimeInterval?
 

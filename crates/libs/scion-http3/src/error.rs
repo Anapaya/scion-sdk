@@ -421,11 +421,6 @@ pub enum BuildRequestError {
         #[source]
         source: Box<dyn StdError + Send + Sync>,
     },
-    /// An empty target list was provided. Targets assert "resolution returned
-    /// exactly this", and an empty resolution result is an error, not a
-    /// wildcard.
-    #[error("target list must not be empty")]
-    EmptyTargets,
 }
 
 #[cfg(test)]

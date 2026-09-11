@@ -8,6 +8,7 @@ typealias FfiTrustAnchors = ScionHTTP3Uniffi.TrustAnchors
 typealias FfiSnapConfig = ScionHTTP3Uniffi.SnapConfig
 typealias FfiUdpConfig = ScionHTTP3Uniffi.UdpConfig
 typealias FfiTimeoutPhase = ScionHTTP3Uniffi.TimeoutPhase
+typealias FfiDnsOverride = ScionHTTP3Uniffi.DnsOverride
 
 /// The request as the stack receives it.
 ///
@@ -26,7 +27,6 @@ func ffiRequest(from request: ScionHttp3Request) throws -> HttpRequest {
         // Absent and empty are different below: absent sends no body at all, where an empty one
         // sends a body of zero bytes. Preserve which the caller chose.
         body: request.body?.data,
-        targets: request.targets.map(\.description),
         requestTimeoutMs: request.requestTimeout.map(milliseconds),
         maxResponseBodyBytes: request.maxResponseBodyBytes.map { UInt64(clamping: $0) })
 }
@@ -114,6 +114,9 @@ extension ClientSettings {
             nextHopResolverFetchIntervalMs: udp.nextHopResolverFetchInterval.map(milliseconds)
                 ?? base.udp.nextHopResolverFetchIntervalMs)
         config.trust = ffiTrustAnchors(trust)
+        config.dnsOverrides = dnsOverrides.sorted { $0.key < $1.key }.map {
+            FfiDnsOverride(host: $0.key, addresses: $0.value.map(\.description))
+        }
         config.connectTimeoutMs = connectTimeout.map(milliseconds) ?? base.connectTimeoutMs
         config.requestTimeoutMs = requestTimeout.map(milliseconds) ?? base.requestTimeoutMs
         config.idleConnectionTimeoutMs =

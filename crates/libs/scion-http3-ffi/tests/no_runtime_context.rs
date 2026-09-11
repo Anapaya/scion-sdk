@@ -51,7 +51,6 @@ fn request() -> HttpRequest {
         url: "https://example.invalid/hello".to_string(),
         headers: vec![],
         body: None,
-        targets: vec![],
         request_timeout_ms: None,
         max_response_body_bytes: None,
     }

@@ -68,7 +68,7 @@ public sealed class ScionHttp3Exception(
      * The request's host has no usable SCION address records.
      *
      * Either the name does not resolve, or it resolves to nothing this client can reach. Use
-     * [ScionHttp3Request.Builder.target] to address a host that has no records at all.
+     * [ScionHttp3Client.Builder.dnsOverride] to address a host that has no records at all.
      */
     public class Resolution internal constructor(
         public val host: String,

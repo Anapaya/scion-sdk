@@ -56,17 +56,18 @@ var configuration = ScionHttp3Client.Configuration(
     endhostApi: info.endhostApiUrl,          // http://127.0.0.1:<port>
     authToken: info.authToken)
 configuration.trust = try .pinned(Data(info.caPem.utf8))
+configuration.dnsOverrides = ["localhost": [try ScionAddress(info.target)]]
 let client = try ScionHttp3Client(configuration: configuration)
 ```
 
-Everything else is the same as against a real network. That is the point of `endhostApi` being the
-only setting that changes: it is what tells the client where to find SCION connectivity.
-
-A server on a local topology has no address records to look up, so address it directly:
+A server on a local topology has no SCION address records. `dnsOverrides` gives the client the
+address of such a host, so the client does not look the host up. The key is the host of the URL. The
+port still comes from the URL. Everything else is the same as against a real network. That is the
+point of `endhostApi` being the only setting that changes: it is what tells the client where to find
+SCION connectivity.
 
 ```swift
-var request = ScionHttp3Request(url: info.baseUrl + "/hello")   // https://localhost:<port>/hello
-request.target = try ScionAddress(info.target)                   // 1-ff00:0:212,127.0.0.1
+let request = ScionHttp3Request(url: info.baseUrl + "/hello")   // https://localhost:<port>/hello
 let response = try await client.execute(request)
 print(response.code, try await response.body.string())           // 200 world
 ```

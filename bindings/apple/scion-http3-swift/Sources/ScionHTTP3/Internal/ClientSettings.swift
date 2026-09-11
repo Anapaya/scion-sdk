@@ -12,6 +12,7 @@ struct ClientSettings: Sendable, Equatable {
     let snap: SnapConfig
     let udp: UdpConfig
     let trust: TrustAnchors
+    let dnsOverrides: [String: [ScionAddress]]
     let connectTimeout: TimeInterval?
     let requestTimeout: TimeInterval?
     let idleConnectionTimeout: TimeInterval?
@@ -53,6 +54,16 @@ struct ClientSettings: Sendable, Equatable {
         }
         try Self.requirePositive(
             "nextHopResolverFetchInterval", configuration.udp.nextHopResolverFetchInterval)
+        for (host, addresses) in configuration.dnsOverrides {
+            if host.trimmingCharacters(in: .whitespaces).isEmpty {
+                throw ScionHttp3Error.invalidConfiguration(
+                    detail: "a dnsOverrides host cannot be blank")
+            }
+            if addresses.isEmpty {
+                throw ScionHttp3Error.invalidConfiguration(
+                    detail: "dnsOverrides for \"\(host)\" has to list at least one address")
+            }
+        }
 
         endhostApiUrl = configuration.endhostApi
         authToken = configuration.authToken
@@ -60,6 +71,7 @@ struct ClientSettings: Sendable, Equatable {
         snap = configuration.snap
         udp = configuration.udp
         trust = configuration.trust
+        dnsOverrides = configuration.dnsOverrides
         connectTimeout = configuration.connectTimeout
         requestTimeout = configuration.requestTimeout
         idleConnectionTimeout = configuration.idleConnectionTimeout

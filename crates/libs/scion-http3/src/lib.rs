@@ -166,8 +166,8 @@ pub use scion_stack;
 pub use scion_stack::reqwest_connect_rpc::token_source::{
     TokenSource, TokenSourceError, TokenSourceWatch, static_token::StaticTokenSource,
 };
-/// SCION address types ([`sciparse::address::ip_addr::ScionIpAddr`]) used by the
-/// [`RequestBuilder::target`] / [`RequestBuilder::targets`] escape hatches.
+/// SCION address types ([`sciparse::address::ip_addr::ScionIpAddr`]) used by
+/// [`Config::with_dns_override`].
 pub use sciparse;
 /// Async I/O traits ([`tokio::io::AsyncRead`], [`tokio::io::AsyncWrite`]) implemented by
 /// [`Tunnel`].

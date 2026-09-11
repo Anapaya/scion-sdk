@@ -38,7 +38,7 @@ use crate::{
     epoch::Network,
     error::{AttemptError, Error, TimeoutPhase},
     establish::staggered_first_ok,
-    origin::{Candidates, Origin},
+    origin::Origin,
 };
 
 /// Counts the re-establishments of one origin's connection.
@@ -200,10 +200,7 @@ impl OriginClient {
     /// Resolves the candidates and runs staggered connection attempts, one
     /// fresh socket per attempt (each QUIC connection needs its own socket).
     async fn establish(&self, previous: Option<&Http3Client>) -> Result<Arc<Http3Client>, Error> {
-        let hosts: Vec<ScionIpAddr> = match &self.origin.candidates {
-            Candidates::Static(list) => list.clone(),
-            Candidates::Dns => self.network.resolve(&self.origin.host).await?,
-        };
+        let hosts: Vec<ScionIpAddr> = self.network.resolve(&self.origin.host).await?;
         // The port is single-sourced from the URL; candidates carry none.
         let mut addrs: Vec<ScionSocketIpAddr> = hosts
             .iter()
@@ -345,14 +342,6 @@ mod tests {
         )
     }
 
-    fn static_origin(host: &str, candidates: Vec<ScionIpAddr>) -> Origin {
-        Origin {
-            host: host.to_string(),
-            port: SERVER_PORT,
-            candidates: Candidates::Static(candidates),
-        }
-    }
-
     /// A test instant `millis` after a fixed base, so the map's time-based
     /// policies can be driven without sleeping.
     fn at(millis: u64) -> Instant {
@@ -364,7 +353,6 @@ mod tests {
         Origin {
             host: host.to_string(),
             port: SERVER_PORT,
-            candidates: Candidates::Dns,
         }
     }
 
@@ -429,13 +417,11 @@ mod tests {
         let (router, _) = test_router();
         let harness = TestServerHarness::new(router);
         let config = test_config();
-        let network = test_network(harness.clone(), StaticResolver::new(vec![]));
-        let client = OriginClient::new(
-            static_origin("localhost", vec![server_scion_ip()]),
-            &config,
-            Instant::now(),
-            network,
+        let network = test_network(
+            harness.clone(),
+            StaticResolver::new(vec![server_scion_ip()]),
         );
+        let client = OriginClient::new(dns_origin("localhost"), &config, Instant::now(), network);
 
         let (first, generation) = client.connection().await.unwrap();
         for _ in 0..4 {
@@ -453,9 +439,12 @@ mod tests {
         let harness = TestServerHarness::new(router);
         harness.stall_first_bind();
         let config = test_config();
-        let network = test_network(harness.clone(), StaticResolver::new(vec![]));
+        let network = test_network(
+            harness.clone(),
+            StaticResolver::new(vec![server_scion_ip()]),
+        );
         let client = Arc::new(OriginClient::new(
-            static_origin("localhost", vec![server_scion_ip()]),
+            dns_origin("localhost"),
             &config,
             Instant::now(),
             network,
@@ -488,13 +477,11 @@ mod tests {
         let (router, _) = test_router();
         let harness = TestServerHarness::new(router);
         let config = test_config();
-        let network = test_network(harness.clone(), StaticResolver::new(vec![]));
-        let client = OriginClient::new(
-            static_origin("localhost", vec![server_scion_ip()]),
-            &config,
-            Instant::now(),
-            network,
+        let network = test_network(
+            harness.clone(),
+            StaticResolver::new(vec![server_scion_ip()]),
         );
+        let client = OriginClient::new(dns_origin("localhost"), &config, Instant::now(), network);
 
         let (_, generation) = client.connection().await.unwrap();
         assert_eq!(harness.binds.load(SeqCst), 1);
@@ -518,15 +505,13 @@ mod tests {
         let (router, _) = test_router();
         let harness = TestServerHarness::new(router);
         let config = test_config();
-        let network = test_network(harness.clone(), StaticResolver::new(vec![]));
+        let network = test_network(
+            harness.clone(),
+            StaticResolver::new(vec![dead_scion_ip(), server_scion_ip()]),
+        );
         // Sorted candidate order puts the dead address first, so the initial
         // establishment attempts it, staggers, and wins on the live one.
-        let client = OriginClient::new(
-            static_origin("localhost", vec![dead_scion_ip(), server_scion_ip()]),
-            &config,
-            Instant::now(),
-            network,
-        );
+        let client = OriginClient::new(dns_origin("localhost"), &config, Instant::now(), network);
 
         let (first, generation) = client.connection().await.unwrap();
         assert_eq!(first.remote().ip(), server_scion_ip().ip());
@@ -563,13 +548,8 @@ mod tests {
         let (router, _) = test_router();
         let harness = TestServerHarness::new(router);
         let config = test_config();
-        let network = test_network(harness.clone(), StaticResolver::new(vec![]));
-        let client = OriginClient::new(
-            static_origin("localhost", vec![dead_scion_ip()]),
-            &config,
-            Instant::now(),
-            network,
-        );
+        let network = test_network(harness.clone(), StaticResolver::new(vec![dead_scion_ip()]));
+        let client = OriginClient::new(dns_origin("localhost"), &config, Instant::now(), network);
 
         let Err(err) = client.connection().await else {
             panic!("establishment to a dead candidate succeeded");
@@ -586,13 +566,11 @@ mod tests {
         let (router, _) = test_router();
         let harness = TestServerHarness::new(router);
         let config = test_config();
-        let network = test_network(harness.clone(), StaticResolver::new(vec![]));
-        let client = OriginClient::new(
-            static_origin("localhost", vec![server_scion_ip()]),
-            &config,
-            Instant::now(),
-            network,
+        let network = test_network(
+            harness.clone(),
+            StaticResolver::new(vec![server_scion_ip()]),
         );
+        let client = OriginClient::new(dns_origin("localhost"), &config, Instant::now(), network);
 
         let (_, generation) = client.connection().await.unwrap();
         client.close().await;
@@ -614,9 +592,13 @@ mod tests {
         let (router, _) = test_router();
         let harness = TestServerHarness::new(router);
         let config = test_config();
-        let epoch = test_epoch(harness.clone(), StaticResolver::new(vec![]), &config);
+        let epoch = test_epoch(
+            harness.clone(),
+            StaticResolver::new(vec![server_scion_ip()]),
+            &config,
+        );
 
-        let origin = static_origin("localhost", vec![server_scion_ip()]);
+        let origin = dns_origin("localhost");
         epoch
             .origin_client(origin.clone(), Instant::now(), &config)
             .expect("origin client before shutdown");

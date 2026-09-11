@@ -81,19 +81,21 @@ val client = ScionHttp3Client.Builder(context)
 Everything else is the same as against a real network. That is the point of `endhostApi` being the
 only setting that changes: it is what tells the client where to find SCION connectivity.
 
-A server on a local topology usually has no address records to look up, so address it directly:
+A server on a local topology usually has no address records to look up. Give the client the
+address for that host instead:
 
 ```kotlin
-val response = client.newCall(
-    ScionHttp3Request.Builder()
-        .url("https://chat.example.org:54321/rooms")
-        .target(ScionAddress.parse("1-ff00:0:110,10.0.0.1"))
-        .build(),
-).execute()
+val client = ScionHttp3Client.Builder(context)
+    .endhostApi("http://10.0.2.2:8041")
+    .dnsOverride("chat.example.org", ScionAddress.parse("1-ff00:0:110,10.0.0.1"))
+    .build()
+
+val response = client.get("https://chat.example.org:54321/rooms")
 ```
 
-The target carries no port on purpose. The port comes from the URL, so the URL stays truthful about
-where the request went.
+The override applies to every request URL and CONNECT authority with that host. The address
+carries no port on purpose. The port comes from the URL, so the URL stays truthful about where the
+request went.
 
 If your token expires, renew it in place rather than building a new client:
 

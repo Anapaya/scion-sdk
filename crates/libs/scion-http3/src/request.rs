@@ -22,7 +22,6 @@ use std::{
 
 use bytes::Bytes;
 use http_body::Frame;
-use sciparse::address::ip_addr::ScionIpAddr;
 use url::Url;
 
 use crate::error::BuildRequestError;
@@ -85,7 +84,6 @@ pub struct Request {
     url: Url,
     headers: http::HeaderMap,
     body: Bytes,
-    targets: Option<Vec<ScionIpAddr>>,
     timeout: Option<Duration>,
 }
 
@@ -133,13 +131,6 @@ impl Request {
         &self.body
     }
 
-    /// The caller-supplied candidate addresses, if any (see
-    /// [`RequestBuilder::targets`]). Sorted and de-duplicated.
-    #[must_use]
-    pub fn targets(&self) -> Option<&[ScionIpAddr]> {
-        self.targets.as_deref()
-    }
-
     /// The per-request timeout override, if any.
     #[must_use]
     pub fn request_timeout(&self) -> Option<Duration> {
@@ -176,7 +167,6 @@ pub struct RequestBuilder {
     url: Option<Url>,
     headers: http::HeaderMap,
     body: Bytes,
-    targets: Option<Vec<ScionIpAddr>>,
     timeout: Option<Duration>,
     error: Option<BuildRequestError>,
 }
@@ -188,7 +178,6 @@ impl RequestBuilder {
             url: None,
             headers: http::HeaderMap::new(),
             body: Bytes::new(),
-            targets: None,
             timeout: None,
             error: None,
         }
@@ -248,37 +237,6 @@ impl RequestBuilder {
         self
     }
 
-    /// Bypasses DNS resolution: connect to `addr`, as if resolution had
-    /// returned exactly this address. The address carries no port — the port
-    /// always comes from the URL. The URL's host remains the server name for SNI
-    /// and certificate validation.
-    ///
-    /// This is the one-element case of [`targets`](Self::targets).
-    #[must_use]
-    pub fn target(self, addr: ScionIpAddr) -> Self {
-        self.targets(vec![addr])
-    }
-
-    /// Supplies the result of a resolution the caller performed itself:
-    /// connect to any of `addrs`, as if DNS had returned exactly this list.
-    /// The caller asserts the addresses are equivalent servers for the URL's
-    /// origin; certificate validation against the URL's host enforces it.
-    ///
-    /// Like [`target`](Self::target), the addresses carry no port. The list
-    /// is sorted and de-duplicated, so element order does not affect
-    /// connection reuse. It must not be empty.
-    #[must_use]
-    pub fn targets(mut self, mut addrs: Vec<ScionIpAddr>) -> Self {
-        if addrs.is_empty() {
-            self.error.get_or_insert(BuildRequestError::EmptyTargets);
-            return self;
-        }
-        addrs.sort_unstable();
-        addrs.dedup();
-        self.targets = Some(addrs);
-        self
-    }
-
     /// Overrides the client's request timeout for this request.
     ///
     /// One deadline covering establishment, the response head, and body
@@ -315,7 +273,6 @@ impl RequestBuilder {
             url,
             headers: self.headers,
             body: self.body,
-            targets: self.targets,
             timeout: self.timeout,
         })
     }
@@ -356,16 +313,7 @@ impl http_body::Body for BufferedBody {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
     use super::*;
-
-    fn addr(last_octet: u8) -> ScionIpAddr {
-        ScionIpAddr::new(
-            "1-ff00:0:110".parse().unwrap(),
-            Ipv4Addr::new(10, 0, 0, last_octet).into(),
-        )
-    }
 
     #[test]
     fn get_builds_with_defaults() {
@@ -374,7 +322,6 @@ mod tests {
             .unwrap();
         assert_eq!(req.method(), http::Method::GET);
         assert_eq!(req.url().as_str(), "https://chat.example.org/rooms");
-        assert!(req.targets().is_none());
         assert!(req.request_timeout().is_none());
         assert!(req.body().is_empty());
     }
@@ -423,24 +370,6 @@ mod tests {
             .build()
             .unwrap_err();
         assert!(matches!(err, BuildRequestError::InvalidHeader { .. }));
-    }
-
-    #[test]
-    fn targets_are_sorted_and_deduplicated() {
-        let req = Request::get("https://example.org/")
-            .targets(vec![addr(2), addr(1), addr(2)])
-            .build()
-            .unwrap();
-        assert_eq!(req.targets(), Some(&[addr(1), addr(2)][..]));
-    }
-
-    #[test]
-    fn empty_targets_are_rejected() {
-        let err = Request::get("https://example.org/")
-            .targets(vec![])
-            .build()
-            .unwrap_err();
-        assert!(matches!(err, BuildRequestError::EmptyTargets));
     }
 
     #[test]

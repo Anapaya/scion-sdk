@@ -26,6 +26,7 @@ use scion_stack::{
     resolver::ScionDnsResolver,
     stack::builder::PreferredUnderlay,
 };
+use sciparse::address::ip_addr::ScionIpAddr;
 use url::Url;
 
 /// Default timeout for establishing a connection to an origin.
@@ -88,6 +89,7 @@ pub struct Config {
     pub(crate) connection_attempt_delay: Duration,
     pub(crate) quic: QuicConfig,
     pub(crate) resolver: Option<Arc<dyn ScionDnsResolver>>,
+    pub(crate) dns_overrides: Vec<(String, Vec<ScionIpAddr>)>,
 }
 
 impl Config {
@@ -107,6 +109,7 @@ impl Config {
             connection_attempt_delay: DEFAULT_CONNECTION_ATTEMPT_DELAY,
             quic: QuicConfig::default(),
             resolver: None,
+            dns_overrides: Vec::new(),
         }
     }
 
@@ -242,6 +245,19 @@ impl Config {
         self.resolver = Some(resolver);
         self
     }
+
+    /// Resolves `host` to `addrs` instead of looking it up, for a host that
+    /// has no TSAR records. Applies to URLs and to `CONNECT` authorities
+    /// alike.
+    ///
+    /// Only the default resolver applies overrides. A resolver injected with
+    /// [`with_resolver`](Self::with_resolver) does its own resolution.
+    #[must_use]
+    pub fn with_dns_override(mut self, host: impl Into<String>, addrs: Vec<ScionIpAddr>) -> Self {
+        self.dns_overrides
+            .push((host.into().to_ascii_lowercase(), addrs));
+        self
+    }
 }
 
 impl fmt::Debug for Config {
@@ -264,6 +280,7 @@ impl fmt::Debug for Config {
             .field("connection_attempt_delay", &self.connection_attempt_delay)
             .field("quic", &self.quic)
             .field("resolver", &self.resolver.as_ref().map(|_| "<custom>"))
+            .field("dns_overrides", &self.dns_overrides)
             .finish()
     }
 }

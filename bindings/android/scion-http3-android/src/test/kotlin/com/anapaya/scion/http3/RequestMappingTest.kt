@@ -15,8 +15,8 @@ import org.junit.jupiter.api.assertThrows
  * The distinctions a request mapper is most likely to lose.
  *
  * Each of these is a difference the stack below acts on, and which a plausible mapping erases: a
- * missing body becoming an empty one, repeated headers being merged, a target quietly carrying a
- * port. The FFI tier proves the stack honours them; this proves the library hands them over.
+ * missing body becoming an empty one, repeated headers being merged, a per-request override quietly
+ * dropped. The FFI tier proves the stack honours them; this proves the library hands them over.
  */
 class RequestMappingTest {
     @Test
@@ -62,28 +62,6 @@ class RequestMappingTest {
             explicit.headers,
             "a caller who set the type meant it",
         )
-    }
-
-    @Test
-    fun `a target is sent without a port, and the URL keeps its own`() {
-        val ffi =
-            request(url = "https://chat.example.org:54321/rooms") {
-                target(ScionAddress.parse("1-ff00:0:110,10.0.0.1"))
-            }.toFfi()
-
-        assertEquals(listOf("1-ff00:0:110,10.0.0.1"), ffi.targets)
-        assertEquals("https://chat.example.org:54321/rooms", ffi.url)
-    }
-
-    @Test
-    fun `several targets are offered together`() {
-        val ffi =
-            request {
-                target(ScionAddress.parse("1-ff00:0:110,10.0.0.1"))
-                target(ScionAddress.parse("1-ff00:0:110,10.0.0.2"))
-            }.toFfi()
-
-        assertEquals(listOf("1-ff00:0:110,10.0.0.1", "1-ff00:0:110,10.0.0.2"), ffi.targets)
     }
 
     @Test

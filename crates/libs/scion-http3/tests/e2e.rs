@@ -17,10 +17,9 @@
 
 mod common;
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use scion_http3::{Client, Error, Request, TimeoutPhase};
-use scion_stack::resolver::txt::ScionTxtDnsResolver;
 use test_log::test;
 
 use crate::common::{SERVER_NAME, e2e_setup};
@@ -31,12 +30,12 @@ async fn e2e_get_post_over_dns_resolution() {
     let setup = e2e_setup().await;
 
     // The DNS path: the URL's host resolves to the server's SCION address
-    // (via a resolver override, standing in for real TSAR TXT records).
-    let resolver = ScionTxtDnsResolver::new()
-        .expect("system resolver")
-        .with_override(SERVER_NAME, vec![setup.server_ip()]);
-    let config = setup.client_config().with_resolver(Arc::new(resolver));
-    let client = Client::new(config);
+    // (via a DNS override, standing in for real TSAR TXT records).
+    let client = Client::new(
+        setup
+            .client_config()
+            .with_dns_override(SERVER_NAME, vec![setup.server_ip()]),
+    );
 
     let response = client.get(setup.url("/hello")).await.expect("GET /hello");
     assert!(response.is_success());
@@ -55,14 +54,17 @@ async fn e2e_get_post_over_dns_resolution() {
 
 #[test(tokio::test)]
 #[ntest::timeout(120_000)]
-async fn e2e_target_override_bypasses_resolution() {
+async fn e2e_dns_override_bypasses_resolution() {
     let setup = e2e_setup().await;
-    let client = Client::new(setup.client_config());
+    let client = Client::new(
+        setup
+            .client_config()
+            .with_dns_override(SERVER_NAME, vec![setup.server_ip()]),
+    );
 
-    // No DNS involved: the request carries the resolved address, the URL
-    // still provides host (SNI, certificate identity) and port.
+    // No lookup involved: the override supplies the address, the URL still
+    // provides host (SNI, certificate identity) and port.
     let request = Request::get(setup.url("/hello"))
-        .target(setup.server_ip())
         .build()
         .expect("building request");
     let response = client.request(request).await.expect("GET /hello");
@@ -76,16 +78,16 @@ async fn e2e_target_override_bypasses_resolution() {
 #[ntest::timeout(120_000)]
 async fn e2e_per_request_timeout() {
     let setup = e2e_setup().await;
-    let resolver = ScionTxtDnsResolver::new()
-        .expect("system resolver")
-        .with_override(SERVER_NAME, vec![setup.server_ip()]);
-    let client = Client::new(setup.client_config().with_resolver(Arc::new(resolver)));
+    let client = Client::new(
+        setup
+            .client_config()
+            .with_dns_override(SERVER_NAME, vec![setup.server_ip()]),
+    );
 
     // Warm up so the timing below covers the request, not the stack build.
     client.warm_up(setup.url("/")).await.expect("warming up");
 
     let request = Request::get(setup.url("/slow"))
-        .target(setup.server_ip())
         .request_timeout(Duration::from_millis(300))
         .build()
         .expect("building request");
@@ -109,10 +111,13 @@ async fn e2e_per_request_timeout() {
 #[ntest::timeout(120_000)]
 async fn e2e_body_size_limit() {
     let setup = e2e_setup().await;
-    let client = Client::new(setup.client_config());
+    let client = Client::new(
+        setup
+            .client_config()
+            .with_dns_override(SERVER_NAME, vec![setup.server_ip()]),
+    );
 
     let request = Request::get(setup.url("/hello"))
-        .target(setup.server_ip())
         .build()
         .expect("building request");
     let response = client.request(request).await.expect("GET /hello");

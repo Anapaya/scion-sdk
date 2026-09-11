@@ -1,6 +1,6 @@
 // Copyright 2026 Anapaya Systems
 
-/// A SCION address, for addressing a host directly instead of resolving its name.
+/// A SCION address, for a host that is reached at a fixed address instead of through DNS.
 ///
 /// The text form is `<isd>-<as>,<host>`, for example `1-ff00:0:110,10.0.0.1`. Only the shape is
 /// checked here.
@@ -54,7 +54,7 @@ public struct ScionAddress: Sendable, Hashable, CustomStringConvertible {
         }
         if hasPort {
             throw ScionHttp3Error.invalidRequest(
-                detail: "\"\(whole)\" carries a port. A target addresses a host only; the port "
+                detail: "\"\(whole)\" carries a port. A SCION address names a host only; the port "
                     + "comes from the request URL.")
         }
     }

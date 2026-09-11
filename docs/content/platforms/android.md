@@ -91,6 +91,12 @@ and closes it when it is done:
 changes between a test network and a real one. `build()` does no I/O: the first request is what
 brings connectivity up.
 
+`dnsOverride` is for a server that has no SCION address records to look up. It resolves one host to
+fixed addresses and does nothing else: the port and the name the certificate has to match still
+come from the URL, so the URL stays truthful about where the request went. The override applies to
+every request URL and `CONNECT` authority with that host. If you give several addresses, the client
+races them.
+
 The sample reads those five values from the test network's control API, in
 [`LocalNetwork.kt`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/android/hello-scion/src/main/kotlin/com/anapaya/scion/http3/hello/LocalNetwork.kt),
 because the network chooses them when it starts. Your own app has them in its configuration
@@ -102,11 +108,6 @@ A request is built, executed, and read:
 
 ```kotlin reference="@sdk/bindings/android/hello-scion/src/main/kotlin/com/anapaya/scion/http3/hello/HelloScion.kt#request" title="HelloScion.kt"
 ```
-
-`target` is for a server that has no SCION address records to look up. It sets the address the
-request is sent to and nothing else: the port and the name the certificate has to match still come
-from the URL, so the URL stays truthful about where the request went. Call it more than once to
-offer several addresses, which are then raced.
 
 Run the app and press the button. You should see:
 

@@ -11,7 +11,7 @@ let neverTimeout: TimeInterval = 600
 /// The connect timeout for a call that is going to fail on the host so it fails promptly.
 let shortConnectTimeout: TimeInterval = 3
 
-/// A facade client that trusts the server's own authority.
+/// A facade client that trusts the server's own authority and knows the server's address.
 func facadeClientFor(
     _ server: TestServer,
     configure: (inout ScionHttp3Client.Configuration) throws -> Void = { _ in }
@@ -19,6 +19,7 @@ func facadeClientFor(
     var configuration = ScionHttp3Client.Configuration(
         endhostApi: server.endpoints.endhostApiUrl, authToken: server.endpoints.authToken)
     configuration.trust = try .pinned(Data(server.endpoints.caPem.utf8))
+    configuration.dnsOverrides = ["localhost": [try ScionAddress(server.endpoints.target)]]
     // Shortened from the defaults so that a test which is going to fail does so while someone is
     // still watching.
     configuration.connectTimeout = 15
@@ -27,17 +28,15 @@ func facadeClientFor(
     return try ScionHttp3Client(configuration: configuration)
 }
 
-/// A request to `path` on the server, addressed directly.
+/// A request to `path` on the server.
 func facadeRequest(
     _ server: TestServer, _ path: String, method: ScionHttp3Request.Method = .get,
     body: ScionHttp3RequestBody? = nil
 ) throws -> ScionHttp3Request {
-    var request = ScionHttp3Request(url: server.url(path), method: method, body: body)
-    request.target = try ScionAddress(server.endpoints.target)
-    return request
+    ScionHttp3Request(url: server.url(path), method: method, body: body)
 }
 
-/// Asserts that a call which was given a URL and no target failed on the URL's host.
+/// Asserts that a call which was given a URL and no DNS override failed on the URL's host.
 func assertTheHostCouldNotBeReached(
     _ error: ScionHttp3Error?, file: StaticString = #filePath, line: UInt = #line
 ) {

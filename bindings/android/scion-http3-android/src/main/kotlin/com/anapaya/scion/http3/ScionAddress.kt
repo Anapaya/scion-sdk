@@ -17,9 +17,9 @@ package com.anapaya.scion.http3
 /**
  * A SCION address, for addressing a host directly instead of resolving its name.
  *
- * This is an escape hatch, and the only type in the request path that names a SCION concept. Almost
- * every application should let the library resolve the URL's host instead; see
- * [ScionHttp3Request.Builder.target] for when this is the right tool.
+ * This is an escape hatch, and the only type in the client's settings that names a SCION concept.
+ * Almost every application should let the library resolve the URL's host instead; see
+ * [ScionHttp3Client.Builder.dnsOverride] for when this is the right tool.
  *
  * The text form is `<isd>-<as>,<host>`, for example `1-ff00:0:110,10.0.0.1`.
  *
@@ -83,8 +83,8 @@ public class ScionAddress private constructor(
                     colons == 1 && afterColon.isNotEmpty() && afterColon.all(Char::isDigit)
                 }
             require(!hasPort) {
-                "\"$whole\" carries a port. A target addresses a host only; the port comes from " +
-                    "the request URL."
+                "\"$whole\" carries a port. A SCION address names a host only; the port comes " +
+                    "from the request URL."
             }
         }
     }
