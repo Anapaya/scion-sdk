@@ -31,7 +31,7 @@ use std::fmt;
 
 use sciparse::address::ip_addr::ScionIpAddr;
 
-use crate::{error::Error, request::Request};
+use crate::{authority::Authority, error::Error, request::Request};
 
 /// The pool key: host, port, and where the candidate addresses come from.
 ///
@@ -88,6 +88,15 @@ impl Origin {
             port,
             candidates,
         })
+    }
+
+    /// Derives a DNS-resolved origin from a `CONNECT` authority.
+    pub(crate) fn from_authority(authority: &Authority) -> Origin {
+        Origin {
+            host: authority.host().to_string(),
+            port: authority.port(),
+            candidates: Candidates::Dns,
+        }
     }
 }
 
@@ -151,6 +160,15 @@ mod tests {
             Origin::from_request(&a).unwrap(),
             Origin::from_request(&b).unwrap()
         );
+    }
+
+    #[test]
+    fn authority_is_a_dns_origin() {
+        let authority = Authority::new("example.org", 8443).unwrap();
+        let origin = Origin::from_authority(&authority);
+        assert_eq!(origin.host, "example.org");
+        assert_eq!(origin.port, 8443);
+        assert_eq!(origin.candidates, Candidates::Dns);
     }
 
     #[test]

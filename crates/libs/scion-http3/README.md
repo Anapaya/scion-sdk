@@ -20,6 +20,23 @@ async fn get_rooms() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+`Client::connect` opens an HTTP `CONNECT` tunnel and returns a byte stream:
+
+```rust
+use scion_http3::Authority;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+async fn tunnel(client: &scion_http3::Client) -> Result<(), Box<dyn std::error::Error>> {
+    let authority: Authority = "chat.example.org:443".parse()?;
+    let mut tunnel = client.connect(&authority).await?;
+    tunnel.write_all(b"hello").await?;
+    let mut reply = vec![0u8; 5];
+    tunnel.read_exact(&mut reply).await?;
+    tunnel.shutdown().await?;
+    Ok(())
+}
+```
+
 See the crate documentation for the full API, and
 `examples/http3_get_post.rs` for a runnable end-to-end example against a
 local network:

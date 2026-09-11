@@ -63,6 +63,27 @@
 //! # }
 //! ```
 //!
+//! ## Tunnels
+//!
+//! [`Client::connect`] opens an HTTP `CONNECT` tunnel to an [`Authority`] (`host:port`). The
+//! returned [`Tunnel`] is a byte stream that implements [`tokio::io::AsyncRead`] and
+//! [`tokio::io::AsyncWrite`]:
+//!
+//! ```no_run
+//! # async fn example(client: scion_http3::Client) -> Result<(), Box<dyn std::error::Error>> {
+//! use scion_http3::Authority;
+//! use tokio::io::{AsyncReadExt, AsyncWriteExt};
+//!
+//! let authority: Authority = "chat.example.org:443".parse()?;
+//! let mut tunnel = client.connect(&authority).await?;
+//! tunnel.write_all(b"hello").await?;
+//! let mut reply = vec![0u8; 5];
+//! tunnel.read_exact(&mut reply).await?;
+//! tunnel.shutdown().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! ## Connection pooling and lifecycle
 //!
 //! A [`Client`] holds a connection pool, so create one client per application and share it.
@@ -100,6 +121,7 @@
     clippy::missing_panics_doc
 )]
 
+mod authority;
 mod client;
 mod config;
 mod epoch;
@@ -111,6 +133,7 @@ mod request;
 mod response;
 #[cfg(test)]
 mod test_support;
+mod tunnel;
 
 // Re-exported dependencies
 //
@@ -118,6 +141,7 @@ mod test_support;
 // here so a client can name and construct the types our signatures require without adding
 // its own direct dependency.
 /// Body bytes ([`bytes::Bytes`]) used for request bodies and collected response bodies.
+pub use authority::{Authority, InvalidAuthority};
 pub use bytes;
 pub use client::Client;
 pub use config::{
@@ -145,5 +169,9 @@ pub use scion_stack::reqwest_connect_rpc::token_source::{
 /// SCION address types ([`sciparse::address::ip_addr::ScionIpAddr`]) used by the
 /// [`RequestBuilder::target`] / [`RequestBuilder::targets`] escape hatches.
 pub use sciparse;
+/// Async I/O traits ([`tokio::io::AsyncRead`], [`tokio::io::AsyncWrite`]) implemented by
+/// [`Tunnel`].
+pub use tokio;
+pub use tunnel::Tunnel;
 /// URL type used for request URLs and the endhost API address.
 pub use url;

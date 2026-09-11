@@ -138,6 +138,12 @@ pub enum Error {
     /// sent.
     #[error("peer's concurrent stream limit reached")]
     ConnectionLimit,
+    /// The server refused the `CONNECT` tunnel with a non-2xx status.
+    #[error("tunnel refused with status {status}")]
+    TunnelRefused {
+        /// The status of the `CONNECT` response.
+        status: http::StatusCode,
+    },
     /// The response body exceeded the size limit passed to
     /// [`Response::bytes`](crate::Response::bytes) or
     /// [`Response::text`](crate::Response::text).
@@ -178,11 +184,12 @@ impl Error {
     /// Whether retrying the request may succeed.
     ///
     /// Transient conditions (connectivity, timeouts, stream resets, stream
-    /// limits) are retryable. Deterministic ones (TLS rejection, protocol
-    /// violations, invalid requests, oversized bodies, a closed client) are
-    /// not. For [`StackBuild`](Self::StackBuild) and
-    /// [`Resolution`](Self::Resolution) the answer is decided when the error
-    /// is constructed, from the transience of the underlying failures.
+    /// limits, a 5xx tunnel refusal) are retryable. Deterministic ones (TLS
+    /// rejection, protocol violations, invalid requests, oversized bodies, a
+    /// 4xx tunnel refusal, a closed client) are not. For
+    /// [`StackBuild`](Self::StackBuild) and [`Resolution`](Self::Resolution)
+    /// the answer is decided when the error is constructed, from the
+    /// transience of the underlying failures.
     ///
     /// A retryable error never implies the request did not reach the server:
     /// only the caller knows whether its request is idempotent.
@@ -190,6 +197,7 @@ impl Error {
     pub fn is_retryable(&self) -> bool {
         match self {
             Error::StackBuild { retryable, .. } | Error::Resolution { retryable, .. } => *retryable,
+            Error::TunnelRefused { status } => status.is_server_error(),
             Error::Connect { .. }
             | Error::StreamReset { .. }
             | Error::ConnectionLimit
@@ -444,6 +452,9 @@ mod tests {
                 phase: TimeoutPhase::Request,
                 timeout: Duration::from_secs(1),
             },
+            Error::TunnelRefused {
+                status: http::StatusCode::BAD_GATEWAY,
+            },
         ];
         for err in retryable {
             assert!(err.is_retryable(), "{err}");
@@ -464,6 +475,9 @@ mod tests {
             Error::BodyTooLarge { limit: 16 },
             Error::InvalidRequest {
                 reason: "bad".into(),
+            },
+            Error::TunnelRefused {
+                status: http::StatusCode::NOT_FOUND,
             },
             Error::Closed,
         ];

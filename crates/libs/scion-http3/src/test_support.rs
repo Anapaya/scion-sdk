@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! In-crate test utilities: an in-memory HTTP/3 server harness (axum over
-//! [`MockScionSocket`] pairs) that doubles as a [`SocketBinder`], plus mock
-//! resolvers and a baseline test [`Config`].
+//! In-crate test utilities: an in-memory HTTP/3 server harness (axum or a
+//! tunnel echo service over [`MockScionSocket`] pairs) that doubles as a
+//! [`SocketBinder`], plus mock resolvers and a baseline test [`Config`].
 
 use std::{
     io::Write,
@@ -31,7 +31,12 @@ use axum::{
     routing::{get, post},
 };
 use scion_quic::{
-    quic::config::QuicConfig,
+    h3::server::{H3RequestBody, Http3Server, Http3ServerConfig, HttpService},
+    quic::{
+        config::QuicConfig,
+        connection::ConnectionHandle,
+        server_endpoint::{Metrics, QuicScionEndpointDriver, QuicScionServerEndpoint},
+    },
     socket::GenericScionUdpSocket,
     test_util::{BreakableScionSocket, MockScionSocket},
 };
@@ -118,14 +123,63 @@ pub(crate) fn test_router() -> (Router, Arc<AtomicUsize>) {
     (router, hits)
 }
 
+/// The method and `:authority` of a received request.
+pub(crate) type ReceivedRequest = (http::Method, Option<String>);
+
+/// A gateway stand-in: answers with a configurable status and echoes the
+/// request body.
+#[derive(Clone, Default)]
+pub(crate) struct TunnelEchoService {
+    status: Arc<StdMutex<Option<http::StatusCode>>>,
+    requests: Arc<StdMutex<Vec<ReceivedRequest>>>,
+}
+
+impl TunnelEchoService {
+    pub(crate) fn set_status(&self, status: http::StatusCode) {
+        *self.status.lock().unwrap() = Some(status);
+    }
+
+    /// Every request received, in order.
+    pub(crate) fn requests(&self) -> Vec<ReceivedRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl HttpService for TunnelEchoService {
+    type Body = H3RequestBody;
+    type ResponseBody = H3RequestBody;
+
+    fn call(
+        &self,
+        req: http::Request<H3RequestBody>,
+    ) -> impl Future<Output = http::Response<H3RequestBody>> + Send {
+        self.requests.lock().unwrap().push((
+            req.method().clone(),
+            req.uri().authority().map(ToString::to_string),
+        ));
+        let status = self.status.lock().unwrap().unwrap_or(http::StatusCode::OK);
+        let response = http::Response::builder()
+            .status(status)
+            .body(req.into_body())
+            .unwrap();
+        std::future::ready(response)
+    }
+}
+
+/// What a [`TestServerHarness`] serves on the far end of each socket.
+enum TestServer {
+    Axum(Router),
+    Tunnel(TunnelEchoService),
+}
+
 /// An in-memory HTTP/3 server that hands out client sockets: every
 /// [`bind`](SocketBinder::bind) creates a fresh [`MockScionSocket`] pair and
-/// spawns an axum-over-HTTP/3 server on the far end, listening on
+/// spawns an HTTP/3 server on the far end, listening on
 /// [`server_scion_ip`]`:`[`SERVER_PORT`]. Dialing any other address over the
 /// returned socket goes nowhere (the server side drops it), which is how
 /// tests model dead candidates.
 pub(crate) struct TestServerHarness {
-    router: Router,
+    server: TestServer,
     server_quic: QuicConfig,
     cert_file: NamedTempFile,
     key_file: NamedTempFile,
@@ -147,6 +201,18 @@ impl TestServerHarness {
     /// Like [`new`](Self::new), with a custom server-side QUIC configuration
     /// (e.g. a stream limit of zero for `StreamBlocked` tests).
     pub(crate) fn with_server_quic(router: Router, server_quic: QuicConfig) -> Arc<Self> {
+        Self::build(TestServer::Axum(router), server_quic)
+    }
+
+    /// A harness whose servers run `service` instead of an axum router.
+    pub(crate) fn with_tunnel_service(service: TunnelEchoService) -> Arc<Self> {
+        Self::build(
+            TestServer::Tunnel(service),
+            QuicConfig::builder().verify_peer(false).build(),
+        )
+    }
+
+    fn build(server: TestServer, server_quic: QuicConfig) -> Arc<Self> {
         let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         let mut cert_file = NamedTempFile::new().unwrap();
         let mut key_file = NamedTempFile::new().unwrap();
@@ -159,7 +225,7 @@ impl TestServerHarness {
             .write_all(cert.signing_key.serialize_pem().as_bytes())
             .unwrap();
         Arc::new(TestServerHarness {
-            router,
+            server,
             server_quic,
             cert_file,
             key_file,
@@ -220,17 +286,40 @@ impl SocketBinder for TestServerHarness {
         let (client_socket, server_socket) =
             MockScionSocket::pair(1024, client_addr(), server_addr());
         let cancel = self.cancel.clone();
-        let router = self.router.clone();
         let config = self.server_config();
-        tokio::spawn(async move {
-            let _ = scion_h3_axum::ScionH3AxumServer::serve_with_graceful_shutdown(
-                Arc::new(server_socket),
-                router,
-                config,
-                cancel,
-            )
-            .await;
-        });
+        let server_socket: Arc<dyn GenericScionUdpSocket> = Arc::new(server_socket);
+        match &self.server {
+            TestServer::Axum(router) => {
+                let router = router.clone();
+                tokio::spawn(async move {
+                    let _ = scion_h3_axum::ScionH3AxumServer::serve_with_graceful_shutdown(
+                        server_socket,
+                        router,
+                        config,
+                        cancel,
+                    )
+                    .await;
+                });
+            }
+            TestServer::Tunnel(service) => {
+                let service = service.clone();
+                tokio::spawn(async move {
+                    let endpoint = QuicScionServerEndpoint::new(
+                        [0u8; 32],
+                        config,
+                        server_socket.local_addr(),
+                        Metrics::new_without_registry(),
+                    );
+                    let driver = QuicScionEndpointDriver::with_config(
+                        endpoint,
+                        server_socket,
+                        |_: ConnectionHandle<Http3Server<TunnelEchoService>>| {},
+                        Http3ServerConfig::new(service),
+                    );
+                    let _ = driver.run(cancel).await;
+                });
+            }
+        }
         let client_socket = Arc::new(BreakableScionSocket::new(Arc::new(client_socket)));
         self.sockets.lock().unwrap().push(client_socket.clone());
         Ok(client_socket)

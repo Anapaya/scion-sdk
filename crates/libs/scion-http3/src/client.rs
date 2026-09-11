@@ -23,15 +23,19 @@ use std::{
 };
 
 use bytes::Bytes;
-use scion_quic::h3::client::{H3ResponseBody, Http3Client, RequestError as H3RequestError};
+use scion_quic::h3::client::{
+    H3DuplexStream, H3ResponseBody, Http3Client, RequestError as H3RequestError,
+};
 
 use crate::{
+    authority::Authority,
     config::Config,
     epoch::Epoch,
     error::{Error, TimeoutPhase},
     origin::Origin,
     request::{IntoUrl, Request},
     response::Response,
+    tunnel::{Tunnel, connect_request},
 };
 
 /// The current connectivity, or the reason there is none.
@@ -128,12 +132,7 @@ impl Client {
         let timeout = request
             .request_timeout()
             .unwrap_or(self.config.request_timeout);
-        let now = tokio::time::Instant::now();
-        // A timeout too large to represent is effectively "no deadline"; 30
-        // years stands in for it (mirroring tokio's internal far_future).
-        let deadline = now
-            .checked_add(timeout)
-            .unwrap_or_else(|| now + Duration::from_hours(24 * 365 * 30));
+        let deadline = deadline_after(timeout);
         let (response, connection) = tokio::time::timeout_at(deadline, self.request_head(&request))
             .await
             .map_err(|_| {
@@ -158,6 +157,24 @@ impl Client {
     pub async fn post(&self, url: impl IntoUrl, body: impl Into<Bytes>) -> Result<Response, Error> {
         let request = Request::post(url).body(body).build()?;
         self.request(request).await
+    }
+
+    /// Opens a `CONNECT` tunnel to `authority`.
+    ///
+    /// The connection to the authority is resolved and pooled like the one of
+    /// a request to `https://host:port/`. The call runs under the request
+    /// timeout up to the response head; the open [`Tunnel`] has no deadline.
+    /// A non-2xx response is [`Error::TunnelRefused`].
+    pub async fn connect(&self, authority: &Authority) -> Result<Tunnel, Error> {
+        let timeout = self.config.request_timeout;
+        tokio::time::timeout_at(deadline_after(timeout), self.connect_tunnel(authority))
+            .await
+            .map_err(|_| {
+                Error::Timeout {
+                    phase: TimeoutPhase::Request,
+                    timeout,
+                }
+            })?
     }
 
     /// Pre-establishes connectivity to `url`'s origin: builds the stack if
@@ -206,25 +223,67 @@ impl Client {
         request: &Request,
     ) -> Result<(http::Response<H3ResponseBody>, Arc<Http3Client>), Error> {
         let origin = Origin::from_request(request)?;
+        self.with_connection(origin, |connection| {
+            async move { Ok(connection.request(request.to_http()?).await?) }
+        })
+        .await
+    }
+
+    /// The tunnel path up to the response head. The request timeout is
+    /// applied around this by [`connect`](Self::connect).
+    async fn connect_tunnel(&self, authority: &Authority) -> Result<Tunnel, Error> {
+        let origin = Origin::from_authority(authority);
+        let (host, port) = (origin.host.clone(), origin.port);
+        let ((response, writer), connection) = self
+            .with_connection(origin, |connection| {
+                async move {
+                    Ok(connection
+                        .request_with_writer(connect_request(authority))
+                        .await?)
+                }
+            })
+            .await?;
+        let response = response
+            .await
+            .map_err(|e| Error::from_h3_request_error(&host, port, e))?;
+        if !response.status().is_success() {
+            return Err(Error::TunnelRefused {
+                status: response.status(),
+            });
+        }
+        let stream = H3DuplexStream::new(writer, response.into_body());
+        Ok(Tunnel::new(stream, connection))
+    }
+
+    /// Runs `send` on the origin's pooled connection and returns its result
+    /// together with the connection.
+    ///
+    /// An establishment failure re-establishes once and runs `send` again;
+    /// nothing has reached the wire at that point.
+    async fn with_connection<T, F, Fut>(
+        &self,
+        origin: Origin,
+        send: F,
+    ) -> Result<(T, Arc<Http3Client>), Error>
+    where
+        F: Fn(Arc<Http3Client>) -> Fut,
+        Fut: Future<Output = Result<T, SendError>>,
+    {
         let (host, port) = (origin.host.clone(), origin.port);
         let epoch = self.current_epoch().await?;
         let origin_client = epoch.origin_client(origin, Instant::now(), &self.config)?;
 
         let (connection, generation) = origin_client.connection().await?;
-        match connection.request(request.to_http()?).await {
-            Ok(response) => Ok((response, connection)),
-            // Establishment failure means nothing reached the wire, so one
-            // re-establish (possibly to a different candidate) and retry is
-            // safe even for non-idempotent requests.
-            Err(H3RequestError::Establish(_)) => {
+        match send(connection.clone()).await {
+            Ok(output) => Ok((output, connection)),
+            Err(SendError::Transport(H3RequestError::Establish(_))) => {
                 let (connection, _) = origin_client.reconnect(generation).await?;
-                let response = connection
-                    .request(request.to_http()?)
+                let output = send(connection.clone())
                     .await
-                    .map_err(|e| Error::from_h3_request_error(&host, port, e))?;
-                Ok((response, connection))
+                    .map_err(|e| e.into_error(&host, port))?;
+                Ok((output, connection))
             }
-            Err(e) => Err(Error::from_h3_request_error(&host, port, e)),
+            Err(e) => Err(e.into_error(&host, port)),
         }
     }
 
@@ -286,6 +345,41 @@ impl Client {
     }
 }
 
+/// A failed send on a pooled connection.
+enum SendError {
+    Transport(H3RequestError),
+    Request(Error),
+}
+
+impl SendError {
+    fn into_error(self, host: &str, port: u16) -> Error {
+        match self {
+            SendError::Transport(e) => Error::from_h3_request_error(host, port, e),
+            SendError::Request(e) => e,
+        }
+    }
+}
+
+impl From<H3RequestError> for SendError {
+    fn from(e: H3RequestError) -> Self {
+        SendError::Transport(e)
+    }
+}
+
+impl From<Error> for SendError {
+    fn from(e: Error) -> Self {
+        SendError::Request(e)
+    }
+}
+
+/// The deadline `timeout` from now; an unrepresentable one becomes 30 years,
+/// as tokio's far future does.
+fn deadline_after(timeout: Duration) -> tokio::time::Instant {
+    let now = tokio::time::Instant::now();
+    now.checked_add(timeout)
+        .unwrap_or_else(|| now + Duration::from_hours(24 * 365 * 30))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -295,11 +389,12 @@ mod tests {
 
     use scion_quic::quic::config::QuicConfig;
     use test_log::test;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use crate::test_support::{
-        FailingResolver, SERVER_PORT, StaticResolver, TestServerHarness, server_scion_ip,
-        test_config, test_router,
+        FailingResolver, SERVER_PORT, StaticResolver, TestServerHarness, TunnelEchoService,
+        server_scion_ip, test_config, test_router,
     };
 
     /// A client whose epochs are assembled from the given harness/resolver
@@ -327,6 +422,142 @@ mod tests {
 
     fn url(host: &str, path: &str) -> String {
         format!("https://{host}:{SERVER_PORT}{path}")
+    }
+
+    fn authority(host: &str) -> Authority {
+        Authority::new(host, SERVER_PORT).unwrap()
+    }
+
+    fn tunnel_client(config: Config) -> (Client, Arc<TestServerHarness>, TunnelEchoService) {
+        let service = TunnelEchoService::default();
+        let harness = TestServerHarness::with_tunnel_service(service.clone());
+        let resolver = StaticResolver::new(vec![server_scion_ip()]);
+        let (client, _) = harness_client(harness.clone(), resolver, config);
+        (client, harness, service)
+    }
+
+    async fn echo_round_trip(tunnel: &mut Tunnel, payload: &[u8]) {
+        tunnel.write_all(payload).await.unwrap();
+        tunnel.flush().await.unwrap();
+        let mut echoed = vec![0u8; payload.len()];
+        tunnel.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(echoed, payload);
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn connect_tunnels_bytes_both_ways() {
+        let (client, _, service) = tunnel_client(test_config());
+
+        let mut tunnel = client.connect(&authority("localhost")).await.unwrap();
+        for round in 0..3 {
+            echo_round_trip(&mut tunnel, format!("chunk-{round}").as_bytes()).await;
+        }
+        assert_eq!(
+            service.requests(),
+            vec![(
+                http::Method::CONNECT,
+                Some(authority("localhost").to_string())
+            )]
+        );
+
+        tunnel.shutdown().await.unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(tunnel.read(&mut buf).await.unwrap(), 0);
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn connect_maps_non_2xx_to_tunnel_refused() {
+        let (client, _, service) = tunnel_client(test_config());
+
+        service.set_status(http::StatusCode::NOT_FOUND);
+        let err = client.connect(&authority("localhost")).await.err().unwrap();
+        assert!(
+            matches!(
+                err,
+                Error::TunnelRefused {
+                    status: http::StatusCode::NOT_FOUND
+                }
+            ),
+            "{err}"
+        );
+        assert!(!err.is_retryable());
+
+        service.set_status(http::StatusCode::BAD_GATEWAY);
+        let err = client.connect(&authority("localhost")).await.err().unwrap();
+        assert!(
+            matches!(
+                err,
+                Error::TunnelRefused {
+                    status: http::StatusCode::BAD_GATEWAY
+                }
+            ),
+            "{err}"
+        );
+        assert!(err.is_retryable());
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn connect_shares_the_pooled_connection() {
+        let (client, harness, _) = tunnel_client(test_config());
+
+        let mut first = client.connect(&authority("localhost")).await.unwrap();
+        let mut second = client.connect(&authority("localhost")).await.unwrap();
+        echo_round_trip(&mut first, b"first").await;
+        echo_round_trip(&mut second, b"second").await;
+        assert_eq!(harness.binds.load(SeqCst), 1);
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn connect_reuses_the_establish_retry() {
+        let (client, harness, _) = tunnel_client(test_config());
+
+        let tunnel = client.connect(&authority("localhost")).await.unwrap();
+        assert_eq!(harness.binds.load(SeqCst), 1);
+        drop(tunnel);
+
+        harness.break_sockets();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let mut tunnel = client.connect(&authority("localhost")).await.unwrap();
+        echo_round_trip(&mut tunnel, b"after reconnect").await;
+        assert_eq!(harness.binds.load(SeqCst), 2);
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn tunnel_survives_origin_eviction() {
+        let (client, ..) = tunnel_client(test_config().with_max_origins(1));
+
+        let mut tunnel = client.connect(&authority("a.local")).await.unwrap();
+        echo_round_trip(&mut tunnel, b"before eviction").await;
+
+        let mut other = client.connect(&authority("b.local")).await.unwrap();
+        echo_round_trip(&mut other, b"other origin").await;
+
+        echo_round_trip(&mut tunnel, b"after eviction").await;
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn close_faults_open_tunnel() {
+        let (client, ..) = tunnel_client(test_config());
+        let client = Arc::new(client);
+
+        let mut tunnel = client.connect(&authority("localhost")).await.unwrap();
+        let pending = tokio::spawn(async move {
+            let mut buf = [0u8; 16];
+            tunnel.read(&mut buf).await
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        client.close().await;
+
+        let start = tokio::time::Instant::now();
+        assert!(pending.await.unwrap().is_err());
+        assert!(start.elapsed() < Duration::from_millis(300));
     }
 
     #[test(tokio::test)]
