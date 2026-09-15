@@ -37,6 +37,9 @@ async fn tunnel(client: &scion_http3::Client) -> Result<(), Box<dyn std::error::
 }
 ```
 
+`Config::with_dns_override` maps a host that has no TSAR records to fixed addresses. It
+applies to URLs and to `CONNECT` authorities alike.
+
 See the crate documentation for the full API, and
 `examples/http3_get_post.rs` for a runnable end-to-end example against a
 local network:

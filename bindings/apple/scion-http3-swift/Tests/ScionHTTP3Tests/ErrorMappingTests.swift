@@ -28,6 +28,11 @@ final class ErrorMappingTests: XCTestCase {
         (.InvalidRequest(retryable: false, detail: "d10"), .invalidRequest(detail: "d10")),
         (.Closed(retryable: false, detail: "d11"), .closed),
         (.Internal(retryable: false, detail: "d12"), .internalError(detail: "d12")),
+        (.TunnelRefused(status: 502, retryable: true, detail: "d13"),
+         .internalError(detail: "d13")),
+        (.TunnelReset(retryable: true, detail: "d14"), .internalError(detail: "d14")),
+        (.TunnelDisconnected(retryable: true, detail: "d15"), .internalError(detail: "d15")),
+        (.TunnelClosed(retryable: false, detail: "d16"), .internalError(detail: "d16")),
     ]
 
     func testEveryCaseMapsToItsCounterpart() {

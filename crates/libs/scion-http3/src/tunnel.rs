@@ -37,11 +37,10 @@ pub(crate) fn connect_request(authority: &Authority) -> http::Request<()> {
 
 /// A byte stream through an accepted `CONNECT` tunnel.
 ///
-/// The two directions are independent. `shutdown` closes the write half and
-/// leaves the read half open. A read returns `Ok(0)` at the end of the stream.
-/// A peer reset reads as [`io::ErrorKind::ConnectionReset`], and a closed
-/// connection as [`io::ErrorKind::NotConnected`]. Dropping the tunnel resets
-/// the stream.
+/// The two directions are independent. `shutdown` closes the write half and leaves the read half
+/// open. A read returns `Ok(0)` at the end of the stream. A stream the peer reset or stopped fails
+/// with [`io::ErrorKind::ConnectionReset`], and a closed connection with
+/// [`io::ErrorKind::NotConnected`]. Dropping the tunnel resets the stream.
 pub struct Tunnel {
     stream: H3DuplexStream,
     /// Keeps the connection alive while the pool may evict its origin.

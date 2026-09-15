@@ -57,6 +57,20 @@
 //! bidirectional channel across the language boundary, and is deliberately not in the first
 //! release.
 //!
+//! ## Tunnels
+//!
+//! [`ScionHttp3Client::connect`] opens a `CONNECT` tunnel and returns a [`Tunnel`], the one
+//! exported object that holds live connection state. Its read and its write direction are
+//! independent, `shutdown_write` ends the write direction, and `abort`, or dropping the object,
+//! resets the stream. Bytes cross the boundary one `read` or `write` at a time. A tunnel does not
+//! keep its client alive: shutting the client down closes every tunnel it opened and their calls
+//! report `Closed` from then on.
+//!
+//! A dropped `read` or `write` call ends on a runtime worker as a dropped request does, and the
+//! tunnel stays open. The `Tunnel` documentation names what is lost with the call: a read that
+//! completed in the same moment loses its bytes, and a write may have sent a prefix. A facade that
+//! cancels a tunnel call therefore aborts the tunnel.
+//!
 //! ## Platform differences
 //!
 //! Every binding loads this same crate, and the exported surface is the union of what they all need
@@ -81,6 +95,11 @@
 //! [`execute_cancellable`](ScionHttp3Client::execute_cancellable), which performs the same
 //! cancellation a dropped future would and then completes with
 //! [`Cancelled`](ScionHttp3Error::Cancelled).
+//!
+//! The tunnel follows the same split. Kotlin drops the future of a `read` or a `write`; Swift
+//! calls [`connect_cancellable`](ScionHttp3Client::connect_cancellable),
+//! [`Tunnel::read_cancellable`] and [`Tunnel::write_cancellable`]. `shutdown_write` has no
+//! cancellable variant: it waits for stream capacity at most, and [`Tunnel::abort`] ends it.
 
 // The FFI boundary catches panics and turns them into errors. Under panic=abort a panic in Rust
 // would instead take the host application's process down, which is both a worse failure and one
@@ -98,11 +117,13 @@ mod convert;
 mod error;
 mod runtime;
 mod token;
+mod tunnel;
 mod types;
 
 pub use cancel::CancelHandle;
 pub use client::ScionHttp3Client;
 pub use error::{ScionHttp3Error, TimeoutPhase};
+pub use tunnel::Tunnel;
 pub use types::{
     ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse, SnapConfig,
     TrustAnchors, UdpConfig, Underlay,

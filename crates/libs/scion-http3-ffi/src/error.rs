@@ -21,8 +21,12 @@
 //! One variant has no counterpart upstream: [`ScionHttp3Error::Cancelled`] reports a cancellation
 //! this crate performed itself, when a [`CancelHandle`](crate::CancelHandle) fired. `scion-http3`
 //! never produces it.
+//!
+//! The tunnel variants are the other exception. A read or a write on a
+//! [`Tunnel`](crate::Tunnel) fails with a [`std::io::Error`], which names a kind and no retry
+//! verdict, so [`ScionHttp3Error::from_io`] decides both here, once.
 
-use std::{error::Error as StdError, fmt::Write as _, time::Duration};
+use std::{error::Error as StdError, fmt::Write as _, io, time::Duration};
 
 use scion_http3::{BuildRequestError, TimeoutPhase as Http3TimeoutPhase};
 
@@ -143,6 +147,40 @@ pub enum ScionHttp3Error {
         /// The error and its source chain.
         detail: String,
     },
+    /// The server refused the `CONNECT` tunnel with a non-2xx status.
+    #[error("tunnel refused with status {status}")]
+    TunnelRefused {
+        /// The status of the `CONNECT` response.
+        status: u16,
+        /// Whether retrying may succeed.
+        retryable: bool,
+        /// The error and its source chain.
+        detail: String,
+    },
+    /// The peer reset the tunnel's stream.
+    #[error("tunnel reset by peer: {detail}")]
+    TunnelReset {
+        /// Whether retrying may succeed.
+        retryable: bool,
+        /// The error and its source chain.
+        detail: String,
+    },
+    /// The connection under the tunnel is gone: the peer closed it, or the client was shut down.
+    #[error("tunnel disconnected: {detail}")]
+    TunnelDisconnected {
+        /// Whether retrying may succeed.
+        retryable: bool,
+        /// The error and its source chain.
+        detail: String,
+    },
+    /// The tunnel was aborted on this side, or its write direction was shut down.
+    #[error("tunnel closed: {detail}")]
+    TunnelClosed {
+        /// Whether retrying may succeed.
+        retryable: bool,
+        /// The error and its source chain.
+        detail: String,
+    },
     /// The response body exceeded the limit the request carried.
     #[error("response body exceeded {limit} bytes")]
     BodyTooLarge {
@@ -237,6 +275,52 @@ impl ScionHttp3Error {
         }
     }
 
+    /// A failed read or write on a tunnel.
+    ///
+    /// A reset stream or a lost connection is a transient condition, like a
+    /// [`StreamReset`](Self::StreamReset) or a [`Connect`](Self::Connect) failure: a new tunnel may
+    /// work. Any other kind is an HTTP/3 failure on the stream, which is a
+    /// [`Protocol`](Self::Protocol) error.
+    pub(crate) fn from_io(error: io::Error) -> Self {
+        let detail = detail(&error);
+        match error.kind() {
+            io::ErrorKind::ConnectionReset => {
+                ScionHttp3Error::TunnelReset {
+                    retryable: true,
+                    detail,
+                }
+            }
+            io::ErrorKind::NotConnected => {
+                ScionHttp3Error::TunnelDisconnected {
+                    retryable: true,
+                    detail,
+                }
+            }
+            _ => {
+                ScionHttp3Error::Protocol {
+                    retryable: false,
+                    detail,
+                }
+            }
+        }
+    }
+
+    /// A call on a tunnel whose client was shut down or dropped.
+    pub(crate) fn client_closed() -> Self {
+        ScionHttp3Error::Closed {
+            retryable: false,
+            detail: "the client was shut down".to_string(),
+        }
+    }
+
+    /// A call on a tunnel this side has closed. Not retryable: the caller closed it.
+    pub(crate) fn tunnel_closed(detail: impl Into<String>) -> Self {
+        ScionHttp3Error::TunnelClosed {
+            retryable: false,
+            detail: detail.into(),
+        }
+    }
+
     /// Whether retrying the operation may succeed, whatever the variant.
     ///
     /// Only the tests need this on the Rust side: `retryable` crosses the boundary as a field of
@@ -252,6 +336,10 @@ impl ScionHttp3Error {
             | ScionHttp3Error::StreamReset { retryable, .. }
             | ScionHttp3Error::Protocol { retryable, .. }
             | ScionHttp3Error::ConnectionLimit { retryable, .. }
+            | ScionHttp3Error::TunnelRefused { retryable, .. }
+            | ScionHttp3Error::TunnelReset { retryable, .. }
+            | ScionHttp3Error::TunnelDisconnected { retryable, .. }
+            | ScionHttp3Error::TunnelClosed { retryable, .. }
             | ScionHttp3Error::BodyTooLarge { retryable, .. }
             | ScionHttp3Error::Timeout { retryable, .. }
             | ScionHttp3Error::InvalidRequest { retryable, .. }
@@ -304,6 +392,13 @@ impl From<scion_http3::Error> for ScionHttp3Error {
             }
             Source::Protocol { .. } => ScionHttp3Error::Protocol { retryable, detail },
             Source::ConnectionLimit => ScionHttp3Error::ConnectionLimit { retryable, detail },
+            Source::TunnelRefused { status } => {
+                ScionHttp3Error::TunnelRefused {
+                    status: status.as_u16(),
+                    retryable,
+                    detail,
+                }
+            }
             Source::BodyTooLarge { limit } => {
                 ScionHttp3Error::BodyTooLarge {
                     limit: u64::try_from(limit).unwrap_or(u64::MAX),
@@ -436,6 +531,26 @@ mod tests {
             (
                 Source::ConnectionLimit,
                 ScionHttp3Error::ConnectionLimit {
+                    retryable: true,
+                    detail: String::new(),
+                },
+            ),
+            (
+                Source::TunnelRefused {
+                    status: scion_http3::http::StatusCode::NOT_FOUND,
+                },
+                ScionHttp3Error::TunnelRefused {
+                    status: 404,
+                    retryable: false,
+                    detail: String::new(),
+                },
+            ),
+            (
+                Source::TunnelRefused {
+                    status: scion_http3::http::StatusCode::BAD_GATEWAY,
+                },
+                ScionHttp3Error::TunnelRefused {
+                    status: 502,
                     retryable: true,
                     detail: String::new(),
                 },
@@ -579,6 +694,72 @@ mod tests {
         assert_eq!(timeout_ms, u64::MAX);
     }
 
+    /// A refused tunnel carries the status the server answered with, which is what a caller keys
+    /// its own decision on.
+    #[test]
+    fn a_refused_tunnel_carries_its_status() {
+        let mapped = ScionHttp3Error::from(Source::TunnelRefused {
+            status: scion_http3::http::StatusCode::FORBIDDEN,
+        });
+        let ScionHttp3Error::TunnelRefused { status, .. } = mapped else {
+            panic!("mapped to {mapped:?}");
+        };
+        assert_eq!(status, 403);
+    }
+
+    /// The kinds the tunnel's stream reports, and the verdict each one gets.
+    #[test]
+    fn io_errors_map_by_kind() {
+        let cases = [
+            (
+                io::Error::new(io::ErrorKind::ConnectionReset, "stream reset by peer"),
+                ScionHttp3Error::TunnelReset {
+                    retryable: true,
+                    detail: String::new(),
+                },
+            ),
+            (
+                io::Error::new(io::ErrorKind::NotConnected, "connection closed"),
+                ScionHttp3Error::TunnelDisconnected {
+                    retryable: true,
+                    detail: String::new(),
+                },
+            ),
+            (
+                io::Error::other("h3 error"),
+                ScionHttp3Error::Protocol {
+                    retryable: false,
+                    detail: String::new(),
+                },
+            ),
+        ];
+
+        for (source, expected) in cases {
+            let message = source.to_string();
+            let mapped = ScionHttp3Error::from_io(source);
+            assert_eq!(
+                std::mem::discriminant(&mapped),
+                std::mem::discriminant(&expected),
+                "{message} mapped to {mapped:?}"
+            );
+            assert_eq!(mapped.retryable(), expected.retryable(), "{message}");
+            assert!(
+                detail_of(&mapped).contains(&message),
+                "{message} lost its detail"
+            );
+        }
+    }
+
+    /// A tunnel the caller closed is not worth retrying on: the caller decided to end it.
+    #[test]
+    fn a_local_close_is_not_retryable() {
+        let error = ScionHttp3Error::tunnel_closed("aborted");
+
+        assert!(matches!(error, ScionHttp3Error::TunnelClosed { .. }));
+        assert!(!error.retryable());
+        assert_eq!(detail_of(&error), "aborted");
+    }
+
     fn detail_of(error: &ScionHttp3Error) -> &str {
         match error {
             ScionHttp3Error::StackBuild { detail, .. }
@@ -588,6 +769,10 @@ mod tests {
             | ScionHttp3Error::StreamReset { detail, .. }
             | ScionHttp3Error::Protocol { detail, .. }
             | ScionHttp3Error::ConnectionLimit { detail, .. }
+            | ScionHttp3Error::TunnelRefused { detail, .. }
+            | ScionHttp3Error::TunnelReset { detail, .. }
+            | ScionHttp3Error::TunnelDisconnected { detail, .. }
+            | ScionHttp3Error::TunnelClosed { detail, .. }
             | ScionHttp3Error::BodyTooLarge { detail, .. }
             | ScionHttp3Error::Timeout { detail, .. }
             | ScionHttp3Error::InvalidRequest { detail, .. }

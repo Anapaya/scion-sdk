@@ -35,7 +35,6 @@ use http_body::Body;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use super::{request::RequestBodyWriter, response::H3ResponseBody};
-use crate::h3::common::H3Error;
 
 /// A bidirectional byte stream over one HTTP/3 request stream.
 ///
@@ -91,7 +90,7 @@ impl AsyncRead for H3DuplexStream {
                         Err(_non_data) => return Poll::Ready(Ok(())),
                     }
                 }
-                Poll::Ready(Some(Err(err))) => return Poll::Ready(Err(h3_to_io(err))),
+                Poll::Ready(Some(Err(err))) => return Poll::Ready(Err(err.into())),
                 // EOF: report by leaving `buf` unfilled.
                 Poll::Ready(None) => return Poll::Ready(Ok(())),
                 Poll::Pending => return Poll::Pending,
@@ -115,21 +114,5 @@ impl AsyncWrite for H3DuplexStream {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
-    }
-}
-
-/// Maps a body read error to an I/O error for the stream's `AsyncRead`.
-fn h3_to_io(err: H3Error) -> io::Error {
-    match err {
-        H3Error::Reset(code) => {
-            io::Error::new(
-                io::ErrorKind::ConnectionReset,
-                format!("stream reset by peer (code {code:#x})"),
-            )
-        }
-        H3Error::ConnectionClosed => {
-            io::Error::new(io::ErrorKind::NotConnected, "connection closed")
-        }
-        H3Error::H3(err) => io::Error::other(format!("h3 error: {err}")),
     }
 }

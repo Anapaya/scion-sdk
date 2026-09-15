@@ -31,6 +31,12 @@
 //! | `GET /invalid-utf8` | Two bytes that are not UTF-8 | Bodies that must not be decoded on the way through. |
 //! | `GET /endless-body?tag=` | A chunk every [`ENDLESS_BODY_INTERVAL`], forever | Cancellation. See [`Counters::endless_chunks`] and [`Counters::endless_released`]. |
 //! | `GET /reset-stream` | A status, one chunk, then a stream reset | The failure in between a clean response and an unreachable peer, which cannot be provoked from the client side. |
+//! | `CONNECT localhost:<port>` | Every byte written into the tunnel, echoed back | Byte streams through a `CONNECT` tunnel. See [`Counters::tunnels_started`], [`Counters::tunnel_bytes`] and [`Counters::tunnels_reset`]. |
+//! | `CONNECT status-<code>.invalid:<port>` | That status and no tunnel | A refused tunnel. The certificate names `localhost` only, so the client must not verify the server for this authority. |
+//! | `CONNECT reset.invalid:<port>` | The first chunk echoed, then a stream reset | A tunnel the peer resets while it is in use. |
+//!
+//! A `CONNECT` request carries no path, so it reaches the router's fallback rather than a route.
+//! The `count` middleware still runs for it and records it under the empty path.
 //!
 //! [`Counters`] is what a caller reads to see what the server saw. `GET /stats` on the binary's
 //! control API reports the same numbers to a harness in another language.
@@ -103,6 +109,13 @@ pub struct Counters {
     started: Mutex<BTreeMap<String, u64>>,
     /// How many times the HTTP/3 server has been restarted.
     restarts: AtomicU64,
+    /// `CONNECT` tunnels the server accepted.
+    tunnels_started: AtomicU64,
+    /// Bytes that arrived through accepted tunnels, all of them echoed.
+    tunnel_bytes: AtomicU64,
+    /// Accepted tunnels that ended with a transport error or before the end of the stream rather
+    /// than with a clean end of stream.
+    tunnels_reset: AtomicU64,
 }
 
 impl Counters {
@@ -188,6 +201,21 @@ impl Counters {
         self.restarts.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Tunnels the server accepted.
+    pub fn tunnels_started(&self) -> u64 {
+        self.tunnels_started.load(Ordering::Relaxed)
+    }
+
+    /// Bytes that arrived through accepted tunnels.
+    pub fn tunnel_bytes(&self) -> u64 {
+        self.tunnel_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Tunnels that did not end cleanly.
+    pub fn tunnels_reset(&self) -> u64 {
+        self.tunnels_reset.load(Ordering::Relaxed)
+    }
+
     /// What `GET /stats` reports.
     pub fn snapshot(&self) -> serde_json::Value {
         let requests = self.requests.lock().expect("lock poisoned").clone();
@@ -200,6 +228,9 @@ impl Counters {
             "requests": requests,
             "started": started,
             "restarts": self.restarts.load(Ordering::Relaxed),
+            "tunnels_started": self.tunnels_started.load(Ordering::Relaxed),
+            "tunnel_bytes": self.tunnel_bytes.load(Ordering::Relaxed),
+            "tunnels_reset": self.tunnels_reset.load(Ordering::Relaxed),
         })
     }
 }
@@ -232,6 +263,7 @@ pub fn router(counters: Arc<Counters>) -> Router {
         .route("/invalid-utf8", get(invalid_utf8))
         .route("/endless-body", get(endless_body))
         .route("/reset-stream", get(reset_stream))
+        .fallback(tunnel)
         // axum refuses a request body over 2 MiB by default, which is a sensible thing for a server
         // that takes bodies from strangers and the wrong thing here: the limits under test are the
         // client's own, and a test that wants to push megabytes through the transport should get a
@@ -392,6 +424,101 @@ async fn endless_body(
         }
     });
     Response::new(Body::from_stream(stream))
+}
+
+/// Answers a `CONNECT` request with an echo tunnel, keyed on the authority's host as the route
+/// table describes. Anything else that reaches the fallback is a 404.
+async fn tunnel(State(counters): State<Arc<Counters>>, request: Request) -> Response {
+    if request.method() != Method::CONNECT {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let host = request.uri().host().unwrap_or_default().to_owned();
+    if let Some(code) = host
+        .strip_prefix("status-")
+        .and_then(|rest| rest.strip_suffix(".invalid"))
+    {
+        return match code
+            .parse()
+            .ok()
+            .and_then(|code| StatusCode::from_u16(code).ok())
+        {
+            Some(code) => code.into_response(),
+            None => (StatusCode::BAD_REQUEST, "not a status code").into_response(),
+        };
+    }
+    counters.tunnels_started.fetch_add(1, Ordering::Relaxed);
+    Response::new(Body::new(EchoBody {
+        inner: request.into_body(),
+        counters,
+        fail_after_first_chunk: host == "reset.invalid",
+        fail_next: false,
+        done: false,
+    }))
+}
+
+/// The response body of a tunnel: the request body, echoed as it arrives.
+///
+/// It counts what passes through and how the tunnel ended. `fail_after_first_chunk` makes it
+/// break off after the first chunk, which the server's teardown turns into a stream reset.
+struct EchoBody {
+    inner: Body,
+    counters: Arc<Counters>,
+    fail_after_first_chunk: bool,
+    fail_next: bool,
+    done: bool,
+}
+
+impl http_body::Body for EchoBody {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, Self::Error>>> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        if this.fail_next {
+            this.end_as_reset();
+            return Poll::Ready(Some(Err(axum::Error::new(std::io::Error::other(
+                "deliberate tunnel failure",
+            )))));
+        }
+        let polled = Pin::new(&mut this.inner).poll_frame(cx);
+        match &polled {
+            Poll::Ready(Some(Ok(frame))) => {
+                if let Some(data) = frame.data_ref() {
+                    this.counters.tunnel_bytes.fetch_add(
+                        u64::try_from(data.len()).unwrap_or(u64::MAX),
+                        Ordering::Relaxed,
+                    );
+                    this.fail_next = this.fail_after_first_chunk;
+                }
+            }
+            Poll::Ready(Some(Err(_))) => this.end_as_reset(),
+            Poll::Ready(None) => this.done = true,
+            Poll::Pending => {}
+        }
+        polled
+    }
+}
+
+impl EchoBody {
+    /// Ends the tunnel and counts it as reset.
+    fn end_as_reset(&mut self) {
+        self.done = true;
+        self.counters.tunnels_reset.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Drop for EchoBody {
+    fn drop(&mut self) {
+        if !self.done {
+            self.end_as_reset();
+        }
+    }
 }
 
 /// What one endless body counts, and what it reports when the server drops it.

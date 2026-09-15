@@ -38,6 +38,7 @@ class ConfigMappingTest {
             snap = FfiSnapConfig(),
             udp = FfiUdpConfig(),
             trust = FfiTrustAnchors.SystemDefault,
+            dnsOverrides = emptyList(),
             connectTimeoutMs = 10_000u,
             requestTimeoutMs = 30_000u,
             idleConnectionTimeoutMs = 25_000u,

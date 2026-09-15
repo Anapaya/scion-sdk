@@ -47,6 +47,11 @@ class ErrorMappingTest {
                 ScionHttp3Exception.InvalidRequest::class.java,
             FfiException.Closed(false, "d") to ScionHttp3Exception.Closed::class.java,
             FfiException.Cancelled(false, "d") to ScionHttp3Exception.Internal::class.java,
+            FfiException.TunnelRefused(502u, true, "d") to ScionHttp3Exception.Internal::class.java,
+            FfiException.TunnelReset(true, "d") to ScionHttp3Exception.Internal::class.java,
+            FfiException.TunnelDisconnected(true, "d") to
+                ScionHttp3Exception.Internal::class.java,
+            FfiException.TunnelClosed(false, "d") to ScionHttp3Exception.Internal::class.java,
             FfiException.Internal(false, "d") to ScionHttp3Exception.Internal::class.java,
         )
 

@@ -32,7 +32,7 @@ use crate::{
         common::{
             H3_REQUEST_CANCELLED, H3Error,
             headers::header_map_to_h3,
-            is_terminated,
+            is_terminated, send_error,
             write::{send_data, send_trailers},
         },
     },
@@ -241,7 +241,10 @@ fn poll_send(
             handle.notify();
             Poll::Pending
         }
-        Err(err) => Poll::Ready(Err(io::Error::other(format!("h3 send error: {err}")))),
+        Err(err) => {
+            let read_state = app.streams.get(&stream_id).map(|st| &st.read_state);
+            Poll::Ready(Err(send_error(err, read_state).into()))
+        }
     }
 }
 

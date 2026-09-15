@@ -22,7 +22,7 @@ use http_body::Body;
 use squiche::h3::Header;
 
 use crate::{
-    h3::common::{H3App, H3Error, headers::header_map_to_h3, is_terminated},
+    h3::common::{H3App, H3Error, headers::header_map_to_h3, is_terminated, send_error},
     quic::connection::{QuicScionConn, WeakConnectionHandle},
 };
 
@@ -119,7 +119,10 @@ pub(crate) async fn send_data<A: H3App>(
                     handle.notify();
                     return Poll::Pending;
                 }
-                Err(err) => return Poll::Ready(Err(H3Error::H3(err))),
+                Err(err) => {
+                    let read_state = streams.get(&stream_id).map(|st| &st.read_state);
+                    return Poll::Ready(Err(send_error(err, read_state)));
+                }
             }
         }
     })

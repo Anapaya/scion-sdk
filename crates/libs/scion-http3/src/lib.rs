@@ -84,6 +84,9 @@
 //! # }
 //! ```
 //!
+//! The authority's host is resolved like a URL's host. [`Config::with_dns_override`] maps a
+//! host that has no TSAR records to fixed addresses.
+//!
 //! ## Connection pooling and lifecycle
 //!
 //! A [`Client`] holds a connection pool, so create one client per application and share it.

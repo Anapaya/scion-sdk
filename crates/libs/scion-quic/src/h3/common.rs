@@ -16,7 +16,7 @@
 //! ([`Http3Server`](crate::h3::server::Http3Server)) and the client
 //! ([`Http3Client`](crate::h3::client::Http3Client)).
 
-use std::{collections::HashMap, task::Waker};
+use std::{collections::HashMap, io, task::Waker};
 
 pub(crate) mod headers;
 pub(crate) mod read;
@@ -34,12 +34,13 @@ pub(crate) const H3_INTERNAL_ERROR: u64 = 0x0102;
 /// of a request whose body was abandoned before it finished (RFC 9114 §8.1).
 pub(crate) const H3_REQUEST_CANCELLED: u64 = 0x010C;
 
-/// An error observed while reading an HTTP/3 message body.
+/// An error observed while reading or writing an HTTP/3 message body.
 ///
 /// Used by both the server's request body and the client's response body.
 #[derive(Debug)]
 pub enum H3Error {
-    /// The peer reset the stream with the given HTTP/3 error code.
+    /// The peer reset the stream with the given HTTP/3 error code: a
+    /// `RESET_STREAM` on the read side or a `STOP_SENDING` on the write side.
     Reset(u64),
     /// The underlying QUIC connection was closed.
     ConnectionClosed,
@@ -58,6 +59,45 @@ impl std::fmt::Display for H3Error {
 }
 
 impl std::error::Error for H3Error {}
+
+/// The I/O view of a body error for the `AsyncRead` and `AsyncWrite`
+/// implementations: a peer reset is [`io::ErrorKind::ConnectionReset`], a
+/// closed connection is [`io::ErrorKind::NotConnected`].
+impl From<H3Error> for io::Error {
+    fn from(err: H3Error) -> io::Error {
+        match err {
+            H3Error::Reset(_) => io::Error::new(io::ErrorKind::ConnectionReset, err.to_string()),
+            H3Error::ConnectionClosed => {
+                io::Error::new(io::ErrorKind::NotConnected, err.to_string())
+            }
+            H3Error::H3(_) => io::Error::other(err.to_string()),
+        }
+    }
+}
+
+/// Maps a failed `send_body` to the body error taxonomy. A stream the peer
+/// stopped or reset is a [`H3Error::Reset`], like a reset seen on the read side.
+///
+/// `read_state` is the stream's own bookkeeping. The transport forgets a
+/// stream once both directions have ended, and then reports only that the
+/// stream does not exist; the read state still says whether the peer reset it
+/// or the connection closed.
+pub(crate) fn send_error(err: squiche::h3::Error, read_state: Option<&ReadState>) -> H3Error {
+    match err {
+        squiche::h3::Error::TransportError(squiche::Error::StreamStopped(code))
+        | squiche::h3::Error::TransportError(squiche::Error::StreamReset(code)) => {
+            H3Error::Reset(code)
+        }
+        squiche::h3::Error::TransportError(squiche::Error::InvalidStreamState(_)) => {
+            match read_state {
+                Some(ReadState::Reset(code)) => H3Error::Reset(*code),
+                Some(ReadState::Closed) => H3Error::ConnectionClosed,
+                _ => H3Error::H3(err),
+            }
+        }
+        err => H3Error::H3(err),
+    }
+}
 
 /// A [`QuicScionApplication`] that runs HTTP/3 and exposes the state the shared
 /// read/write helpers operate on: the `squiche` HTTP/3 connection and the
@@ -122,4 +162,51 @@ pub(crate) fn is_terminated(conn: &squiche::Connection) -> bool {
         || conn.is_draining()
         || conn.local_error().is_some()
         || conn.peer_error().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stopped_or_reset_stream_is_a_peer_reset() {
+        for err in [
+            squiche::Error::StreamStopped(0x10c),
+            squiche::Error::StreamReset(0x10c),
+        ] {
+            let mapped = send_error(squiche::h3::Error::TransportError(err), None);
+            assert!(matches!(mapped, H3Error::Reset(0x10c)), "{mapped}");
+            assert_eq!(
+                io::Error::from(mapped).kind(),
+                io::ErrorKind::ConnectionReset
+            );
+        }
+
+        let other = send_error(
+            squiche::h3::Error::TransportError(squiche::Error::StreamLimit),
+            None,
+        );
+        assert!(matches!(other, H3Error::H3(_)), "{other}");
+        assert_eq!(io::Error::from(other).kind(), io::ErrorKind::Other);
+    }
+
+    /// Once the transport has forgotten the stream, the read state decides.
+    #[test]
+    fn a_forgotten_stream_takes_its_verdict_from_the_read_state() {
+        let gone = || squiche::h3::Error::TransportError(squiche::Error::InvalidStreamState(0));
+
+        assert!(matches!(
+            send_error(gone(), Some(&ReadState::Reset(0x10c))),
+            H3Error::Reset(0x10c)
+        ));
+        assert!(matches!(
+            send_error(gone(), Some(&ReadState::Closed)),
+            H3Error::ConnectionClosed
+        ));
+        assert!(matches!(
+            send_error(gone(), Some(&ReadState::Eof)),
+            H3Error::H3(_)
+        ));
+        assert!(matches!(send_error(gone(), None), H3Error::H3(_)));
+    }
 }

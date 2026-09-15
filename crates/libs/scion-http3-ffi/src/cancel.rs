@@ -13,9 +13,11 @@
 // limitations under the License.
 
 //! The cancellation handle for a binding that cannot cancel by dropping the exported future.
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use tokio_util::sync::CancellationToken;
+
+use crate::error::Error;
 
 /// A one-shot cancellation for one call to
 /// [`execute_cancellable`](crate::ScionHttp3Client::execute_cancellable).
@@ -53,6 +55,24 @@ impl CancelHandle {
     /// The token a request awaits, cloned so the request outlives the handle.
     pub(crate) fn token(&self) -> CancellationToken {
         self.token.clone()
+    }
+}
+
+/// Runs `work` unless, or until, `token` fires. Meant to run inside a spawned task.
+///
+/// Nothing starts if the token fired before the task ran. The select is biased, so a completed
+/// `work` wins against a cancellation that arrived in the same moment.
+pub(crate) async fn cancellable<T>(
+    token: CancellationToken,
+    work: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    if token.is_cancelled() {
+        return Err(Error::cancelled());
+    }
+    tokio::select! {
+        biased;
+        result = work => result,
+        () = token.cancelled() => Err(Error::cancelled()),
     }
 }
 

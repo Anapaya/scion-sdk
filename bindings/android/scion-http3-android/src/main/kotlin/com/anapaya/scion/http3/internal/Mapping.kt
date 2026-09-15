@@ -117,6 +117,17 @@ internal fun FfiException.toPublic(): ScionHttp3Exception =
         // ErrorMappingTest fails if a cancellable call is added to it.
         is FfiException.Cancelled ->
             ScionHttp3Exception.Internal(retryable, detail, this)
+        // Unreachable for the same reason: only the FFI's tunnel calls report these, and
+        // [Http3Backend] declares no tunnel call yet. They get public arms of their own when it
+        // does.
+        is FfiException.TunnelRefused ->
+            ScionHttp3Exception.Internal(retryable, detail, this)
+        is FfiException.TunnelReset ->
+            ScionHttp3Exception.Internal(retryable, detail, this)
+        is FfiException.TunnelDisconnected ->
+            ScionHttp3Exception.Internal(retryable, detail, this)
+        is FfiException.TunnelClosed ->
+            ScionHttp3Exception.Internal(retryable, detail, this)
         is FfiException.Internal ->
             ScionHttp3Exception.Internal(retryable, detail, this)
     }

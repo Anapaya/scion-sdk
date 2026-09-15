@@ -27,15 +27,17 @@
 
 use std::{future::Future, sync::Arc};
 
-use scion_http3::Client;
+use scion_http3::{Authority, Client};
 use tokio::runtime::Runtime;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
-    cancel::CancelHandle,
+    cancel::{CancelHandle, cancellable},
     convert::collect_response,
     error::Error,
     runtime,
     token::AuthToken,
+    tunnel::Tunnel,
     types::{ClientConfig, HttpRequest, HttpResponse},
 };
 
@@ -54,6 +56,8 @@ pub struct ScionHttp3Client {
     max_response_body_bytes: u64,
     /// The token every request authenticates with, or `None` for a client configured without one.
     auth_token: Option<Arc<AuthToken>>,
+    /// Fired by `shutdown` and by `Drop`. Every tunnel this client opened watches it.
+    closed: CancellationToken,
 }
 
 #[uniffi::export]
@@ -81,6 +85,7 @@ impl ScionHttp3Client {
             runtime,
             max_response_body_bytes,
             auth_token,
+            closed: CancellationToken::new(),
         }))
     }
 
@@ -104,21 +109,31 @@ impl ScionHttp3Client {
         // Cloned rather than holding the handle, so that a caller which drops the handle does not
         // thereby decide anything about the request.
         let token = cancel.token();
+        runtime::spawn(self.runtime, cancellable(token, work)).await
+    }
 
-        runtime::spawn(self.runtime, async move {
-            // Nothing is sent if the handle fired before the task ran.
-            if token.is_cancelled() {
-                return Err(Error::cancelled());
-            }
-            // Biased, so a received response wins against a cancellation that arrived in the same
-            // moment.
-            tokio::select! {
-                biased;
-                result = work => result,
-                () = token.cancelled() => Err(Error::cancelled()),
-            }
-        })
-        .await
+    /// Opens a `CONNECT` tunnel to `authority` (`host:port`).
+    ///
+    /// The host is resolved like the host of a request URL, so a
+    /// [`DnsOverride`](crate::DnsOverride) in the configuration applies to it. The call runs
+    /// under the request timeout up to the response head; the open tunnel has no deadline. A
+    /// non-2xx response is [`TunnelRefused`](crate::ScionHttp3Error::TunnelRefused).
+    ///
+    /// Dropping this call on the foreign side ends the connect: a stream that is already open is
+    /// reset, and no tunnel is returned.
+    pub async fn connect(&self, authority: String) -> Result<Arc<Tunnel>, Error> {
+        runtime::spawn(self.runtime, self.connect_work(authority)?).await
+    }
+
+    /// Opens a tunnel as [`connect`](Self::connect) does and stops when `cancel` fires.
+    pub async fn connect_cancellable(
+        &self,
+        authority: String,
+        cancel: Arc<CancelHandle>,
+    ) -> Result<Arc<Tunnel>, Error> {
+        let work = self.connect_work(authority)?;
+        let token = cancel.token();
+        runtime::spawn(self.runtime, cancellable(token, work)).await
     }
 
     /// Replaces the token used to authenticate with the endhost API and the SNAP control plane.
@@ -164,12 +179,15 @@ impl ScionHttp3Client {
         self.inner.reset();
     }
 
-    /// Closes the connection pool, faulting in-flight requests; later requests fail as closed.
+    /// Closes the connection pool, faulting in-flight requests and open tunnels; later requests
+    /// fail as closed.
     ///
     /// Idempotent. A caller cancelled while this runs still gets its pool closed, because the close
     /// is spawned and then awaited rather than run inline. A caller cancelled before the call is
     /// ever polled never starts one, and there the object's own disposal closes the pool instead.
     pub async fn shutdown(&self) {
+        // Before the close, so that a tunnel whose connection fails under it can tell why.
+        self.closed.cancel();
         let client = self.inner.clone();
         runtime::spawn_detached(self.runtime, async move { client.close().await }).await;
     }
@@ -197,6 +215,25 @@ impl ScionHttp3Client {
             collect_response(response, max_body_bytes).await
         })
     }
+
+    /// Parses `authority` and returns the future that opens the tunnel, in the shape of
+    /// [`work`](Self::work).
+    fn connect_work(
+        &self,
+        authority: String,
+    ) -> Result<impl Future<Output = Result<Arc<Tunnel>, Error>> + Send + 'static, Error> {
+        let authority: Authority = authority
+            .parse()
+            .map_err(|e| Error::invalid_request(format!("invalid authority `{authority}`: {e}")))?;
+        let client = self.inner.clone();
+        let runtime = self.runtime;
+        let client_closed = self.closed.clone();
+
+        Ok(async move {
+            let tunnel = client.connect(&authority).await?;
+            Ok(Tunnel::new(tunnel, runtime, client_closed))
+        })
+    }
 }
 
 impl Drop for ScionHttp3Client {
@@ -208,6 +245,7 @@ impl Drop for ScionHttp3Client {
         //
         // Fire and forget, and it outlives this object: the runtime is never shut down, so there is
         // nothing for the close to race against.
+        self.closed.cancel();
         let client = self.inner.clone();
         runtime::spawn_forget(self.runtime, async move { client.close().await });
     }

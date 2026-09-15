@@ -80,6 +80,11 @@ func publicError(_ error: any Error) -> any Error {
         return ScionHttp3Error.closed
     case .Cancelled:
         return CancellationError()
+    // Only the FFI's tunnel calls report these, and `Http3Backend` declares no tunnel call yet.
+    // They get cases of their own when it does.
+    case .TunnelRefused(_, _, let detail), .TunnelReset(_, let detail),
+        .TunnelDisconnected(_, let detail), .TunnelClosed(_, let detail):
+        return ScionHttp3Error.internalError(detail: detail)
     case .Internal(_, let detail):
         return ScionHttp3Error.internalError(detail: detail)
     }

@@ -24,12 +24,15 @@
 //! futures executor. They are about where the work runs, not about what it returns, so they use an
 //! endhost API that is not there and mostly assert only that the call reports rather than panics.
 //! The exception is the already-cancelled call, whose whole claim is that no request was attempted.
+//! The tunnel's methods need a tunnel, so that test starts the test server on a runtime it owns;
+//! the exported futures are still polled from a bare thread.
 
 use std::thread;
 
+use scion_h3_test_server::{Options, TestServer};
 use scion_http3_ffi::{
-    CancelHandle, ClientConfig, HttpRequest, ScionHttp3Client, ScionHttp3Error,
-    default_client_config,
+    CancelHandle, ClientConfig, DnsOverride, HttpRequest, ScionHttp3Client, ScionHttp3Error,
+    TrustAnchors, default_client_config,
 };
 
 /// An endhost API on a port nothing listens on, so the request fails quickly and locally.
@@ -109,6 +112,80 @@ fn a_cancelled_call_is_pollable_without_a_runtime() {
         matches!(result, Err(ScionHttp3Error::Cancelled { .. })),
         "a call whose handle had already fired ended as {result:?}"
     );
+}
+
+#[test]
+fn connect_is_pollable_without_a_runtime() {
+    let result = on_a_foreign_thread(|| {
+        let client = ScionHttp3Client::new(config()).expect("building a client");
+        futures::executor::block_on(client.connect("example.invalid:443".to_string()))
+    });
+    assert!(
+        result.is_err(),
+        "a tunnel was opened to a server that is not there"
+    );
+}
+
+#[test]
+fn connect_cancellable_is_pollable_without_a_runtime() {
+    let result = on_a_foreign_thread(|| {
+        let client = ScionHttp3Client::new(config()).expect("building a client");
+        futures::executor::block_on(
+            client.connect_cancellable("example.invalid:443".to_string(), CancelHandle::new()),
+        )
+    });
+    assert!(
+        result.is_err(),
+        "a tunnel was opened to a server that is not there"
+    );
+}
+
+/// Every method of a tunnel, in the order a caller uses them, each polled from a bare thread.
+#[test]
+fn tunnel_methods_are_pollable_without_a_runtime() {
+    let runtime = tokio::runtime::Runtime::new().expect("building a runtime for the server");
+    let server = runtime
+        .block_on(TestServer::start(Options::default()))
+        .expect("starting the test server");
+    let config = ClientConfig {
+        auth_token: Some(server.auth_token()),
+        trust: TrustAnchors::Pem {
+            pem: server.ca_pem().as_bytes().to_vec(),
+        },
+        dns_overrides: vec![DnsOverride {
+            host: "localhost".to_string(),
+            addresses: vec![server.target()],
+        }],
+        ..default_client_config(server.endhost_api_url().to_string())
+    };
+    let authority = format!("localhost:{}", server.port());
+
+    on_a_foreign_thread(move || {
+        use futures::executor::block_on;
+
+        let client = ScionHttp3Client::new(config).expect("building a client");
+        let tunnel = block_on(client.connect(authority)).expect("opening a tunnel");
+        block_on(tunnel.write(b"ping".to_vec())).expect("writing");
+        assert_eq!(block_on(tunnel.read(16)).expect("reading"), b"ping");
+        block_on(tunnel.write_cancellable(b"pong".to_vec(), CancelHandle::new()))
+            .expect("writing cancellably");
+        assert_eq!(
+            block_on(tunnel.read_cancellable(16, CancelHandle::new()))
+                .expect("reading cancellably"),
+            b"pong"
+        );
+        block_on(tunnel.shutdown_write()).expect("shutting the write direction down");
+        assert!(
+            block_on(tunnel.read(16))
+                .expect("reading at the end")
+                .is_empty()
+        );
+        tunnel.abort();
+        drop(tunnel);
+        block_on(client.shutdown());
+    });
+
+    runtime.block_on(async move { drop(server) });
 }
 
 #[test]
