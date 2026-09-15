@@ -50,9 +50,7 @@ const config: Config = {
                     path: '../content',
                     routeBasePath: '/',
                     sidebarPath: './sidebars.ts',
-                    beforeDefaultRemarkPlugins: [
-                        [codeImport, { aliases: { '@sdk': sdkRoot } }],
-                    ],
+                    beforeDefaultRemarkPlugins: [[codeImport, { aliases: { '@sdk': sdkRoot } }]],
                 },
                 blog: false,
                 theme: { customCss: './src/css/custom.css' },

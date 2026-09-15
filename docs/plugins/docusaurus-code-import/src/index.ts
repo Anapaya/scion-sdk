@@ -70,11 +70,7 @@ export interface CodeImportOptions {
 
 const REFERENCE_RE = /(?:^|\s)reference="([^"]+)"/;
 
-function resolvePath(
-    rawPath: string,
-    pageFile: string,
-    aliases: Record<string, string>,
-): string {
+function resolvePath(rawPath: string, pageFile: string, aliases: Record<string, string>): string {
     for (const [prefix, target] of Object.entries(aliases)) {
         if (rawPath === prefix || rawPath.startsWith(`${prefix}/`)) {
             const rest = rawPath.slice(prefix.length).replace(/^\/+/, '');
@@ -96,9 +92,7 @@ function extractAnchor(source: string, anchor: string, file: string): string {
         );
     }
     // Keep lines strictly between the markers, dropping any nested anchor markers.
-    const block = lines
-        .slice(start + 1, end)
-        .filter((l) => !/ANCHOR(_END)?:/.test(l));
+    const block = lines.slice(start + 1, end).filter((l) => !/ANCHOR(_END)?:/.test(l));
     return trimBlankEdges(block).join('\n');
 }
 
@@ -135,9 +129,7 @@ function extractLineRange(source: string, selector: string, file: string): strin
 
 function dedent(block: string): string {
     const lines = block.split('\n');
-    const indents = lines
-        .filter((l) => l.trim().length > 0)
-        .map((l) => l.match(/^\s*/)![0].length);
+    const indents = lines.filter((l) => l.trim().length > 0).map((l) => l.match(/^\s*/)![0].length);
     const min = indents.length ? Math.min(...indents) : 0;
     return lines.map((l) => l.slice(min)).join('\n');
 }
