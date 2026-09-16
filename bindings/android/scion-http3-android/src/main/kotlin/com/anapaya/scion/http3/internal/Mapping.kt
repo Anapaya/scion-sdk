@@ -111,22 +111,19 @@ internal fun FfiException.toPublic(): ScionHttp3Exception =
             ScionHttp3Exception.InvalidRequest(retryable, detail, this)
         is FfiException.Closed ->
             ScionHttp3Exception.Closed(retryable, detail, this)
-        // Unreachable, and here because the `when` is exhaustive. Only the FFI's
-        // executeCancellable reports a cancellation, and [Http3Backend] declares no cancellable
-        // call, so nothing here can reach one. That seam is what keeps this true, and
-        // ErrorMappingTest fails if a cancellable call is added to it.
-        is FfiException.Cancelled ->
-            ScionHttp3Exception.Internal(retryable, detail, this)
-        // Unreachable for the same reason: only the FFI's tunnel calls report these, and
-        // [Http3Backend] declares no tunnel call yet. They get public arms of their own when it
-        // does.
         is FfiException.TunnelRefused ->
-            ScionHttp3Exception.Internal(retryable, detail, this)
+            ScionHttp3Exception.TunnelRefused(status.toInt(), retryable, detail, this)
         is FfiException.TunnelReset ->
-            ScionHttp3Exception.Internal(retryable, detail, this)
+            ScionHttp3Exception.TunnelReset(retryable, detail, this)
         is FfiException.TunnelDisconnected ->
-            ScionHttp3Exception.Internal(retryable, detail, this)
+            ScionHttp3Exception.TunnelDisconnected(retryable, detail, this)
         is FfiException.TunnelClosed ->
+            ScionHttp3Exception.TunnelClosed(retryable, detail, this)
+        // Unreachable, and here because the `when` is exhaustive. The FFI reports a cancellation
+        // from its cancellable calls only. The one this library uses is the deadline read on
+        // [TunnelBackend] and turns the cancellation into the elapsed deadline before anything
+        // reaches this mapping.
+        is FfiException.Cancelled ->
             ScionHttp3Exception.Internal(retryable, detail, this)
         is FfiException.Internal ->
             ScionHttp3Exception.Internal(retryable, detail, this)

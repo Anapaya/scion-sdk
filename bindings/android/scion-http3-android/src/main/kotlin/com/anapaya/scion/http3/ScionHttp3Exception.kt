@@ -17,7 +17,7 @@ package com.anapaya.scion.http3
 import java.io.IOException
 
 /**
- * Everything a request can fail with.
+ * Everything a request or a tunnel can fail with.
  *
  * An [IOException], so an application that already handles network failure catches these without
  * changing its structure. The hierarchy is sealed, so a `when` over it is exhaustive and each arm
@@ -111,6 +111,50 @@ public sealed class ScionHttp3Exception(
         detail: String,
         cause: Throwable? = null,
     ) : ScionHttp3Exception("stream reset, code $code: $detail", isRetryable, detail, cause)
+
+    /**
+     * The gateway did not accept a `CONNECT` tunnel.
+     *
+     * @property status the HTTP status the gateway answered with. A 5xx is usually retryable, a 4xx
+     *   says the authority is not one this gateway opens tunnels to.
+     */
+    public class TunnelRefused internal constructor(
+        public val status: Int,
+        isRetryable: Boolean,
+        detail: String,
+        cause: Throwable? = null,
+    ) : ScionHttp3Exception(
+            "tunnel refused with status $status: $detail",
+            isRetryable,
+            detail,
+            cause,
+        )
+
+    /** The peer reset the tunnel's stream while it was open. */
+    public class TunnelReset internal constructor(
+        isRetryable: Boolean,
+        detail: String,
+        cause: Throwable? = null,
+    ) : ScionHttp3Exception(detail, isRetryable, detail, cause)
+
+    /**
+     * The connection under the tunnel went away.
+     *
+     * A network change ends every tunnel on the connection this way. Shutting the client down
+     * ends them with [Closed] instead.
+     */
+    public class TunnelDisconnected internal constructor(
+        isRetryable: Boolean,
+        detail: String,
+        cause: Throwable? = null,
+    ) : ScionHttp3Exception(detail, isRetryable, detail, cause)
+
+    /** The tunnel was closed on this side or its write direction was shut down. */
+    public class TunnelClosed internal constructor(
+        isRetryable: Boolean,
+        detail: String,
+        cause: Throwable? = null,
+    ) : ScionHttp3Exception(detail, isRetryable, detail, cause)
 
     /** The origin broke HTTP/3 itself: a malformed frame, or a header section this client rejects. */
     public class Protocol internal constructor(

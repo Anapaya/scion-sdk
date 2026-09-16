@@ -36,6 +36,9 @@ internal interface Http3Backend : AutoCloseable {
     /** Establishes connectivity to an origin before it is needed. */
     suspend fun warmUp(url: String)
 
+    /** Opens a `CONNECT` tunnel to `host:port`. Cancelling resets the stream. */
+    suspend fun openTunnel(authority: String): TunnelBackend
+
     /**
      * Marks connectivity stale.
      *

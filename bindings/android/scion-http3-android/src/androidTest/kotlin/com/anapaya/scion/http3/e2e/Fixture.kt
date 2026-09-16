@@ -5,16 +5,22 @@ package com.anapaya.scion.http3.e2e
 import android.content.Context
 import androidx.test.platform.app.InstrumentationRegistry
 import com.anapaya.scion.http3.ScionAddress
+import com.anapaya.scion.http3.ScionHttp3Authority
 import com.anapaya.scion.http3.ScionHttp3Client
 import com.anapaya.scion.http3.ScionHttp3Request
 import com.anapaya.scion.http3.ScionHttp3Response
 import com.anapaya.scion.http3.TrustAnchors
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import kotlinx.coroutines.delay
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
 import java.net.URI
 import java.net.URL
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 internal const val TEST_TIMEOUT_MILLIS = 180_000L
 
@@ -57,6 +63,17 @@ object Fixture {
     /** The server's host, as it appears in [url]. */
     val host: String by lazy { URI(info.baseUrl).host }
 
+    /** The server's port, as it appears in [url]. */
+    val port: Int by lazy { URI(info.baseUrl).port }
+
+    /** The `CONNECT` authority the server echoes on. */
+    fun tunnelAuthority(host: String = this.host): ScionHttp3Authority =
+        ScionHttp3Authority(host, port)
+
+    /** [tunnelAuthority] as the endpoint a socket connects to. */
+    fun tunnelEndpoint(host: String = this.host): InetSocketAddress =
+        InetSocketAddress.createUnresolved(host, port)
+
     /** A URL on the server. */
     fun url(path: String): String = info.baseUrl + path
 
@@ -79,6 +96,19 @@ object Fixture {
     /** A client trusting the certificate the server presents. */
     fun client(): ScionHttp3Client = clientBuilder().build()
 
+    /**
+     * A client for the `.invalid` hosts the server answers `CONNECT` on specially.
+     *
+     * Each is an origin of its own, so each needs its own override, and the certificate names only
+     * [host], so verification is off. The test application is debuggable, so that is logged and
+     * allowed.
+     */
+    fun insecureClientFor(vararg hosts: String): ScionHttp3Client =
+        clientBuilder()
+            .trust(TrustAnchors.insecureNoVerify())
+            .apply { hosts.forEach { dnsOverride(it, target) } }
+            .build()
+
     /** A request to [path] on the server. */
     fun request(path: String): ScionHttp3Request.Builder =
         ScionHttp3Request
@@ -93,6 +123,25 @@ object Fixture {
 
     /** How many times the HTTP/3 server has been stood up again. */
     fun restarts(): Long = stats().get("restarts").asLong
+
+    /** `CONNECT` requests the server accepted. */
+    fun tunnelsStarted(): Long = stats().get("tunnels_started").asLong
+
+    /** Bytes the server echoed through tunnels. */
+    fun tunnelBytes(): Long = stats().get("tunnel_bytes").asLong
+
+    /** Tunnels that ended in a reset rather than a clean end of stream. */
+    fun tunnelsReset(): Long = stats().get("tunnels_reset").asLong
+
+    /** Waits until [tunnelsReset] reaches [atLeast]. */
+    suspend fun awaitTunnelsReset(atLeast: Long) {
+        val deadline = System.nanoTime() + RESET_DEADLINE.inWholeNanoseconds
+        while (System.nanoTime() < deadline) {
+            if (tunnelsReset() >= atLeast) return
+            delay(RESET_POLL)
+        }
+        throw AssertionError("tunnels_reset did not reach $atLeast within $RESET_DEADLINE")
+    }
 
     private fun stats(): JsonObject = JsonParser.parseString(control("/stats")).asJsonObject
 
@@ -185,6 +234,9 @@ object Fixture {
     }
 
     private const val CONTROL_TIMEOUT_MILLIS = 60_000
+
+    private val RESET_DEADLINE: Duration = 60.seconds
+    private val RESET_POLL: Duration = 250.milliseconds
 
     // Long enough for the emulator's networking to come back by itself, which takes well under a
     // second, and short enough that a server nobody started still says so promptly.

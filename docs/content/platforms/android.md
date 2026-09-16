@@ -120,6 +120,21 @@ world
 That is a full SCION round trip: an HTTP/3 request from the emulator, across a SCION network, to a
 server in a different autonomous system.
 
+## Tunnels
+
+`openTunnel` opens a `CONNECT` tunnel to a `host:port` through the gateway on the far side and gives
+you the byte stream. `ScionTunnelSocket` wraps one as a `java.net.Socket`, for a protocol client
+that takes a socket, and `ScionTunnelSocketFactory` hands them to OkHttp:
+
+```kotlin
+val tunnel = client.openTunnel("chat.example.org", 5222)
+
+val socket = ScionTunnelSocket(client)
+socket.connect(InetSocketAddress.createUnresolved("chat.example.org", 5222))
+```
+
+The socket's streams block the calling thread, as `Socket` streams do.
+
 ## Timeouts
 
 The client above sets two limits. `connectTimeout` bounds establishing connectivity to an origin,

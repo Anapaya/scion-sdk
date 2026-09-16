@@ -208,15 +208,58 @@ A deployment with its own authority needs its bundle:
 There is also `TrustAnchors.insecureNoVerify()`, which checks nothing. It exists for a throwaway test
 server, it logs an error every time a client is built with it, and it must never ship.
 
+## Tunnels and sockets
+
+A `CONNECT` tunnel is a byte stream to a `host:port` that the gateway on the far side opens for you.
+It reuses the connection the requests use, and it is what carries a protocol that is not HTTP:
+
+```kotlin
+val tunnel = client.openTunnel("chat.example.org", 5222)
+tunnel.write(hello)
+val reply = tunnel.read(4096)
+tunnel.shutdownWrite()             // the peer sees the end of the stream; reads continue
+tunnel.close()
+```
+
+Cancelling a pending read or write closes the tunnel. The dropped call may have lost the bytes it
+just read or written part of its data, so the stream is not usable after it.
+
+`ScionTunnelSocket` is a `java.net.Socket`. Its `connect(endpoint)` opens the tunnel to the
+endpoint's host name and port, its streams block the calling thread, and `close()` from another
+thread ends a blocked read with `SocketException("Socket closed")`. The options (`tcpNoDelay`,
+`keepAlive`, ...) do not have any effect.
+
+`ScionTunnelSocketFactory` hands them to OkHttp. OkHttp resolves the host itself and gives the socket
+an address, so a host that lives on SCION alone needs a `Dns` that keeps the name on a placeholder:
+
+```kotlin
+val scionHosts = setOf("chat.example.org")
+val okHttp = OkHttpClient.Builder()
+    .socketFactory(ScionTunnelSocketFactory(client))
+    .dns(object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            if (hostname !in scionHosts) throw UnknownHostException(hostname)
+            return listOf(InetAddress.getByAddress(hostname, byteArrayOf(0, 0, 0, 0)))
+        }
+    })
+    .build()
+```
+
+Set the `Dns` and the socket factory on the same client. The factory never connects to the
+placeholder, but a client with the `Dns` and a platform socket factory connects to `0.0.0.0` on the
+device itself.
+
+TLS through the socket needs an `SSLSocket` that works without a file descriptor.
+
 ## What this version does not do
 
 - **No HTTP/1.1 or HTTP/2 fallback.** If SCION cannot carry the request, it fails.
 - **Bodies are held in memory**, in both directions, which suits REST and JSON. Streaming is coming,
   and the API is shaped so that it can arrive without breaking anything.
-- **Kotlin, not Java.** Requests are `suspend` functions, which Java cannot call comfortably. The
-  builders and exceptions are already Java-friendly, and a `Future`-based facade can be added when
+- **Kotlin only** Requests are `suspend` functions, which Java cannot call comfortably. The
+  builders and exceptions are already Java-friendly and a `Future`-based facade can be added when
   there is a need for it.
-- No WebSockets, no server push, no `CONNECT`.
+- No WebSockets, no server push.
 
 ## Testing your own code
 

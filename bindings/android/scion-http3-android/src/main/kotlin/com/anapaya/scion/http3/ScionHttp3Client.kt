@@ -66,6 +66,9 @@ import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
  * Requests are ordinary `suspend` functions and cancel the way any other does. Cancelling one resets
  * its HTTP/3 stream and leaves the connection usable.
  *
+ * [openTunnel] opens a `CONNECT` tunnel over the same connections, as a [ScionHttp3Tunnel] or,
+ * through [ScionTunnelSocket], as a `java.net.Socket`.
+ *
  * The client watches for network changes on its own. After the device moves between Wi-Fi and
  * cellular, connectivity is rebuilt on the next request; nothing has to be called for that to
  * happen. Requests that were in flight when the network went away do fail, and they are marked
@@ -139,6 +142,32 @@ public class ScionHttp3Client internal constructor(
      * @throws ScionHttp3Exception if connectivity cannot be established.
      */
     public suspend fun warmUp(url: String): Unit = withBackend { it.warmUp(url) }
+
+    /**
+     * Opens a `CONNECT` tunnel to [authority].
+     *
+     * The host is resolved and the connection pooled exactly as for a request URL, so the tunnel
+     * shares the connection with the requests to the same origin. The client's `connectTimeout` and
+     * `requestTimeout` bound the `CONNECT` exchange; the open tunnel itself has no deadline.
+     *
+     * Wrap the tunnel in a [ScionTunnelSocket] for code that wants a `java.net.Socket`.
+     *
+     * @throws ScionHttp3Exception if no tunnel was opened. [ScionHttp3Exception.TunnelRefused]
+     *   carries the status the gateway answered with.
+     */
+    public suspend fun openTunnel(authority: ScionHttp3Authority): ScionHttp3Tunnel =
+        withBackend { ScionHttp3Tunnel(it.openTunnel(authority.toString())) }
+
+    /**
+     * Opens a `CONNECT` tunnel to [host] and [port].
+     *
+     * @throws IllegalArgumentException if the two do not make a [ScionHttp3Authority].
+     * @throws ScionHttp3Exception if no tunnel was opened.
+     */
+    public suspend fun openTunnel(
+        host: String,
+        port: Int,
+    ): ScionHttp3Tunnel = openTunnel(ScionHttp3Authority(host, port))
 
     /**
      * Marks connectivity stale, so the next request rebuilds it.

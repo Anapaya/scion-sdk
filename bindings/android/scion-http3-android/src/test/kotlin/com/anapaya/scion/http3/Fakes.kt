@@ -13,6 +13,8 @@ import com.anapaya.scion.http3.internal.NetworkMonitor
 import com.anapaya.scion.http3.internal.PemEncoder
 import com.anapaya.scion.http3.internal.StalenessTracker
 import com.anapaya.scion.http3.internal.SystemTrustStore
+import com.anapaya.scion.http3.internal.TunnelBackend
+import com.anapaya.scion.http3.internal.TunnelCancel
 import com.anapaya.scion.http3.uniffi.Header
 import com.anapaya.scion.http3.uniffi.HttpRequest
 import com.anapaya.scion.http3.uniffi.HttpResponse
@@ -21,30 +23,16 @@ import java.security.KeyStore
 import java.security.cert.X509Certificate
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
+import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
 
-// What the unit tier stands on.
-//
-// These fakes replace the two things a desktop JVM does not have: the native library the generated
-// bindings call, and the Android framework. Everything above them is the real code.
-//
-// What that buys, and what it does not, is worth being precise about. It shows that the decisions
-// this library makes are the right ones *given* that the stack and the framework behave as modelled
-// here. It cannot show that they do behave that way. Whether a cancelled call really reaches the
-// Rust future, and whether the timeouts and error arms mean what they say, is covered by
-// `scion-http3-jvm-test` against a real library and a real SCION topology; whether
-// `ConnectivityManager` delivers what `ConnectivityNetworkMonitor` assumes is covered by the
-// instrumented tests on an emulator.
-//
-// So the fakes are kept deliberately dumb. [FakeBackend] answers with what it was told to answer
-// with and keeps no connection state of its own, because a fake that started modelling the stack
-// would drift from it, and tests would then pass against a model nobody maintains.
-
-/** Records what reached the FFI, and answers with whatever the test set up. */
+/** Records what reached the FFI and answers with whatever the test set up. */
 internal class FakeBackend : Http3Backend {
     val requests: MutableList<HttpRequest> = Collections.synchronizedList(mutableListOf())
     val warmedUp: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    val authorities: MutableList<String> = Collections.synchronizedList(mutableListOf())
     val tokens: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
     val resets = AtomicInteger(0)
@@ -54,10 +42,13 @@ internal class FakeBackend : Http3Backend {
     /** What [execute] answers with. */
     var response: HttpResponse = response(status = 200)
 
+    /** What [openTunnel] answers with. */
+    var tunnel: FakeTunnel = FakeTunnel()
+
     /** Thrown from [execute] instead of answering, when set. */
     var failure: Throwable? = null
 
-    /** When set, [execute] suspends on this until the test completes it. */
+    /** When set, [execute] and [openTunnel] suspend on this until the test completes it. */
     var gate: CompletableDeferred<Unit>? = null
 
     /** Set while a suspended [execute] is cancelled, which is what proves cancellation arrived. */
@@ -102,6 +93,14 @@ internal class FakeBackend : Http3Backend {
         failure?.let { throw it }
     }
 
+    override suspend fun openTunnel(authority: String): TunnelBackend {
+        authorities += authority
+        gate?.await()
+        requireLive()
+        failure?.let { throw it }
+        return tunnel
+    }
+
     override fun reset() {
         resets.incrementAndGet()
         if (resetThrows) throw IllegalStateException("handle already destroyed")
@@ -126,6 +125,132 @@ internal class FakeBackend : Http3Backend {
         // The wording the generated bindings use, so a test asserting on it is asserting on what a
         // caller would really see.
         check(!destroyed) { "ScionHttp3Client object has already been destroyed" }
+    }
+}
+
+/** A tunnel that answers reads from a script and records everything else. */
+internal class FakeTunnel : TunnelBackend {
+    /** What successive reads answer with: a [ByteArray] to return or a [Throwable] to throw. */
+    val reads: ArrayDeque<Any> = ArrayDeque()
+
+    /** The `max` each read was asked for. */
+    val maxima: MutableList<Int> = Collections.synchronizedList(mutableListOf())
+    val written: MutableList<ByteArray> = Collections.synchronizedList(mutableListOf())
+
+    val shutdownWrites = AtomicInteger(0)
+    val aborts = AtomicInteger(0)
+    val closes = AtomicInteger(0)
+    val cancelsCreated = AtomicInteger(0)
+
+    /** Thrown from [write] instead of recording it, when set. */
+    var writeFailure: Throwable? = null
+
+    @Volatile
+    var destroyed: Boolean = false
+
+    @Volatile
+    private var aborted: Boolean = false
+
+    @Volatile
+    private var writeShut: Boolean = false
+
+    private val pending = AtomicReference<CompletableDeferred<ByteArray>?>(null)
+
+    /** Whether a read is waiting for the peer right now. */
+    val isReadPending: Boolean get() = pending.get() != null
+
+    override suspend fun read(max: Int): ByteArray = readScripted(max, null)
+
+    override suspend fun read(
+        max: Int,
+        cancel: TunnelCancel,
+    ): ByteArray = readScripted(max, cancel as FakeTunnelCancel)
+
+    private suspend fun readScripted(
+        max: Int,
+        cancel: FakeTunnelCancel?,
+    ): ByteArray {
+        requireLive()
+        maxima += max
+        if (aborted) throw abortedFailure()
+        // A fired cancellation ends the call before it starts, as the stack's does.
+        if (cancel?.fired == true) throw cancelledFailure()
+        val next = reads.removeFirstOrNull() ?: return awaitPeer(cancel)
+        if (next is Throwable) throw next
+        return next as ByteArray
+    }
+
+    private suspend fun awaitPeer(cancel: FakeTunnelCancel?): ByteArray {
+        val waiting = CompletableDeferred<ByteArray>()
+        check(pending.compareAndSet(null, waiting)) { "the fake models one pending read" }
+        cancel?.pending = waiting
+        try {
+            return waiting.await()
+        } finally {
+            pending.set(null)
+        }
+    }
+
+    override fun newCancel(): TunnelCancel {
+        cancelsCreated.incrementAndGet()
+        return FakeTunnelCancel()
+    }
+
+    override suspend fun write(data: ByteArray) {
+        requireLive()
+        if (aborted) throw abortedFailure()
+        if (writeShut) {
+            throw FfiException.TunnelClosed(false, "the write direction was shut down")
+        }
+        writeFailure?.let { throw it }
+        written += data
+    }
+
+    override suspend fun shutdownWrite() {
+        requireLive()
+        if (aborted) throw abortedFailure()
+        shutdownWrites.incrementAndGet()
+        writeShut = true
+    }
+
+    override fun abort() {
+        aborts.incrementAndGet()
+        aborted = true
+        pending.get()?.completeExceptionally(abortedFailure())
+    }
+
+    override fun close() {
+        closes.incrementAndGet()
+        destroyed = true
+    }
+
+    private fun requireLive() {
+        check(!destroyed) { "Tunnel object has already been destroyed" }
+    }
+
+    private fun abortedFailure() = FfiException.TunnelClosed(false, "the tunnel was aborted")
+
+    private fun cancelledFailure() = FfiException.Cancelled(false, "the call was cancelled")
+
+    /** Ends the read that is waiting for the peer as the stack's runtime would. */
+    inner class FakeTunnelCancel : TunnelCancel {
+        @Volatile
+        var fired: Boolean = false
+
+        @Volatile
+        var closed: Boolean = false
+
+        @Volatile
+        internal var pending: CompletableDeferred<ByteArray>? = null
+
+        override fun cancel() {
+            fired = true
+            pending?.completeExceptionally(cancelledFailure())
+        }
+
+        override fun close() {
+            closed = true
+        }
     }
 }
 

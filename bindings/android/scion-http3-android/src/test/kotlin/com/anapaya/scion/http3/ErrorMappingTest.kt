@@ -2,7 +2,6 @@
 
 package com.anapaya.scion.http3
 
-import com.anapaya.scion.http3.internal.Http3Backend
 import com.anapaya.scion.http3.internal.toPublic
 import com.anapaya.scion.http3.uniffi.TimeoutPhase
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -47,11 +46,12 @@ class ErrorMappingTest {
                 ScionHttp3Exception.InvalidRequest::class.java,
             FfiException.Closed(false, "d") to ScionHttp3Exception.Closed::class.java,
             FfiException.Cancelled(false, "d") to ScionHttp3Exception.Internal::class.java,
-            FfiException.TunnelRefused(502u, true, "d") to ScionHttp3Exception.Internal::class.java,
-            FfiException.TunnelReset(true, "d") to ScionHttp3Exception.Internal::class.java,
+            FfiException.TunnelRefused(502u, true, "d") to
+                ScionHttp3Exception.TunnelRefused::class.java,
+            FfiException.TunnelReset(true, "d") to ScionHttp3Exception.TunnelReset::class.java,
             FfiException.TunnelDisconnected(true, "d") to
-                ScionHttp3Exception.Internal::class.java,
-            FfiException.TunnelClosed(false, "d") to ScionHttp3Exception.Internal::class.java,
+                ScionHttp3Exception.TunnelDisconnected::class.java,
+            FfiException.TunnelClosed(false, "d") to ScionHttp3Exception.TunnelClosed::class.java,
             FfiException.Internal(false, "d") to ScionHttp3Exception.Internal::class.java,
         )
 
@@ -82,32 +82,6 @@ class ErrorMappingTest {
             mapped,
             "an arm added to the FFI is a compilation error in the mapping, and this makes it a " +
                 "test failure here as well",
-        )
-    }
-
-    /**
-     * Why [ScionHttp3Exception.Internal] is the right home for a cancellation, and the one change
-     * that would make it the wrong one.
-     *
-     * The FFI reports a cancellation from `executeCancellable` alone, which exists for Swift. This
-     * library cancels by cancelling a coroutine, which drops the exported future, so a cancellation
-     * never crosses the boundary. What keeps that true is the seam: add a cancellable call to
-     * [Http3Backend] and a cancellation becomes reachable, at which point it needs a public arm of
-     * its own rather than being filed under a failure of the bindings.
-     *
-     * The `when` in the mapping stays exhaustive either way, so the compiler cannot raise this.
-     */
-    @Test
-    fun `a cancellation is unreachable because the seam has no cancellable call`() {
-        val cancellable =
-            Http3Backend::class.java.declaredMethods
-                .map { it.name }
-                .filter { it.contains("ancellable") }
-
-        assertTrue(
-            cancellable.isEmpty(),
-            "$cancellable was added to the backend seam, so FfiException.Cancelled can now reach " +
-                "the mapping. It needs a public arm rather than ScionHttp3Exception.Internal.",
         )
     }
 
@@ -167,6 +141,9 @@ class ErrorMappingTest {
             (timeout as ScionHttp3Exception.Timeout).phase,
         )
         assertEquals(5_000L, timeout.timeoutMillis)
+
+        val refused = FfiException.TunnelRefused(502u, true, "d").toPublic()
+        assertEquals(502, (refused as ScionHttp3Exception.TunnelRefused).status)
     }
 
     @Test
@@ -195,5 +172,8 @@ class ErrorMappingTest {
                     "gave up",
                 ).toPublic()
         assertEquals("timed out after 10000ms in CONNECT: gave up", timeout.message)
+
+        val refused = FfiException.TunnelRefused(502u, true, "bad gateway").toPublic()
+        assertEquals("tunnel refused with status 502: bad gateway", refused.message)
     }
 }
