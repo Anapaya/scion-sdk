@@ -26,7 +26,7 @@ class MainActivity : Activity() {
     private var helloScion: HelloScion? = null
 
     private lateinit var output: TextView
-    private lateinit var send: Button
+    private val buttons = mutableListOf<Button>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,28 +41,28 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun onSendClicked() {
-        send.isEnabled = false
+    /** Runs [action] against the client and shows what it returns or how it failed. */
+    private fun run(action: suspend (HelloScion) -> String) {
+        buttons.forEach { it.isEnabled = false }
         output.text = getString(R.string.sending)
         scope.launch {
-            output.text = sendRequest()
-            send.isEnabled = true
+            output.text = attempt(action)
+            buttons.forEach { it.isEnabled = true }
         }
     }
 
-    private suspend fun sendRequest(): String =
+    private suspend fun attempt(action: suspend (HelloScion) -> String): String =
         try {
-            val reply = client().hello()
-            "${reply.code}\n\n${reply.body}"
+            action(client())
         } catch (e: ScionHttp3Exception) {
             describe(e)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Reading the test network's configuration happens before any SCION call, so it fails
-            // on its own terms. The screen is the only place a reader can see that.
             "${e::class.simpleName}: ${e.message ?: e}"
         }
+
+    private fun HelloScion.Reply.render(): String = "$code\n\n$body"
 
     /** The client, built on first use and kept for the activity's life. */
     private suspend fun client(): HelloScion =
@@ -94,11 +94,10 @@ class MainActivity : Activity() {
     private fun buildLayout(): LinearLayout {
         val padding = (16 * resources.displayMetrics.density).toInt()
 
-        send =
-            Button(this).apply {
-                text = getString(R.string.send_request)
-                setOnClickListener { onSendClicked() }
-            }
+        button(R.string.send_request) { it.hello().render() }
+        button(R.string.echo_tunnel) { it.tunnels.echo("hello over a tunnel") }
+        button(R.string.echo_socket) { it.tunnels.echoThroughSocket("hello over a socket") }
+        button(R.string.fetch_okhttp) { it.tunnels.fetchWithOkHttp().render() }
 
         output =
             TextView(this).apply {
@@ -115,8 +114,19 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.TOP
             setPadding(padding, padding, padding, padding)
-            addView(send, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+            buttons.forEach { addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
             addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         }
+    }
+
+    private fun button(
+        label: Int,
+        action: suspend (HelloScion) -> String,
+    ) {
+        buttons +=
+            Button(this).apply {
+                text = getString(label)
+                setOnClickListener { run(action) }
+            }
     }
 }

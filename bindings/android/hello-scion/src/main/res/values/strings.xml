@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="send_request">Send request</string>
-    <string name="press_send">Start the test server, then press Send request.</string>
+    <string name="echo_tunnel">Echo through a tunnel</string>
+    <string name="echo_socket">Echo through a socket</string>
+    <string name="fetch_okhttp">Fetch with OkHttp</string>
+    <string name="press_send">Start the test server, then press a button.</string>
     <string name="sending">Sending…</string>
 </resources>

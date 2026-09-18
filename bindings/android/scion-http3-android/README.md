@@ -249,7 +249,7 @@ Set the `Dns` and the socket factory on the same client. The factory never conne
 placeholder, but a client with the `Dns` and a platform socket factory connects to `0.0.0.0` on the
 device itself.
 
-TLS through the socket needs an `SSLSocket` that works without a file descriptor.
+An `https` URL works too: OkHttp layers the platform's `SSLSocket` over the tunnel socket.
 
 ## What this version does not do
 

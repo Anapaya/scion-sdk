@@ -53,6 +53,8 @@ dependencies {
         implementation(project(":scion-http3-android"))
     }
     implementation(libs.kotlinx.coroutines.android)
+    // For Tunnels.kt, which sends an OkHttp request through a tunnel.
+    implementation(libs.okhttp)
 }
 
 ktlint {

@@ -21,6 +21,7 @@ use pocketscion::util::{
     dev_auth_token,
     topologies::{IA212, PsSetup},
 };
+use rustls::pki_types::PrivatePkcs8KeyDer;
 use scion_quic::{quic::config::QuicConfig, reexport::squiche, socket::GenericScionUdpSocket};
 use scion_stack::{ScionStack, ScionStackBuilder};
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
@@ -30,7 +31,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Options, app};
 
-/// The name in the server certificate, and therefore the host a client must use.
+/// The host a client addresses the server by. The certificate names it, and the two hosts in
+/// [`app`] that serve HTTP inside a tunnel.
 pub const SERVER_NAME: &str = "localhost";
 
 type BoxError = Box<dyn std::error::Error>;
@@ -98,8 +100,23 @@ impl Http3Server {
             .build()
             .await?;
 
-        let cert = rcgen::generate_simple_self_signed(vec![SERVER_NAME.to_string()])?;
+        let cert = rcgen::generate_simple_self_signed(vec![
+            SERVER_NAME.to_string(),
+            app::HTTP1_HOST.to_string(),
+            app::TLS_HOST.to_string(),
+        ])?;
         let ca_pem = cert.cert.pem();
+        let tls = Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()?
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![cert.cert.der().clone()],
+                PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der()).into(),
+            )?,
+        );
         let cert_file = write_temp_file(ca_pem.as_bytes())?;
         let key_file = write_temp_file(cert.signing_key.serialize_pem().as_bytes())?;
 
@@ -117,7 +134,7 @@ impl Http3Server {
             _stack: stack,
             socket,
             bind_addr,
-            router: app::router(counters),
+            router: app::router(counters, tls),
             max_streams: options.max_streams,
             alpn: options.alpn.as_bytes().to_vec(),
             cert_file,

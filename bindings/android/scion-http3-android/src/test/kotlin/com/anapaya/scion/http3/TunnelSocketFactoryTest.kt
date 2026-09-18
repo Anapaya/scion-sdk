@@ -2,6 +2,9 @@
 
 package com.anapaya.scion.http3
 
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
@@ -9,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.net.InetAddress
+import java.net.UnknownHostException
 import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
 
 class TunnelSocketFactoryTest {
@@ -46,6 +50,40 @@ class TunnelSocketFactoryTest {
             ),
             factory.backend.authorities,
         )
+    }
+
+    @Test
+    fun `OkHttp sends a request through the socket and reads the answer`() {
+        val tunnel = factory.backend.tunnel
+        tunnel.reads.addLast(
+            "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nworld".toByteArray(),
+        )
+        val okHttp =
+            OkHttpClient
+                .Builder()
+                .socketFactory(sockets)
+                .dns(
+                    object : Dns {
+                        override fun lookup(hostname: String): List<InetAddress> {
+                            if (hostname != "chat.example.org") throw UnknownHostException(hostname)
+                            return listOf(InetAddress.getByAddress(hostname, bytesOf(0, 0, 0, 0)))
+                        }
+                    },
+                ).build()
+        val request = Request.Builder().url("http://chat.example.org:8080/hello").build()
+
+        val body =
+            okHttp.newCall(request).execute().use { response ->
+                assertEquals(200, response.code)
+                response.body!!.string()
+            }
+
+        assertEquals("world", body)
+        assertEquals(listOf("chat.example.org:8080"), factory.backend.authorities)
+        val sent = tunnel.written.fold(ByteArray(0)) { all, part -> all + part }.decodeToString()
+        assertTrue(sent.startsWith("GET /hello HTTP/1.1\r\n"), sent)
+        assertTrue(sent.contains("Host: chat.example.org:8080\r\n"), sent)
+        okHttp.dispatcher.executorService.shutdown()
     }
 
     @Test

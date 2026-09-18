@@ -34,15 +34,20 @@
 //! | `CONNECT localhost:<port>` | Every byte written into the tunnel, echoed back | Byte streams through a `CONNECT` tunnel. See [`Counters::tunnels_started`], [`Counters::tunnel_bytes`] and [`Counters::tunnels_reset`]. |
 //! | `CONNECT status-<code>.invalid:<port>` | That status and no tunnel | A refused tunnel. The certificate names `localhost` only, so the client must not verify the server for this authority. |
 //! | `CONNECT reset.invalid:<port>` | The first chunk echoed, then a stream reset | A tunnel the peer resets while it is in use. |
+//! | `CONNECT http.invalid:<port>` | An HTTP/1.1 server inside the tunnel, with these same routes | A protocol client that speaks through a `java.net.Socket` or another byte stream. |
+//! | `CONNECT https.invalid:<port>` | A TLS server with the same certificate, then HTTP/1.1 inside | TLS through a tunnel, verified against the same authority. |
 //!
 //! A `CONNECT` request carries no path, so it reaches the router's fallback rather than a route.
-//! The `count` middleware still runs for it and records it under the empty path.
+//! The `count` middleware still runs for it and records it under the empty path. The certificate
+//! names `localhost` and the two hosts that serve HTTP inside a tunnel, and no other host.
 //!
 //! [`Counters`] is what a caller reads to see what the server saw. `GET /stats` on the binary's
 //! control API reports the same numbers to a harness in another language.
 
 use std::{
     collections::BTreeMap,
+    convert::Infallible,
+    io,
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -53,7 +58,7 @@ use std::{
 };
 
 use axum::{
-    Router,
+    Extension, Router,
     body::{Body, Bytes},
     extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
@@ -61,12 +66,29 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, get, post},
 };
+use futures::{SinkExt, TryStreamExt};
+use hyper_util::{rt::TokioIo, service::TowerToHyperService};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::mpsc,
+};
+use tokio_rustls::TlsAcceptor;
+use tokio_util::{
+    io::{CopyToBytes, SinkWriter, StreamReader},
+    sync::PollSender,
+};
 
 /// How often the endless body produces a chunk.
 ///
 /// Public because a test that waits for the count to settle has to know the cadence it is waiting
 /// out, and a copy of this number in the test would drift from it.
 pub const ENDLESS_BODY_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The `CONNECT` host that serves HTTP/1.1 inside the tunnel.
+pub const HTTP1_HOST: &str = "http.invalid";
+
+/// The `CONNECT` host that serves TLS, and HTTP/1.1 inside it, inside the tunnel.
+pub const TLS_HOST: &str = "https.invalid";
 
 /// The largest body `/big` will produce.
 ///
@@ -111,7 +133,7 @@ pub struct Counters {
     restarts: AtomicU64,
     /// `CONNECT` tunnels the server accepted.
     tunnels_started: AtomicU64,
-    /// Bytes that arrived through accepted tunnels, all of them echoed.
+    /// Bytes that arrived through echo tunnels, all of them echoed.
     tunnel_bytes: AtomicU64,
     /// Accepted tunnels that ended with a transport error or before the end of the stream rather
     /// than with a clean end of stream.
@@ -246,7 +268,22 @@ fn counts(counters: &Mutex<BTreeMap<String, Arc<AtomicU64>>>) -> BTreeMap<String
 }
 
 /// The application the HTTP/3 server serves.
-pub fn router(counters: Arc<Counters>) -> Router {
+///
+/// `tls` is the identity the `https.invalid` tunnel presents. It has to be the certificate the
+/// HTTP/3 server presents, so that a client verifies both against the same authority.
+pub fn router(counters: Arc<Counters>, tls: Arc<rustls::ServerConfig>) -> Router {
+    let inside_tunnels = Arc::new(InsideTunnel {
+        router: with_counting(routes(), counters.clone()),
+        tls,
+    });
+    with_counting(
+        routes().fallback(tunnel).layer(Extension(inside_tunnels)),
+        counters,
+    )
+}
+
+/// The routes, without the tunnel fallback: what is served both over HTTP/3 and inside a tunnel.
+fn routes() -> Router<Arc<Counters>> {
     Router::new()
         .route("/hello", get(|| async { "world" }))
         .route("/echo", post(echo))
@@ -263,7 +300,11 @@ pub fn router(counters: Arc<Counters>) -> Router {
         .route("/invalid-utf8", get(invalid_utf8))
         .route("/endless-body", get(endless_body))
         .route("/reset-stream", get(reset_stream))
-        .fallback(tunnel)
+}
+
+/// Adds the counting middleware and the state to `router`.
+fn with_counting(router: Router<Arc<Counters>>, counters: Arc<Counters>) -> Router {
+    router
         // axum refuses a request body over 2 MiB by default, which is a sensible thing for a server
         // that takes bodies from strangers and the wrong thing here: the limits under test are the
         // client's own, and a test that wants to push megabytes through the transport should get a
@@ -426,13 +467,21 @@ async fn endless_body(
     Response::new(Body::from_stream(stream))
 }
 
-/// Answers a `CONNECT` request with an echo tunnel, keyed on the authority's host as the route
-/// table describes. Anything else that reaches the fallback is a 404.
-async fn tunnel(State(counters): State<Arc<Counters>>, request: Request) -> Response {
+/// Answers a `CONNECT` request as the route table describes, keyed on the authority's host.
+/// Anything else that reaches the fallback is a 404.
+async fn tunnel(
+    State(counters): State<Arc<Counters>>,
+    Extension(inside): Extension<Arc<InsideTunnel>>,
+    request: Request,
+) -> Response {
     if request.method() != Method::CONNECT {
         return StatusCode::NOT_FOUND.into_response();
     }
     let host = request.uri().host().unwrap_or_default().to_owned();
+    if host == HTTP1_HOST || host == TLS_HOST {
+        counters.tunnels_started.fetch_add(1, Ordering::Relaxed);
+        return inside.serve(request.into_body(), host == TLS_HOST);
+    }
     if let Some(code) = host
         .strip_prefix("status-")
         .and_then(|rest| rest.strip_suffix(".invalid"))
@@ -454,6 +503,60 @@ async fn tunnel(State(counters): State<Arc<Counters>>, request: Request) -> Resp
         fail_next: false,
         done: false,
     }))
+}
+
+/// What the `http.invalid` and `https.invalid` tunnels serve.
+struct InsideTunnel {
+    router: Router,
+    tls: Arc<rustls::ServerConfig>,
+}
+
+impl InsideTunnel {
+    /// Serves one HTTP/1.1 connection over the tunnel whose request body is `inbound`, and returns
+    /// the response whose body carries what the server writes.
+    ///
+    /// The connection runs in its own task, because the tunnel is open only once this response is
+    /// returned. It ends when the client ends the tunnel or drops the response body.
+    fn serve(&self, inbound: Body, with_tls: bool) -> Response {
+        let (tx, mut rx) = mpsc::channel::<Bytes>(16);
+        let reader = StreamReader::new(inbound.into_data_stream().map_err(io::Error::other));
+        let writer = SinkWriter::new(CopyToBytes::new(
+            PollSender::new(tx).sink_map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe)),
+        ));
+        let io = tokio::io::join(reader, writer);
+        let router = self.router.clone();
+        let tls = self.tls.clone();
+        tokio::spawn(async move {
+            let served = if with_tls {
+                match TlsAcceptor::from(tls).accept(io).await {
+                    Ok(io) => serve_http1(io, router).await,
+                    Err(error) => Err(error.into()),
+                }
+            } else {
+                serve_http1(io, router).await
+            };
+            if let Err(error) = served {
+                tracing::debug!(%error, "an HTTP/1.1 connection inside a tunnel ended");
+            }
+        });
+        let outbound = futures::stream::poll_fn(move |cx| {
+            rx.poll_recv(cx).map(|chunk| chunk.map(Ok::<_, Infallible>))
+        });
+        Response::new(Body::from_stream(outbound))
+    }
+}
+
+async fn serve_http1<I>(
+    io: I,
+    router: Router,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    hyper::server::conn::http1::Builder::new()
+        .serve_connection(TokioIo::new(io), TowerToHyperService::new(router))
+        .await?;
+    Ok(())
 }
 
 /// The response body of a tunnel: the request body, echoed as it arrives.

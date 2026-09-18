@@ -19,7 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use scion_h3_test_server::{Options, TestServer};
+use scion_h3_test_server::{Options, TestServer, app::HTTP1_HOST};
 use scion_http3_ffi::{
     CancelHandle, ClientConfig, DnsOverride, HttpRequest, ScionHttp3Client, ScionHttp3Error,
     TrustAnchors, Tunnel, default_client_config,
@@ -623,4 +623,50 @@ async fn a_handle_that_never_fires_delivers_the_bytes() {
         .expect("reading");
 
     assert_eq!(echoed, b"cancellable");
+}
+
+/// The `http.invalid` tunnel serves HTTP/1.1 inside the tunnel, which is what a protocol client
+/// speaking through a socket adapter sees.
+#[test(tokio::test)]
+#[ntest::timeout(120_000)]
+async fn an_http1_tunnel_answers_a_request_written_into_it() {
+    let server = test_server().await;
+    let client = client_with_trust(
+        &server,
+        TrustAnchors::Pem {
+            pem: server.ca_pem().as_bytes().to_vec(),
+        },
+        &["localhost", HTTP1_HOST],
+    );
+    let started = server.counters().tunnels_started();
+
+    let tunnel = client
+        .connect(authority(&server, HTTP1_HOST))
+        .await
+        .expect("opening the HTTP/1.1 tunnel");
+    let request = format!("GET /hello HTTP/1.1\r\nHost: {HTTP1_HOST}\r\nConnection: close\r\n\r\n");
+    tunnel
+        .write(request.into_bytes())
+        .await
+        .expect("writing the request");
+
+    let mut response = Vec::new();
+    loop {
+        let chunk = tunnel.read(4096).await.expect("reading the response");
+        if chunk.is_empty() {
+            break;
+        }
+        response.extend_from_slice(&chunk);
+    }
+    let response = String::from_utf8(response).expect("a UTF-8 response");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK\r\n"),
+        "unexpected response: {response:?}"
+    );
+    assert!(
+        response.ends_with("\r\n\r\nworld"),
+        "unexpected response: {response:?}"
+    );
+    assert_eq!(server.counters().tunnels_started(), started + 1);
+    assert_eq!(server.counters().requests("/hello"), 1);
 }

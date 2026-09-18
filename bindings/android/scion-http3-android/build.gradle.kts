@@ -337,11 +337,14 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
+    // A consumer of the socket factory.
+    testImplementation(libs.okhttp)
 
     // The instrumented tier using the android emulator.
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.gson)
+    androidTestImplementation(libs.okhttp)
 }
 
 // Every task that reads the main source set has to be told about generateBindings by hand. Adding

@@ -35,10 +35,14 @@ class HelloScion(
             .trust(TrustAnchors.pinned(network.caPem.toByteArray()))
             // The test network publishes no records for its server, so resolve its host directly.
             .dnsOverride(URI(network.baseUrl).host, ScionAddress.parse(network.target))
+            .dnsOverride(Tunnels.HTTP_HOST, ScionAddress.parse(network.target))
             .connectTimeout(30.seconds)
             .requestTimeout(60.seconds)
             .build()
     // ANCHOR_END: build-client
+
+    /** Tunnels over the same client. */
+    val tunnels = Tunnels(client, network)
 
     // ANCHOR: request
 

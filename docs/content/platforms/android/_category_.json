@@ -1,0 +1,10 @@
+{
+  "label": "Android",
+  "position": 1,
+  "link": {
+    "type": "generated-index",
+    "title": "Android",
+    "slug": "/platforms/android",
+    "description": "The SCION HTTP/3 client as a prebuilt Android library. The first guide takes an app developer from nothing to an HTTP/3 request over SCION on an emulator. The second carries a protocol that is not HTTP/3 through a CONNECT tunnel on the same client."
+  }
+}

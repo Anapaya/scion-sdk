@@ -28,6 +28,12 @@ internal const val TEST_TIMEOUT_MILLIS = 180_000L
  * The `scion-h3-test-server` used in the e2e tests.
  */
 object Fixture {
+    /** The `CONNECT` host the server answers with HTTP/1.1 inside the tunnel. */
+    const val HTTP1_HOST = "http.invalid"
+
+    /** The `CONNECT` host the server answers with HTTPS inside the tunnel. */
+    const val TLS_HOST = "https.invalid"
+
     /** What `GET /info` says. The fields are the test server's, named as it names them. */
     data class Info(
         val endhostApiUrl: String,
@@ -96,13 +102,13 @@ object Fixture {
     /** A client trusting the certificate the server presents. */
     fun client(): ScionHttp3Client = clientBuilder().build()
 
-    /**
-     * A client for the `.invalid` hosts the server answers `CONNECT` on specially.
-     *
-     * Each is an origin of its own, so each needs its own override, and the certificate names only
-     * [host], so verification is off. The test application is debuggable, so that is logged and
-     * allowed.
-     */
+    /**cA client trusting the server's certificate which resolves [hosts] to the server as well. */
+    fun clientFor(vararg hosts: String): ScionHttp3Client =
+        clientBuilder()
+            .apply { hosts.forEach { dnsOverride(it, target) } }
+            .build()
+
+    /** A client for the `.invalid` hosts the server refuses or resets a `CONNECT` on. */
     fun insecureClientFor(vararg hosts: String): ScionHttp3Client =
         clientBuilder()
             .trust(TrustAnchors.insecureNoVerify())

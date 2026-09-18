@@ -16,8 +16,11 @@ axum = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
 http-body = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["server", "service", "tokio"] }
 pocketscion = { workspace = true }
 rcgen = { workspace = true }
+rustls = { workspace = true }
 scion-h3-axum = { workspace = true }
 scion-quic = { workspace = true }
 scion-sdk-utils = { workspace = true }
@@ -26,7 +29,8 @@ sciparse = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio-rustls = { workspace = true }
+tokio-util = { workspace = true, features = ["io"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 

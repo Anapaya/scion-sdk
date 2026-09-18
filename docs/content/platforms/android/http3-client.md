@@ -1,5 +1,5 @@
 ---
-title: Android
+title: HTTP/3 client
 sidebar_position: 1
 description: From nothing to an HTTP/3 request over SCION from an Android emulator.
 ---
@@ -95,7 +95,7 @@ brings connectivity up.
 fixed addresses and does nothing else: the port and the name the certificate has to match still
 come from the URL, so the URL stays truthful about where the request went. The override applies to
 every request URL and `CONNECT` authority with that host. If you give several addresses, the client
-races them.
+races them. The second override in the sample is for the [tunnels guide](tunnels.md).
 
 The sample reads those five values from the test network's control API, in
 [`LocalNetwork.kt`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/android/hello-scion/src/main/kotlin/com/anapaya/scion/http3/hello/LocalNetwork.kt),
@@ -122,18 +122,10 @@ server in a different autonomous system.
 
 ## Tunnels
 
-`openTunnel` opens a `CONNECT` tunnel to a `host:port` through the gateway on the far side and gives
-you the byte stream. `ScionTunnelSocket` wraps one as a `java.net.Socket`, for a protocol client
-that takes a socket, and `ScionTunnelSocketFactory` hands them to OkHttp:
-
-```kotlin
-val tunnel = client.openTunnel("chat.example.org", 5222)
-
-val socket = ScionTunnelSocket(client)
-socket.connect(InetSocketAddress.createUnresolved("chat.example.org", 5222))
-```
-
-The socket's streams block the calling thread, as `Socket` streams do.
+The same client carries traffic that is not an HTTP/3 request. A `CONNECT` tunnel gives you a byte
+stream to a `host:port`, forwarded by the HTTP/3 server on the far side, and the library wraps it
+as a `java.net.Socket` and as a socket factory for OkHttp. The [tunnels guide](tunnels.md) covers
+all three, with the same sample app.
 
 ## Timeouts
 
@@ -208,8 +200,8 @@ Cancellation needs nothing special: cancel the coroutine, and the request is can
 - **The library README** —
   [`bindings/android/scion-http3-android/README.md`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/android/scion-http3-android)
   is the reference for the whole API, including request bodies, headers and trailers.
-- **The concepts pages** — [addressing](../concepts/addressing.md) explains what
-  `2-ff00:0:212,127.0.0.1` means, and [transport underlays](../concepts/transport-underlays.md)
+- **The concepts pages** — [addressing](../../concepts/addressing.md) explains what
+  `2-ff00:0:212,127.0.0.1` means, and [transport underlays](../../concepts/transport-underlays.md)
   explains the `--underlay` option above.
 - **The sample app** —
   [`bindings/android/hello-scion`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/android/hello-scion)

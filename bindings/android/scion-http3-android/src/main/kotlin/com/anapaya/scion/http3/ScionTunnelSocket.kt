@@ -37,8 +37,7 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * Do not use one on the main thread. Every call blocks for a network round trip.
  *
- * TLS through this socket needs an `SSLSocket` implementation that works without a file
- * descriptor.
+ * The platform's `SSLSocket` layers over this socket, so TLS through the tunnel works.
  */
 public class ScionTunnelSocket private constructor(
     impl: TunnelSocketImpl,
