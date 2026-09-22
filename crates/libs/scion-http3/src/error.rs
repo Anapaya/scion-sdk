@@ -26,7 +26,7 @@ use std::{borrow::Cow, error::Error as StdError, fmt, time::Duration};
 
 use scion_quic::{
     h3::client::{
-        CollectError, CollectToStringError, EstablishError, RequestError as H3RequestError,
+        CollectError, CollectToStringError, EstablishError, H3Error, RequestError as H3RequestError,
     },
     reexport::squiche,
 };
@@ -293,6 +293,9 @@ impl Error {
     }
 
     /// Maps a body-collection error to the taxonomy.
+    ///
+    /// A peer reset that arrives while the body streams is the same failure as
+    /// one that arrives before the head.
     pub(crate) fn from_collect_error(err: CollectError, limit: Option<usize>) -> Error {
         match err {
             CollectError::TooLarge => {
@@ -300,6 +303,7 @@ impl Error {
                     limit: limit.unwrap_or(usize::MAX),
                 }
             }
+            CollectError::H3(H3Error::Reset(code)) => Error::StreamReset { code },
             _ => {
                 Error::Protocol {
                     source: Box::new(err),
@@ -320,6 +324,7 @@ impl Error {
                 }
             }
             CollectToStringError::Utf8(source) => Error::InvalidBody { source },
+            CollectToStringError::H3(H3Error::Reset(code)) => Error::StreamReset { code },
             CollectToStringError::H3(_) => {
                 Error::Protocol {
                     source: Box::new(err),
@@ -536,6 +541,22 @@ mod tests {
         assert!(matches!(rejected, Error::Tls { .. }));
         assert!(!rejected.is_retryable());
         assert!(rejected.to_string().contains("example.org"));
+    }
+
+    #[test]
+    fn a_reset_while_the_body_streams_is_a_stream_reset() {
+        let collected = Error::from_collect_error(CollectError::H3(H3Error::Reset(0x10c)), None);
+        assert!(matches!(collected, Error::StreamReset { code: 0x10c }));
+        assert!(collected.is_retryable());
+
+        let text = Error::from_collect_to_string_error(
+            CollectToStringError::H3(H3Error::Reset(0x10c)),
+            None,
+        );
+        assert!(matches!(text, Error::StreamReset { code: 0x10c }));
+
+        let closed = Error::from_collect_error(CollectError::H3(H3Error::ConnectionClosed), None);
+        assert!(matches!(closed, Error::Protocol { .. }));
     }
 
     #[test]

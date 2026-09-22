@@ -84,6 +84,9 @@ use tokio_util::{
 /// out, and a copy of this number in the test would drift from it.
 pub const ENDLESS_BODY_INTERVAL: Duration = Duration::from_millis(50);
 
+/// How long `GET /reset-stream` waits between the first chunk and the body error.
+const RESET_DELAY: Duration = Duration::from_millis(100);
+
 /// The `CONNECT` host that serves HTTP/1.1 inside the tunnel.
 pub const HTTP1_HOST: &str = "http.invalid";
 
@@ -432,11 +435,17 @@ async fn invalid_utf8() -> Response {
 /// the client sees `RESET_STREAM` after a response it had already begun to read. That ordering is
 /// the point: a client that only ever sees clean responses and unreachable peers has no test for
 /// the arm in between, and there is no way to provoke it from the client side.
+///
+/// The error waits [`RESET_DELAY`] so that the ordering holds on the wire as well.
 async fn reset_stream() -> Response {
-    let stream = futures::stream::iter([
-        Ok(Bytes::from_static(b"partial")),
-        Err(std::io::Error::other("deliberate mid-body failure")),
-    ]);
+    use futures::StreamExt as _;
+
+    let stream = futures::stream::iter([Ok(Bytes::from_static(b"partial"))]).chain(
+        futures::stream::once(async {
+            tokio::time::sleep(RESET_DELAY).await;
+            Err(std::io::Error::other("deliberate mid-body failure"))
+        }),
+    );
     Response::new(Body::from_stream(stream))
 }
 
