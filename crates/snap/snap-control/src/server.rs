@@ -29,14 +29,12 @@ use tower_http::cors::CorsLayer;
 use url::Url;
 
 use crate::{
-    api::{
-        crpc::{
-            model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
-            nest_crpc_api,
-        },
-        http::{model::PgWapSessionManager, nest_http_api},
+    api::crpc::{
+        model::{SnapDataPlaneResolver, SnapTunIdentityRegistry},
+        nest_crpc_api,
     },
     model::UnderlayDiscovery,
+    pg_wap::crpc::model::ControlServiceAPIHandler,
     server::{
         auth::AuthMiddlewareLayer,
         metrics::{Metrics, PrometheusMiddlewareLayer},
@@ -61,7 +59,7 @@ pub fn build_router<UD, SL, SR, IR>(
     segment_lister: SL,
     snap_resolver: SR,
     identity_registry: Arc<IR>,
-    pg_wap_session_manager: Option<Arc<dyn PgWapSessionManager>>,
+    wap_control_api: Option<Arc<dyn ControlServiceAPIHandler>>,
     token_verifier: SnapTokenVerifier,
     metrics: Metrics,
 ) -> std::io::Result<Router>
@@ -89,18 +87,21 @@ where
     let mut router = Router::new();
     // XXX(bunert): For now the pathguard WAP HTTP API is unauthenticated. This will change in the
     // future.
-    if let Some(pg_wap_session_manager) = pg_wap_session_manager {
+    if let Some(wap_control_api) = wap_control_api {
         // The WAP control API is called cross-origin from the webscion browser SDK. CORS is not a
         // security boundary here so we reflect any request Origin. Reflection (instead of a literal
         // `*`) keeps this valid should the endpoint ever gain credentialed auth, where
         // `Access-Control-Allow-Credentials` is incompatible with `*`.
-        let http_api_router = nest_http_api(Router::new(), pg_wap_session_manager).layer(
-            CorsLayer::new()
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any)
-                .allow_origin(tower_http::cors::AllowOrigin::mirror_request()),
-        );
-        router = router.merge(http_api_router);
+
+        let crpc_api_router =
+            crate::pg_wap::crpc::api::nest_crpc_api(Router::new(), wap_control_api).layer(
+                CorsLayer::new()
+                    .allow_methods(tower_http::cors::Any)
+                    .allow_headers(tower_http::cors::Any)
+                    .allow_origin(tower_http::cors::AllowOrigin::mirror_request()),
+            );
+
+        router = router.merge(crpc_api_router);
     }
 
     // Merge the authenticated router into the main router

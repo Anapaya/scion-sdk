@@ -11,143 +11,90 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 //! PathGuard WAP SNAP extension.
+//!
+//! The WAP control plane is assembled from four components:
+//!
+//! * [`grants::GrantManager`] - Manages which client IPs are authorized for which targets and
+//!   segments, and when those authorizations expire.
+//! * [`segments::SegmentManager`] -  Keeps public segments for the (src, dst) pairs in use fresh.
+//! * [`paths::PathManager`] -  Combines public and granted segments into the single best path, and
+//!   reports which segments it used.
+//! * [`uplinks::UplinkManager`] - Creates and manages one uplink per (path, WAG) pair, multiplexes
+//!   SNI streams over it, refreshes its path, cleans it when unused or closed.
+//!
+//! Clients reach the control plane over the Connect RPC API in [`crpc`], which is where the
+//! authorizations that [`grants::GrantManager`] hands out come from.
+//!
+//! ## Time
+//!
+//! Every operation that depends on the current time takes it as a `now: SystemTime` argument, so
+//! all the decisions taken while serving one connection can be made against a single timestamp
+//! instead of drifting apart as the clock moves under them.
+//!
+//! The `run` maintenance loops are the exception: they own their cadence, so they read the wall
+//! clock themselves.
 
-use std::{net::IpAddr, time::Instant};
-
-use anyhow::Context as _;
-
-use crate::{
-    api::http::model::{PgWapSessionManager, Session},
-    pg_wap::{auth::AuthService, session_manager::WapSessionManager},
+use crate::pg_wap::{
+    grants::GrantManager,
+    paths::PathManager,
+    segments::SegmentManager,
+    uplinks::{UplinkEstablisher, UplinkManager},
 };
 
-mod auth;
-pub mod session_manager;
+pub mod crpc;
+pub mod grants;
+pub mod paths;
+pub mod segments;
+pub mod sni;
+pub mod uplinks;
 
-pub use auth::AuthInfo;
+#[cfg(test)]
+mod test_util;
 
-/// Handles WAP control plane interactions
-#[derive(Clone)]
-pub struct WapControl {
-    auth_service: AuthService,
-    session_manager: WapSessionManager,
-    data_plane_port: u16,
-    ap_id: String,
+/// The WAP control plane
+pub struct WapControlPlane<EstablisherType: UplinkEstablisher> {
+    /// Decides which client IP may reach which target over which private segments.
+    pub grant: GrantManager,
+    /// Public segments for all (src, dst) pairs currently in use.
+    pub segments: SegmentManager,
+    /// Combines public and granted segments into paths.
+    pub paths: PathManager,
+    /// Uplinks towards the WAGs, keyed by the (path, WAG) pair they were established for.
+    pub uplinks: UplinkManager<EstablisherType>,
 }
-
-impl WapControl {
-    /// Creates a new control service.
+impl<T: UplinkEstablisher> WapControlPlane<T> {
+    /// Creates a new WAP control plane.
     pub fn new(
-        session_manager: WapSessionManager,
-        auth_duration: std::time::Duration,
-        ap_id: String,
-        data_plane_port: u16,
+        grant: GrantManager,
+        segments: SegmentManager,
+        paths: PathManager,
+        uplinks: UplinkManager<T>,
     ) -> Self {
-        let auth_service = AuthService::new(auth_duration);
-
         Self {
-            session_manager,
-            auth_service,
-            ap_id,
-            data_plane_port,
+            grant,
+            segments,
+            paths,
+            uplinks,
         }
     }
 
-    fn ap_id(&self) -> &str {
-        &self.ap_id
+    /// Runs the maintenance loops of every component that has one.
+    ///
+    /// Never returns, unless one of the loops panics.
+    pub async fn run(&self) {
+        tokio::join!(self.grant.run(), self.segments.run(), self.uplinks.run());
     }
 }
 
-impl PgWapSessionManager for WapControl {
-    fn new_session(
-        &self,
-        client_ip: IpAddr,
-        target_domains: &[&str],
-    ) -> Result<Session, anyhow::Error> {
-        let now = Instant::now();
-        let auth_info = self
-            .auth_service
-            .authenticate(now, client_ip, target_domains);
-        self.session_manager
-            .add_session_authentication(auth_info.clone());
-
-        let valid_until = chrono::Utc::now()
-            + chrono::Duration::from_std(auth_info.valid_until.saturating_duration_since(now))
-                .context("auth service returned out of bounds duration")?;
-        tracing::info!(%client_ip, %valid_until, ?target_domains, "Granted IP access");
-
-        Ok(Session {
-            ip: auth_info.ip,
-            ap_id: self.ap_id().to_string(),
-            data_plane_port: self.data_plane_port,
-            target_domains: auth_info.targets,
-            valid_until,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{net::IpAddr, time::Duration};
-
-    use super::*;
-
-    fn control() -> WapControl {
-        WapControl::new(
-            WapSessionManager::new(),
-            Duration::from_secs(60),
-            "test-wap".to_string(),
-            8443,
-        )
-    }
-
-    #[test]
-    fn new_session_authenticates_for_requested_target_domains() {
-        let control = control();
-        let client_ip = IpAddr::from([10, 0, 0, 1]);
-
-        let session = control
-            .new_session(client_ip, &["a.example.com", "b.example.com"])
-            .expect("new_session");
-
-        // The response echoes exactly the requested target domains.
-        assert_eq!(
-            session.target_domains,
-            vec!["a.example.com".to_string(), "b.example.com".to_string()]
-        );
-        assert_eq!(session.ip, client_ip);
-        assert_eq!(session.data_plane_port, 8443);
-
-        // The session manager records an authentication covering exactly those domains.
-        let authed = control
-            .session_manager
-            .authenticated_sessions_for_ip(client_ip);
-        assert_eq!(authed.len(), 1);
-        assert_eq!(
-            authed[0].targets,
-            vec!["a.example.com".to_string(), "b.example.com".to_string()]
-        );
-    }
-
-    #[test]
-    fn authentication_is_scoped_to_supplied_domains() {
-        let control = control();
-        let client_ip = IpAddr::from([10, 0, 0, 2]);
-
-        control
-            .new_session(client_ip, &["a.example.com"])
-            .expect("new_session");
-
-        let authed = control
-            .session_manager
-            .authenticated_sessions_for_ip(client_ip);
-        assert_eq!(authed.len(), 1);
-        assert!(authed[0].targets.contains(&"a.example.com".to_string()));
-        assert!(
-            !authed[0]
-                .targets
-                .contains(&"not-requested.example.com".to_string())
-        );
+impl<T: UplinkEstablisher> Clone for WapControlPlane<T> {
+    fn clone(&self) -> Self {
+        Self {
+            grant: self.grant.clone(),
+            segments: self.segments.clone(),
+            paths: self.paths.clone(),
+            uplinks: self.uplinks.clone(),
+        }
     }
 }

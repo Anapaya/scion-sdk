@@ -22,9 +22,6 @@ pub mod server;
 #[allow(missing_docs)]
 pub mod proto;
 
-#[doc(hidden)]
-pub mod pg_wap2;
-
 /// Re-exported dependencies.
 pub mod reexport {
     pub use reqwest_connect_rpc::token_source::*;

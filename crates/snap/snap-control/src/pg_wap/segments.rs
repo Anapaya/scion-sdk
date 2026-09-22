@@ -33,6 +33,9 @@ use sciparse::{
     identifier::isd_asn::IsdAsn,
     segment::{SegmentFp, Segments, SignedPathSegment},
 };
+use serde::{Deserialize, Serialize};
+use serde_with::{DurationSeconds, serde_as};
+use tokio::select;
 
 /// Number of segments to request per segment fetch.
 const SEGMENT_FETCH_PAGE_SIZE: i32 = 250;
@@ -44,10 +47,11 @@ const SEGMENT_FETCH_PAGE_SIZE: i32 = 250;
 /// Keeps the public segments of every (src, dst) pair that is in use available and fresh.
 ///
 /// A pair starts being managed the first time it is asked for, is refetched before its
-/// segments expire, and is evicted once it has not been used for `idle_eviction_time`.
+/// segments expire, and is evicted once it has not been used for
+/// [`SegmentManagerConfig::idle_eviction_time`].
 ///
-/// A consumer that keeps using a pair longer than `idle_eviction_time` must hold a
-/// [`PairGuard`] from [`Self::hold_pair`] on it, which exempts it from eviction.
+/// A consumer that keeps using a pair longer than that must hold a [`PairGuard`] from
+/// [`Self::hold_pair`] on it, which exempts it from eviction.
 ///
 /// Cheap to clone; all clones share the same state.
 #[derive(Clone)]
@@ -59,37 +63,119 @@ struct SegmentManagerInner {
 
     segment_fetcher: Box<dyn SegmentsDiscovery>,
 
+    config: SegmentManagerConfig,
+
+    next_maintain: tokio::sync::watch::Sender<SystemTime>,
+}
+
+/// Configuration for a [`SegmentManager`].
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SegmentManagerConfig {
     /// The minimum duration between two fetches of segments for the same (src, dst) pair.
-    minimum_segment_fetch_interval: Duration,
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "SegmentManagerConfig::default_minimum_segment_fetch_interval")]
+    pub minimum_segment_fetch_interval: Duration,
     /// The maximum duration between two fetches of segments for the same (src, dst) pair.
-    maximum_segment_fetch_interval: Duration,
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "SegmentManagerConfig::default_maximum_segment_fetch_interval")]
+    pub maximum_segment_fetch_interval: Duration,
     /// The duration after which an unused (src, dst) pair is removed from the store.
-    idle_eviction_time: Duration,
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "SegmentManagerConfig::default_idle_eviction_time")]
+    pub idle_eviction_time: Duration,
     /// Minimum duration a segment must have left to be kept in the store.
-    min_segment_lifetime: Duration,
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "SegmentManagerConfig::default_min_segment_lifetime")]
+    pub min_segment_lifetime: Duration,
     /// The duration before the segments expiry is reached to start fetching new segments.
-    segment_lifetime_buffer: Duration,
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "SegmentManagerConfig::default_segment_lifetime_buffer")]
+    pub segment_lifetime_buffer: Duration,
+}
+
+impl SegmentManagerConfig {
+    fn default_minimum_segment_fetch_interval() -> Duration {
+        // With the default segment lifetime buffer, we have 8 chances to refetch a segment before
+        // it expires. This should be enough to avoid hitting issues.
+        Duration::from_secs(30)
+    }
+
+    fn default_maximum_segment_fetch_interval() -> Duration {
+        Duration::from_secs(60 * 60)
+    }
+
+    fn default_idle_eviction_time() -> Duration {
+        Duration::from_secs(60)
+    }
+
+    fn default_min_segment_lifetime() -> Duration {
+        Duration::from_secs(60)
+    }
+
+    fn default_segment_lifetime_buffer() -> Duration {
+        Duration::from_secs(5 * 60)
+    }
+
+    /// Checks that the timings are usable.
+    ///
+    /// Returns an error if a duration is zero, or if the minimum fetch interval is greater than
+    /// the maximum fetch interval.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.minimum_segment_fetch_interval > self.maximum_segment_fetch_interval {
+            anyhow::bail!(
+                "minimum_segment_fetch_interval ({:?}) is greater than \
+                 maximum_segment_fetch_interval ({:?})",
+                self.minimum_segment_fetch_interval,
+                self.maximum_segment_fetch_interval
+            );
+        }
+
+        if self.minimum_segment_fetch_interval == Duration::ZERO {
+            anyhow::bail!("minimum_segment_fetch_interval must be greater than 0");
+        }
+
+        if self.maximum_segment_fetch_interval == Duration::ZERO {
+            anyhow::bail!("maximum_segment_fetch_interval must be greater than 0");
+        }
+
+        if self.idle_eviction_time == Duration::ZERO {
+            anyhow::bail!("idle_eviction_time must be greater than 0");
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for SegmentManagerConfig {
+    fn default() -> Self {
+        Self {
+            minimum_segment_fetch_interval: Self::default_minimum_segment_fetch_interval(),
+            maximum_segment_fetch_interval: Self::default_maximum_segment_fetch_interval(),
+            idle_eviction_time: Self::default_idle_eviction_time(),
+            min_segment_lifetime: Self::default_min_segment_lifetime(),
+            segment_lifetime_buffer: Self::default_segment_lifetime_buffer(),
+        }
+    }
 }
 
 impl SegmentManager {
-    /// Creates a new, empty segment manager.
+    /// Creates a new, empty segment manager with the timings of `config`.
+    ///
+    /// Returns an error if `config` does not [`SegmentManagerConfig::validate`].
     pub fn new(
-        maximum_segment_fetch_interval: Duration,
-        minimum_segment_fetch_interval: Duration,
-        idle_eviction_time: Duration,
-        min_segment_lifetime: Duration,
-        segment_lifetime_buffer: Duration,
+        config: SegmentManagerConfig,
         segment_fetcher: Box<dyn SegmentsDiscovery>,
-    ) -> Self {
-        Self(Arc::new(SegmentManagerInner {
+    ) -> anyhow::Result<Self> {
+        config.validate()?;
+
+        Ok(Self(Arc::new(SegmentManagerInner {
             segments: scc::HashMap::new(),
             segment_fetcher,
-            minimum_segment_fetch_interval,
-            maximum_segment_fetch_interval,
-            idle_eviction_time,
-            min_segment_lifetime,
-            segment_lifetime_buffer,
-        }))
+            config,
+            next_maintain: tokio::sync::watch::channel(SystemTime::now()).0,
+        })))
     }
 
     /// Returns the segment with the given fingerprint, if it is in the store.
@@ -149,6 +235,28 @@ impl SegmentManager {
         Ok(SegmentsIter { store })
     }
 
+    async fn wait_to_next_maintain(&self) {
+        let mut rx = self.0.next_maintain.subscribe();
+
+        loop {
+            let next = *rx.borrow_and_update();
+            let duration = next
+                .duration_since(SystemTime::now())
+                .unwrap_or(Duration::ZERO);
+
+            tracing::trace!("Next segment manager maintenance in {:?}", duration);
+
+            select! {
+                // Due time was updated, check again.
+                _ = rx.changed() => {
+                    tracing::trace!("Next segment manager maintenance time changed");
+                },
+                // Wait until the next maintenance time
+                _ = tokio::time::sleep(duration) => return,
+            }
+        }
+    }
+
     /// Runs the maintenance loop for the segment manager, which periodically evicts unused
     /// (src, dst) pairs and refetches the ones that are due for a refresh.
     ///
@@ -156,11 +264,31 @@ impl SegmentManager {
     pub async fn run(&self) {
         loop {
             let now = SystemTime::now();
+
+            // Reset the next maintenance time to the maximum fetch interval from now
+            self.0
+                .next_maintain
+                .send_replace(now + self.0.config.maximum_segment_fetch_interval);
             let next = self.maintain(now).await;
-            let duration = next.duration_since(now).unwrap_or(Duration::ZERO);
-            tracing::trace!("Next segment manager maintenance in {:?}", duration);
-            tokio::time::sleep(duration).await;
+            // Update the next maintenance time with the earlier time
+            self.update_next_maintain(next);
+
+            // Wait until the next maintenance time, adapting to changes in the next maintenance
+            // time that happen while we wait.
+            self.wait_to_next_maintain().await;
         }
+    }
+
+    /// Updates the next maintenance time to `next`, if it is earlier than the current value.
+    fn update_next_maintain(&self, next: SystemTime) {
+        self.0.next_maintain.send_if_modified(|current| {
+            if next < *current {
+                *current = next;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     /// Ensures that the segment store for the given (src, dst) pair is managed, fetching
@@ -192,21 +320,19 @@ impl SegmentManager {
 
         // Prepare the store for the (src, dst) pair with the fetched segments.
         let mut store = SegmentStore::new((src, dst), now);
-        store.update_segments(
-            fetched.segments,
-            now,
-            self.0.minimum_segment_fetch_interval,
-            self.0.maximum_segment_fetch_interval,
-            self.0.min_segment_lifetime,
-            self.0.segment_lifetime_buffer,
-        );
+        store.update_segments(fetched.segments, now, &self.0.config);
 
         match self.0.segments.entry_async((src, dst)).await {
             // Someone else already created a store for the (src, dst) pair, return it and discard
             // the one we just created.
             scc::hash_map::Entry::Occupied(occupied_entry) => Ok(occupied_entry),
             // No entry exists for the (src, dst) pair, fetch segments and create a new store.
-            scc::hash_map::Entry::Vacant(vacant_entry) => Ok(vacant_entry.insert_entry(store)),
+            scc::hash_map::Entry::Vacant(vacant_entry) => {
+                // Update the next maintenance time with the new store's next refresh time, if it is
+                // earlier than the current value.
+                self.update_next_maintain(store.next_refresh);
+                Ok(vacant_entry.insert_entry(store))
+            }
         }
     }
 
@@ -220,7 +346,7 @@ impl SegmentManager {
     /// segment fetch interval from now.
     pub async fn maintain(&self, now: SystemTime) -> SystemTime {
         let mut update_keys = Vec::new();
-        let mut next_maintain = now + self.0.maximum_segment_fetch_interval;
+        let mut next_maintain = now + self.0.config.maximum_segment_fetch_interval;
 
         // Evict all unused entries from the store and plan to update segments for (src, dst)
         // pairs that are due for refresh.
@@ -228,7 +354,9 @@ impl SegmentManager {
             .segments
             .retain_async(|key, entry| {
                 // A referenced pair is still in use, however long ago it was last looked at.
-                if !entry.has_references() && entry.last_use() + self.0.idle_eviction_time < now {
+                if !entry.has_references()
+                    && entry.last_use() + self.0.config.idle_eviction_time < now
+                {
                     tracing::debug!(
                         src = %key.0, dst = %key.1,
                         "Evicting unused segments from the store"
@@ -263,7 +391,8 @@ impl SegmentManager {
                 Err(e) => {
                     // The entry stays due for a refresh; retry no earlier than the minimum
                     // fetch interval from now.
-                    next_maintain = next_maintain.min(now + self.0.minimum_segment_fetch_interval);
+                    next_maintain =
+                        next_maintain.min(now + self.0.config.minimum_segment_fetch_interval);
                     tracing::error!(%src, %dst, "Failed to fetch segments: {e}");
                     continue;
                 }
@@ -277,14 +406,9 @@ impl SegmentManager {
                 continue;
             };
 
-            entry.get_mut().update_segments(
-                fetched.segments,
-                now,
-                self.0.minimum_segment_fetch_interval,
-                self.0.maximum_segment_fetch_interval,
-                self.0.min_segment_lifetime,
-                self.0.segment_lifetime_buffer,
-            );
+            entry
+                .get_mut()
+                .update_segments(fetched.segments, now, &self.0.config);
 
             next_maintain = next_maintain.min(entry.get().next_refresh);
         }
@@ -361,33 +485,18 @@ impl SegmentStore {
     /// Updates the segments store.
     ///
     /// Does the following steps:
-    /// - Merges the new segments into the store
-    /// - Removes segments that have less than `min_segment_lifetime` left
+    /// - Merges `new_segments` into the store
+    /// - Removes segments that have less than [`SegmentManagerConfig::min_segment_lifetime`] left
     /// - Updates the next refresh time based on the earliest expiration of the remaining segments,
-    ///   or the maximum refetch delay, whichever is earlier
+    ///   or the maximum fetch interval, whichever is earlier
     ///
-    /// The next refresh time is between now + min_refetch_delay and now + max_refetch_delay,
-    /// trying to capture the earliest expiration of the segments.
-    ///
-    /// ### Parameters
-    /// - `new_segments`: The new segments to merge into the store.
-    /// - `now`: The current time
-    /// - `min_refetch_delay`: The minimum duration between two fetches of segments for the same
-    ///   (src, dst) pair.
-    /// - `max_refetch_delay`: The maximum duration between two fetches of segments for the same
-    ///   (src, dst) pair.
-    /// - `min_segment_lifetime`: The minimum duration a segment must have left to be kept in the
-    ///   store.
-    /// - `segment_lifetime_buffer`: The duration before a segment expires at which we want to have
-    ///   fetched its replacement.
+    /// The next refresh time is between now + the minimum fetch interval and now + the maximum
+    /// fetch interval, trying to capture the earliest expiration of the segments.
     fn update_segments(
         &mut self,
         new_segments: Segments,
         now: SystemTime,
-        min_refetch_delay: Duration,
-        max_refetch_delay: Duration,
-        min_segment_lifetime: Duration,
-        segment_lifetime_buffer: Duration,
+        config: &SegmentManagerConfig,
     ) {
         let start_core_count = self.core_segments.len();
         let start_non_core_count = self.non_core_segments.len();
@@ -415,19 +524,19 @@ impl SegmentStore {
 
         // Never refetch later than max_refetch_delay from now, even if all segments live
         // longer than that.
-        let mut next_refetch = now + max_refetch_delay;
+        let mut next_refetch = now + config.maximum_segment_fetch_interval;
         for store in [&mut self.core_segments, &mut self.non_core_segments] {
             store.retain(|_, segment| {
                 // Drop segments that are expired, or so close to expiry that a path built
                 // from them would be useless.
-                if segment.expiration < now + min_segment_lifetime {
+                if segment.expiration < now + config.min_segment_lifetime {
                     return false;
                 }
 
                 // Try to have fetched a replacement before the earliest segment expires.
                 let refetch_at = segment
                     .expiration
-                    .checked_sub(segment_lifetime_buffer)
+                    .checked_sub(config.segment_lifetime_buffer)
                     .unwrap_or(now);
 
                 next_refetch = next_refetch.min(refetch_at);
@@ -441,15 +550,15 @@ impl SegmentStore {
             tracing::debug!(
                 src = %self.query.0, dst = %self.query.1,
                 "Segment store is empty after update, forcing a refetch in {}s",
-                min_refetch_delay.as_secs()
+                config.minimum_segment_fetch_interval.as_secs()
             );
 
-            next_refetch = now + min_refetch_delay;
+            next_refetch = now + config.minimum_segment_fetch_interval;
         }
 
-        // Ensure that the next refresh time is at least now + min_refetch_delay, to avoid
-        // fetching too frequently.
-        next_refetch = next_refetch.max(now + min_refetch_delay);
+        // Ensure that the next refresh time is at least now + the minimum fetch interval, to
+        // avoid fetching too frequently.
+        next_refetch = next_refetch.max(now + config.minimum_segment_fetch_interval);
 
         tracing::info!(
             "Updated segments for ({}, {}): core: {} -> {}, non-core: {} -> {}, next refresh: {:?}",
@@ -582,10 +691,10 @@ impl SegmentsIter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pg_wap2::test_util::{
-        Fixture, MAX_FETCH_INTERVAL, MIN_FETCH_INTERVAL, MockFetcher, SEGMENT_LIFETIME_BUFFER, at,
-        core_ia, leaf_ia, other_leaf_ia, secs_since_epoch, short_lived_up_segment, store_id,
-        up_segment,
+    use crate::pg_wap::test_util::{
+        Fixture, IDLE_EVICTION_TIME, MAX_FETCH_INTERVAL, MIN_FETCH_INTERVAL, MIN_SEGMENT_LIFETIME,
+        MockFetcher, SEGMENT_LIFETIME_BUFFER, at, core_ia, leaf_ia, other_leaf_ia,
+        secs_since_epoch, short_lived_up_segment, store_id, up_segment,
     };
 
     #[tokio::test]
@@ -869,6 +978,159 @@ mod tests {
             fixture.fetcher.calls(),
             2,
             "the evicted pair has to be fetched again"
+        );
+    }
+    #[tokio::test]
+    async fn the_wake_up_only_moves_earlier() {
+        let fixture = Fixture::new(MockFetcher::empty(), Duration::from_secs(100));
+        let next_maintain = &fixture.segments.0.next_maintain;
+
+        next_maintain.send_replace(at(1000));
+
+        fixture.segments.update_next_maintain(at(500));
+        assert_eq!(*next_maintain.borrow(), at(500), "an earlier wake up wins");
+
+        fixture.segments.update_next_maintain(at(900));
+        assert_eq!(
+            *next_maintain.borrow(),
+            at(500),
+            "a later wake up does not push the earlier one back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_pair_moves_the_wake_up_to_its_own_refresh() {
+        // An empty fetch leaves the store empty, so the pair is due again after the minimum
+        // fetch interval.
+        let fixture = Fixture::new(MockFetcher::empty(), Duration::from_secs(100));
+        let next_maintain = &fixture.segments.0.next_maintain;
+
+        // What the maintenance loop leaves behind after maintaining an empty manager.
+        next_maintain.send_replace(at(0) + MAX_FETCH_INTERVAL);
+
+        fixture
+            .segments
+            .segments(leaf_ia(), core_ia(), at(0))
+            .await
+            .expect("segments are fetched");
+        assert_eq!(
+            *next_maintain.borrow(),
+            at(0) + MIN_FETCH_INTERVAL,
+            "a pair added after the last maintenance run has to be waited for"
+        );
+
+        next_maintain.send_replace(at(0) + MAX_FETCH_INTERVAL);
+        fixture
+            .segments
+            .segments(leaf_ia(), core_ia(), at(0))
+            .await
+            .expect("segments are served from the store");
+        assert_eq!(
+            *next_maintain.borrow(),
+            at(0) + MAX_FETCH_INTERVAL,
+            "a pair that is already managed is already scheduled for"
+        );
+    }
+
+    // Test using `start_paused` run in virtual time, once all tasks have yielded, sleeps advance
+    // the clock to the next scheduled wake up.
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_ends_at_the_scheduled_wake_up() {
+        let fixture = Fixture::new(MockFetcher::empty(), Duration::from_secs(100));
+        fixture
+            .segments
+            .0
+            .next_maintain
+            .send_replace(SystemTime::now() + Duration::from_secs(30));
+
+        let started = tokio::time::Instant::now();
+        fixture.segments.wait_to_next_maintain().await;
+
+        let waited = started.elapsed();
+        assert!(
+            waited > Duration::from_secs(29) && waited <= Duration::from_secs(31),
+            "waited {waited:?} instead of the scheduled 30s"
+        );
+    }
+
+    // Test using `start_paused` run in virtual time, once all tasks have yielded, sleeps advance
+    // the clock to the next scheduled wake up.
+    #[tokio::test(start_paused = true)]
+    async fn an_earlier_wake_up_cuts_the_wait_short() {
+        let fixture = Fixture::new(MockFetcher::empty(), Duration::from_secs(100));
+        fixture
+            .segments
+            .0
+            .next_maintain
+            .send_replace(SystemTime::now() + MAX_FETCH_INTERVAL);
+
+        let started = tokio::time::Instant::now();
+        let segments = fixture.segments.clone();
+        let waiting = tokio::spawn(async move { segments.wait_to_next_maintain().await });
+
+        // Let the waiting task arm its timer on the far away wake up before moving it.
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        fixture
+            .segments
+            .update_next_maintain(SystemTime::now() + Duration::from_secs(5));
+
+        tokio::time::timeout(MAX_FETCH_INTERVAL / 2, waiting)
+            .await
+            .expect("the wait ends before the wake up it started with")
+            .expect("the waiting task does not panic");
+
+        let waited = started.elapsed();
+
+        assert!(
+            waited < Duration::from_secs(20),
+            "waited {waited:?} instead of following the earlier wake up"
+        );
+    }
+
+    /// The maintenance loop reads the wall clock, which a test cannot move, so this one runs on
+    /// real time with a manager configured in milliseconds.
+    #[tokio::test]
+    async fn the_maintenance_loop_wakes_for_a_pair_added_while_it_waits() {
+        let fetcher = MockFetcher::empty();
+        let segments = SegmentManager::new(
+            SegmentManagerConfig {
+                minimum_segment_fetch_interval: Duration::from_millis(50),
+                // Far longer than the test runs, so reaching it fails the test.
+                maximum_segment_fetch_interval: Duration::from_secs(60),
+                idle_eviction_time: IDLE_EVICTION_TIME,
+                min_segment_lifetime: MIN_SEGMENT_LIFETIME,
+                segment_lifetime_buffer: SEGMENT_LIFETIME_BUFFER,
+            },
+            Box::new(fetcher.clone()),
+        )
+        .expect("a valid SegmentManagerConfig");
+
+        let maintained = segments.clone();
+        tokio::spawn(async move { maintained.run().await });
+
+        // The loop maintains the empty manager and settles on the fetch interval cap.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(fetcher.calls(), 0, "nothing asked for a pair yet");
+
+        segments
+            .segments(leaf_ia(), core_ia(), SystemTime::now())
+            .await
+            .expect("segments are fetched");
+        assert_eq!(fetcher.calls(), 1);
+
+        // The empty store is due again after the minimum fetch interval, so the loop has to
+        // refetch long before the fetch interval cap.
+        let mut calls = fetcher.calls();
+        for _ in 0..50 {
+            if calls > 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            calls = fetcher.calls();
+        }
+        assert!(
+            calls > 1,
+            "the loop kept waiting instead of maintaining the pair added while it waited"
         );
     }
 }

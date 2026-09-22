@@ -23,7 +23,7 @@ use std::{collections::BTreeMap, net::IpAddr, time::SystemTime};
 
 use sciparse::segment::SignedPathSegment;
 
-use crate::pg_wap2::sni::CustomerDomain;
+use crate::pg_wap::sni::CustomerDomain;
 
 /// A request to authorize a client for a set of targets.
 ///
@@ -35,7 +35,7 @@ pub struct AuthorizeTargetsRequest {
     /// The key is the customer domain of the target, i.e. the part of the SNI that follows the
     /// WAP ID and the namespace. A client cannot know the WAP ID it has to use before it has the
     /// response to this request, and grants are held per customer domain, see
-    /// [`AuthService::authorize`](crate::pg_wap2::auth::AuthService::authorize).
+    /// [`GrantManager::authorize`](crate::pg_wap::grants::GrantManager::authorize).
     pub targets: BTreeMap<CustomerDomain, AuthSegments>,
 }
 
@@ -46,7 +46,7 @@ pub struct AuthorizeTargetsRequest {
 ///
 /// The three kinds are kept apart because that is how a client obtains them. The grants they turn
 /// into only distinguish core from non-core segments, see
-/// [`GrantedSegmentId`](crate::pg_wap2::auth::GrantedSegmentId).
+/// [`GrantedSegmentId`](crate::pg_wap::grants::GrantedSegmentId).
 #[derive(Debug, Default)]
 pub struct AuthSegments {
     /// The up segments granted for the target.
@@ -74,7 +74,7 @@ pub struct AuthorizeTargetsResponse {
     /// The ID of the WAP that handled the request.
     ///
     /// The grant is only valid on this WAP, so the client has to address it in the SNI of the
-    /// data plane connections that follow, see [`WapSNI`](crate::pg_wap2::sni::WapSNI).
+    /// data plane connections that follow, see [`WapSNI`](crate::pg_wap::sni::WapSNI).
     pub wap_id: String,
     /// The port the data plane of that WAP listens on.
     pub data_plane_port: u16,
@@ -108,7 +108,7 @@ pub trait ControlServiceAPIHandler: Send + Sync {
     ///
     /// Grants are additive and are never shortened, so a client refreshes its authorization by
     /// calling this again before the returned expiry, see
-    /// [`AuthService::authorize`](crate::pg_wap2::auth::AuthService::authorize).
+    /// [`GrantManager::authorize`](crate::pg_wap::grants::GrantManager::authorize).
     ///
     /// Returned error carries an HTTP status code and a human-readable message.
     fn authorize_targets(

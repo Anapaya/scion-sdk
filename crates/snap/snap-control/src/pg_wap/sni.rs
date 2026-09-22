@@ -39,7 +39,7 @@ impl WapSNI {
 
     /// Creates a new SNI from the given string.
     ///
-    /// The name is lowercased and then validated, see [`validate_hostname`]. DNS is case
+    /// The name is lowercased and then validated, see `validate_hostname`. DNS is case
     /// insensitive (RFC 4343), so a peer may send any spelling of the same name. Storing the
     /// canonical one keeps the [`PartialEq`] and [`Hash`] implementations of `WapSNI` case
     /// insensitive as well.
@@ -89,8 +89,8 @@ impl WapSNI {
     /// e.g. `id.wap.domain.com` -> `wg-wap.domain.com`
     ///
     /// The derived name is not validated again. It inherits the syntax of the SNI it is built
-    /// from, but a one character WAP ID or a namespace close to [`MAX_LABEL_LEN`] can push it
-    /// past the length caps that [`validate_hostname`] enforces.
+    /// from, but a one character WAP ID or a namespace close to `MAX_LABEL_LEN` can push it
+    /// past the length caps that `validate_hostname` enforces.
     pub fn gateway_domain(&self) -> GatewayDomain {
         GatewayDomain(format!(
             "{}-{}.{}",
@@ -129,7 +129,7 @@ impl CustomerDomain {
 
     /// Creates a customer domain from the given string.
     ///
-    /// The name is lowercased and then validated, see [`validate_hostname`].
+    /// The name is lowercased and then validated, see `validate_hostname`.
     pub fn new(mut domain: String) -> Result<Self, SniFormatError> {
         domain.make_ascii_lowercase();
         validate_hostname(&domain, Self::MIN_LABELS)?;
@@ -197,7 +197,7 @@ impl GatewayDomain {
 
     /// Creates a gateway domain from the given string.
     ///
-    /// The name is lowercased and then validated, see [`validate_hostname`].
+    /// The name is lowercased and then validated, see `validate_hostname`.
     pub fn new(mut domain: String) -> Result<Self, SniFormatError> {
         domain.make_ascii_lowercase();
         validate_hostname(&domain, Self::MIN_LABELS)?;
@@ -293,6 +293,7 @@ fn validate_hostname(name: &str, min_labels: usize) -> Result<(), SniFormatError
     Ok(())
 }
 
+/// Failures of the SNI and domain parsers of this module.
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SniFormatError {

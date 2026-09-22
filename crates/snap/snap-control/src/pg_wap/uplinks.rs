@@ -63,13 +63,16 @@ use std::{
 };
 
 use anyhow::Context;
+use http::StatusCode;
 use sciparse::{
     address::ip_socket_addr::ScionSocketIpAddr,
     path::{ScionPath, fingerprint::data_plane::DpPathFingerprint},
 };
+use serde::{Deserialize, Serialize};
+use serde_with::{DurationSeconds, serde_as};
 use tokio_util::sync::CancellationToken;
 
-use crate::pg_wap2::{
+use crate::pg_wap::{
     paths::{GrantWatch, PathManager, PathSegmentsGuard, UsedPath},
     sni::WapSNI,
 };
@@ -84,6 +87,55 @@ pub struct UplinkKey {
     pub path_fp: DpPathFingerprint,
     /// The WAG the uplink is connected to.
     pub wag: ScionSocketIpAddr,
+}
+
+/// The timings an [`UplinkManager`] re-paths and reaps uplinks with.
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UplinkManagerConfig {
+    /// An uplink whose path has less than this left is re-pathed by [`UplinkManager::maintain`].
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "UplinkManagerConfig::default_min_path_lifetime")]
+    pub min_path_lifetime: Duration,
+    /// Interval between two [`UplinkManager::maintain`] runs.
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "UplinkManagerConfig::default_maintenance_interval")]
+    pub maintenance_interval: Duration,
+}
+
+impl UplinkManagerConfig {
+    fn default_min_path_lifetime() -> Duration {
+        Duration::from_secs(60)
+    }
+
+    fn default_maintenance_interval() -> Duration {
+        Duration::from_secs(10)
+    }
+
+    /// Checks that the timings are usable.
+    ///
+    /// Returns an error if a duration is zero.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.min_path_lifetime == Duration::ZERO {
+            anyhow::bail!("min_path_lifetime must be greater than 0");
+        }
+
+        if self.maintenance_interval == Duration::ZERO {
+            anyhow::bail!("maintenance_interval must be greater than 0");
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for UplinkManagerConfig {
+    fn default() -> Self {
+        Self {
+            min_path_lifetime: Self::default_min_path_lifetime(),
+            maintenance_interval: Self::default_maintenance_interval(),
+        }
+    }
 }
 
 /// Owns the uplinks towards the WAGs, one per (path, WAG) pair.
@@ -104,27 +156,99 @@ struct UplinkManagerInner<Establisher: UplinkEstablisher> {
     /// Opens the connections to the WAGs.
     establisher: Establisher,
     paths: PathManager,
-    /// An uplink whose path has less than this left is re-pathed by [`UplinkManager::maintain`].
-    min_path_lifetime: Duration,
-    /// Interval between two [`UplinkManager::maintain`] runs.
-    maintenance_interval: Duration,
+    config: UplinkManagerConfig,
 }
 
 impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
     /// Creates a new, empty uplink manager, connecting to the WAGs through `establisher`.
+    ///
+    /// Returns an error if `config` does not [`UplinkManagerConfig::validate`].
     pub fn new(
         establisher: Establisher,
         paths: PathManager,
-        min_path_lifetime: Duration,
-        maintenance_interval: Duration,
-    ) -> Self {
-        Self(Arc::new(UplinkManagerInner {
+        config: UplinkManagerConfig,
+    ) -> anyhow::Result<Self> {
+        config.validate()?;
+
+        Ok(Self(Arc::new(UplinkManagerInner {
             uplinks: RwLock::new(HashMap::new()),
             establisher,
             paths,
-            min_path_lifetime,
-            maintenance_interval,
-        }))
+            config,
+        })))
+    }
+}
+
+/// The error an uplink operation returns.
+///
+/// `status` holds the status code the WAG answered with, if the WAG answered at all. An operation
+/// that fails before the WAG answers, e.g. on a network error, carries no status.
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
+pub struct UplinkError {
+    /// The status code the WAG answered with.
+    status: Option<StatusCode>,
+    #[source]
+    source: anyhow::Error,
+}
+
+impl UplinkError {
+    /// Creates an error for a WAG that refused the operation with `status`.
+    pub fn with_status(status: StatusCode, source: impl Into<anyhow::Error>) -> Self {
+        Self {
+            status: Some(status),
+            source: source.into(),
+        }
+    }
+
+    /// The status code the WAG answered with, if it answered.
+    pub fn status(&self) -> Option<StatusCode> {
+        self.status
+    }
+
+    /// Adds `context` to the error and keeps the status.
+    pub fn context(self, context: impl std::fmt::Display + Send + Sync + 'static) -> Self {
+        Self {
+            status: self.status,
+            source: self.source.context(context),
+        }
+    }
+}
+
+impl From<anyhow::Error> for UplinkError {
+    fn from(source: anyhow::Error) -> Self {
+        Self {
+            status: None,
+            source,
+        }
+    }
+}
+
+/// The error returned by [`UplinkManager::establish_stream`] when the client is not authorized
+#[derive(Debug, thiserror::Error)]
+pub enum EstablishStreamError {
+    /// The client holds no grant for the destination or for a segment of the path.
+    #[error("Client is not authorized to use the path")]
+    NotAuthorized,
+    /// The uplink could not be established, or the stream could not be opened on it.
+    #[error("Uplink error: {0}")]
+    UplinkError(UplinkError),
+}
+
+impl EstablishStreamError {
+    /// The status code the WAG answered with, if it answered.
+    pub fn status(&self) -> Option<StatusCode> {
+        match self {
+            Self::NotAuthorized => None,
+            Self::UplinkError(error) => error.status(),
+        }
+    }
+}
+
+impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
+    /// Returns a reference to the establisher that opens the uplinks.
+    pub fn establisher(&self) -> &Establisher {
+        &self.0.establisher
     }
 
     /// Opens a stream for `client_ip` to `dst_sni` over the uplink for the given (path, WAG) pair,
@@ -142,25 +266,28 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
         used_path: UsedPath,
         wag: ScionSocketIpAddr,
         now: SystemTime,
-    ) -> anyhow::Result<UplinkStreamGuard<Establisher::Uplink>> {
+    ) -> Result<UplinkStreamGuard<Establisher::Uplink>, EstablishStreamError> {
         // Watch the client's grants before anything is established, so an unauthorized client
         // cannot cause an uplink to be built.
         let grants = self
             .0
             .paths
             .watch_grants(client_ip, sni.customer_domain(), &used_path, now)
-            .context("Client is not authorized to use the path")?;
+            .map_err(|_| EstablishStreamError::NotAuthorized)?;
 
         // Prepare the uplink and increase its stream count, so it is not cleaned while the stream
         // is being established.
-        let reservation = self.reserve_uplink(used_path, wag, now).await?;
+        let reservation = self
+            .reserve_uplink(used_path, wag, now)
+            .await
+            .map_err(EstablishStreamError::UplinkError)?;
 
         let stream = reservation
             .entry()
             .uplink
             .establish_stream(sni)
             .await
-            .context("Failed to establish stream on the uplink")?;
+            .map_err(EstablishStreamError::UplinkError)?;
 
         Ok(reservation.attach(stream, grants))
     }
@@ -175,7 +302,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
         used_path: UsedPath,
         wag: ScionSocketIpAddr,
         now: SystemTime,
-    ) -> anyhow::Result<UplinkReservation<Establisher::Uplink>> {
+    ) -> Result<UplinkReservation<Establisher::Uplink>, UplinkError> {
         let key = UplinkKey {
             path_fp: used_path.path.fingerprint(),
             wag,
@@ -209,7 +336,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
             .establisher
             .establish_connection(used_path.path.clone(), wag, closed.clone())
             .await
-            .context("Failed to establish uplink")?;
+            .map_err(|e| e.context("Failed to establish uplink"))?;
 
         let entry = Arc::new(UplinkEntry {
             uplink,
@@ -259,7 +386,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
     pub async fn run(&self) {
         loop {
             self.maintain(SystemTime::now()).await;
-            tokio::time::sleep(self.0.maintenance_interval).await;
+            tokio::time::sleep(self.0.config.maintenance_interval).await;
         }
     }
 
@@ -288,7 +415,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
                 continue;
             };
 
-            if expiry > now + self.0.min_path_lifetime {
+            if expiry > now + self.0.config.min_path_lifetime {
                 continue;
             }
 
@@ -413,7 +540,7 @@ impl<UplinkType: GenericUplink> UplinkEntry<UplinkType> {
         self.established
     }
 
-    /// Whether the uplink is closed, see [`GenericUplink::establish_connection`].
+    /// Whether the uplink is closed, see [`UplinkEstablisher::establish_connection`].
     pub fn is_closed(&self) -> bool {
         self.closed.is_cancelled()
     }
@@ -559,7 +686,7 @@ pub trait UplinkEstablisher: Send + Sync + 'static {
         path: ScionPath,
         dst_addr: ScionSocketIpAddr,
         closed: CancellationToken,
-    ) -> anyhow::Result<Self::Uplink>;
+    ) -> Result<Self::Uplink, UplinkError>;
 }
 
 /// An established uplink to a WAG, as seen by the control plane.
@@ -572,10 +699,12 @@ pub trait GenericUplink: Send + Sync + 'static {
     type StreamType: Send;
 
     /// Opens a new stream to `dst_sni` on this uplink.
-    async fn establish_stream(&self, dst_sni: &WapSNI) -> anyhow::Result<Self::StreamType>;
+    ///
+    /// Sets [`UplinkError::status`] if the WAG refused the stream with a status code.
+    async fn establish_stream(&self, dst_sni: &WapSNI) -> Result<Self::StreamType, UplinkError>;
 
     /// Switches the uplink over to `new_path` without interrupting its streams.
-    fn replace_path(&self, new_path: ScionPath) -> anyhow::Result<()>;
+    fn replace_path(&self, new_path: ScionPath) -> Result<(), UplinkError>;
 }
 
 #[cfg(test)]
@@ -585,7 +714,7 @@ mod tests {
     use futures::FutureExt;
 
     use super::*;
-    use crate::pg_wap2::{
+    use crate::pg_wap::{
         paths::UsedPath,
         test_util::{
             Fixture, IDLE_EVICTION_TIME, MockFetcher, at, client_ip, core_ia, granted_id, leaf_ia,
@@ -622,6 +751,8 @@ mod tests {
     struct Failures {
         connect: bool,
         stream: bool,
+        /// The status the refused streams report, if the test set one.
+        stream_status: Option<StatusCode>,
         replace_path: bool,
     }
 
@@ -645,9 +776,20 @@ mod tests {
             self.with_state(|state| state.failing.connect = fail);
         }
 
-        /// Makes the streams opened from now on fail, or stops doing so.
+        /// Makes the streams opened from now on fail without a status, or stops doing so.
         fn fail_streams(&self, fail: bool) {
-            self.with_state(|state| state.failing.stream = fail);
+            self.with_state(|state| {
+                state.failing.stream = fail;
+                state.failing.stream_status = None;
+            });
+        }
+
+        /// Makes the streams opened from now on fail with `status`.
+        fn fail_streams_with_status(&self, status: StatusCode) {
+            self.with_state(|state| {
+                state.failing.stream = true;
+                state.failing.stream_status = Some(status);
+            });
         }
 
         /// Makes the uplinks reject the paths the manager hands them, or stops doing so.
@@ -728,11 +870,11 @@ mod tests {
             _path: ScionPath,
             dst_addr: ScionSocketIpAddr,
             closed: CancellationToken,
-        ) -> anyhow::Result<Self::Uplink> {
+        ) -> Result<Self::Uplink, UplinkError> {
             self.with_state(|state| {
                 if state.failing.connect {
                     state.log.push(UplinkEvent::ConnectionRefused);
-                    anyhow::bail!("the test asked connecting to fail");
+                    return Err(anyhow::anyhow!("the test asked connecting to fail").into());
                 }
 
                 state.log.push(UplinkEvent::Connected(dst_addr));
@@ -749,11 +891,19 @@ mod tests {
     impl GenericUplink for TestUplink {
         type StreamType = ();
 
-        async fn establish_stream(&self, dst_sni: &WapSNI) -> anyhow::Result<Self::StreamType> {
+        async fn establish_stream(
+            &self,
+            dst_sni: &WapSNI,
+        ) -> Result<Self::StreamType, UplinkError> {
             self.0.with_state(|state| {
                 if state.failing.stream {
                     state.log.push(UplinkEvent::StreamRefused);
-                    anyhow::bail!("the test asked streaming to fail");
+                    let error = anyhow::anyhow!("the test asked streaming to fail");
+
+                    return Err(match state.failing.stream_status {
+                        Some(status) => UplinkError::with_status(status, error),
+                        None => error.into(),
+                    });
                 }
 
                 state
@@ -763,11 +913,11 @@ mod tests {
             })
         }
 
-        fn replace_path(&self, _new_path: ScionPath) -> anyhow::Result<()> {
+        fn replace_path(&self, _new_path: ScionPath) -> Result<(), UplinkError> {
             self.0.with_state(|state| {
                 if state.failing.replace_path {
                     state.log.push(UplinkEvent::PathReplacementRejected);
-                    anyhow::bail!("the test asked path replacement to fail");
+                    return Err(anyhow::anyhow!("the test asked path replacement to fail").into());
                 }
 
                 state.log.push(UplinkEvent::PathReplaced);
@@ -790,9 +940,12 @@ mod tests {
         UplinkManager::new(
             uplinks,
             fixture.paths.clone(),
-            min_path_lifetime,
-            Duration::from_secs(10),
+            UplinkManagerConfig {
+                min_path_lifetime,
+                ..UplinkManagerConfig::default()
+            },
         )
+        .expect("a valid UplinkManagerConfig")
     }
 
     /// An uplink manager and an AS local path to establish uplinks over, which is built from no
@@ -838,8 +991,11 @@ mod tests {
 
     /// An uplink manager and a path over a privately granted up segment, so the path depends on a
     /// grant rather than on the segment store.
-    async fn granted_path_fixture(min_path_lifetime: Duration, auth_duration: Duration) -> Harness {
-        let fixture = Fixture::new(MockFetcher::empty(), auth_duration);
+    async fn granted_path_fixture(
+        min_path_lifetime: Duration,
+        grant_duration: Duration,
+    ) -> Harness {
+        let fixture = Fixture::new(MockFetcher::empty(), grant_duration);
         fixture.grant_non_core(vec![up_segment(0)], at(0));
 
         let used = fixture
@@ -975,13 +1131,13 @@ mod tests {
 
         // The first client's grant lapses; the second refreshes and keeps the segment granted.
         fixture.grant_non_core_to(other_client_ip(), vec![up_segment(600)], at(90));
-        fixture.auth.clean(at(101));
+        fixture.grant.clean(at(101));
 
         // The segment is no longer granted to the first client, but is still granted to the second,
         // which is what keeps the path usable.
         assert!(
             fixture
-                .auth
+                .grant
                 .segment_grant_expiry(
                     client_ip(),
                     sni().customer_domain(),
@@ -992,7 +1148,7 @@ mod tests {
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&up_segment(0)), at(101))
                 .is_some(),
             "a segment stays available while any client is granted it"
@@ -1053,7 +1209,7 @@ mod tests {
     async fn a_stream_is_refused_for_an_ip_without_any_authorization() {
         let (fixture, uplinks, manager, used) = uplink_fixture().await;
 
-        assert!(!fixture.auth.ip_is_authorized(stranger_ip(), at(0)));
+        assert!(!fixture.grant.ip_is_authorized(stranger_ip(), at(0)));
         assert!(
             manager
                 .establish_stream(stranger_ip(), &sni(), used, wag(leaf_ia()), at(0))
@@ -1077,7 +1233,7 @@ mod tests {
         assert!(used.segments.is_empty());
 
         // The grant lapsed but nothing has swept it yet: the check must not depend on
-        // `AuthService::clean` having run.
+        // `GrantManager::clean` having run.
         assert!(
             manager
                 .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(101))
@@ -1086,7 +1242,7 @@ mod tests {
             "a lapsed grant does not authorize a stream, swept or not"
         );
 
-        fixture.auth.clean(at(101));
+        fixture.grant.clean(at(101));
         assert!(
             manager
                 .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(101))
@@ -1362,7 +1518,7 @@ mod tests {
             .expect("the stream is established");
 
         // The only grant on the path's segment lapses, so the path cannot be rebuilt at all.
-        fixture.auth.clean(at(101));
+        fixture.grant.clean(at(101));
         assert!(fixture.paths.refresh_path(&used, at(101)).await.is_err());
 
         manager.maintain(at(101)).await;
@@ -1419,6 +1575,35 @@ mod tests {
             uplinks.connections(),
             2,
             "the reaped uplink had to be established again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_stream_reports_the_status_of_the_wag() {
+        let (_fixture, uplinks, manager, used) = uplink_fixture().await;
+
+        uplinks.fail_streams_with_status(StatusCode::FORBIDDEN);
+        let error = manager
+            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .await
+            .err()
+            .expect("the uplink refused the stream");
+        assert_eq!(
+            error.status(),
+            Some(StatusCode::FORBIDDEN),
+            "the status of the WAG reaches the caller"
+        );
+
+        uplinks.fail_streams(true);
+        let error = manager
+            .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(0))
+            .await
+            .err()
+            .expect("the uplink refused the stream");
+        assert_eq!(
+            error.status(),
+            None,
+            "a failure without an answer from the WAG carries no status"
         );
     }
 

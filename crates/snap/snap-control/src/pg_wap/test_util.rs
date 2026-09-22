@@ -15,7 +15,7 @@
 //! Fixtures shared by the tests of the individual primitives.
 
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     net::IpAddr,
     sync::{
         Arc, Mutex,
@@ -37,12 +37,12 @@ use sciparse::{
 };
 
 use super::{
-    auth::{AuthService, AuthServiceConfig, GrantedSegmentId},
     crpc::model::AuthSegments,
+    grants::{GrantManager, GrantManagerConfig, GrantedSegmentId},
     paths::PathManager,
-    segments::{SegmentManager, SegmentStoreId},
+    segments::{SegmentManager, SegmentManagerConfig, SegmentStoreId},
 };
-use crate::pg_wap2::sni::{CustomerDomainRef, WapSNI};
+use crate::pg_wap::sni::{CustomerDomainRef, WapSNI};
 
 pub fn sni() -> WapSNI {
     WapSNI::new("id.wap.target.example.com".to_string()).unwrap()
@@ -362,7 +362,7 @@ pub const MIN_SEGMENT_LIFETIME: Duration = Duration::from_secs(60);
 pub const SEGMENT_LIFETIME_BUFFER: Duration = Duration::from_secs(300);
 
 pub struct Fixture {
-    pub auth: AuthService,
+    pub grant: GrantManager,
     pub fetcher: Arc<MockFetcher>,
     pub segments: SegmentManager,
     pub paths: PathManager,
@@ -371,42 +371,45 @@ pub struct Fixture {
 impl Fixture {
     /// Builds the primitives with generous timeouts, so nothing expires unless a test hands one
     /// of them a later point in time.
-    pub fn new(fetcher: Arc<MockFetcher>, auth_duration: Duration) -> Self {
-        Self::with_auth_config(
+    pub fn new(fetcher: Arc<MockFetcher>, grant_duration: Duration) -> Self {
+        Self::with_grant_config(
             fetcher,
-            AuthServiceConfig {
-                auth_duration,
-                ..Self::auth_config_defaults()
+            GrantManagerConfig {
+                grant_duration,
+                ..Self::grant_config_defaults()
             },
         )
     }
 
-    /// The [`AuthServiceConfig`] a [`Fixture`] uses.
-    pub fn auth_config_defaults() -> AuthServiceConfig {
-        AuthServiceConfig {
-            // The clean interval bounds only matter for `AuthService::run`, which the tests drive
+    /// The [`GrantManagerConfig`] a [`Fixture`] uses.
+    pub fn grant_config_defaults() -> GrantManagerConfig {
+        GrantManagerConfig {
+            // The clean interval bounds only matter for `GrantManager::run`, which the tests drive
             // by calling `clean` directly.
             min_clean_interval: Duration::from_millis(30),
             max_clean_interval: Duration::from_secs(120),
-            ..AuthServiceConfig::default()
+            ..GrantManagerConfig::default()
         }
     }
 
-    /// Builds the primitives with an [`AuthService`] configured by hand.
-    pub fn with_auth_config(fetcher: Arc<MockFetcher>, auth_config: AuthServiceConfig) -> Self {
-        let auth = AuthService::new(auth_config).expect("a valid AuthServiceConfig");
+    /// Builds the primitives with a [`GrantManager`] configured by hand.
+    pub fn with_grant_config(fetcher: Arc<MockFetcher>, grant_config: GrantManagerConfig) -> Self {
+        let grant = GrantManager::new(grant_config).expect("a valid GrantManagerConfig");
         let segments = SegmentManager::new(
-            MAX_FETCH_INTERVAL,
-            MIN_FETCH_INTERVAL,
-            IDLE_EVICTION_TIME,
-            MIN_SEGMENT_LIFETIME,
-            SEGMENT_LIFETIME_BUFFER,
+            SegmentManagerConfig {
+                minimum_segment_fetch_interval: MIN_FETCH_INTERVAL,
+                maximum_segment_fetch_interval: MAX_FETCH_INTERVAL,
+                idle_eviction_time: IDLE_EVICTION_TIME,
+                min_segment_lifetime: MIN_SEGMENT_LIFETIME,
+                segment_lifetime_buffer: SEGMENT_LIFETIME_BUFFER,
+            },
             Box::new(fetcher.clone()),
-        );
-        let paths = PathManager::new(segments.clone(), auth.clone());
+        )
+        .expect("a valid SegmentManagerConfig");
+        let paths = PathManager::new(segments.clone(), grant.clone());
 
         Self {
-            auth,
+            grant,
             fetcher,
             segments,
             paths,
@@ -446,8 +449,8 @@ impl Fixture {
         segments: AuthSegments,
         now: SystemTime,
     ) {
-        self.auth
-            .authorize(ip, HashMap::from([(dst.into(), segments)]), now)
+        self.grant
+            .authorize(ip, BTreeMap::from([(dst.into(), segments)]), now)
             .expect("the grant fits");
     }
 }

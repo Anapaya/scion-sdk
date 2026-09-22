@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! IP based authorization.
+//! IP based grants.
 //!
 //! A grant is a promise that a client IP may use a target, and a set of private segments
 //! towards it, until a point in time:
 //!
-//! - **Additive**: [`AuthService::authorize`] adds targets and segments to whatever the IP already
+//! - **Additive**: [`GrantManager::authorize`] adds targets and segments to whatever the IP already
 //!   has, and never shortens an existing grant.
-//! - **Bounded**: an IP holds at most [`AuthServiceConfig::max_targets_per_ip`] target grants, and
-//!   a target holds at most [`AuthServiceConfig::max_segments_per_target`] segment grants. Grants
+//! - **Bounded**: an IP holds at most [`GrantManagerConfig::max_targets_per_ip`] target grants, and
+//!   a target holds at most [`GrantManagerConfig::max_segments_per_target`] segment grants. Grants
 //!   over a limit evict unguarded grants, or fail.
-//! - **Not revocable**: apart from that eviction, state leaves the service only via
-//!   [`AuthService::clean`], and only once it has expired.
+//! - **Not revocable**: apart from that eviction, state leaves the manager only via
+//!   [`GrantManager::clean`], and only once it has expired.
 //! - **Observable**: every grant carries a [`CancellationToken`] that is cancelled when the grant
 //!   is removed, so consumers can tear down or re-path. Cancellation is latched, so a waiter that
 //!   has not been polled yet still observes it.
@@ -35,67 +35,94 @@
 //! The invariants we maintain are:
 //! - A segment grant never outlives the segment it was granted on.
 //! - A segment is removed from the authoritative store once its last grant is gone.
-//! - A certain IP and SNI can only get grants for segments that which are granted for it.
+//! - If a segment was granted for an IP and an SNI, it cannot be used for another IP or SNI.
 //! - As soon as a grant is removed, it's connected cancellation token is cancelled.
 //! - An IP never holds more than `max_targets_per_ip` target grants.
 //! - A target never holds more than `max_segments_per_target` segment grants.
 //! - A grant with a live [`SegmentGrantGuard`] or [`TargetGrantGuard`] is never evicted.
 
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{BTreeMap, HashMap, hash_map::Entry},
     net::IpAddr,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, SystemTime},
 };
 
 use sciparse::segment::{SegmentFp, SignedPathSegment};
+use serde::{Deserialize, Serialize};
+use serde_with::{DurationSeconds, serde_as};
 use tokio_util::sync::CancellationToken;
 
-use crate::pg_wap2::{
+use crate::pg_wap::{
     crpc::model::AuthSegments,
     sni::{CustomerDomain, CustomerDomainRef},
 };
 
-/// Tracks which client IPs are authorized for which targets and segments.
-#[derive(Clone)]
-pub struct AuthService(Arc<AuthServiceShared>);
-
-struct AuthServiceShared {
-    /// The mutable authorization state.
-    inner: RwLock<AuthServiceInner>,
-    config: AuthServiceConfig,
-}
-
-pub struct AuthServiceConfig {
+/// Configuration for a [`GrantManager`].
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GrantManagerConfig {
     /// How long a grant is handed out for, after which the client has to re-authorize.
-    pub auth_duration: Duration,
-    /// Shortest sleep between two [`AuthService::clean`] runs.
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "GrantManagerConfig::default_grant_duration")]
+    pub grant_duration: Duration,
+    /// Shortest sleep between two [`GrantManager::clean`] runs.
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "GrantManagerConfig::default_min_clean_interval")]
     pub min_clean_interval: Duration,
-    /// Longest sleep between two [`AuthService::clean`] runs.
+    /// Longest sleep between two [`GrantManager::clean`] runs.
+    #[serde_as(as = "DurationSeconds<u64>")]
+    #[serde(default = "GrantManagerConfig::default_max_clean_interval")]
     pub max_clean_interval: Duration,
     /// Maximum total number of segments a client may grant in one authorization request.
+    #[serde(default = "GrantManagerConfig::default_max_segments_per_request")]
     pub max_segments_per_request: usize,
     /// Maximum number of segment grants one target holds per authorized IP.
     ///
-    /// Grants over the limit are evicted by [`AuthService::authorize`].
+    /// Grants over the limit are evicted by [`GrantManager::authorize`].
+    #[serde(default = "GrantManagerConfig::default_max_segments_per_target")]
     pub max_segments_per_target: usize,
     /// Maximum number of targets a client may grant in one authorization request.
+    #[serde(default = "GrantManagerConfig::default_max_targets_per_request")]
     pub max_targets_per_request: usize,
     /// Maximum number of target grants one IP holds.
     ///
-    /// Grants over the limit are evicted by [`AuthService::authorize`].
+    /// Grants over the limit are evicted by [`GrantManager::authorize`].
+    #[serde(default = "GrantManagerConfig::default_max_targets_per_ip")]
     pub max_targets_per_ip: usize,
 }
 
-impl AuthServiceConfig {
-    const DEFAULT_MAX_SEGMENTS_PER_REQUEST: usize = 100;
-    const DEFAULT_MAX_SEGMENTS_PER_TARGET: usize = 10;
-    const DEFAULT_AUTH_DURATION: Duration = Duration::from_secs(2 * 60);
-    const DEFAULT_MIN_CLEAN_INTERVAL: Duration = Duration::from_secs(10);
-    const DEFAULT_MAX_CLEAN_INTERVAL: Duration = Duration::from_secs(30);
-    const DEFAULT_MAX_TARGETS_PER_REQUEST: usize = 10;
-    const DEFAULT_MAX_TARGETS_PER_IP: usize = 50;
+impl GrantManagerConfig {
+    fn default_grant_duration() -> Duration {
+        Duration::from_secs(2 * 60)
+    }
 
+    fn default_min_clean_interval() -> Duration {
+        Duration::from_secs(10)
+    }
+
+    fn default_max_clean_interval() -> Duration {
+        Duration::from_secs(30)
+    }
+
+    fn default_max_segments_per_request() -> usize {
+        100
+    }
+
+    fn default_max_segments_per_target() -> usize {
+        10
+    }
+
+    fn default_max_targets_per_request() -> usize {
+        10
+    }
+
+    fn default_max_targets_per_ip() -> usize {
+        50
+    }
+
+    /// Validates the configuration, returning an error if it is invalid.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.min_clean_interval > self.max_clean_interval {
             anyhow::bail!(
@@ -121,8 +148,8 @@ impl AuthServiceConfig {
             anyhow::bail!("max_targets_per_ip must be greater than 0");
         }
 
-        if self.auth_duration == Duration::ZERO {
-            anyhow::bail!("auth_duration must be greater than 0");
+        if self.grant_duration == Duration::ZERO {
+            anyhow::bail!("grant_duration must be greater than 0");
         }
 
         if self.min_clean_interval == Duration::ZERO {
@@ -137,22 +164,32 @@ impl AuthServiceConfig {
     }
 }
 
-impl Default for AuthServiceConfig {
+impl Default for GrantManagerConfig {
     fn default() -> Self {
         Self {
-            auth_duration: Self::DEFAULT_AUTH_DURATION,
-            min_clean_interval: Self::DEFAULT_MIN_CLEAN_INTERVAL,
-            max_clean_interval: Self::DEFAULT_MAX_CLEAN_INTERVAL,
-            max_segments_per_request: Self::DEFAULT_MAX_SEGMENTS_PER_REQUEST,
-            max_segments_per_target: Self::DEFAULT_MAX_SEGMENTS_PER_TARGET,
-            max_targets_per_request: Self::DEFAULT_MAX_TARGETS_PER_REQUEST,
-            max_targets_per_ip: Self::DEFAULT_MAX_TARGETS_PER_IP,
+            grant_duration: Self::default_grant_duration(),
+            min_clean_interval: Self::default_min_clean_interval(),
+            max_clean_interval: Self::default_max_clean_interval(),
+            max_segments_per_request: Self::default_max_segments_per_request(),
+            max_segments_per_target: Self::default_max_segments_per_target(),
+            max_targets_per_request: Self::default_max_targets_per_request(),
+            max_targets_per_ip: Self::default_max_targets_per_ip(),
         }
     }
 }
 
-/// The mutable state of an [`AuthService`].
-pub struct AuthServiceInner {
+/// Tracks which client IPs are authorized for which targets and segments.
+#[derive(Clone)]
+pub struct GrantManager(Arc<GrantManagerShared>);
+
+struct GrantManagerShared {
+    /// The mutable authorization state.
+    inner: RwLock<GrantManagerInner>,
+    config: GrantManagerConfig,
+}
+
+/// The mutable state of a [`GrantManager`].
+pub struct GrantManagerInner {
     /// Map of all authenticated IPs.
     auth_ips: HashMap<IpAddr, IpAuthInfo>,
 
@@ -165,15 +202,15 @@ pub struct AuthServiceInner {
     private_core_segments: HashMap<SegmentFp, AuthSegmentEntry>,
 }
 
-impl AuthService {
+impl GrantManager {
     /// Creates an empty service handing out grants as `config` describes.
     ///
-    /// Returns an error if `config` does not [`AuthServiceConfig::validate`].
-    pub fn new(config: AuthServiceConfig) -> anyhow::Result<Self> {
+    /// Returns an error if `config` does not [`GrantManagerConfig::validate`].
+    pub fn new(config: GrantManagerConfig) -> anyhow::Result<Self> {
         config.validate()?;
 
-        Ok(Self(Arc::new(AuthServiceShared {
-            inner: RwLock::new(AuthServiceInner {
+        Ok(Self(Arc::new(GrantManagerShared {
+            inner: RwLock::new(GrantManagerInner {
                 auth_ips: HashMap::new(),
                 private_non_core_segments: HashMap::new(),
                 private_core_segments: HashMap::new(),
@@ -182,15 +219,15 @@ impl AuthService {
         })))
     }
 
-    fn read(&self) -> RwLockReadGuard<'_, AuthServiceInner> {
+    fn read(&self) -> RwLockReadGuard<'_, GrantManagerInner> {
         self.0.inner.read().unwrap()
     }
 
-    fn write(&self) -> RwLockWriteGuard<'_, AuthServiceInner> {
+    fn write(&self) -> RwLockWriteGuard<'_, GrantManagerInner> {
         self.0.inner.write().unwrap()
     }
 
-    /// Checks if the ip has any kind of auth.
+    /// Checks if the ip has any kind of grant.
     pub fn ip_is_authorized(&self, ip: IpAddr, now: SystemTime) -> bool {
         let this = self.read();
 
@@ -209,22 +246,25 @@ impl AuthService {
     /// A segment grant is capped at the expiry of the segment it is granted on, so refreshing
     /// only extends it as far as the freshest copy of that segment allows.
     ///
-    /// An IP holds at most [`AuthServiceConfig::max_targets_per_ip`] destination grants, and a
-    /// destination holds at most [`AuthServiceConfig::max_segments_per_target`] segment grants.
+    /// An IP holds at most [`GrantManagerConfig::max_targets_per_ip`] destination grants, and a
+    /// destination holds at most [`GrantManagerConfig::max_segments_per_target`] segment grants.
     /// A request that does not fit evicts destination grants without a [`TargetGrantGuard`], and
     /// segment grants without a [`SegmentGrantGuard`]. Grants with the least time left are evicted
     /// first. Evicting a destination grant removes its segment grants as well.
     ///
     /// The request is rejected if eviction can not free enough room, or if it supplies too many
-    /// destinations or segments at once. A rejection does not modify the state of the service.
+    /// destinations or segments at once. A rejection does not modify the state of the manager.
+    ///
+    /// Returns the time the destination grants hold until, which is when the client has to
+    /// authorize again. A segment grant capped at its segment's expiry ends before that.
     ///
     /// Note: Segments are currently not being validated in this function.
     pub fn authorize(
         &self,
         ip: IpAddr,
-        destinations: HashMap<CustomerDomain, AuthSegments>,
+        destinations: BTreeMap<CustomerDomain, AuthSegments>,
         now: SystemTime,
-    ) -> Result<(), AuthorizeError> {
+    ) -> Result<SystemTime, AuthorizeError> {
         if destinations.len() > self.0.config.max_targets_per_request {
             return Err(AuthorizeError::TooManyTargetsInRequest {
                 requested: destinations.len(),
@@ -253,7 +293,7 @@ impl AuthService {
 
         // TODO: Auth segments are client input and should be validated.
 
-        let dst_granted_until = now + self.0.config.auth_duration;
+        let dst_granted_until = now + self.0.config.grant_duration;
 
         let mut this = self.write();
 
@@ -276,7 +316,7 @@ impl AuthService {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let AuthServiceInner {
+        let GrantManagerInner {
             auth_ips,
             private_non_core_segments,
             private_core_segments,
@@ -338,7 +378,7 @@ impl AuthService {
             }
         }
 
-        Ok(())
+        Ok(dst_granted_until)
     }
 
     /// Checks if the IP has a grant for the given SNI.
@@ -496,7 +536,7 @@ impl AuthService {
     /// Returns `None` if the segment is not in the authoritative store, or if it has no valid
     /// grants.
     pub fn segment(&self, id: &GrantedSegmentId, now: SystemTime) -> Option<SignedPathSegment> {
-        let this: RwLockReadGuard<'_, AuthServiceInner> = self.read();
+        let this: RwLockReadGuard<'_, GrantManagerInner> = self.read();
 
         let store = match id {
             GrantedSegmentId::Core(_) => &this.private_core_segments,
@@ -534,10 +574,10 @@ impl AuthService {
     /// The functions should be called regularely, to ensure newly added grants are cleaned up
     /// in time.
     pub fn clean(&self, now: SystemTime) -> SystemTime {
-        let mut next_expiry = now + self.0.config.auth_duration;
+        let mut next_expiry = now + self.0.config.grant_duration;
 
         let mut this = self.write();
-        let AuthServiceInner {
+        let GrantManagerInner {
             auth_ips,
             private_non_core_segments,
             private_core_segments,
@@ -619,13 +659,13 @@ impl AuthService {
                 .max(self.0.config.min_clean_interval)
                 .min(self.0.config.max_clean_interval);
 
-            tracing::trace!("Next auth service cleanup in {:?}", sleep);
+            tracing::trace!("Next grant manager cleanup in {:?}", sleep);
             tokio::time::sleep(sleep).await;
         }
     }
 }
 
-/// Picks the target grants an [`AuthService::authorize`] call has to evict to fit `max_targets`.
+/// Picks the target grants a [`GrantManager::authorize`] call has to evict to fit `max_targets`.
 ///
 /// Changes nothing, so a caller can plan every destination before applying any of them.
 ///
@@ -639,10 +679,10 @@ impl AuthService {
 /// Fails, and plans nothing, if evicting every evictable target still does not fit. Returns
 /// [`AuthorizeError::IpTargetLimitReached`].
 fn plan_targets(
-    inner: &AuthServiceInner,
+    inner: &GrantManagerInner,
     max_targets: usize,
     ip: IpAddr,
-    requested: &HashMap<CustomerDomain, AuthSegments>,
+    requested: &BTreeMap<CustomerDomain, AuthSegments>,
 ) -> Result<Vec<CustomerDomain>, AuthorizeError> {
     let Some(ip_auth) = inner.auth_ips.get(&ip) else {
         return Ok(Vec::new());
@@ -689,7 +729,7 @@ fn plan_targets(
         .collect())
 }
 
-/// Plans the changes one destination of an [`AuthService::authorize`] call turns into.
+/// Plans the changes one destination of a [`GrantManager::authorize`] call turns into.
 ///
 /// Changes nothing, so a caller can plan every destination before applying any of them.
 ///
@@ -710,7 +750,7 @@ fn plan_targets(
 /// - Evicting every evictable grant still does not fit. Returns
 ///   [`AuthorizeError::TargetGrantLimitReached`].
 fn plan_destination(
-    inner: &AuthServiceInner,
+    inner: &GrantManagerInner,
     max_grants: usize,
     ip: IpAddr,
     dst: CustomerDomain,
@@ -967,7 +1007,7 @@ fn drop_segment_grant(
 /// Decrements the grant count of the segment `fp` refers to.
 ///
 /// The entry itself is left in place; it is dropped by the store sweep in
-/// [`AuthService::clean`] once its count has reached zero.
+/// [`GrantManager::clean`] once its count has reached zero.
 fn release_segment_grant(store: &mut HashMap<SegmentFp, AuthSegmentEntry>, fp: SegmentFp) {
     let Some(segment_entry) = store.get_mut(&fp) else {
         debug_assert!(false, "segment {fp} has a grant but is not in the store");
@@ -981,52 +1021,74 @@ fn release_segment_grant(store: &mut HashMap<SegmentFp, AuthSegmentEntry>, fp: S
     segment_entry.grant_count = segment_entry.grant_count.saturating_sub(1);
 }
 
-/// Failures of [`AuthService::authorize`].
+/// Failures of [`GrantManager::authorize`].
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorizeError {
-    /// The request is over [`AuthServiceConfig::max_segments_per_request`].
+    /// The request is over [`GrantManagerConfig::max_segments_per_request`].
     #[error("request grants {requested} segments, at most {max} are allowed per request")]
-    TooManySegmentsInRequest { requested: usize, max: usize },
-    /// The request is over [`AuthServiceConfig::max_targets_per_request`].
-    #[error("request has {requested} targets, at most {max} are allowed per request")]
-    TooManyTargetsInRequest { requested: usize, max: usize },
-
-    /// One destination of the request is over [`AuthServiceConfig::max_segments_per_target`].
-    #[error("request grants {requested} segments for {dst}, at most {max} are allowed per target")]
-    TooManySegmentsForTarget {
-        dst: CustomerDomain,
+    TooManySegmentsInRequest {
+        /// The number of segments the request wants to grant, over all its targets.
         requested: usize,
+        /// The maximum number of segments allowed per request.
         max: usize,
     },
-
+    /// The request is over [`GrantManagerConfig::max_targets_per_request`].
+    #[error("request has {requested} targets, at most {max} are allowed per request")]
+    TooManyTargetsInRequest {
+        /// The number of targets in the request.
+        requested: usize,
+        /// The maximum number of targets allowed per request.
+        max: usize,
+    },
+    /// One destination of the request is over [`GrantManagerConfig::max_segments_per_target`].
+    #[error("request grants {requested} segments for {dst}, at most {max} are allowed per target")]
+    TooManySegmentsForTarget {
+        /// The destination that is over the limit.
+        dst: CustomerDomain,
+        /// The number of segments the request wants to grant for that destination.
+        requested: usize,
+        /// The maximum number of segments allowed per destination.
+        max: usize,
+    },
     /// One destination is at its limit, and too many of its grants are guarded to evict.
     #[error(
         "target {dst} needs {needed} of its {max} segment grants freed, but {in_use} of the \
          candidates are in use"
     )]
     TargetGrantLimitReached {
+        /// The destination that is over the limit.
         dst: CustomerDomain,
+        /// The number of grants that are currently in use and cannot be evicted.
         in_use: usize,
+        /// The number of grants that need to be freed to fit the request.
         needed: usize,
+        /// The maximum number of grants allowed per destination.
         max: usize,
     },
-
-    /// The request alone is over [`AuthServiceConfig::max_targets_per_ip`].
+    /// The request alone is over [`GrantManagerConfig::max_targets_per_ip`].
     #[error("request has {requested} targets, an IP may hold at most {max}")]
-    TooManyTargetsForIp { requested: usize, max: usize },
+    TooManyTargetsForIp {
+        /// The number of targets the request wants to grant for the IP.
+        requested: usize,
+        /// The maximum number of targets allowed per IP.
+        max: usize,
+    },
     /// The IP is at its limit, and too many of its target grants are in use to evict.
     #[error(
         "the IP needs {needed} of its {max} target grants freed, but {in_use} of the candidates \
          are in use"
     )]
     IpTargetLimitReached {
+        /// The number of target grants that are in use and cannot be evicted.
         in_use: usize,
+        /// The number of target grants that have to be freed to fit the request.
         needed: usize,
+        /// The maximum number of target grants allowed per IP.
         max: usize,
     },
 }
 
-/// The changes [`AuthService::authorize`] applies to one destination.
+/// The changes [`GrantManager::authorize`] applies to one destination.
 struct DstPlan {
     dst: CustomerDomain,
     /// The grants to add or extend, deduplicated by id.
@@ -1093,7 +1155,7 @@ struct IpAuthInfo {
 struct DstAuthInfo {
     segment_grants: HashMap<GrantedSegmentId, SegmentGrant>,
     granted_until: SystemTime,
-    /// Cancelled when this grant is removed, either by [`AuthService::clean`] or by eviction.
+    /// Cancelled when this grant is removed, either by [`GrantManager::clean`] or by eviction.
     expired: CancellationToken,
     /// Holds one strong reference per live [`TargetGrantGuard`], plus the one kept here.
     in_use: Arc<()>,
@@ -1133,7 +1195,7 @@ impl DstAuthInfo {
 /// A grant for one segment within a [`DstAuthInfo`].
 struct SegmentGrant {
     granted_until: SystemTime,
-    /// Cancelled when this grant is removed, either by [`AuthService::clean`] or by eviction.
+    /// Cancelled when this grant is removed, either by [`GrantManager::clean`] or by eviction.
     expired: CancellationToken,
     /// Holds one strong reference per live [`SegmentGrantGuard`], plus the one kept here.
     in_use: Arc<()>,
@@ -1170,7 +1232,7 @@ impl SegmentGrant {
 
 /// Guards a target grant from eviction, and allows a client to observe expiry.
 ///
-/// Handed out by [`AuthService::watch_grant`].
+/// Handed out by [`GrantManager::watch_grant`].
 /// Use [`Self::expired`] to await expiry.
 pub struct TargetGrantGuard {
     expired: CancellationToken,
@@ -1189,7 +1251,7 @@ impl TargetGrantGuard {
 
 /// Guards a segment grant from eviction, and allows a client to observe expiry.
 ///
-/// Handed out by [`AuthService::watch_segment_grant`].
+/// Handed out by [`GrantManager::watch_segment_grant`].
 /// Use [`Self::expired`] to await expiry.
 pub struct SegmentGrantGuard {
     expired: CancellationToken,
@@ -1208,7 +1270,7 @@ impl SegmentGrantGuard {
 
 // XXX: this should not copy the segments, just an iterator over the granted segments, but that
 // would require locking magic.
-/// A grany for one destination in [`AuthService::dst_grant`].
+/// A grany for one destination in [`GrantManager::dst_grant`].
 #[derive(Default)]
 pub struct DstGrant {
     core_segments: HashMap<SegmentFp, SignedPathSegment>,
@@ -1239,10 +1301,10 @@ impl DstGrant {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     use super::*;
-    use crate::pg_wap2::test_util::{
+    use crate::pg_wap::test_util::{
         Fixture, MockFetcher, at, client_ip, granted_id, nth_sni, nth_up_segment, other_client_ip,
         other_sni, other_up_segment, secs_since_epoch, sni, up_segment,
     };
@@ -1256,7 +1318,7 @@ mod tests {
 
         fixture.grant_non_core(vec![first.clone()], at(0));
         let first_expiry = fixture
-            .auth
+            .grant
             .segment_grant_expiry(
                 client_ip(),
                 sni().customer_domain(),
@@ -1269,7 +1331,7 @@ mod tests {
         fixture.grant_non_core(vec![second.clone()], at(10));
 
         assert_eq!(
-            fixture.auth.segment_grant_expiry(
+            fixture.grant.segment_grant_expiry(
                 client_ip(),
                 sni().customer_domain(),
                 &granted_id(&first),
@@ -1279,18 +1341,18 @@ mod tests {
             "the first grant must be kept, with its original expiry"
         );
         assert_eq!(
-            fixture.auth.segment_grant_expiry(
+            fixture.grant.segment_grant_expiry(
                 client_ip(),
                 sni().customer_domain(),
                 &granted_id(&second),
                 at(10)
             ),
             Some(at(110)),
-            "the second grant runs for the full auth duration from the refresh"
+            "the second grant runs for the full grant duration from the refresh"
         );
         assert_eq!(
             fixture
-                .auth
+                .grant
                 .grant_expiry(client_ip(), sni().customer_domain(), at(10)),
             Some(at(110)),
             "the target grant is extended by the refresh"
@@ -1299,14 +1361,14 @@ mod tests {
 
     #[test]
     fn a_segment_grant_never_outlives_its_segment() {
-        // The auth duration is far longer than the segment lives.
+        // The grant duration is far longer than the segment lives.
         let fixture = Fixture::new(MockFetcher::empty(), Duration::from_secs(10 * 24 * 3600));
 
         let segment = up_segment(0);
         fixture.grant_non_core(vec![segment.clone()], at(0));
 
         assert_eq!(
-            fixture.auth.segment_grant_expiry(
+            fixture.grant.segment_grant_expiry(
                 client_ip(),
                 sni().customer_domain(),
                 &granted_id(&segment),
@@ -1326,7 +1388,7 @@ mod tests {
         fixture.grant_non_core(vec![segment.clone()], expired);
 
         assert_eq!(
-            fixture.auth.segment_grant_expiry(
+            fixture.grant.segment_grant_expiry(
                 client_ip(),
                 sni().customer_domain(),
                 &granted_id(&segment),
@@ -1344,11 +1406,11 @@ mod tests {
         fixture.grant_non_core(vec![segment.clone()], at(0));
 
         let target_expired = fixture
-            .auth
+            .grant
             .watch_grant(client_ip(), sni().customer_domain(), at(0))
             .expect("the target grant is live");
         let segment_expired = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 sni().customer_domain(),
@@ -1357,46 +1419,46 @@ mod tests {
             )
             .expect("the segment grant is live");
 
-        assert!(fixture.auth.ip_is_authorized(client_ip(), at(0)));
+        assert!(fixture.grant.ip_is_authorized(client_ip(), at(0)));
 
         // Nothing has expired yet, so cleaning changes nothing.
         assert_eq!(
-            fixture.auth.clean(at(0)),
+            fixture.grant.clean(at(0)),
             at(100),
             "clean reports when the next grant expires"
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .dst_grant(client_ip(), sni().customer_domain(), at(0))
                 .is_some()
         );
 
-        fixture.auth.clean(at(101));
+        fixture.grant.clean(at(101));
 
         // Both notifiers were handed out before the expiry and still resolve.
         target_expired.expired().cancelled().await;
         segment_expired.expired().cancelled().await;
 
         assert!(
-            !fixture.auth.ip_is_authorized(client_ip(), at(101)),
+            !fixture.grant.ip_is_authorized(client_ip(), at(101)),
             "an IP without grants is de-authorized"
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .dst_grant(client_ip(), sni().customer_domain(), at(101))
                 .is_none()
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&segment), at(101))
                 .is_none()
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .watch_grant(client_ip(), sni().customer_domain(), at(101))
                 .is_none(),
             "there is no live grant left to wait on"
@@ -1414,10 +1476,10 @@ mod tests {
         let only_sni = other_up_segment(0);
 
         fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([
+                BTreeMap::from([
                     (
                         sni().customer_domain().into(),
                         AuthSegments {
@@ -1439,10 +1501,10 @@ mod tests {
 
         // Only the second destination re-authenticates, so the first one lapses at t=100.
         fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([(
+                BTreeMap::from([(
                     other_sni().customer_domain().into(),
                     AuthSegments {
                         up_segments: vec![shared.clone()],
@@ -1461,15 +1523,15 @@ mod tests {
         let (fixture, shared, only_sni) = two_destination_fixture();
 
         let sni_expired = fixture
-            .auth
+            .grant
             .watch_grant(client_ip(), sni().customer_domain(), at(50))
             .expect("the lapsing destination is granted");
         let other_expired = fixture
-            .auth
+            .grant
             .watch_grant(client_ip(), other_sni().customer_domain(), at(50))
             .expect("the refreshed destination is granted");
         let shared_for_sni_expired = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 sni().customer_domain(),
@@ -1478,7 +1540,7 @@ mod tests {
             )
             .expect("the shared segment is granted for the lapsing destination");
         let shared_for_other_expired = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 other_sni().customer_domain(),
@@ -1488,14 +1550,14 @@ mod tests {
             .expect("the shared segment is granted for the refreshed destination");
 
         assert_eq!(
-            fixture.auth.clean(at(101)),
+            fixture.grant.clean(at(101)),
             at(150),
             "the remaining destination is the next thing to expire"
         );
 
         assert!(
             fixture
-                .auth
+                .grant
                 .dst_grant(client_ip(), sni().customer_domain(), at(101))
                 .is_none(),
             "the lapsed destination is gone"
@@ -1507,7 +1569,7 @@ mod tests {
         );
 
         let other_grant = fixture
-            .auth
+            .grant
             .dst_grant(client_ip(), other_sni().customer_domain(), at(101))
             .expect("the refreshed destination is untouched");
         assert_eq!(
@@ -1521,19 +1583,19 @@ mod tests {
         assert!(!shared_for_other_expired.expired().is_cancelled());
 
         assert!(
-            fixture.auth.ip_is_authorized(client_ip(), at(101)),
+            fixture.grant.ip_is_authorized(client_ip(), at(101)),
             "an IP with one destination left stays authorized"
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&shared), at(101))
                 .is_some(),
             "the shared segment is still held by the destination that refreshed"
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&only_sni), at(101))
                 .is_none(),
             "the segment only the lapsed destination held lost its last grant"
@@ -1545,25 +1607,25 @@ mod tests {
         let (fixture, shared, _only_sni) = two_destination_fixture();
 
         // The first destination goes at t=100, the second one at t=150.
-        fixture.auth.clean(at(101));
-        assert!(fixture.auth.ip_is_authorized(client_ip(), at(101)));
+        fixture.grant.clean(at(101));
+        assert!(fixture.grant.ip_is_authorized(client_ip(), at(101)));
 
-        fixture.auth.clean(at(151));
+        fixture.grant.clean(at(151));
 
         assert!(
-            !fixture.auth.ip_is_authorized(client_ip(), at(151)),
+            !fixture.grant.ip_is_authorized(client_ip(), at(151)),
             "the IP is de-authorized once its last destination is gone"
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .dst_grant(client_ip(), other_sni().customer_domain(), at(151))
                 .is_none(),
             "and so is that last destination"
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&shared), at(151))
                 .is_none(),
             "a segment cannot outlive the last grant referencing it"
@@ -1579,7 +1641,7 @@ mod tests {
         fixture.grant_non_core(vec![kept.clone(), omitted.clone()], at(0));
 
         let omitted_expired = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 sni().customer_domain(),
@@ -1588,19 +1650,19 @@ mod tests {
             )
             .expect("both segments are granted");
 
-        // The re-auth carries only one of the two segments; the other keeps running out.
+        // The re-grant carries only one of the two segments; the other keeps running out.
         fixture.grant_non_core(vec![kept.clone()], at(50));
 
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&omitted), at(50))
                 .is_some(),
             "an omitted segment stays usable while its own grant is valid"
         );
         assert!(!omitted_expired.expired().is_cancelled());
 
-        fixture.auth.clean(at(101));
+        fixture.grant.clean(at(101));
 
         assert!(
             omitted_expired.expired().is_cancelled(),
@@ -1608,14 +1670,14 @@ mod tests {
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&omitted), at(101))
                 .is_none(),
             "and the segment goes with its last grant"
         );
 
         let grant = fixture
-            .auth
+            .grant
             .dst_grant(client_ip(), sni().customer_domain(), at(101))
             .expect("the destination was extended by the refresh");
         assert_eq!(
@@ -1626,7 +1688,7 @@ mod tests {
             vec![kept.fingerprint()],
             "only the refreshed segment is left"
         );
-        assert!(fixture.auth.segment(&granted_id(&kept), at(101)).is_some());
+        assert!(fixture.grant.segment(&granted_id(&kept), at(101)).is_some());
     }
 
     #[test]
@@ -1636,10 +1698,10 @@ mod tests {
         let granted = up_segment(0);
         let other = other_up_segment(0);
         fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([
+                BTreeMap::from([
                     (
                         sni().customer_domain().into(),
                         AuthSegments {
@@ -1660,7 +1722,7 @@ mod tests {
             .expect("both destinations fit");
 
         let segments = fixture
-            .auth
+            .grant
             .dst_grant(client_ip(), sni().customer_domain(), at(0))
             .expect("the target is granted");
         assert_eq!(
@@ -1673,7 +1735,7 @@ mod tests {
         assert_eq!(segments.iter_core_segments().count(), 0);
 
         let other_segments = fixture
-            .auth
+            .grant
             .dst_grant(client_ip(), other_sni().customer_domain(), at(0))
             .expect("the other target is granted");
         assert_eq!(
@@ -1689,7 +1751,7 @@ mod tests {
             CustomerDomain::new("ungranted.example.com".to_owned()).expect("a valid domain");
         assert!(
             fixture
-                .auth
+                .grant
                 .dst_grant(client_ip(), ungranted.as_domain(), at(0))
                 .is_none()
         );
@@ -1697,12 +1759,12 @@ mod tests {
 
     /// A fixture whose targets hold at most `max_grants` segment grants, with a 100s duration.
     fn capped_fixture(max_grants: usize) -> Fixture {
-        Fixture::with_auth_config(
+        Fixture::with_grant_config(
             MockFetcher::empty(),
-            AuthServiceConfig {
-                auth_duration: Duration::from_secs(100),
+            GrantManagerConfig {
+                grant_duration: Duration::from_secs(100),
                 max_segments_per_target: max_grants,
-                ..Fixture::auth_config_defaults()
+                ..Fixture::grant_config_defaults()
             },
         )
     }
@@ -1713,7 +1775,7 @@ mod tests {
         segment: &SignedPathSegment,
         now: SystemTime,
     ) -> Option<SystemTime> {
-        fixture.auth.segment_grant_expiry(
+        fixture.grant.segment_grant_expiry(
             client_ip(),
             sni().customer_domain(),
             &granted_id(segment),
@@ -1734,7 +1796,7 @@ mod tests {
 
         // Watching a grant holds it, so keep only the token: this one is meant to be evictable.
         let watch = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 sni().customer_domain(),
@@ -1757,7 +1819,10 @@ mod tests {
             "an evicted grant is cancelled, just like an expired one"
         );
         assert!(
-            fixture.auth.segment(&granted_id(&oldest), at(20)).is_none(),
+            fixture
+                .grant
+                .segment(&granted_id(&oldest), at(20))
+                .is_none(),
             "and the segment goes with its last grant"
         );
 
@@ -1778,7 +1843,7 @@ mod tests {
         fixture.grant_non_core(vec![unheld.clone()], at(10));
 
         let hold = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 sni().customer_domain(),
@@ -1813,7 +1878,7 @@ mod tests {
         fixture.grant_non_core(vec![held.clone()], at(0));
 
         let hold = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 sni().customer_domain(),
@@ -1823,10 +1888,10 @@ mod tests {
             .expect("the segment is granted");
 
         fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([(
+                BTreeMap::from([(
                     sni().customer_domain().into(),
                     AuthSegments {
                         up_segments: vec![extra.clone()],
@@ -1857,7 +1922,7 @@ mod tests {
 
         let holds = [&first, &second].map(|segment| {
             fixture
-                .auth
+                .grant
                 .watch_segment_grant(
                     client_ip(),
                     sni().customer_domain(),
@@ -1869,10 +1934,10 @@ mod tests {
 
         // The same request carries a second destination, which would have fit on its own.
         let error = fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([
+                BTreeMap::from([
                     (
                         sni().customer_domain().into(),
                         AuthSegments {
@@ -1912,14 +1977,14 @@ mod tests {
         );
         assert_eq!(
             fixture
-                .auth
+                .grant
                 .grant_expiry(client_ip(), sni().customer_domain(), at(10)),
             Some(at(100)),
             "and the target grant it came with was not extended either"
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .grant_expiry(client_ip(), other_sni().customer_domain(), at(10))
                 .is_none(),
             "the destination that would have fit is rejected with the request it came in"
@@ -1931,10 +1996,10 @@ mod tests {
         let fixture = capped_fixture(2);
 
         let error = fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([(
+                BTreeMap::from([(
                     sni().customer_domain().into(),
                     AuthSegments {
                         up_segments: vec![nth_up_segment(0), nth_up_segment(1)],
@@ -1958,27 +2023,27 @@ mod tests {
             "{error:?}"
         );
         assert!(
-            !fixture.auth.ip_is_authorized(client_ip(), at(0)),
+            !fixture.grant.ip_is_authorized(client_ip(), at(0)),
             "a rejected request leaves the IP as unauthorized as it was"
         );
     }
 
     #[test]
     fn a_request_over_the_request_limit_is_rejected() {
-        let fixture = Fixture::with_auth_config(
+        let fixture = Fixture::with_grant_config(
             MockFetcher::empty(),
-            AuthServiceConfig {
-                auth_duration: Duration::from_secs(100),
+            GrantManagerConfig {
+                grant_duration: Duration::from_secs(100),
                 max_segments_per_request: 1,
-                ..Fixture::auth_config_defaults()
+                ..Fixture::grant_config_defaults()
             },
         );
 
         let error = fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([
+                BTreeMap::from([
                     (
                         sni().customer_domain().into(),
                         AuthSegments {
@@ -2008,7 +2073,7 @@ mod tests {
             ),
             "{error:?}"
         );
-        assert!(!fixture.auth.ip_is_authorized(client_ip(), at(0)));
+        assert!(!fixture.grant.ip_is_authorized(client_ip(), at(0)));
     }
 
     #[test]
@@ -2037,10 +2102,10 @@ mod tests {
 
         let segment = nth_up_segment(0);
         let error = fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([(
+                BTreeMap::from([(
                     sni().customer_domain().into(),
                     AuthSegments {
                         up_segments: vec![segment.clone()],
@@ -2107,7 +2172,7 @@ mod tests {
 
         assert_eq!(expiry_of(&fixture, &for_sni, at(0)), Some(at(100)));
         assert_eq!(
-            fixture.auth.segment_grant_expiry(
+            fixture.grant.segment_grant_expiry(
                 client_ip(),
                 other_sni().customer_domain(),
                 &granted_id(&for_other),
@@ -2118,12 +2183,12 @@ mod tests {
     }
     /// A fixture whose IPs hold at most `max_targets` target grants, with a 100s duration.
     fn target_capped_fixture(max_targets: usize) -> Fixture {
-        Fixture::with_auth_config(
+        Fixture::with_grant_config(
             MockFetcher::empty(),
-            AuthServiceConfig {
-                auth_duration: Duration::from_secs(100),
+            GrantManagerConfig {
+                grant_duration: Duration::from_secs(100),
                 max_targets_per_ip: max_targets,
-                ..Fixture::auth_config_defaults()
+                ..Fixture::grant_config_defaults()
             },
         )
     }
@@ -2144,7 +2209,7 @@ mod tests {
     /// When the test client's grant on the `n`th target expires, if it holds one.
     fn target_expiry_of(fixture: &Fixture, n: usize, now: SystemTime) -> Option<SystemTime> {
         fixture
-            .auth
+            .grant
             .grant_expiry(client_ip(), nth_sni(n).customer_domain(), now)
     }
 
@@ -2157,7 +2222,7 @@ mod tests {
 
         // Watching a target holds it, so keep only the token: this one is meant to be evictable.
         let watch = fixture
-            .auth
+            .grant
             .watch_grant(client_ip(), nth_sni(0).customer_domain(), at(10))
             .expect("the first target is granted");
         let oldest_expired = watch.expired().clone();
@@ -2176,7 +2241,7 @@ mod tests {
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&nth_up_segment(0)), at(20))
                 .is_none(),
             "an evicted target takes its segment grants with it"
@@ -2195,7 +2260,7 @@ mod tests {
         grant_nth_target(&fixture, client_ip(), 1, at(10));
 
         let hold = fixture
-            .auth
+            .grant
             .watch_grant(client_ip(), nth_sni(0).customer_domain(), at(10))
             .expect("the first target is granted");
 
@@ -2224,7 +2289,7 @@ mod tests {
 
         // Only the segment grant is held, the target grant itself is not.
         let hold = fixture
-            .auth
+            .grant
             .watch_segment_grant(
                 client_ip(),
                 nth_sni(0).customer_domain(),
@@ -2252,15 +2317,15 @@ mod tests {
         grant_nth_target(&fixture, client_ip(), 0, at(0));
 
         let hold = fixture
-            .auth
+            .grant
             .watch_grant(client_ip(), nth_sni(0).customer_domain(), at(0))
             .expect("the target is granted");
 
         fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([(nth_sni(1).customer_domain().into(), AuthSegments::default())]),
+                BTreeMap::from([(nth_sni(1).customer_domain().into(), AuthSegments::default())]),
                 at(10),
             )
             .expect_err("the only target of the IP is in use");
@@ -2282,16 +2347,16 @@ mod tests {
 
         let holds = [0, 1].map(|n| {
             fixture
-                .auth
+                .grant
                 .watch_grant(client_ip(), nth_sni(n).customer_domain(), at(0))
                 .expect("both targets are granted")
         });
 
         let error = fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([(
+                BTreeMap::from([(
                     nth_sni(2).customer_domain().into(),
                     AuthSegments {
                         up_segments: vec![nth_up_segment(2)],
@@ -2324,7 +2389,7 @@ mod tests {
         );
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&nth_up_segment(2)), at(10))
                 .is_none(),
             "and neither were the segments it came with"
@@ -2336,10 +2401,10 @@ mod tests {
         let fixture = target_capped_fixture(2);
 
         let error = fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([
+                BTreeMap::from([
                     (nth_sni(0).customer_domain().into(), AuthSegments::default()),
                     (nth_sni(1).customer_domain().into(), AuthSegments::default()),
                     (nth_sni(2).customer_domain().into(), AuthSegments::default()),
@@ -2359,7 +2424,7 @@ mod tests {
             "{error:?}"
         );
         assert!(
-            !fixture.auth.ip_is_authorized(client_ip(), at(0)),
+            !fixture.grant.ip_is_authorized(client_ip(), at(0)),
             "a rejected request leaves the IP as unauthorized as it was"
         );
     }
@@ -2372,10 +2437,10 @@ mod tests {
         grant_nth_target(&fixture, client_ip(), 1, at(0));
 
         fixture
-            .auth
+            .grant
             .authorize(
                 client_ip(),
-                HashMap::from([
+                BTreeMap::from([
                     (nth_sni(0).customer_domain().into(), AuthSegments::default()),
                     (nth_sni(1).customer_domain().into(), AuthSegments::default()),
                 ]),
@@ -2387,7 +2452,7 @@ mod tests {
         assert_eq!(target_expiry_of(&fixture, 1, at(10)), Some(at(110)));
         assert!(
             fixture
-                .auth
+                .grant
                 .segment(&granted_id(&nth_up_segment(0)), at(10))
                 .is_some(),
             "a refreshed target keeps the segment grants the refresh omits"
@@ -2404,7 +2469,7 @@ mod tests {
         assert_eq!(target_expiry_of(&fixture, 0, at(0)), Some(at(100)));
         assert_eq!(
             fixture
-                .auth
+                .grant
                 .grant_expiry(other_client_ip(), nth_sni(1).customer_domain(), at(0)),
             Some(at(100)),
             "another IP at its own limit is untouched"

@@ -5698,6 +5698,7 @@ dependencies = [
  "sciparse",
  "serde",
  "serde_json",
+ "serde_with",
  "snap-tokens",
  "snap-tun",
  "thiserror 2.0.20",
@@ -5708,7 +5709,6 @@ dependencies = [
  "tracing",
  "url",
  "utoipa",
- "utoipa-axum",
  "x25519-dalek",
 ]
 

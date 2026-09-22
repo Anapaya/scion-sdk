@@ -15,7 +15,7 @@
 //! Path combination.
 //!
 //! [`PathManager`] combines the public segments of the [`SegmentManager`] with the segments granted
-//! by the [`AuthService`] into the single best path, and reports which segments went into it so
+//! by the [`GrantManager`] into the single best path, and reports which segments went into it so
 //! callers can re-path and observe grant expiry.
 
 use std::{
@@ -35,8 +35,8 @@ use sciparse::{
     segment::{SegmentFp, SignedPathSegment},
 };
 
-use crate::pg_wap2::{
-    auth::{AuthService, DstGrant, GrantedSegmentId, SegmentGrantGuard, TargetGrantGuard},
+use crate::pg_wap::{
+    grants::{DstGrant, GrantManager, GrantedSegmentId, SegmentGrantGuard, TargetGrantGuard},
     segments::{PairGuard, SegmentManager, SegmentStoreId, SegmentsIter},
     sni::{CustomerDomainRef, WapSNI},
 };
@@ -50,13 +50,13 @@ pub struct PathManager(Arc<PathManagerInner>);
 /// The state shared by all clones of a [`PathManager`].
 struct PathManagerInner {
     segments: SegmentManager,
-    auth: AuthService,
+    grant: GrantManager,
 }
 
 impl PathManager {
     /// Creates a path manager on top of the given segment sources.
-    pub fn new(segments: SegmentManager, auth: AuthService) -> Self {
-        Self(Arc::new(PathManagerInner { segments, auth }))
+    pub fn new(segments: SegmentManager, grant: GrantManager) -> Self {
+        Self(Arc::new(PathManagerInner { segments, grant }))
     }
 
     /// Returns the best path from the given source ISD-ASN to the destination ISD-ASN.
@@ -80,15 +80,17 @@ impl PathManager {
         src: IsdAsn,
         dst: IsdAsn,
         now: SystemTime,
-    ) -> anyhow::Result<Option<UsedPath>> {
+    ) -> Result<Option<UsedPath>, BestPathError> {
         if src.is_wildcard() || dst.is_wildcard() {
-            bail!("Source and destination ISD-ASNs must be specified, wildcards are not allowed");
+            return Err(BestPathError::WildcardIA);
         }
 
         // Check if the client is authorized for the destination SNI and get the granted segments.
-        let auth_segments = self.0.auth.dst_grant(client_ip, dst_sni.customer_domain(), now).context(
-            "IP address is not authorized for the given destination SNI or the grant has expired",
-        )?;
+        let auth_segments = self
+            .0
+            .grant
+            .dst_grant(client_ip, dst_sni.customer_domain(), now)
+            .ok_or(BestPathError::UnauthorizedDestination)?;
 
         // Check if the destination is in the same AS
         if src == dst {
@@ -102,6 +104,7 @@ impl PathManager {
 
         // Get all public segments for the (src, dst) pair. This holds a lock on the store's entry
         // bucket, so nothing below may await on the segment manager again.
+        // XXX(performance): This needs to be optimized to avoid blocking when we scale up.
         let store_segments = self
             .0
             .segments
@@ -139,7 +142,7 @@ impl PathManager {
         for fp in fps {
             segments.push(
                 segment_source(fp, src, dst, &store_segments, &auth_segments)
-                .context("The path used a segment that is no longer available in either the store or the grant")?,
+                    .ok_or(BestPathError::UnauthorizedSegments)?,
             );
         }
 
@@ -247,7 +250,7 @@ impl PathManager {
     ) -> anyhow::Result<GrantWatch> {
         let target = self
             .0
-            .auth
+            .grant
             .watch_grant(client_ip, customer_domain, now)
             .with_context(|| format!("No live grant of {client_ip} for {customer_domain}"))?;
 
@@ -260,7 +263,7 @@ impl PathManager {
 
             segments.push(
                 self.0
-                    .auth
+                    .grant
                     .watch_segment_grant(client_ip, customer_domain, id, now)
                     .with_context(|| {
                         format!(
@@ -278,9 +281,26 @@ impl PathManager {
     async fn resolve(&self, id: &SegmentSourceId, now: SystemTime) -> Option<SignedPathSegment> {
         match id {
             SegmentSourceId::Store(id) => self.0.segments.segment(*id, now).await,
-            SegmentSourceId::Auth(id) => self.0.auth.segment(id, now),
+            SegmentSourceId::Auth(id) => self.0.grant.segment(id, now),
         }
     }
+}
+
+/// Errors that can occur while computing the best path.
+#[derive(thiserror::Error, Debug)]
+pub enum BestPathError {
+    /// The client holds no valid grant for the destination.
+    #[error("the client is not authorized to access the given destination")]
+    UnauthorizedDestination,
+    /// One hop of the path comes from a segment that is neither public nor granted to the client.
+    #[error("the client is not authorized to use one or more of the given segments")]
+    UnauthorizedSegments,
+    /// The source or the destination ISD-AS is a wildcard.
+    #[error("src or dst IA contained a wildcard, this is not allowed")]
+    WildcardIA,
+    /// The path could not be built for any other reason.
+    #[error("failed to compute the best path: {0}")]
+    Other(#[from] anyhow::Error),
 }
 
 /// Combines `inputs` into the cheapest loop free path from `src` to `dst` that `accept`ed.
@@ -348,7 +368,7 @@ fn segment_source(
 pub enum SegmentSourceId {
     /// A public segment from the [`SegmentManager`].
     Store(SegmentStoreId),
-    /// A private segment granted by the [`AuthService`].
+    /// A private segment granted by the [`GrantManager`].
     Auth(GrantedSegmentId),
 }
 
@@ -445,7 +465,7 @@ mod tests {
     use sciparse::segment::Segments;
 
     use super::*;
-    use crate::pg_wap2::{
+    use crate::pg_wap::{
         crpc::model::AuthSegments,
         test_util::{
             Fixture, IDLE_EVICTION_TIME, MAX_FETCH_INTERVAL, MockFetcher, at, client_ip, core_ia,
@@ -619,7 +639,7 @@ mod tests {
             .paths
             .watch_grants(client_ip(), sni().customer_domain(), &used, at(0))
             .expect("the client is authorized for the path");
-        fixture.auth.clean(at(101));
+        fixture.grant.clean(at(101));
         assert!(watch.expired().now_or_never().is_some());
     }
 
@@ -636,7 +656,7 @@ mod tests {
             .expect("the public pair of the path can be held");
 
         // Every one of the three segments is re-beaconed 600s later: the granted ones by a
-        // re-auth, the public one by the segment manager refetching the pair.
+        // re-grant, the public one by the segment manager refetching the pair.
         let refreshed_at = at(MAX_FETCH_INTERVAL.as_secs() + 1);
         fixture.grant_for(
             client_ip(),
@@ -788,7 +808,7 @@ mod tests {
             .expect("path combination succeeds")
             .expect("the granted segment yields a path");
 
-        fixture.auth.clean(at(101));
+        fixture.grant.clean(at(101));
 
         assert!(
             fixture.paths.refresh_path(&used, at(101)).await.is_err(),

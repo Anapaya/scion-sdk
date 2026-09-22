@@ -31,7 +31,7 @@ use axum_connect_rpc::{
 };
 
 use crate::{
-    pg_wap2::crpc::model::{AuthorizeTargetsError, ControlServiceAPIHandler},
+    pg_wap::crpc::model::{AuthorizeTargetsError, ControlServiceAPIHandler},
     proto::anapaya::wap::v1 as rpc,
 };
 
@@ -103,7 +103,7 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
-    use crate::pg_wap2::{
+    use crate::pg_wap::{
         crpc::model::{AuthorizeTargetsRequest, AuthorizeTargetsResponse},
         sni::CustomerDomain,
         test_util::{client_ip, sni},

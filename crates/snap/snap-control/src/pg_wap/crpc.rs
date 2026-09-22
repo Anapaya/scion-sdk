@@ -15,13 +15,15 @@
 //! Connect RPC API of the WAP control plane.
 //!
 //! Serves the `anapaya.wap.v1.WapControl` service defined in
-//! `protobuf/anapaya/wap/v1/control_service.proto`, split into three parts:
+//! `protobuf/anapaya/wap/v1/control_service.proto`
 //!
 //! * [`model`] - One model per message of the service, plus the
 //!   [`ControlServiceAPIHandler`](model::ControlServiceAPIHandler) that serves them.
 //! * [`convert`] - Translation between the protobuf messages and their models.
 //! * [`api`] - The endpoints, and [`api::nest_crpc_api`] to serve them on a router.
+//! * [`handler`] - The [`handler::WapControlHandler`] one WAP serves the service with.
 
 pub mod api;
 pub mod convert;
+pub mod handler;
 pub mod model;

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Translation between the protobuf messages of the WAP control service and their
-//! [`model`](super::model)s.
+//! [`model`]s.
 
 use std::{collections::BTreeMap, time::UNIX_EPOCH};
 
@@ -21,7 +21,7 @@ use scion_protobuf::proto::control_plane::v1 as buffa_cp;
 use sciparse::{rpc::FromRpcError, segment::SignedPathSegment};
 
 use crate::{
-    pg_wap2::{
+    pg_wap::{
         crpc::model,
         sni::{CustomerDomain, SniFormatError},
     },
@@ -140,7 +140,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::*;
-    use crate::pg_wap2::test_util::{client_ip, core_segment, down_segment, sni, up_segment};
+    use crate::pg_wap::test_util::{client_ip, core_segment, down_segment, sni, up_segment};
 
     /// A request granting `segments` for the customer domain of [`sni`].
     fn request(segments: rpc::AuthSegments) -> rpc::AuthorizeTargetsRequest {
