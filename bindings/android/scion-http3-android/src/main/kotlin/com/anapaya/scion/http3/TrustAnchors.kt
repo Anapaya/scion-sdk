@@ -24,6 +24,10 @@ import java.security.cert.CertificateFactory
  * The default, [systemDefault], is what an application wants unless it talks to a deployment with
  * its own authority. The variants are opaque on purpose, so more can be added without breaking a
  * `when` nobody should be writing over them.
+ *
+ * This setting applies to the servers that requests go to over SCION. It does not apply to the
+ * endhost API or to the SNAP control plane: the client always verifies those against the device's
+ * own certificate authorities, the same set as [systemDefault].
  */
 public sealed class TrustAnchors private constructor() {
     internal data object PlatformAnchors : TrustAnchors()

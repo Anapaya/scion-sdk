@@ -25,7 +25,7 @@ use scion_http3::{
     http::{HeaderMap, HeaderName, HeaderValue, Method},
     scion_quic::quic::config::QuicConfig,
     scion_stack::{
-        ScionStackBuilder,
+        ScionStackBuilder, reqwest,
         stack::builder::{PreferredUnderlay, SnapUnderlayConfig, UdpUnderlayConfig},
         x25519_dalek::StaticSecret,
     },
@@ -95,9 +95,11 @@ impl ClientConfig {
         let discovery = self.discovery;
         let snap = validated_snap(self.snap)?;
         let udp = validated_udp(self.udp)?;
-        if customization_needed(&discovery, &snap, &udp) {
-            config = config
-                .with_stack_customizer(move |builder| customize(builder, &discovery, &snap, &udp));
+        let control_plane = validated_control_plane(self.control_plane_anchors_pem.as_deref())?;
+        if customization_needed(&discovery, &snap, &udp, control_plane.as_ref()) {
+            config = config.with_stack_customizer(move |builder| {
+                customize(builder, &discovery, &snap, &udp, control_plane.as_ref())
+            });
         }
 
         Ok(config)
@@ -110,12 +112,14 @@ fn customization_needed(
     discovery: &DiscoveryConfig,
     snap: &ValidatedSnap,
     udp: &ValidatedUdp,
+    control_plane: Option<&ValidatedControlPlane>,
 ) -> bool {
     discovery.max_groups.is_some()
         || discovery.apis_per_group.is_some()
         || discovery.per_group_delay_ms.is_some()
         || snap.is_set()
         || udp.is_set()
+        || control_plane.is_some()
 }
 
 fn customize(
@@ -123,6 +127,7 @@ fn customize(
     discovery: &DiscoveryConfig,
     snap: &ValidatedSnap,
     udp: &ValidatedUdp,
+    control_plane: Option<&ValidatedControlPlane>,
 ) -> ScionStackBuilder {
     if let Some(max_groups) = discovery.max_groups {
         builder = builder.with_endhost_api_discovery_max_groups(max_groups as usize);
@@ -143,8 +148,77 @@ fn customize(
     if udp.is_set() {
         builder = builder.with_udp_underlay_config(udp.build());
     }
+    // The stack passes this client to the SNAP control plane as well, since the SNAP configuration
+    // sets none of its own.
+    if let Some(control_plane) = control_plane {
+        match control_plane.build() {
+            Ok(client) => builder = builder.with_crpc_client(client),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "Could not build the control-plane HTTP client, using the default one"
+                );
+            }
+        }
+    }
 
     builder
+}
+
+/// Timeout for one control-plane request. The same value that `CrpcClient::new` applies.
+const CONTROL_PLANE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Control-plane trust anchors that are known to build an HTTP client.
+struct ValidatedControlPlane {
+    anchors: Vec<reqwest::Certificate>,
+}
+
+impl ValidatedControlPlane {
+    /// Builds a new HTTP client that trusts the anchors and nothing else.
+    ///
+    /// Each rebuild gets a new client, so that no pooled connection outlives the network it was
+    /// opened on.
+    fn build(&self) -> Result<reqwest::Client, reqwest::Error> {
+        reqwest::Client::builder()
+            .timeout(CONTROL_PLANE_REQUEST_TIMEOUT)
+            .tls_certs_only(self.anchors.iter().cloned())
+            .build()
+    }
+}
+
+fn validated_control_plane(pem: Option<&[u8]>) -> Result<Option<ValidatedControlPlane>, Error> {
+    let Some(pem) = pem else {
+        // The platform verifier on Android reads the trust store through JNI, and this library
+        // registers no JavaVM for it. Without this check, the first HTTPS request to the endhost
+        // API fails with an error that names only the verifier crate.
+        if cfg!(target_os = "android") {
+            return Err(Error::invalid_request(
+                "on Android, `control_plane_anchors_pem` must be set: the platform verifier is \
+                 not available, so the endhost API and SNAP certificates cannot be verified \
+                 without it",
+            ));
+        }
+        return Ok(None);
+    };
+
+    let anchors = reqwest::Certificate::from_pem_bundle(pem).map_err(|e| {
+        Error::invalid_request(format!(
+            "the control-plane trust anchors are not a readable PEM bundle: {e}"
+        ))
+    })?;
+    if anchors.is_empty() {
+        return Err(Error::invalid_request(
+            "the control-plane trust anchors hold no certificate",
+        ));
+    }
+
+    let control_plane = ValidatedControlPlane { anchors };
+    control_plane.build().map_err(|e| {
+        Error::invalid_request(format!(
+            "the control-plane trust anchors do not build an HTTP client: {e}"
+        ))
+    })?;
+    Ok(Some(control_plane))
 }
 
 /// A [`SnapConfig`] whose values are known to be usable, so that the customizer cannot fail.
@@ -514,6 +588,7 @@ mod tests {
             &untouched.discovery,
             &validated_snap(untouched.snap).expect("no identity"),
             &validated_udp(untouched.udp).expect("no addresses"),
+            None,
         ));
 
         let tuned = ClientConfig {
@@ -527,7 +602,118 @@ mod tests {
             &tuned.discovery,
             &validated_snap(tuned.snap).expect("no identity"),
             &validated_udp(tuned.udp).expect("no addresses"),
+            None,
         ));
+    }
+
+    /// A certificate authority and a `localhost` certificate that it signed, both as PEM.
+    struct TestPki {
+        ca_pem: String,
+        leaf_pem: String,
+        leaf_key_pem: String,
+    }
+
+    fn test_pki() -> TestPki {
+        let mut ca_params = rcgen::CertificateParams::new(vec![]).expect("CA parameters");
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = rcgen::CertifiedIssuer::self_signed(
+            ca_params,
+            rcgen::KeyPair::generate().expect("CA key"),
+        )
+        .expect("CA certificate");
+
+        let leaf_key = rcgen::KeyPair::generate().expect("leaf key");
+        let leaf = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .expect("leaf parameters")
+            .signed_by(&leaf_key, &ca)
+            .expect("leaf certificate");
+
+        TestPki {
+            ca_pem: ca.pem(),
+            leaf_pem: leaf.pem(),
+            leaf_key_pem: leaf_key.serialize_pem(),
+        }
+    }
+
+    #[test]
+    fn unusable_control_plane_anchors_are_rejected() {
+        let not_pem = validated_control_plane(Some(b"not a certificate"));
+        assert!(matches!(not_pem, Err(Error::InvalidRequest { .. })));
+
+        let empty = validated_control_plane(Some(b""));
+        assert!(matches!(empty, Err(Error::InvalidRequest { .. })));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn control_plane_anchors_install_a_customizer() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        let untouched = ClientConfig::with_defaults("https://endhost-api.example.org".to_string());
+        assert!(
+            validated_control_plane(None)
+                .expect("absent anchors are valid off Android")
+                .is_none()
+        );
+
+        let control_plane =
+            validated_control_plane(Some(test_pki().ca_pem.as_bytes())).expect("a valid bundle");
+        assert!(customization_needed(
+            &untouched.discovery,
+            &validated_snap(untouched.snap).expect("no identity"),
+            &validated_udp(untouched.udp).expect("no addresses"),
+            control_plane.as_ref(),
+        ));
+    }
+
+    /// The control-plane client must trust the given anchors and nothing else. This is what keeps
+    /// the platform verifier, which cannot run on Android, out of the endhost API connection.
+    #[tokio::test]
+    async fn the_control_plane_client_trusts_only_its_anchors() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        let pki = test_pki();
+
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+            pki.leaf_pem.clone().into_bytes(),
+            pki.leaf_key_pem.clone().into_bytes(),
+        )
+        .await
+        .expect("server TLS configuration");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binding a port");
+        listener
+            .set_nonblocking(true)
+            .expect("a non-blocking listener");
+        let port = listener.local_addr().expect("the bound address").port();
+        let server = axum_server::from_tcp_rustls(listener, tls)
+            .expect("the TLS server")
+            .serve(
+                axum::Router::new()
+                    .route("/", axum::routing::get(|| async { "ok" }))
+                    .into_make_service(),
+            );
+        let server = tokio::spawn(server);
+        let url = format!("https://localhost:{port}/");
+
+        let trusted = validated_control_plane(Some(pki.ca_pem.as_bytes()))
+            .expect("a valid bundle")
+            .expect("anchors were given")
+            .build()
+            .expect("the client");
+        let response = trusted.get(&url).send().await.expect("the request");
+        assert!(response.status().is_success());
+
+        let other = validated_control_plane(Some(test_pki().ca_pem.as_bytes()))
+            .expect("a valid bundle")
+            .expect("anchors were given")
+            .build()
+            .expect("the client");
+        let error = other
+            .get(&url)
+            .send()
+            .await
+            .expect_err("a certificate from another authority must be refused");
+        assert!(error.is_connect(), "unexpected error: {error}");
+
+        server.abort();
     }
 
     /// A DNS override is checked when the client is built, so a mistake in it is reported there

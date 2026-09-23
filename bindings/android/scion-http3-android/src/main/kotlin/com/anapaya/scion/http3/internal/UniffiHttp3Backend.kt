@@ -71,6 +71,7 @@ internal class UniffiHttp3BackendFactory(
                 // no default for.
                 base = defaultClientConfig(settings.endhostApiUrl),
                 trust = settings.trust.toFfi(trustStore),
+                controlPlaneAnchors = trustStore.anchorsPem(),
             )
         return UniffiHttp3Backend(FfiClient(config))
     }

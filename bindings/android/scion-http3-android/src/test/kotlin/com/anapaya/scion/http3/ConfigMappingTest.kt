@@ -47,6 +47,10 @@ class ConfigMappingTest {
             maxResponseBodyBytes = 16u * 1024u * 1024u,
         )
 
+    // One instance for every expectation: a generated data class compares a byte array by
+    // reference.
+    private val anchors = "-----BEGIN CERTIFICATE-----".toByteArray()
+
     @Test
     fun `every setting crosses into the field it belongs in`() {
         val settings =
@@ -67,7 +71,7 @@ class ConfigMappingTest {
                     mapOf("pinned.example" to listOf(ScionAddress.parse("1-ff00:0:110,10.0.0.1"))),
             )
 
-        val config = settings.applyTo(base, FfiTrustAnchors.InsecureNoVerify)
+        val config = settings.applyTo(base, FfiTrustAnchors.InsecureNoVerify, anchors)
 
         assertEquals(
             base.copy(
@@ -77,6 +81,7 @@ class ConfigMappingTest {
                 snap = FfiSnapConfig(dpIndex = 3u),
                 udp = FfiUdpConfig(outboundIps = listOf("10.0.0.5")),
                 trust = FfiTrustAnchors.InsecureNoVerify,
+                controlPlaneAnchorsPem = anchors,
                 dnsOverrides =
                     listOf(DnsOverride("pinned.example", listOf("1-ff00:0:110,10.0.0.1"))),
                 connectTimeoutMs = 1_111u,
@@ -96,12 +101,13 @@ class ConfigMappingTest {
             ClientSettings(
                 endhostApiUrl = "https://endhost-api.example.org",
                 trust = TrustAnchors.systemDefault(),
-            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
+            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify, anchors)
 
         assertEquals(
             base.copy(
                 endhostApiUrl = "https://endhost-api.example.org",
                 trust = FfiTrustAnchors.InsecureNoVerify,
+                controlPlaneAnchorsPem = anchors,
             ),
             config,
             "every default has one home, and it is the SCION stack. A value restated in Kotlin " +
@@ -116,7 +122,7 @@ class ConfigMappingTest {
                 endhostApiUrl = "https://endhost-api.example.org",
                 trust = TrustAnchors.systemDefault(),
                 requestTimeoutMillis = 90_000,
-            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
+            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify, anchors)
 
         assertEquals(90_000uL, config.requestTimeoutMs)
     }
@@ -136,7 +142,7 @@ class ConfigMappingTest {
                                 ScionAddress.parse("1-ff00:0:110,[::1]"),
                             ),
                     ),
-            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
+            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify, anchors)
 
         assertEquals(
             listOf(
@@ -155,8 +161,20 @@ class ConfigMappingTest {
                 endhostApiUrl = "https://endhost-api.example.org",
                 trust = TrustAnchors.systemDefault(),
                 snap = SnapConfig.Builder().staticIdentity(key).build(),
-            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
+            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify, anchors)
 
         assertArrayEquals(key, config.snap.staticIdentity)
+    }
+
+    /** Even a client that verifies nothing on the SCION path must give the control plane anchors. */
+    @Test
+    fun `the control plane gets the platform anchors whatever the trust setting`() {
+        val config =
+            ClientSettings(
+                endhostApiUrl = "https://endhost-api.example.org",
+                trust = TrustAnchors.insecureNoVerify(),
+            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify, anchors)
+
+        assertArrayEquals(anchors, config.controlPlaneAnchorsPem)
     }
 }

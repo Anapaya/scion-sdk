@@ -142,10 +142,15 @@ private fun FfiTimeoutPhase.toPublic(): ScionHttp3Exception.TimeoutPhase =
  *
  * [base] is what `defaultClientConfig()` returned, so every field this leaves alone keeps the value
  * the SCION stack chose. That is the point: the defaults have exactly one home, and it is not here.
+ *
+ * [controlPlaneAnchors] are the platform's anchors, whatever [ClientSettings.trust] says. The stack
+ * reaches the endhost API and the SNAP control plane over ordinary HTTPS, and on Android it cannot
+ * verify those certificates without anchors from this side.
  */
 internal fun ClientSettings.applyTo(
     base: ClientConfig,
     trust: FfiTrustAnchors,
+    controlPlaneAnchors: ByteArray,
 ): ClientConfig =
     base.copy(
         endhostApiUrl = endhostApiUrl,
@@ -154,6 +159,7 @@ internal fun ClientSettings.applyTo(
         snap = snap?.toFfi() ?: base.snap,
         udp = udp?.toFfi() ?: base.udp,
         trust = trust,
+        controlPlaneAnchorsPem = controlPlaneAnchors,
         dnsOverrides =
             dnsOverrides.toSortedMap().map { (host, addresses) ->
                 FfiDnsOverride(host = host, addresses = addresses.map { it.toString() })

@@ -5029,8 +5029,11 @@ dependencies = [
 name = "scion-http3-ffi"
 version = "0.0.0"
 dependencies = [
+ "axum",
+ "axum-server",
  "futures",
  "ntest",
+ "rcgen",
  "scion-h3-test-server",
  "scion-http3",
  "scion-sdk-utils",

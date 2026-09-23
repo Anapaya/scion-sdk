@@ -218,7 +218,18 @@ pub struct ClientConfig {
     /// UDP underlay settings.
     pub udp: UdpConfig,
     /// Trust anchors for server certificates.
+    ///
+    /// These govern the QUIC connections to origins only. The endhost API and the SNAP control
+    /// plane are reached over ordinary HTTPS and use
+    /// [`control_plane_anchors_pem`](Self::control_plane_anchors_pem) instead.
     pub trust: TrustAnchors,
+    /// Trust anchors for the endhost API and the SNAP control plane, as a PEM bundle.
+    ///
+    /// When set, these anchors and no others verify the control-plane certificates. When unset,
+    /// the platform verifier does. Android requires this field: the platform verifier there needs
+    /// a JavaVM and a `Context` that nothing registers, so the client refuses to build without it.
+    #[uniffi(default)]
+    pub control_plane_anchors_pem: Option<Vec<u8>>,
     /// Hosts resolved to fixed addresses instead of through DNS.
     #[uniffi(default)]
     pub dns_overrides: Vec<DnsOverride>,
@@ -261,6 +272,7 @@ impl ClientConfig {
             snap: SnapConfig::default(),
             udp: UdpConfig::default(),
             trust: TrustAnchors::SystemDefault,
+            control_plane_anchors_pem: None,
             dns_overrides: vec![],
             connect_timeout_ms: millis(DEFAULT_CONNECT_TIMEOUT),
             request_timeout_ms: millis(DEFAULT_REQUEST_TIMEOUT),
