@@ -219,6 +219,12 @@ pub struct ClientConfig {
     pub udp: UdpConfig,
     /// Trust anchors for server certificates.
     pub trust: TrustAnchors,
+    /// Trust anchors for the endhost API and the SNAP control plane, as a PEM bundle.
+    ///
+    /// When unset, the platform verifier is used. Android must set it, because nothing initializes
+    /// the platform verifier there.
+    #[uniffi(default)]
+    pub control_plane_anchors_pem: Option<Vec<u8>>,
     /// Hosts resolved to fixed addresses instead of through DNS.
     #[uniffi(default)]
     pub dns_overrides: Vec<DnsOverride>,
@@ -261,6 +267,7 @@ impl ClientConfig {
             snap: SnapConfig::default(),
             udp: UdpConfig::default(),
             trust: TrustAnchors::SystemDefault,
+            control_plane_anchors_pem: None,
             dns_overrides: vec![],
             connect_timeout_ms: millis(DEFAULT_CONNECT_TIMEOUT),
             request_timeout_ms: millis(DEFAULT_REQUEST_TIMEOUT),

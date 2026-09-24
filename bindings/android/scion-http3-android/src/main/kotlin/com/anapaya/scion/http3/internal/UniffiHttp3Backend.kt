@@ -72,6 +72,9 @@ internal class UniffiHttp3BackendFactory(
                 base = defaultClientConfig(settings.endhostApiUrl),
                 trust = settings.trust.toFfi(trustStore),
             )
-        return UniffiHttp3Backend(FfiClient(config))
+        // The control plane always uses the platform's anchors, because trust covers only the
+        // SCION servers.
+        val anchored = config.copy(controlPlaneAnchorsPem = trustStore.anchorsPem())
+        return UniffiHttp3Backend(FfiClient(anchored))
     }
 }

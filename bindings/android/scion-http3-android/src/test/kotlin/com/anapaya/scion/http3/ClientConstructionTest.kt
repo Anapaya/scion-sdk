@@ -154,7 +154,7 @@ class ClientConstructionTest {
                     )
                 }
 
-            assertTrue(failure.detail.contains("TrustAnchors.pinned()"))
+            assertTrue(failure.detail.contains("no trust anchors"))
         }
 
     @Test

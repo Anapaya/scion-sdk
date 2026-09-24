@@ -120,7 +120,7 @@ class TrustAnchorsTest {
         val failure = assertThrows<ScionHttp3Exception.Connectivity> { store.anchorsPem() }
 
         assertTrue(
-            failure.detail.contains("TrustAnchors.pinned()"),
+            failure.detail.contains("no trust anchors"),
             "an empty bundle would accept nothing, and fail every handshake without saying why",
         )
         assertFalse(failure.isRetryable, "the same platform will report the same nothing again")

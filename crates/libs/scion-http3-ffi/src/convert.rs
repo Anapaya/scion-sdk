@@ -25,7 +25,7 @@ use scion_http3::{
     http::{HeaderMap, HeaderName, HeaderValue, Method},
     scion_quic::quic::config::QuicConfig,
     scion_stack::{
-        ScionStackBuilder,
+        ScionStackBuilder, reqwest,
         stack::builder::{PreferredUnderlay, SnapUnderlayConfig, UdpUnderlayConfig},
         x25519_dalek::StaticSecret,
     },
@@ -95,9 +95,14 @@ impl ClientConfig {
         let discovery = self.discovery;
         let snap = validated_snap(self.snap)?;
         let udp = validated_udp(self.udp)?;
-        if customization_needed(&discovery, &snap, &udp) {
-            config = config
-                .with_stack_customizer(move |builder| customize(builder, &discovery, &snap, &udp));
+        let crpc_client = self
+            .control_plane_anchors_pem
+            .map(|pem| control_plane_client(&pem))
+            .transpose()?;
+        if crpc_client.is_some() || customization_needed(&discovery, &snap, &udp) {
+            config = config.with_stack_customizer(move |builder| {
+                customize(builder, &discovery, &snap, &udp, crpc_client.clone())
+            });
         }
 
         Ok(config)
@@ -123,6 +128,7 @@ fn customize(
     discovery: &DiscoveryConfig,
     snap: &ValidatedSnap,
     udp: &ValidatedUdp,
+    crpc_client: Option<reqwest::Client>,
 ) -> ScionStackBuilder {
     if let Some(max_groups) = discovery.max_groups {
         builder = builder.with_endhost_api_discovery_max_groups(max_groups as usize);
@@ -143,8 +149,26 @@ fn customize(
     if udp.is_set() {
         builder = builder.with_udp_underlay_config(udp.build());
     }
+    if let Some(client) = crpc_client {
+        builder = builder.with_crpc_client(client);
+    }
 
     builder
+}
+
+/// Builds the HTTP client for the endhost API and the SNAP control plane. It trusts only the
+/// anchors in `pem`.
+fn control_plane_client(pem: &[u8]) -> Result<reqwest::Client, Error> {
+    let invalid = |e: reqwest::Error| {
+        Error::invalid_request(format!("invalid control-plane trust anchors: {e}"))
+    };
+    let anchors = reqwest::Certificate::from_pem_bundle(pem).map_err(invalid)?;
+    reqwest::Client::builder()
+        // The same timeout that `CrpcClient::new` sets.
+        .timeout(Duration::from_secs(30))
+        .tls_certs_only(anchors)
+        .build()
+        .map_err(invalid)
 }
 
 /// A [`SnapConfig`] whose values are known to be usable, so that the customizer cannot fail.

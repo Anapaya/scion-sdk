@@ -121,9 +121,8 @@ internal class CachingTrustStore(
                 throw ScionHttp3Exception.Connectivity(
                     isRetryable = false,
                     detail =
-                        "the platform reported no trust anchors, so no server certificate could " +
-                            "be accepted. Pass the deployment's certificate authority to " +
-                            "TrustAnchors.pinned() instead.",
+                        "the platform reported no trust anchors, so the client cannot verify " +
+                            "any certificate.",
                 )
             }
             read.also { cached = it }
