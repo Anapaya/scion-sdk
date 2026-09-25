@@ -200,7 +200,7 @@ impl PathUnawareUdpScionSocket {
                 None,
             );
 
-            return Ok((packet.udp().payload().len(), src_addr, path));
+            return Ok((max_read, src_addr, path));
         }
     }
 
@@ -282,7 +282,7 @@ impl PathUnawareUdpScionSocket {
             let max_read = std::cmp::min(buffer.len(), packet.udp().payload().len());
             buffer[..max_read].copy_from_slice(&packet.udp().payload()[..max_read]);
 
-            return Ok((packet.udp().payload().len(), src_addr));
+            return Ok((max_read, src_addr));
         }
     }
 
@@ -1089,5 +1089,35 @@ mod cancel_safety_tests {
             payload,
             "buffer must contain the real payload after Ok return"
         );
+    }
+
+    /// `recv_from` returns the number of bytes written if the buffer is too small.
+    #[tokio::test]
+    async fn recv_from_truncates_to_buffer_size() {
+        let (socket, inject_tx, _pather) = build_socket();
+        let payload = b"truncated-payload";
+        inject_tx
+            .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
+            .unwrap();
+
+        let mut buf = [0u8; 4];
+        let (len, _sender) = socket.recv_from(&mut buf).await.unwrap();
+        assert_eq!(len, buf.len());
+        assert_eq!(&buf[..], &payload[..4]);
+    }
+
+    /// `recv_from_with_path` returns the number of bytes written if the buffer is too small.
+    #[tokio::test]
+    async fn recv_from_with_path_truncates_to_buffer_size() {
+        let (socket, inject_tx, _pather) = build_socket();
+        let payload = b"truncated-payload";
+        inject_tx
+            .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
+            .unwrap();
+
+        let mut buf = [0u8; 4];
+        let (len, _sender, _path) = socket.recv_from_with_path(&mut buf).await.unwrap();
+        assert_eq!(len, buf.len());
+        assert_eq!(&buf[..], &payload[..4]);
     }
 }
