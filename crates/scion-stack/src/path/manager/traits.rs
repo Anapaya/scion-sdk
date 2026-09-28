@@ -22,7 +22,10 @@ use std::{
 use sciparse::{identifier::isd_asn::IsdAsn, path::ScionPath};
 use thiserror::Error;
 
-use crate::path::fetcher::traits::PathFetchError;
+use crate::{
+    path::fetcher::traits::PathFetchError,
+    stack::{scmp_handler::ScmpErrorReceiver, socket::SendErrorReceiver},
+};
 
 /// Trait for active path management with async interface.
 pub trait PathManager: SyncPathManager {
@@ -60,6 +63,18 @@ pub trait PathManager: SyncPathManager {
                 Err(_) => Err(PathWaitTimeoutError::Timeout),
             }
         }
+    }
+
+    /// Returns the receiver that can be used to report SCMP errors to the path manager.
+    /// Returns `None` if the path manager does not support receiving SCMP errors.
+    fn scmp_error_receiver(self: Arc<Self>) -> Option<Arc<dyn ScmpErrorReceiver>> {
+        None
+    }
+
+    /// Returns the receiver that can be used to report send errors to the path manager.
+    /// Returns `None` if the path manager does not support receiving send errors.
+    fn send_error_receiver(self: Arc<Self>) -> Option<Arc<dyn SendErrorReceiver>> {
+        None
     }
 }
 

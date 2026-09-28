@@ -522,6 +522,14 @@ impl<F: PathFetcher> PathManager for MultiPathManager<F> {
             }
         }
     }
+
+    fn scmp_error_receiver(self: Arc<Self>) -> Option<Arc<dyn ScmpErrorReceiver>> {
+        Some(self)
+    }
+
+    fn send_error_receiver(self: Arc<Self>) -> Option<Arc<dyn SendErrorReceiver>> {
+        Some(self)
+    }
 }
 
 impl<F: PathFetcher> PathPrefetcher for MultiPathManager<F> {

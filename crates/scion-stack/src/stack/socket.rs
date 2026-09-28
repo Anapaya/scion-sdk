@@ -41,7 +41,7 @@ use crate::{
     path::manager::{MultiPathManager, traits::PathManager},
     stack::{
         ScionSocketConnectError, ScionSocketReceiveError, ScionSocketSendError,
-        scmp_handler::ScmpHandler,
+        scmp_handler::{ScmpErrorHandler, ScmpHandler},
     },
 };
 
@@ -299,16 +299,29 @@ impl PathUnawareUdpScionSocket {
     /// Converts the [`PathUnawareUdpScionSocket`] to a [`UdpScionSocket`] using the given
     /// [`PathManager`]
     ///
+    /// If the path manager supports it SCMP and send errors are forwarded to the
+    /// [`PathManager::scmp_error_receiver`] and [`PathManager::send_error_receiver`].
+    ///
     /// ### Params
     /// * `path_manager`: The path manager this socket will query for paths to the destination.
     /// * `connect_timeout`: The timeout for the initial path lookup when connecting to a remote
     ///   address.
     pub fn into_path_aware<P: PathManager>(
-        self,
+        mut self,
         path_manager: Arc<P>,
         connect_timeout: Duration,
     ) -> UdpScionSocket<P> {
-        UdpScionSocket::new(self, path_manager, connect_timeout, Subscribers::default())
+        if let Some(receiver) = path_manager.clone().scmp_error_receiver() {
+            let scmp_error_receivers = Subscribers::new();
+            scmp_error_receivers.register(receiver);
+            self.scmp_handlers
+                .push(Box::new(ScmpErrorHandler::new(scmp_error_receivers)));
+        }
+        let send_error_receivers = Subscribers::new();
+        if let Some(receiver) = path_manager.clone().send_error_receiver() {
+            send_error_receivers.register(receiver);
+        }
+        UdpScionSocket::new(self, path_manager, connect_timeout, send_error_receivers)
     }
 }
 
@@ -962,8 +975,6 @@ mod cancel_safety_tests {
         );
         (socket, inject_tx, pather)
     }
-
-    // ─── Tests ─────────────────────────────────────────────────────────────────
 
     /// Dropping a [`recv_from_with_path`] future while it is pending (waiting in the channel)
     /// must not consume the packet. The next call must receive that packet.
