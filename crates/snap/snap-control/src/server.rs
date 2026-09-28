@@ -80,26 +80,22 @@ where
         Arc::new(segment_lister),
     );
     auth_router = nest_crpc_api(auth_router, Arc::new(snap_resolver), identity_registry);
-    auth_router =
-        auth_router.layer(ServiceBuilder::new().layer(AuthMiddlewareLayer::new(token_verifier)));
+    auth_router = auth_router
+        .layer(ServiceBuilder::new().layer(AuthMiddlewareLayer::new(token_verifier.clone())));
 
-    // Main unauthorized router.
     let mut router = Router::new();
-    // XXX(bunert): For now the pathguard WAP HTTP API is unauthenticated. This will change in the
-    // future.
     if let Some(wap_control_api) = wap_control_api {
-        // The WAP control API is called cross-origin from the webscion browser SDK. CORS is not a
-        // security boundary here so we reflect any request Origin. Reflection (instead of a literal
-        // `*`) keeps this valid should the endpoint ever gain credentialed auth, where
-        // `Access-Control-Allow-Credentials` is incompatible with `*`.
-
+        // Since the WAP CP must be callable from any website, allow unrestricted CORS.
+        // Sub-router so CORS only applies to WAP CP endpoints, not the rest of the SNAP CP.
         let crpc_api_router =
-            crate::pg_wap::crpc::api::nest_crpc_api(Router::new(), wap_control_api).layer(
-                CorsLayer::new()
-                    .allow_methods(tower_http::cors::Any)
-                    .allow_headers(tower_http::cors::Any)
-                    .allow_origin(tower_http::cors::AllowOrigin::mirror_request()),
-            );
+            crate::pg_wap::crpc::api::nest_crpc_api(Router::new(), wap_control_api)
+                .layer(AuthMiddlewareLayer::new(token_verifier))
+                .layer(
+                    CorsLayer::new()
+                        .allow_methods(tower_http::cors::Any)
+                        .allow_headers(tower_http::cors::Any)
+                        .allow_origin(tower_http::cors::AllowOrigin::mirror_request()),
+                );
 
         router = router.merge(crpc_api_router);
     }
