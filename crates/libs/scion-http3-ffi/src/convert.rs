@@ -95,13 +95,19 @@ impl ClientConfig {
         let discovery = self.discovery;
         let snap = validated_snap(self.snap)?;
         let udp = validated_udp(self.udp)?;
-        let crpc_client = self
+        let control_plane_anchors = self
             .control_plane_anchors_pem
-            .map(|pem| control_plane_client(&pem))
+            .map(|pem| control_plane_anchors(&pem))
             .transpose()?;
-        if crpc_client.is_some() || customization_needed(&discovery, &snap, &udp) {
+        if control_plane_anchors.is_some() || customization_needed(&discovery, &snap, &udp) {
             config = config.with_stack_customizer(move |builder| {
-                customize(builder, &discovery, &snap, &udp, crpc_client.clone())
+                customize(
+                    builder,
+                    &discovery,
+                    &snap,
+                    &udp,
+                    control_plane_anchors.as_deref(),
+                )
             });
         }
 
@@ -128,7 +134,7 @@ fn customize(
     discovery: &DiscoveryConfig,
     snap: &ValidatedSnap,
     udp: &ValidatedUdp,
-    crpc_client: Option<reqwest::Client>,
+    control_plane_anchors: Option<&[reqwest::Certificate]>,
 ) -> ScionStackBuilder {
     if let Some(max_groups) = discovery.max_groups {
         builder = builder.with_endhost_api_discovery_max_groups(max_groups as usize);
@@ -149,26 +155,38 @@ fn customize(
     if udp.is_set() {
         builder = builder.with_udp_underlay_config(udp.build());
     }
-    if let Some(client) = crpc_client {
+    if let Some(anchors) = control_plane_anchors {
+        let client = control_plane_client(anchors.to_vec())
+            .expect("the anchors built a client when the config was converted");
         builder = builder.with_crpc_client(client);
     }
 
     builder
 }
 
-/// Builds the HTTP client for the endhost API and the SNAP control plane. It trusts only the
-/// anchors in `pem`.
-fn control_plane_client(pem: &[u8]) -> Result<reqwest::Client, Error> {
+/// Parses the trust anchors for the endhost API and the SNAP control plane, and checks that they
+/// build a client.
+fn control_plane_anchors(pem: &[u8]) -> Result<Vec<reqwest::Certificate>, Error> {
     let invalid = |e: reqwest::Error| {
         Error::invalid_request(format!("invalid control-plane trust anchors: {e}"))
     };
     let anchors = reqwest::Certificate::from_pem_bundle(pem).map_err(invalid)?;
+    control_plane_client(anchors.clone()).map_err(invalid)?;
+    Ok(anchors)
+}
+
+/// Builds the HTTP client for the endhost API and the SNAP control plane. It trusts only
+/// `anchors`.
+///
+/// Each rebuild of connectivity builds a new client. Clones of a `reqwest::Client` share one
+/// connection pool. After a network change, that pool can hold a connection on the network that
+/// is gone, and a request on that connection gets no answer until the request timeout.
+fn control_plane_client(anchors: Vec<reqwest::Certificate>) -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         // The same timeout that `CrpcClient::new` sets.
         .timeout(Duration::from_secs(30))
         .tls_certs_only(anchors)
         .build()
-        .map_err(invalid)
 }
 
 /// A [`SnapConfig`] whose values are known to be usable, so that the customizer cannot fail.
@@ -359,7 +377,13 @@ fn lossy_value(name: &HeaderName, value: &HeaderValue) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use scion_http3::http::HeaderMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use crate::types::ClientConfig;
@@ -578,5 +602,75 @@ mod tests {
             Error::InvalidRequest { .. }
         ));
         config(vec!["2-ff00:0:212,127.0.0.1"]).expect("a valid override");
+    }
+
+    /// A rebuild of connectivity must not reuse a control-plane connection from an earlier
+    /// build. After a network change, that connection can be on the network that is gone.
+    #[tokio::test]
+    async fn each_control_plane_client_opens_its_own_connections() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        let pem = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("a certificate")
+            .cert
+            .pem();
+        let anchors = control_plane_anchors(pem.as_bytes()).expect("valid anchors");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a listener");
+        let url = format!("http://{}/", listener.local_addr().expect("an address"));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(serve_empty_responses(listener, accepted.clone()));
+
+        let get = |client: reqwest::Client| {
+            let url = url.clone();
+            async move {
+                let response = client.get(url).send().await.expect("a response");
+                assert!(response.status().is_success());
+            }
+        };
+
+        let first = control_plane_client(anchors.clone()).expect("a client");
+        get(first.clone()).await;
+        get(first).await;
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "one client keeps its connection"
+        );
+
+        get(control_plane_client(anchors).expect("a client")).await;
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            2,
+            "a new client opens a new connection"
+        );
+    }
+
+    /// Answers every HTTP/1.1 request with an empty `200 OK`, and keeps each connection open.
+    async fn serve_empty_responses(listener: tokio::net::TcpListener, accepted: Arc<AtomicUsize>) {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("a connection");
+            accepted.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                loop {
+                    let n = match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => n,
+                    };
+                    let requests = buf[..n].windows(4).filter(|w| w == b"\r\n\r\n").count();
+                    for _ in 0..requests {
+                        if stream
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            });
+        }
     }
 }

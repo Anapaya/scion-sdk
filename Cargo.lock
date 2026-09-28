@@ -5031,6 +5031,7 @@ version = "0.0.0"
 dependencies = [
  "futures",
  "ntest",
+ "rcgen",
  "scion-h3-test-server",
  "scion-http3",
  "scion-sdk-utils",

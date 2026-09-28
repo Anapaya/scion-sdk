@@ -36,6 +36,7 @@ uniffi = { workspace = true }
 [dev-dependencies]
 futures = { workspace = true }
 ntest = { workspace = true }
+rcgen = { workspace = true }
 # The same topology, server and routes the Kotlin suite runs against, started in
 # the test's own process rather than as a child.
 scion-h3-test-server = { workspace = true }
