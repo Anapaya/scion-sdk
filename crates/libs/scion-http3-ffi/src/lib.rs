@@ -125,8 +125,8 @@ pub use client::ScionHttp3Client;
 pub use error::{ScionHttp3Error, TimeoutPhase};
 pub use tunnel::Tunnel;
 pub use types::{
-    ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse, SnapConfig,
-    TrustAnchors, UdpConfig, Underlay,
+    ApiKeyAuth, ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse,
+    SnapConfig, TrustAnchors, UdpConfig, Underlay,
 };
 
 // No namespace argument: the namespace then follows the crate name, which keeps the shared

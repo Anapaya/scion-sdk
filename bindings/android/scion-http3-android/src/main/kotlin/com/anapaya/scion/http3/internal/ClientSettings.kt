@@ -37,6 +37,7 @@ internal class ClientSettings(
     val endhostApiUrl: String,
     val trust: TrustAnchors,
     val authToken: String? = null,
+    val apiKey: ApiKeyAuth? = null,
     val preferredUnderlay: PreferredUnderlay? = null,
     val snap: SnapConfig? = null,
     val udp: UdpConfig? = null,
@@ -51,6 +52,17 @@ internal class ClientSettings(
     init {
         validateEndhostApiUrl(endhostApiUrl)
         authToken?.let { require(it.isNotEmpty()) { "an auth token cannot be empty" } }
+        apiKey?.let {
+            require(authToken == null) {
+                "a client is built with an authToken or an apiKey, not both"
+            }
+            require(it.key.isNotEmpty()) { "an Anapaya AA API key cannot be empty" }
+            validateUrl("apiKey.aaUrl", it.aaUrl)
+            require(it.allowInsecureHttp || URI(it.aaUrl).scheme.lowercase() == "https") {
+                "apiKey.aaUrl \"${it.aaUrl}\" is not https, so the API key would cross the " +
+                    "network in cleartext. Pass allowInsecureHttp = true to permit it."
+            }
+        }
         requirePositive("connectTimeout", connectTimeoutMillis)
         requirePositive("requestTimeout", requestTimeoutMillis)
         requirePositive("idleConnectionTimeout", idleConnectionTimeoutMillis)
@@ -98,21 +110,47 @@ internal class ClientSettings(
                     "connectivity through. A local PocketSCION topology reached from the " +
                     "emulator is http://10.0.2.2:8041."
             }
+            validateUrl("endhostApi", url)
+        }
+
+        fun validateUrl(
+            name: String,
+            url: String,
+        ) {
             val uri =
                 try {
                     URI(url)
                 } catch (e: URISyntaxException) {
-                    throw IllegalArgumentException("endhostApi \"$url\" is not a valid URL", e)
+                    throw IllegalArgumentException("$name \"$url\" is not a valid URL", e)
                 }
             require(uri.isAbsolute && !uri.host.isNullOrEmpty()) {
-                "endhostApi \"$url\" needs a scheme and a host, for example " +
+                "$name \"$url\" needs a scheme and a host, for example " +
                     "https://endhost-api.example.org"
             }
             val scheme = uri.scheme.lowercase()
             require(scheme == "http" || scheme == "https") {
-                "endhostApi \"$url\" has to be http or https, not $scheme"
+                "$name \"$url\" has to be http or https, not $scheme"
             }
         }
+    }
+}
+
+/**
+ * An Anapaya AA API key and where to exchange it for a token.
+ *
+ * The device id the AA records is not a setting: the SDK sends [DEVICE_ID] until it derives one
+ * from the device itself.
+ *
+ * [allowInsecureHttp] permits an `http` [aaUrl], which sends the key in cleartext. The URL has to
+ * be `https` without it.
+ */
+internal class ApiKeyAuth(
+    val key: String,
+    val aaUrl: String,
+    val allowInsecureHttp: Boolean = false,
+) {
+    internal companion object {
+        const val DEVICE_ID: String = "no-device-id"
     }
 }
 
@@ -138,6 +176,31 @@ internal fun warnIfVerificationDisabled(
             "Worse: this application is not debuggable, so this is a release build. " +
                 "TrustAnchors.insecureNoVerify() must not ship. Use TrustAnchors.pinned() with " +
                 "the deployment's own certificate authority instead.",
+        )
+    }
+}
+
+/**
+ * Says, loudly, that the client accepts a plain-HTTP Anapaya AA.
+ *
+ * Logged rather than refused, as [warnIfVerificationDisabled] is, and for the same reasons: a local
+ * AA over plain HTTP is a real need, and the debuggable flag cannot tell an internal beta from a
+ * shipped app.
+ */
+internal fun warnIfInsecureAaHttp(
+    apiKey: ApiKeyAuth?,
+    debug: DebugGuard,
+    log: LibraryLog,
+) {
+    if (apiKey?.allowInsecureHttp != true) return
+    log.error(
+        "This ScionHttp3Client accepts a plain-HTTP Anapaya AA, which sends the API key in " +
+            "cleartext. Anyone on the path can read it. This is for local testing only.",
+    )
+    if (!debug.isDebuggable()) {
+        log.error(
+            "Worse: this application is not debuggable, so this is a release build. " +
+                "allowInsecureHttp must not ship. Point apiKey at an https AA instead.",
         )
     }
 }

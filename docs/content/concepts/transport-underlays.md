@@ -93,27 +93,17 @@ Locally, the examples use a fixed development token that PocketSCION accepts
 
 In production you obtain real, short-lived tokens from an **AA** (Authentication and Authorization)
 service by presenting an API key, wrapped in a refreshing token source so the SDK fetches a new
-token before the current one expires:
+token before the current one expires. The HTTP/3 client does that for you: give it the key with
+[`Config::with_api_key`](https://docs.rs/scion-http3/latest/scion_http3/struct.Config.html#method.with_api_key):
 
-{/*TODO(docs): this snippet is hand-written and NOT compiled or checked in CI. Replace it
-    with a reference to a CI-checked example (examples/udp_path_policy.rs) once a token or
-    AA exchange can be exercised in a PocketSCION-based test.*/}
-
-```rust
-use anapaya_aa_client::{ApiKeyTokenRefresher, CrpcAaAuthClient};
-use scion_stack::reqwest_connect_rpc::token_source::RefreshTokenSource;
-use scion_stack::stack::ScionStackBuilder;
-
-// Exchange an API key at the AA for short-lived SNAP tokens, refreshed in the background.
-let refresher = ApiKeyTokenRefresher::new(CrpcAaAuthClient::new(&aa_url)?, api_key, device_id);
-let token_source = RefreshTokenSource::builder("aa", refresher).build();
-
-let stack = ScionStackBuilder::new()
-    .with_endhost_api(endhost_api)
-    .with_auth_token_source(token_source)
-    .build()
-    .await?;
+```rust reference="@sdk/crates/libs/scion-http3/examples/http3_get_post.rs#api-key" title="examples/http3_get_post.rs"
 ```
+
+For a stack built directly, the same exchange is
+[`ApiKeyTokenRefresher`](https://docs.rs/anapaya-aa-client/latest/anapaya_aa_client/struct.ApiKeyTokenRefresher.html)
+wrapped in a
+[`RefreshTokenSource`](https://docs.rs/reqwest-connect-rpc/latest/reqwest_connect_rpc/token_source/refresh/struct.RefreshTokenSource.html),
+handed to `with_auth_token_source`.
 
 Obtaining API keys and choosing a subscription is an operational step covered in the
 going-to-production material.

@@ -8,6 +8,7 @@ import Foundation
 struct ClientSettings: Sendable, Equatable {
     let endhostApiUrl: String
     let authToken: String?
+    let apiKey: ScionHttp3Client.ApiKeyAuth?
     let preferredUnderlay: PreferredUnderlay?
     let snap: SnapConfig
     let udp: UdpConfig
@@ -25,6 +26,24 @@ struct ClientSettings: Sendable, Equatable {
         try Self.validateEndhostApiUrl(configuration.endhostApi)
         if let token = configuration.authToken, token.isEmpty {
             throw ScionHttp3Error.invalidConfiguration(detail: "an auth token cannot be empty")
+        }
+        if let apiKey = configuration.apiKey {
+            if configuration.authToken != nil {
+                throw ScionHttp3Error.invalidConfiguration(
+                    detail: "a client is built with an authToken or an apiKey, not both")
+            }
+            if apiKey.key.isEmpty {
+                throw ScionHttp3Error.invalidConfiguration(
+                    detail: "an Anapaya AA API key cannot be empty")
+            }
+            try Self.validateUrl("apiKey.aaUrl", apiKey.aaUrl)
+            let scheme = URLComponents(string: apiKey.aaUrl)?.scheme?.lowercased()
+            if scheme != "https" && !apiKey.allowInsecureHttp {
+                throw ScionHttp3Error.invalidConfiguration(
+                    detail: "apiKey.aaUrl \"\(apiKey.aaUrl)\" is not https, so the API key "
+                        + "would cross the network in cleartext. Set allowInsecureHttp to "
+                        + "permit it.")
+            }
         }
         try Self.requirePositive("connectTimeout", configuration.connectTimeout)
         try Self.requirePositive("requestTimeout", configuration.requestTimeout)
@@ -67,6 +86,7 @@ struct ClientSettings: Sendable, Equatable {
 
         endhostApiUrl = configuration.endhostApi
         authToken = configuration.authToken
+        apiKey = configuration.apiKey
         preferredUnderlay = configuration.preferredUnderlay
         snap = configuration.snap
         udp = configuration.udp
@@ -102,21 +122,37 @@ struct ClientSettings: Sendable, Equatable {
                     + "connectivity through. A local PocketSCION topology is reached at the "
                     + "endhost API URL it prints, for example http://127.0.0.1:8041.")
         }
+        try validateUrl("endhostApi", url)
+    }
+
+    private static func validateUrl(_ name: String, _ url: String) throws {
         guard let components = URLComponents(string: url) else {
             throw ScionHttp3Error.invalidConfiguration(
-                detail: "endhostApi \"\(url)\" is not a valid URL")
+                detail: "\(name) \"\(url)\" is not a valid URL")
         }
         guard let scheme = components.scheme, let host = components.host, !host.isEmpty else {
             throw ScionHttp3Error.invalidConfiguration(
-                detail: "endhostApi \"\(url)\" needs a scheme and a host, for example "
+                detail: "\(name) \"\(url)\" needs a scheme and a host, for example "
                     + "https://endhost-api.example.org")
         }
         let lowered = scheme.lowercased()
         if lowered != "http" && lowered != "https" {
             throw ScionHttp3Error.invalidConfiguration(
-                detail: "endhostApi \"\(url)\" has to be http or https, not \(scheme)")
+                detail: "\(name) \"\(url)\" has to be http or https, not \(scheme)")
         }
     }
+}
+
+/// Says, loudly, that the client accepts a plain-HTTP Anapaya AA.
+///
+/// Logged rather than refused, as `warnIfVerificationDisabled` is: a local AA over plain HTTP is a
+/// real need.
+func warnIfInsecureAaHttp(_ apiKey: ScionHttp3Client.ApiKeyAuth?, log: any LibraryLog) {
+    guard apiKey?.allowInsecureHttp == true else { return }
+    log.error(
+        "This ScionHttp3Client accepts a plain-HTTP Anapaya AA, which sends the API key in "
+            + "cleartext. Anyone on the path can read it. This is for local testing only. "
+            + "allowInsecureHttp should not ship. Point apiKey.aaUrl at an https AA instead.")
 }
 
 func warnIfVerificationDisabled(_ trust: TrustAnchors, log: any LibraryLog) {

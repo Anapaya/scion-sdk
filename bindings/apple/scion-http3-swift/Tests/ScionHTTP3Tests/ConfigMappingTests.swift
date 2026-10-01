@@ -60,6 +60,18 @@ final class ConfigMappingTests: XCTestCase {
         XCTAssertEqual(try settings().applyTo(base), expected)
     }
 
+    func testAnApiKeyCrossesWithItsAaAndDeviceId() throws {
+        var configuration = configuration()
+        configuration.apiKey = .init(key: "k", aaUrl: "https://aa.example.org")
+        let config = try ClientSettings(configuration).applyTo(base)
+        XCTAssertEqual(
+            config.apiKey,
+            FfiApiKeyAuth(
+                key: "k", aaUrl: "https://aa.example.org", deviceId: apiKeyDeviceId,
+                allowInsecureHttp: false))
+        XCTAssertNil(config.authToken)
+    }
+
     func testDurationsCrossAsWholeMilliseconds() throws {
         var configuration = configuration()
         configuration.connectTimeout = 0.0015

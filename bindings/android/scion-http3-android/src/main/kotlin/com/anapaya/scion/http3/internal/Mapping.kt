@@ -28,6 +28,7 @@ import com.anapaya.scion.http3.uniffi.Header
 import com.anapaya.scion.http3.uniffi.HttpRequest
 import com.anapaya.scion.http3.uniffi.HttpResponse
 import com.anapaya.scion.http3.uniffi.Underlay
+import com.anapaya.scion.http3.uniffi.ApiKeyAuth as FfiApiKeyAuth
 import com.anapaya.scion.http3.uniffi.DnsOverride as FfiDnsOverride
 import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
 import com.anapaya.scion.http3.uniffi.SnapConfig as FfiSnapConfig
@@ -150,6 +151,7 @@ internal fun ClientSettings.applyTo(
     base.copy(
         endhostApiUrl = endhostApiUrl,
         authToken = authToken ?: base.authToken,
+        apiKey = apiKey?.toFfi() ?: base.apiKey,
         preferredUnderlay = preferredUnderlay?.toFfi() ?: base.preferredUnderlay,
         snap = snap?.toFfi() ?: base.snap,
         udp = udp?.toFfi() ?: base.udp,
@@ -166,6 +168,14 @@ internal fun ClientSettings.applyTo(
         connectionAttemptDelayMs =
             connectionAttemptDelayMillis?.toULong() ?: base.connectionAttemptDelayMs,
         maxResponseBodyBytes = maxResponseBodyBytes?.toULong() ?: base.maxResponseBodyBytes,
+    )
+
+private fun ApiKeyAuth.toFfi(): FfiApiKeyAuth =
+    FfiApiKeyAuth(
+        key = key,
+        aaUrl = aaUrl,
+        deviceId = ApiKeyAuth.DEVICE_ID,
+        allowInsecureHttp = allowInsecureHttp,
     )
 
 private fun PreferredUnderlay.toFfi(): Underlay =

@@ -187,9 +187,9 @@ impl Error {
     /// limits, a 5xx tunnel refusal) are retryable. Deterministic ones (TLS
     /// rejection, protocol violations, invalid requests, oversized bodies, a
     /// 4xx tunnel refusal, a closed client) are not. For
-    /// [`StackBuild`](Self::StackBuild) and [`Resolution`](Self::Resolution)
-    /// the answer is decided when the error is constructed, from the
-    /// transience of the underlying failures.
+    /// [`StackBuild`](Self::StackBuild) and [`Resolution`](Self::Resolution) the
+    /// answer is decided when the error is constructed, from the transience of
+    /// the underlying failures.
     ///
     /// A retryable error never implies the request did not reach the server:
     /// only the caller knows whether its request is idempotent.

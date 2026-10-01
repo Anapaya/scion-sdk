@@ -14,8 +14,13 @@
 
 //! URL-driven HTTP/3 over SCION: GET and POST with [`scion_http3::Client`].
 //!
+//! The client authenticates with an Anapaya AA API key. It exchanges the key
+//! for a SNAP token on the first request and renews the token itself.
+//!
 //! The example starts a local two-AS PocketSCION network, serves an axum app
-//! over HTTP/3 in one AS, and talks to it from the other.
+//! over HTTP/3 in one AS, and talks to it from the other. It also serves a
+//! stand-in AA, because a local network has none. A real deployment points
+//! `aa_url` at the Anapaya AA instead, and changes nothing else.
 //!
 //! ```text
 //!                        +--------------------------+
@@ -30,50 +35,81 @@
 //! cargo run -p scion-http3 --example http3_get_post
 //! ```
 
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{io::Write, net::SocketAddr, sync::Arc, time::Duration};
 
+use anapaya_aa_protobuf::proto::anapaya::aa::v1::{
+    AuthenticateByKeyRequest, AuthenticateByKeyResponse,
+};
 use anyhow::Context;
 use axum::{
     Router,
+    response::{IntoResponse, Response},
     routing::{get, post},
+};
+use axum_connect_rpc::{
+    error::{CrpcError, CrpcErrorCode},
+    extractor::ConnectRpc,
 };
 use pocketscion::util::{
     dev_auth_token,
     topologies::{IA132, IA212, PsSetup, UnderlayType, minimal::minimal_topology},
 };
 use scion_h3_axum::ScionH3AxumServer;
-use scion_http3::{Client, Config, Request, scion_quic::quic::config::QuicConfig};
+use scion_http3::{ApiKeyAuth, Client, Config, Request, scion_quic::quic::config::QuicConfig};
 use scion_stack::{ScionStackBuilder, resolver::txt::ScionTxtDnsResolver};
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tempfile::NamedTempFile;
+use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 /// The server name: certificate identity, SNI, and the host in every URL.
 const SERVER_NAME: &str = "localhost";
 /// Cap on a collected response body; a larger one fails rather than buffering
 /// unboundedly. The responses here are a few bytes.
 const MAX_BODY_SIZE: usize = 1024;
+/// The key the stand-in AA accepts. A real key comes from your subscription.
+const API_KEY: &str = "example-api-key";
+/// What the AA records for this device, and puts in the token it returns.
+const DEVICE_ID: &str = "example-device";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     run().await
 }
 
-/// Starts the network and the server, then issues a GET and a POST by URL.
+/// Starts the network, the server and the AA, then issues a GET and a POST by
+/// URL.
 async fn run() -> anyhow::Result<()> {
     // PocketSCION's control plane uses rustls; pick a crypto backend.
     scion_sdk_utils::rustls::select_ring_crypto_provider();
 
     // Start the PocketSCION network with a minimal two-AS topology.
     let ps = minimal_topology(UnderlayType::Udp).await;
+    let shutdown = CancellationToken::new();
 
     // Serve an axum app over HTTP/3 in AS 2-ff00:0:212.
-    let (server_addr, cert_file, shutdown) = start_server(&ps).await?;
+    let (server_addr, cert_file) = start_server(&ps, shutdown.clone()).await?;
     println!("HTTP/3 server listening on {server_addr}");
 
-    // Build the client: the endhost API is how it discovers SCION connectivity.
-    let config = Config::new(ps.endhost_api(IA132).context("no endhost API")?)
-        .with_auth_token(dev_auth_token())
+    let aa_url = start_aa(shutdown.clone()).await?;
+    println!("Stand-in AA listening on {aa_url}");
+
+    let endhost_api = ps.endhost_api(IA132).context("no endhost API")?;
+
+    // ANCHOR: api-key
+    // The endhost API is where the client discovers SCION connectivity. The
+    // client exchanges the API key for a SNAP token at the AA on the first
+    // request, and renews the token for as long as it lives.
+    //
+    // The stand-in AA below serves plain HTTP, which the client permits only
+    // when it is told to. A deployment reaches the Anapaya AA over HTTPS and
+    // drops that call.
+    let config = Config::new(endhost_api)
+        .with_api_key(ApiKeyAuth::new(API_KEY, aa_url, DEVICE_ID).allow_insecure_http());
+    // ANCHOR_END: api-key
+
+    let config = config
         // Trust the server's self-signed certificate.
         .with_quic_config(
             QuicConfig::builder()
@@ -86,7 +122,8 @@ async fn run() -> anyhow::Result<()> {
         ));
     let client = Client::new(config);
 
-    // GET by URL.
+    // GET by URL. This request performs the key exchange; a refused key fails
+    // it as `Error::StackBuild`, and `is_retryable` is then false.
     let url = format!("https://{SERVER_NAME}:{}/hello", server_addr.port());
     let response = client.get(&url).await?;
     let (body, _trailers) = response.text(Some(MAX_BODY_SIZE)).await?;
@@ -112,11 +149,49 @@ async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Serves the AA route on the loopback address and answers with the token that
+/// PocketSCION accepts. The Anapaya AA serves the same route over HTTPS.
+async fn start_aa(shutdown: CancellationToken) -> anyhow::Result<Url> {
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+    let url = format!("http://{}", listener.local_addr()?).parse()?;
+    let app = Router::new().route(
+        "/anapaya.aa.v1.AuthService/AuthenticateByKey",
+        post(authenticate),
+    );
+
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move { shutdown.cancelled().await })
+            .await;
+    });
+
+    Ok(url)
+}
+
+async fn authenticate(ConnectRpc(request): ConnectRpc<AuthenticateByKeyRequest>) -> Response {
+    if request.api_key != API_KEY {
+        return CrpcError::new(
+            CrpcErrorCode::Unauthenticated,
+            "unknown API key".to_string(),
+        )
+        .into_response();
+    }
+    ConnectRpc(AuthenticateByKeyResponse {
+        snap_token: dev_auth_token(),
+        ..Default::default()
+    })
+    .into_response()
+}
+
 /// Builds a stack in AS 2-ff00:0:212, binds a socket, and serves an axum
 /// router over HTTP/3 on it with a fresh self-signed certificate.
+///
+/// The stack takes the development token directly, because it stands in for
+/// the peer this example talks to rather than for an application you write.
 async fn start_server(
     ps: &PsSetup,
-) -> anyhow::Result<(ScionSocketIpAddr, NamedTempFile, CancellationToken)> {
+    shutdown: CancellationToken,
+) -> anyhow::Result<(ScionSocketIpAddr, NamedTempFile)> {
     let stack = ScionStackBuilder::new()
         .with_endhost_api(ps.endhost_api(IA212).context("no endhost API")?)
         .with_auth_token(dev_auth_token())
@@ -149,9 +224,7 @@ async fn start_server(
         .route("/hello", get(|| async { "world" }))
         .route("/echo", post(|body: String| async move { body }));
 
-    let shutdown = CancellationToken::new();
     tokio::spawn({
-        let shutdown = shutdown.clone();
         async move {
             let _stack = stack;
             let _key_file = key_file;
@@ -165,7 +238,7 @@ async fn start_server(
         }
     });
 
-    Ok((server_addr, cert_file, shutdown))
+    Ok((server_addr, cert_file))
 }
 
 #[cfg(test)]

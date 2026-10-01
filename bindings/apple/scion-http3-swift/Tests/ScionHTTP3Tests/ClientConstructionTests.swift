@@ -89,6 +89,21 @@ final class ClientConstructionTests: XCTestCase {
         rejected("dnsOverrides") { $0.dnsOverrides = ["example.org": []] }
         let address = try! ScionAddress("1-ff00:0:110,10.0.0.1")
         rejected("dnsOverrides") { $0.dnsOverrides = [" ": [address]] }
+        let key = ScionHttp3Client.ApiKeyAuth(key: "k", aaUrl: "https://aa.example.org")
+        rejected("not both") {
+            $0.authToken = "t"
+            $0.apiKey = key
+        }
+        rejected("API key") { $0.apiKey = .init(key: "", aaUrl: key.aaUrl) }
+        rejected("apiKey.aaUrl") { $0.apiKey = .init(key: "k", aaUrl: "aa.example.org") }
+        rejected("apiKey.aaUrl") {
+            $0.apiKey = .init(key: "k", aaUrl: "ftp://aa.example.org")
+        }
+        rejected("apiKey.aaUrl") { $0.apiKey = .init(key: "k", aaUrl: "http://aa.example.org") }
+        XCTAssertNoThrow(try settings(apiKey: key))
+        XCTAssertNoThrow(
+            try settings(
+                apiKey: .init(key: "k", aaUrl: "http://aa.example.org", allowInsecureHttp: true)))
     }
 
     func testTheIdleThresholdFollowsTheConfiguration() throws {

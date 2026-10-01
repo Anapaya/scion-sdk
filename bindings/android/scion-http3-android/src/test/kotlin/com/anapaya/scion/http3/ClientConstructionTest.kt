@@ -2,6 +2,7 @@
 
 package com.anapaya.scion.http3
 
+import com.anapaya.scion.http3.internal.ApiKeyAuth
 import com.anapaya.scion.http3.internal.CachingTrustStore
 import com.anapaya.scion.http3.internal.ClientSettings
 import com.anapaya.scion.http3.internal.StalenessTracker
@@ -216,6 +217,30 @@ class ClientConstructionTest {
                 authToken = "",
             )
         }
+    }
+
+    @Test
+    fun `an API key beside a token, or one that cannot work, is rejected`() {
+        val key = ApiKeyAuth("a-key", "https://aa.example.org")
+        settings(apiKey = key)
+        assertThrows<IllegalArgumentException> { settings(authToken = "a-token", apiKey = key) }
+        assertThrows<IllegalArgumentException> {
+            settings(apiKey = ApiKeyAuth("", "https://aa.example.org"))
+        }
+        assertThrows<IllegalArgumentException> {
+            settings(apiKey = ApiKeyAuth("a-key", "aa.example.org"))
+        }
+        assertThrows<IllegalArgumentException> {
+            settings(apiKey = ApiKeyAuth("a-key", "ftp://aa.example.org"))
+        }
+    }
+
+    @Test
+    fun `a plain-http AA is rejected unless it is allowed`() {
+        assertThrows<IllegalArgumentException> {
+            settings(apiKey = ApiKeyAuth("a-key", "http://aa.example.org"))
+        }
+        settings(apiKey = ApiKeyAuth("a-key", "http://aa.example.org", allowInsecureHttp = true))
     }
 
     @Test

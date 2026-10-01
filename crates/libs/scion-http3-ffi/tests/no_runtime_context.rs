@@ -31,12 +31,12 @@ use std::thread;
 
 use scion_h3_test_server::{Options, TestServer};
 use scion_http3_ffi::{
-    CancelHandle, ClientConfig, DnsOverride, HttpRequest, ScionHttp3Client, ScionHttp3Error,
-    TrustAnchors, default_client_config,
+    ApiKeyAuth, CancelHandle, ClientConfig, DnsOverride, HttpRequest, ScionHttp3Client,
+    ScionHttp3Error, TrustAnchors, default_client_config,
 };
 
-/// An endhost API on a port nothing listens on, so the request fails quickly and locally.
-const UNREACHABLE_ENDHOST_API: &str = "http://127.0.0.1:1";
+/// A URL on a port nothing listens on, so a request to it fails quickly and locally.
+const UNREACHABLE_URL: &str = "http://127.0.0.1:1";
 
 fn config() -> ClientConfig {
     ClientConfig {
@@ -44,7 +44,7 @@ fn config() -> ClientConfig {
         // which somehow does not refuse it fails the test rather than hanging the suite.
         connect_timeout_ms: 2_000,
         request_timeout_ms: 5_000,
-        ..default_client_config(UNREACHABLE_ENDHOST_API.to_string())
+        ..default_client_config(UNREACHABLE_URL.to_string())
     }
 }
 
@@ -218,6 +218,34 @@ fn reset_and_construction_need_no_runtime() {
         let client = ScionHttp3Client::new(config()).expect("building a client");
         client.reset();
     });
+}
+
+#[test]
+fn an_api_key_client_is_pollable_without_a_runtime() {
+    let result = on_a_foreign_thread(|| {
+        let client = ScionHttp3Client::new(ClientConfig {
+            api_key: Some(ApiKeyAuth {
+                key: "key".to_string(),
+                aa_url: UNREACHABLE_URL.to_string(),
+                device_id: "device".to_string(),
+                allow_insecure_http: true,
+            }),
+            ..config()
+        })
+        .expect("building a client");
+        client.reset();
+        futures::executor::block_on(client.execute(request()))
+    });
+    assert!(
+        matches!(
+            result,
+            Err(ScionHttp3Error::StackBuild {
+                retryable: true,
+                ..
+            })
+        ),
+        "an AA that is not there ended as {result:?}"
+    );
 }
 
 /// Dropping the client hands its shutdown to the runtime, and needs none of its own.

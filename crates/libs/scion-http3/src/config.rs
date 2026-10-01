@@ -29,6 +29,8 @@ use scion_stack::{
 use sciparse::address::ip_addr::ScionIpAddr;
 use url::Url;
 
+use crate::aa::{AaTokenSource, ApiKeyAuth};
+
 /// Default timeout for establishing a connection to an origin.
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default timeout for a request (response head plus body collection).
@@ -141,6 +143,29 @@ impl Config {
     pub fn with_auth_token_source(mut self, source: impl TokenSource) -> Self {
         self.auth_token_source = Some(Arc::new(source));
         self
+    }
+
+    /// Sets an Anapaya AA API key. The client exchanges the key for the tokens
+    /// that the endhost API and the SNAP control plane need.
+    ///
+    /// The client exchanges the key on the first request, and renews the token
+    /// in the background while the client lives. The exchange is shared, like a
+    /// token source: every stack this configuration builds reuses the same
+    /// token, across every [`reset`](crate::Client::reset). A refused key, or an
+    /// AA out of reach, fails that first request with
+    /// [`Error::StackBuild`](crate::Error::StackBuild);
+    /// [`is_retryable`](crate::Error::is_retryable) is false for a refused key
+    /// and true for an AA out of reach. Construction never fails.
+    ///
+    /// The AA URL has to be `https`, so that the key does not cross the network
+    /// in cleartext. [`ApiKeyAuth::allow_insecure_http`] permits `http` for
+    /// local testing; without it an `http` URL fails the first request.
+    ///
+    /// The key, a token, and a token source occupy one slot: the last one set
+    /// wins.
+    #[must_use]
+    pub fn with_api_key(self, auth: ApiKeyAuth) -> Self {
+        self.with_auth_token_source(AaTokenSource::new(auth))
     }
 
     /// Sets the preferred underlay, applied to whatever endhost API discovery
@@ -320,6 +345,36 @@ mod tests {
         let config = config().with_auth_token("super-secret-token");
         let debug = format!("{config:?}");
         assert!(!debug.contains("super-secret-token"));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    fn api_key() -> ApiKeyAuth {
+        ApiKeyAuth::new(
+            "super-secret-key",
+            "https://aa.example.org".parse().unwrap(),
+            "device",
+        )
+    }
+
+    #[test]
+    fn with_api_key_installs_a_token_source() {
+        let config = config().with_api_key(api_key());
+        assert!(config.auth_token_source.is_some());
+    }
+
+    #[test]
+    fn the_last_credential_set_wins() {
+        let config = config().with_api_key(api_key()).with_auth_token("token");
+        assert!(config.auth_token_source.is_some());
+        let config = config.with_api_key(api_key());
+        assert!(config.auth_token_source.is_some());
+    }
+
+    #[test]
+    fn debug_redacts_the_api_key() {
+        let config = config().with_api_key(api_key());
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("super-secret-key"));
         assert!(debug.contains("<redacted>"));
     }
 }

@@ -184,6 +184,14 @@ changing the network the library sees. Call `reset()` when your app knows that h
 If your SNAP token expires, renew it in place with `setAuthToken(refreshed)` rather than building a
 new client. The next request picks it up and the connections already established survive.
 
+A client built with `apiKey(key, aaUrl)` for the Anapaya AA instead of `authToken` refreshes the
+token automatically, so you never call `setAuthToken()`. A refused key fails the first request with
+`ScionHttp3Exception.Connectivity`, and `isRetryable` is false for it.
+
+`aaUrl` has to be `https`, so that the key does not cross the network in cleartext. Pass
+`allowInsecureHttp = true` to reach a local AA over plain HTTP. A client built with it logs an
+error, and logs a second one when the application is not debuggable.
+
 ## The client's lifetime
 
 ```kotlin reference="@sdk/bindings/android/hello-scion/src/main/kotlin/com/anapaya/scion/http3/hello/HelloScion.kt#lifetime" title="HelloScion.kt"

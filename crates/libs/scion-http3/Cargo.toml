@@ -12,6 +12,7 @@ categories = ["network-programming"]
 
 [dependencies]
 # Local Dependencies
+anapaya-aa-client = { workspace = true }
 scion-quic = { workspace = true }
 scion-stack = { workspace = true }
 sciparse = { workspace = true }
@@ -27,8 +28,10 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+anapaya-aa-protobuf = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
+axum-connect-rpc = { workspace = true }
 ntest = { workspace = true }
 pocketscion = { workspace = true }
 rcgen = { workspace = true }

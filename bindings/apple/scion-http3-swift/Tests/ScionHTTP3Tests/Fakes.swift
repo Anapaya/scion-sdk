@@ -318,10 +318,12 @@ final class RecordingLog: LibraryLog {
 func configuration(
     endhostApi: String = "https://endhost-api.example.org",
     authToken: String? = nil,
+    apiKey: ScionHttp3Client.ApiKeyAuth? = nil,
     trust: TrustAnchors = .systemDefault,
     idleConnectionTimeout: TimeInterval? = nil
 ) -> ScionHttp3Client.Configuration {
     var configuration = ScionHttp3Client.Configuration(endhostApi: endhostApi, authToken: authToken)
+    configuration.apiKey = apiKey
     configuration.trust = trust
     configuration.idleConnectionTimeout = idleConnectionTimeout
     return configuration
@@ -330,12 +332,13 @@ func configuration(
 func settings(
     endhostApi: String = "https://endhost-api.example.org",
     authToken: String? = nil,
+    apiKey: ScionHttp3Client.ApiKeyAuth? = nil,
     trust: TrustAnchors = .systemDefault,
     idleConnectionTimeout: TimeInterval? = nil
 ) throws -> ClientSettings {
     try ClientSettings(
         configuration(
-            endhostApi: endhostApi, authToken: authToken, trust: trust,
+            endhostApi: endhostApi, authToken: authToken, apiKey: apiKey, trust: trust,
             idleConnectionTimeout: idleConnectionTimeout))
 }
 

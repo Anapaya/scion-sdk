@@ -33,12 +33,12 @@ import Foundation
 public final class ScionHttp3Client: Sendable {
     /// Everything a client can be configured with.
     ///
-    /// Two settings cover the common case: where the endhost API is, and the token for it.
-    /// Everything else has a default that comes from the SCION stack itself rather than from this
-    /// library, so an unset setting is not a value restated here that could drift from the real
-    /// one.
+    /// Two settings cover the common case: where the endhost API is, and the credential for it,
+    /// an `authToken` or an `apiKey`. Everything else has a default that comes from the SCION
+    /// stack itself rather than from this library, so an unset setting is not a value restated
+    /// here that could drift from the real one.
     ///
-    /// Keep the whole value out of logs: it holds the token.
+    /// Keep the whole value out of logs: it holds the token, or the API key.
     public struct Configuration: Sendable, Equatable {
         /// Where the client discovers SCION connectivity. Required.
         ///
@@ -49,8 +49,20 @@ public final class ScionHttp3Client: Sendable {
 
         /// The token for the endhost API and the SNAP control plane.
         ///
-        /// A client built without one cannot be given one later; see `setAuthToken(_:)`.
+        /// A client takes this or `apiKey`, not both. A client built without one cannot be given
+        /// one later; see `setAuthToken(_:)`.
         public var authToken: String?
+
+        /// An Anapaya AA API key the client exchanges for a token itself, on the first request,
+        /// and renews for as long as it runs.
+        ///
+        /// A client takes this or `authToken`, not both. A refused key fails the first request
+        /// with `ScionHttp3Error.connectivity`, and so does an AA out of reach; `isRetryable`
+        /// tells the two apart. A client built with a key refuses `setAuthToken(_:)`.
+        ///
+        /// The AA URL has to be `https`, so that the key does not cross the network in cleartext.
+        /// `ApiKeyAuth.allowInsecureHttp` permits an `http` AA for local testing.
+        public var apiKey: ApiKeyAuth?
 
         /// Which transport to favor among those the endhost API offers.
         ///
@@ -108,6 +120,25 @@ public final class ScionHttp3Client: Sendable {
         public init(endhostApi: String, authToken: String? = nil) {
             self.endhostApi = endhostApi
             self.authToken = authToken
+        }
+    }
+
+    /// An Anapaya AA API key and where to exchange it for a token, for `Configuration.apiKey`.
+    public struct ApiKeyAuth: Sendable, Equatable {
+        /// The API key.
+        public var key: String
+        /// The Anapaya AA service that exchanges the key for tokens.
+        public var aaUrl: String
+        /// Allows an `http` `aaUrl`, which sends the API key in cleartext.
+        ///
+        /// `aaUrl` has to be `https` without this. Set it only for local testing: a client built
+        /// with it logs an error.
+        public var allowInsecureHttp: Bool
+
+        public init(key: String, aaUrl: String, allowInsecureHttp: Bool = false) {
+            self.key = key
+            self.aaUrl = aaUrl
+            self.allowInsecureHttp = allowInsecureHttp
         }
     }
 
@@ -173,6 +204,7 @@ public final class ScionHttp3Client: Sendable {
         self.log = log
         self.state = Locked(State(authToken: settings.authToken))
         warnIfVerificationDisabled(settings.trust, log: log)
+        warnIfInsecureAaHttp(settings.apiKey, log: log)
     }
 
     deinit {
@@ -250,10 +282,15 @@ public final class ScionHttp3Client: Sendable {
     ///
     /// Throws `ScionHttp3Error.invalidConfiguration` if the client was built without `authToken`.
     /// There is then nothing reading a token, so there is nothing to replace: build a client with
-    /// one instead.
+    /// one instead. Likewise if it was built with an API key.
     public func setAuthToken(_ token: String) throws {
         if token.isEmpty {
             throw ScionHttp3Error.invalidConfiguration(detail: "an auth token cannot be empty")
+        }
+        guard settings.apiKey == nil else {
+            throw ScionHttp3Error.invalidConfiguration(
+                detail: "this client was built with an API key, setting a specific token is not "
+                    + "allowed")
         }
         guard settings.authToken != nil else {
             throw ScionHttp3Error.invalidConfiguration(

@@ -124,6 +124,7 @@
     clippy::missing_panics_doc
 )]
 
+mod aa;
 mod authority;
 mod client;
 mod config;
@@ -143,6 +144,7 @@ mod tunnel;
 // These crates appear in `scion-http3`'s public API by deliberate choice. They are re-exported
 // here so a client can name and construct the types our signatures require without adding
 // its own direct dependency.
+pub use aa::ApiKeyAuth;
 /// Body bytes ([`bytes::Bytes`]) used for request bodies and collected response bodies.
 pub use authority::{Authority, InvalidAuthority};
 pub use bytes;
@@ -166,6 +168,8 @@ pub use scion_quic;
 pub use scion_stack;
 /// Authentication token plumbing for [`Config::with_auth_token_source`]: implement
 /// [`TokenSource`] to supply tokens that expire; [`StaticTokenSource`] wraps a fixed one.
+/// [`Config::with_api_key`] builds a source that exchanges an Anapaya AA API key for tokens
+/// itself.
 pub use scion_stack::reqwest_connect_rpc::token_source::{
     TokenSource, TokenSourceError, TokenSourceWatch, static_token::StaticTokenSource,
 };

@@ -30,14 +30,15 @@ use scion_http3::{
         x25519_dalek::StaticSecret,
     },
     sciparse::address::ip_addr::ScionIpAddr,
+    url::Url,
 };
 
 use crate::{
     error::Error,
     token::SharedToken,
     types::{
-        ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse, SnapConfig,
-        TrustAnchors, UdpConfig, Underlay,
+        ApiKeyAuth, ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse,
+        SnapConfig, TrustAnchors, UdpConfig, Underlay,
     },
 };
 
@@ -66,11 +67,29 @@ impl ClientConfig {
             .with_connection_attempt_delay(Duration::from_millis(self.connection_attempt_delay_ms))
             .with_quic_config(quic_config(&self.trust)?);
 
+        // The AA client trusts the same anchors as the control plane, so parse them before the
+        // API key needs them.
+        let control_plane_anchors = self
+            .control_plane_anchors_pem
+            .map(|pem| control_plane_anchors(&pem))
+            .transpose()?;
+
         // Installed only when there is a token. The stack's get_token awaits the first value, so a
         // source with nothing in it would make the first endhost-API request hang rather than go
         // out unauthenticated, which is what a client configured without a token wants.
         if let Some(token) = auth_token {
             config = config.with_auth_token_source(token);
+        }
+        if let Some(api_key) = self.api_key {
+            if self.auth_token.is_some() {
+                return Err(Error::invalid_request(
+                    "a client is built with an auth_token or an api_key, not both",
+                ));
+            }
+            config = config.with_api_key(validated_api_key(
+                api_key,
+                control_plane_anchors.as_deref(),
+            )?);
         }
 
         for DnsOverride { host, addresses } in self.dns_overrides {
@@ -95,10 +114,6 @@ impl ClientConfig {
         let discovery = self.discovery;
         let snap = validated_snap(self.snap)?;
         let udp = validated_udp(self.udp)?;
-        let control_plane_anchors = self
-            .control_plane_anchors_pem
-            .map(|pem| control_plane_anchors(&pem))
-            .transpose()?;
         if control_plane_anchors.is_some() || customization_needed(&discovery, &snap, &udp) {
             config = config.with_stack_customizer(move |builder| {
                 customize(
@@ -162,6 +177,48 @@ fn customize(
     }
 
     builder
+}
+
+/// Refuses a key that cannot work at construction, where the reason can still be given.
+///
+/// The AA gets the anchors the control plane trusts, so a private deployment reaches its own AA.
+/// Without anchors the client keeps the default roots.
+fn validated_api_key(
+    auth: ApiKeyAuth,
+    control_plane_anchors: Option<&[reqwest::Certificate]>,
+) -> Result<scion_http3::ApiKeyAuth, Error> {
+    if auth.key.is_empty() {
+        return Err(Error::invalid_request(
+            "an Anapaya AA API key cannot be empty",
+        ));
+    }
+    if auth.device_id.is_empty() {
+        return Err(Error::invalid_request(
+            "an Anapaya AA API key needs a device id",
+        ));
+    }
+    let aa_url: Url = auth
+        .aa_url
+        .parse()
+        .map_err(|e| Error::invalid_request(format!("invalid AA URL `{}`: {e}", auth.aa_url)))?;
+    if !matches!(aa_url.scheme(), "http" | "https") {
+        return Err(Error::invalid_request(format!(
+            "the AA URL `{aa_url}` is not http or https"
+        )));
+    }
+    if aa_url.scheme() == "http" && !auth.allow_insecure_http {
+        return Err(Error::invalid_request(format!(
+            "the AA URL `{aa_url}` is not https, so the API key would cross the network in              cleartext; set `allow_insecure_http` to permit it"
+        )));
+    }
+    let mut validated = scion_http3::ApiKeyAuth::new(auth.key, aa_url, auth.device_id);
+    if auth.allow_insecure_http {
+        validated = validated.allow_insecure_http();
+    }
+    Ok(match control_plane_anchors {
+        Some(anchors) => validated.with_trust_anchors(anchors.to_vec()),
+        None => validated,
+    })
 }
 
 /// Parses the trust anchors for the endhost API and the SNAP control plane, and checks that they
@@ -521,6 +578,69 @@ mod tests {
         .into_client_config(None)
         .expect_err("an invalid endhost API URL is not a configuration");
         assert!(matches!(bad, Error::InvalidRequest { .. }));
+    }
+
+    fn api_key(key: &str, aa_url: &str, device_id: &str) -> ApiKeyAuth {
+        ApiKeyAuth {
+            key: key.to_string(),
+            aa_url: aa_url.to_string(),
+            device_id: device_id.to_string(),
+            allow_insecure_http: false,
+        }
+    }
+
+    #[test]
+    fn an_api_key_alone_builds_a_configuration() {
+        ClientConfig {
+            api_key: Some(api_key("key", "https://aa.example.org", "device")),
+            ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+        }
+        .into_client_config(None)
+        .expect("building the configuration");
+    }
+
+    #[test]
+    fn an_api_key_and_a_token_together_are_rejected() {
+        let error = ClientConfig {
+            auth_token: Some("token".to_string()),
+            api_key: Some(api_key("key", "https://aa.example.org", "device")),
+            ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+        }
+        .into_client_config(None)
+        .expect_err("two credentials are not a configuration");
+        assert!(matches!(error, Error::InvalidRequest { .. }));
+    }
+
+    #[test]
+    fn an_unusable_api_key_is_rejected() {
+        for auth in [
+            api_key("", "https://aa.example.org", "device"),
+            api_key("key", "https://aa.example.org", ""),
+            api_key("key", "not a url", "device"),
+            api_key("key", "ftp://aa.example.org", "device"),
+            api_key("key", "http://aa.example.org", "device"),
+        ] {
+            let error = ClientConfig {
+                api_key: Some(auth),
+                ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+            }
+            .into_client_config(None)
+            .expect_err("an unusable key is not a configuration");
+            assert!(matches!(error, Error::InvalidRequest { .. }));
+        }
+    }
+
+    #[test]
+    fn an_http_aa_url_builds_a_configuration_when_it_is_allowed() {
+        ClientConfig {
+            api_key: Some(ApiKeyAuth {
+                allow_insecure_http: true,
+                ..api_key("key", "http://aa.example.org", "device")
+            }),
+            ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+        }
+        .into_client_config(None)
+        .expect("building the configuration");
     }
 
     /// A key of the wrong length must be refused at construction, where it can still be explained,

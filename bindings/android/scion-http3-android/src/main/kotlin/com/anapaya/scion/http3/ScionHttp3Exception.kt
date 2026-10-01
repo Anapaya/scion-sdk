@@ -56,7 +56,9 @@ public sealed class ScionHttp3Exception(
      *
      * This is the layer below [Connect]: discovery through the endhost API, the SNAP handshake, or
      * reading the device's trust anchors, rather than reaching one origin. A wrong `endhostApi`, a
-     * missing or rejected `authToken`, and no route to the endhost API all arrive here.
+     * missing or rejected `authToken`, and no route to the endhost API all arrive here, and so
+     * does a refused `apiKey`: [isRetryable] is false when the AA refused the key, and true when
+     * the AA was out of reach.
      */
     public class Connectivity internal constructor(
         isRetryable: Boolean,

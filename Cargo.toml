@@ -33,6 +33,7 @@ anapaya-ead-models = { path = "crates/apis/anapaya-ead/anapaya-ead-models", vers
 
 anapaya-hsd-api-protobuf = { path = "crates/apis/anapaya-hsd-api/anapaya-hsd-api-protobuf", version = "0.8.2" }
 
+anapaya-aa-client = { path = "crates/apis/anapaya-aa/anapaya-aa-client", version = "0.8.2" }
 anapaya-aa-protobuf = { path = "crates/apis/anapaya-aa/anapaya-aa-protobuf", version = "0.8.2" }
 
 axum-connect-rpc = { path = "crates/libs/axum-connect-rpc", version = "0.8.2" }

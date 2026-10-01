@@ -207,6 +207,13 @@ happened.
 If your SNAP token expires, renew it in place with `setAuthToken(refreshed)`. Do not build a new
 client. The next request uses the new token, and the established connections survive.
 
+A client built with `Configuration.apiKey` for the Anapaya AA instead of `authToken` refreshes the
+token automatically, so you never call `setAuthToken(_:)`. A refused key fails the first request
+with `ScionHttp3Error.connectivity`, and `isRetryable` is false for it.
+
+The AA URL has to be `https`, so that the key does not cross the network in cleartext. Set
+`allowInsecureHttp` to reach a local AA over plain HTTP. A client built with it logs an error.
+
 ## What this version does not do
 
 - **No `URLSession` or Alamofire drop-in.** `URLSession` has no pluggable transport. Its one hook,

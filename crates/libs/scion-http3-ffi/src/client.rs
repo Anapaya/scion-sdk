@@ -56,6 +56,8 @@ pub struct ScionHttp3Client {
     max_response_body_bytes: u64,
     /// The token every request authenticates with, or `None` for a client configured without one.
     auth_token: Option<Arc<AuthToken>>,
+    /// Whether the client renews its own token, so that none can be set from outside.
+    api_key: bool,
     /// Fired by `shutdown` and by `Drop`. Every tunnel this client opened watches it.
     closed: CancellationToken,
 }
@@ -71,6 +73,7 @@ impl ScionHttp3Client {
         scion_sdk_utils::rustls::select_ring_crypto_provider();
 
         let max_response_body_bytes = config.max_response_body_bytes;
+        let api_key = config.api_key.is_some();
         // Created before the configuration so that the configuration can hold a handle to it, which
         // is what lets `set_auth_token` reach connectivity that has already been built.
         let auth_token = config.auth_token.clone().map(AuthToken::new).map(Arc::new);
@@ -85,6 +88,7 @@ impl ScionHttp3Client {
             runtime,
             max_response_body_bytes,
             auth_token,
+            api_key,
             closed: CancellationToken::new(),
         }))
     }
@@ -147,8 +151,15 @@ impl ScionHttp3Client {
     /// it survives the rebuild that follows a network change or a [`reset`](Self::reset).
     ///
     /// Fails if the client was built without `auth_token`, since there is then nothing to replace
-    /// and nothing reading a token; construct a client with one instead.
+    /// and nothing reading a token; construct a client with one instead. Fails likewise for a
+    /// client built with an `api_key`.
     pub fn set_auth_token(&self, token: String) -> Result<(), Error> {
+        if self.api_key {
+            return Err(Error::invalid_request(
+                "this client was built with an api_key and renews its own token, so there is no \
+                 token to replace",
+            ));
+        }
         match &self.auth_token {
             Some(auth_token) => {
                 auth_token.set(token);
@@ -185,6 +196,9 @@ impl ScionHttp3Client {
     /// Idempotent. A caller cancelled while this runs still gets its pool closed, because the close
     /// is spawned and then awaited rather than run inline. A caller cancelled before the call is
     /// ever polled never starts one, and there the object's own disposal closes the pool instead.
+    ///
+    /// A client built with an `api_key` renews its token outside the pool. That renewal stops
+    /// when the caller releases the client.
     pub async fn shutdown(&self) {
         // Before the close, so that a tunnel whose connection fails under it can tell why.
         self.closed.cancel();

@@ -2,6 +2,7 @@
 
 package com.anapaya.scion.http3
 
+import com.anapaya.scion.http3.internal.ApiKeyAuth
 import com.anapaya.scion.http3.internal.ClientSettings
 import com.anapaya.scion.http3.internal.DebugGuard
 import com.anapaya.scion.http3.internal.Http3Backend
@@ -366,12 +367,14 @@ internal fun settings(
     trust: TrustAnchors = TrustAnchors.systemDefault(),
     idleConnectionTimeoutMillis: Long? = null,
     authToken: String? = null,
+    apiKey: ApiKeyAuth? = null,
 ): ClientSettings =
     ClientSettings(
         endhostApiUrl = endhostApiUrl,
         trust = trust,
         idleConnectionTimeoutMillis = idleConnectionTimeoutMillis,
         authToken = authToken,
+        apiKey = apiKey,
     )
 
 internal fun response(

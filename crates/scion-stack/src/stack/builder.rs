@@ -526,10 +526,10 @@ impl std::error::Error for AllEndhostApisFailed {}
 #[non_exhaustive]
 pub enum ApiAttemptError {
     /// The API client could not be instantiated.
-    #[error("client setup")]
+    #[error("client setup: {0}")]
     ClientSetup(#[source] CrpcClientCreationError),
     /// Underlay discovery against the API failed (e.g. server unreachable).
-    #[error("underlay discovery")]
+    #[error("underlay discovery: {0}")]
     UnderlayDiscovery(#[source] CrpcClientError),
 }
 
@@ -720,7 +720,7 @@ mod tests {
     use std::borrow::Cow;
 
     use reqwest::header;
-    use reqwest_connect_rpc::client::CrpcClientError;
+    use reqwest_connect_rpc::{client::CrpcClientError, token_source::TokenSourceError};
     use url::Url;
 
     use super::*;
@@ -745,6 +745,32 @@ mod tests {
             user_agent: "in\nvalid".to_owned(),
             source: header::HeaderValue::from_str("in\nvalid").expect_err("invalid header value"),
         }
+    }
+
+    fn token_error(error: TokenSourceError) -> ApiAttemptError {
+        ApiAttemptError::UnderlayDiscovery(CrpcClientError::TokenSourceError(error))
+    }
+
+    fn api_url() -> Url {
+        "http://endhost-api.example.org".parse().unwrap()
+    }
+
+    /// A refused credential holds on a retry, an unreachable token service does not. The HTTP/3
+    /// client reports `is_transient` to its callers, so this is what tells an application whether
+    /// to try again.
+    #[test]
+    fn a_token_failure_carries_the_transience_of_its_cause() {
+        let refused = BuildScionStackError::from(AllEndhostApisFailed::new(vec![(
+            api_url(),
+            token_error(TokenSourceError::rejected("revoked")),
+        )]));
+        assert!(!refused.is_transient());
+
+        let unreachable = BuildScionStackError::from(AllEndhostApisFailed::new(vec![(
+            api_url(),
+            token_error(TokenSourceError::unavailable("no route")),
+        )]));
+        assert!(unreachable.is_transient());
     }
 
     #[test]

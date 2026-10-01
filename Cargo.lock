@@ -5001,9 +5001,12 @@ dependencies = [
 name = "scion-http3"
 version = "0.8.2"
 dependencies = [
+ "anapaya-aa-client",
+ "anapaya-aa-protobuf",
  "anyhow",
  "async-trait",
  "axum",
+ "axum-connect-rpc",
  "bytes",
  "futures",
  "http",
