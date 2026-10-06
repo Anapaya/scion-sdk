@@ -9,6 +9,7 @@ import com.anapaya.scion.http3.ScionHttp3Authority
 import com.anapaya.scion.http3.ScionHttp3Client
 import com.anapaya.scion.http3.ScionHttp3Request
 import com.anapaya.scion.http3.ScionHttp3Response
+import com.anapaya.scion.http3.SnapConfig
 import com.anapaya.scion.http3.TrustAnchors
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -95,6 +96,7 @@ object Fixture {
             .endhostApi(info.endhostApiUrl)
             .authToken(info.authToken)
             .trust(TrustAnchors.pinned(info.caPem.toByteArray()))
+            .snap(SnapConfig.Builder().staticIdentity(SNAP_IDENTITY).build())
             .dnsOverride(host, target)
             .connectTimeoutMillis(30_000)
             .requestTimeoutMillis(60_000)
@@ -102,7 +104,7 @@ object Fixture {
     /** A client trusting the certificate the server presents. */
     fun client(): ScionHttp3Client = clientBuilder().build()
 
-    /**cA client trusting the server's certificate which resolves [hosts] to the server as well. */
+    /** A client trusting the server's certificate which resolves [hosts] to the server as well. */
     fun clientFor(vararg hosts: String): ScionHttp3Client =
         clientBuilder()
             .apply { hosts.forEach { dnsOverride(it, target) } }
@@ -240,6 +242,17 @@ object Fixture {
     }
 
     private const val CONTROL_TIMEOUT_MILLIS = 60_000
+
+    /**
+     * The SNAP identity of every client in these tests.
+     *
+     * The SNAP data plane binds a source address to the identity that opened a tunnel from it. The
+     * binding stays for minutes after the client stops. The emulator can give a new client the
+     * source address of an earlier client. On that address, the data plane drops the handshake of
+     * a different identity, and the connection times out. The same identity gets a new tunnel at
+     * once.
+     */
+    private val SNAP_IDENTITY = ByteArray(32) { 7 }
 
     private val RESET_DEADLINE: Duration = 60.seconds
     private val RESET_POLL: Duration = 250.milliseconds
