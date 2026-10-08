@@ -166,8 +166,20 @@ impl Client {
     /// timeout up to the response head; the open [`Tunnel`] has no deadline.
     /// A non-2xx response is [`Error::TunnelRefused`].
     pub async fn connect(&self, authority: &Authority) -> Result<Tunnel, Error> {
+        self.connect_via(authority, authority).await
+    }
+
+    /// Opens a `CONNECT` tunnel to `target` through the proxy at `proxy`.
+    ///
+    /// The client dials `proxy` and sends `target` as the `CONNECT`
+    /// authority. Otherwise it works like [`connect`](Self::connect).
+    pub async fn connect_via(
+        &self,
+        proxy: &Authority,
+        target: &Authority,
+    ) -> Result<Tunnel, Error> {
         let timeout = self.config.request_timeout;
-        tokio::time::timeout_at(deadline_after(timeout), self.connect_tunnel(authority))
+        tokio::time::timeout_at(deadline_after(timeout), self.connect_tunnel(proxy, target))
             .await
             .map_err(|_| {
                 Error::Timeout {
@@ -231,14 +243,14 @@ impl Client {
 
     /// The tunnel path up to the response head. The request timeout is
     /// applied around this by [`connect`](Self::connect).
-    async fn connect_tunnel(&self, authority: &Authority) -> Result<Tunnel, Error> {
-        let origin = Origin::from_authority(authority);
+    async fn connect_tunnel(&self, proxy: &Authority, target: &Authority) -> Result<Tunnel, Error> {
+        let origin = Origin::from_authority(proxy);
         let (host, port) = (origin.host.clone(), origin.port);
         let ((response, writer), connection) = self
             .with_connection(origin, |connection| {
                 async move {
                     Ok(connection
-                        .request_with_writer(connect_request(authority))
+                        .request_with_writer(connect_request(target))
                         .await?)
                 }
             })
@@ -464,6 +476,23 @@ mod tests {
         tunnel.shutdown().await.unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(tunnel.read(&mut buf).await.unwrap(), 0);
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn connect_via_sends_the_target_to_the_proxy() {
+        let (client, _, service) = tunnel_client(test_config());
+        let target = Authority::new("backend.test", 8443).unwrap();
+
+        let mut tunnel = client
+            .connect_via(&authority("localhost"), &target)
+            .await
+            .unwrap();
+        echo_round_trip(&mut tunnel, b"through the proxy").await;
+        assert_eq!(
+            service.requests(),
+            vec![(http::Method::CONNECT, Some(target.to_string()))]
+        );
     }
 
     #[test(tokio::test)]

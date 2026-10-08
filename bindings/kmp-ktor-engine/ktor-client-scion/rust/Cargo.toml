@@ -1,0 +1,43 @@
+[package]
+name = "ktor-scion-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "scion-http3 behind a UniFFI interface, for the Ktor SCION engine"
+
+[lib]
+name = "ktor_scion_core"
+# staticlib feeds Kotlin/Native. cdylib feeds the JVM and Android.
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+anapaya-aa-client = { path = "../../../../crates/apis/anapaya-aa/anapaya-aa-client" }
+anyhow = "1"
+async-trait = "0.1"
+# The WebGateway transport. boring must match the version that squiche uses,
+# because boring-sys links one BoringSSL per build.
+boring = "4.22"
+http-body-util = "0.1"
+hyper-boring = { version = "4.22", default-features = false, features = ["hyper1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+scion-http3 = { path = "../../../../crates/libs/scion-http3" }
+scion-sdk-utils = { path = "../../../../crates/libs/scion-sdk-utils" }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio-boring = "4.22"
+tower-service = "0.3"
+# Must match the uniffi_bindgen version that the Gobley plugin installs.
+uniffi = "=0.29.4"
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# The version that reqwest uses, so that one initialization on Android serves
+# reqwest and HTTP/3.
+rustls-platform-verifier = "0.7"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.22", default-features = false }
+
+[dev-dependencies]
+rcgen = "0.14"
+tokio = { version = "1", features = ["io-util", "macros", "rt"] }

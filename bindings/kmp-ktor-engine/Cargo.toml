@@ -1,0 +1,23 @@
+# Copyright 2026 Anapaya Systems
+
+# Not a member of the endhost/public workspace. Gobley pins uniffi 0.29, and
+# that workspace pins uniffi 0.31 for scion-http3-ffi. Cargo.lock started as
+# a copy of its lock file, so the shared crates resolve the same way.
+[workspace]
+resolver = "3"
+members = ["ktor-client-scion-testing/rust", "ktor-client-scion/rust"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = "debuginfo"
+# The UniFFI boundary turns a Rust panic into a Kotlin exception. That needs
+# unwinding. With abort, a panic ends the host process.
+panic = "unwind"
+
+# The test server needs no LTO, which costs minutes on the SCION stack.
+[profile.test-server]
+inherits = "release"
+lto = false
+codegen-units = 16

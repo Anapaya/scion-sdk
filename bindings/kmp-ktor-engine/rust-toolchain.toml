@@ -1,0 +1,6 @@
+# Copyright 2026 Anapaya Systems
+
+# rustup installs this toolchain on first use, so a fresh rustup needs no
+# default toolchain. Gobley adds the cross targets.
+[toolchain]
+channel = "1.98.0"

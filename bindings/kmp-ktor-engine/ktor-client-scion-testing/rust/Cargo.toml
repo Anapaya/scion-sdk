@@ -1,0 +1,38 @@
+[package]
+name = "ktor-scion-testing"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "A PocketSCION topology for tests of the Ktor SCION engine, as a UniFFI library"
+
+[lib]
+name = "ktor_scion_testing"
+# cdylib feeds the JVM and Android. staticlib feeds Kotlin/Native. rlib feeds the
+# integration tests.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+axum = "0.8"
+futures = "0.3"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["server", "service", "tokio"] }
+pocketscion = { path = "../../../../crates/pocketscion" }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+scion-h3-axum = { path = "../../../../crates/libs/scion-h3-axum" }
+scion-quic = { path = "../../../../crates/libs/scion-quic" }
+scion-sdk-utils = { path = "../../../../crates/libs/scion-sdk-utils" }
+scion-stack = { path = "../../../../crates/scion-stack" }
+serde_json = "1.0"
+tempfile = "3.23"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1"
+# Must match the uniffi_bindgen version that the Gobley plugin installs.
+uniffi = "=0.29.4"
+
+[dev-dependencies]
+scion-http3 = { path = "../../../../crates/libs/scion-http3" }

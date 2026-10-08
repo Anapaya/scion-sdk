@@ -1,0 +1,29 @@
+# Copyright 2026 Anapaya Systems
+
+[env]
+# For arm64 iOS, boring-sys 4.22 gives the assembler its own flags, and these
+# have no iOS target. clang then builds the BoringSSL .S files for macOS, and
+# the iOS link fails.
+#
+# If CMAKE_TOOLCHAIN_FILE_<triple> is set, boring-sys adds no flags. cmake-rs
+# then gives the assembler the flags of the C compiler, and those have the iOS
+# target.
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_ios = { value = ".cargo/toolchains/aarch64-apple-ios.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_ios_sim = { value = ".cargo/toolchains/aarch64-apple-ios-sim.cmake", relative = true }
+
+# The minimum iOS version of Kotlin/Native 2.4. rustc, the cc crate, and the
+# iOS toolchain files read it. Without it, CMake builds BoringSSL for the SDK
+# version, rustc links for iOS 10, and the arm64 link misses
+# ___chkstk_darwin.
+IPHONEOS_DEPLOYMENT_TARGET = "15.0"
+
+# boring-sys runs CMake twice in one build directory, for ssl and for crypto.
+# For Android, it passes CC_<triple> as the compiler, and the NDK toolchain
+# file swaps that for clang. The second run then sees a changed compiler,
+# deletes the CMake cache, and configures BoringSSL for the host. On a Mac,
+# the host flags break the NDK clang. With a toolchain file of our own,
+# boring-sys sets no compiler, so both runs agree.
+CMAKE_TOOLCHAIN_FILE_aarch64_linux_android = { value = ".cargo/toolchains/android.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_armv7_linux_androideabi = { value = ".cargo/toolchains/android.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_i686_linux_android = { value = ".cargo/toolchains/android.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_x86_64_linux_android = { value = ".cargo/toolchains/android.cmake", relative = true }

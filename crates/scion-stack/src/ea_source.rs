@@ -95,6 +95,7 @@ pub trait EndhostApiSource: Send + Sync + 'static {
 /// APIs.
 pub struct StaticEndhostApiDiscovery {
     discovery_apis: Vec<Url>,
+    http_client: Option<reqwest::Client>,
 }
 
 impl StaticEndhostApiDiscovery {
@@ -103,7 +104,10 @@ impl StaticEndhostApiDiscovery {
     /// Creates a new `StaticEndhostApiDiscovery` with the given list of discovery API URLs.
     #[must_use]
     pub fn new(discovery_apis: Vec<Url>) -> Self {
-        Self { discovery_apis }
+        Self {
+            discovery_apis,
+            http_client: None,
+        }
     }
 
     /// Creates a new `StaticEndhostApiDiscovery` with the global list of discovery API URLs.
@@ -114,7 +118,14 @@ impl StaticEndhostApiDiscovery {
             .map(|url_str| Url::parse(url_str).expect("Invalid URL in GLOBAL_DISCOVERY_APIS"))
             .collect();
 
-        Self { discovery_apis }
+        Self::new(discovery_apis)
+    }
+
+    /// Sends the discovery requests through the given `http_client` instead of creating a new one.
+    #[must_use]
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
+        self
     }
 }
 
@@ -129,7 +140,7 @@ impl EndhostApiSource for StaticEndhostApiDiscovery {
             ));
         }
 
-        discover_endhost_apis(self.discovery_apis.clone(), None).await
+        discover_endhost_apis(&self.discovery_apis, self.http_client.as_ref(), None).await
     }
 }
 
@@ -183,14 +194,24 @@ impl EndhostApiSource for StaticEndhostApis {
 /// On failure, returns the last error encountered or a generic error if no discovery APIs were
 /// provided.
 async fn discover_endhost_apis(
-    discovery_apis: Vec<Url>,
+    discovery_apis: &[Url],
+    http_client: Option<&reqwest::Client>,
     token_source: Option<Arc<dyn TokenSource>>,
 ) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError> {
     let mut last_error = None;
-    for discovery_api in &discovery_apis {
+    for discovery_api in discovery_apis {
         // Try all apis in order, return the first successful one
         let client = {
-            let mut client = match CrpcEndhostApiDiscoveryClient::new(discovery_api) {
+            let client = match http_client {
+                Some(http_client) => {
+                    CrpcEndhostApiDiscoveryClient::new_with_client(
+                        discovery_api,
+                        http_client.clone(),
+                    )
+                }
+                None => CrpcEndhostApiDiscoveryClient::new(discovery_api),
+            };
+            let mut client = match client {
                 Ok(client) => client,
                 Err(e) => {
                     tracing::warn!(%discovery_api, error = ?e, "Failed to create Endhost API discovery client");

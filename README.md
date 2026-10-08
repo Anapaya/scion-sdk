@@ -112,6 +112,9 @@ Language bindings live outside `crates/`:
 - [bindings/apple/](bindings/apple/): Packages the SCION HTTP/3 client into a Swift package for iOS
   and macOS, cross-compiling [scion-http3-ffi](crates/libs/scion-http3-ffi/) into an XCFramework
   with a hand-written Swift facade on top.
+- [bindings/kmp-ktor-engine/](bindings/kmp-ktor-engine/): A Ktor client engine for Kotlin
+  Multiplatform (preview), on top of [scion-http3](crates/libs/scion-http3/), with a testing
+  library that runs a SCION network in the test process.
 
 ## Contributing
 
