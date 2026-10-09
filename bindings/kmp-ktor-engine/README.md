@@ -173,6 +173,27 @@ If the API key field is empty, the app starts a `ScionTestNetwork` in its own
 process on the first run, and sends the requests to its test API. This needs
 no server on the host. It works on an emulator and on a device.
 
+### iOS app
+
+The iOS app has the same fields and works the same way as the Android app.
+It is UIKit in Kotlin, with no Swift and no Xcode project. Build it on a Mac.
+With the launch argument `-autorun YES`, the app taps "Run sample" itself
+when the screen opens.
+
+On the simulator:
+
+```bash
+./gradlew :hello-scion:assembleIosAppIosSimulatorArm64
+xcrun simctl boot "iPhone 17 Pro"
+xcrun simctl install booted samples/hello-scion/build/ios/iosSimulatorArm64/HelloScion.app
+xcrun simctl launch booted net.anapaya.ktor.scion.sample
+```
+
+For an iPhone, `./gradlew :hello-scion:assembleIosAppIosArm64` writes
+`samples/hello-scion/build/ios/iosArm64/HelloScion.app`. Without an Xcode
+project, Xcode does not sign it. Sign it with `codesign` and your
+provisioning profile. The bundle ID is in `src/iosMain/Info.plist`.
+
 ## Limits
 
 - The engine buffers each body in memory. No streaming yet, in either

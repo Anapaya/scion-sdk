@@ -5,6 +5,9 @@ import com.android.build.api.variant.HostTestBuilder
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSetTree
+import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
+import org.jetbrains.kotlin.konan.target.Family
 
 plugins {
     // AGP goes first. The Kotlin plugin reads its version while it applies.
@@ -44,6 +47,17 @@ kotlin {
         }
     }
 
+    // The iOS app. Its entry point starts UIKit, not the command line.
+    if (hostOs.contains("mac")) {
+        listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
+            target.binaries {
+                executable {
+                    entryPoint = "net.anapaya.ktor.scion.sample.startIosApp"
+                }
+            }
+        }
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(project(":ktor-client-scion"))
@@ -64,8 +78,42 @@ kotlin {
             implementation(libs.androidx.test.runner)
             implementation(libs.androidx.test.core)
         }
+
+        // Only a Mac declares the iOS targets, so only a Mac has iosMain.
+        if (hostOs.contains("mac")) {
+            iosMain.dependencies {
+                // The test network for a run without an API key.
+                implementation(project(":ktor-client-scion-testing"))
+            }
+        }
     }
 }
+
+// Packs each iOS executable with Info.plist into HelloScion.app.
+kotlin.targets.withType<KotlinNativeTarget>()
+    .matching { it.konanTarget.family == Family.IOS }
+    .configureEach {
+        val executable = binaries.getExecutable(NativeBuildType.RELEASE)
+        val name = targetName.replaceFirstChar { it.uppercase() }
+        val app = layout.buildDirectory.dir("ios/$targetName/HelloScion.app")
+
+        // Pack the executable and Info.plist. map, not flatMap, keeps the
+        // dependency on the link task.
+        val bundle = tasks.register<Sync>("bundleIosApp$name") {
+            from(executable.linkTaskProvider.map { it.outputFile.get() }) {
+                rename { "HelloScion" }
+            }
+            from("src/iosMain/Info.plist")
+            into(app)
+        }
+
+        // The simulator refuses to launch a bundle without a signature, so
+        // sign it ad hoc. For a device, codesign replaces the signature.
+        tasks.register<Exec>("assembleIosApp$name") {
+            dependsOn(bundle)
+            commandLine("codesign", "--force", "--sign", "-", app.get().asFile.path)
+        }
+    }
 
 android {
     namespace = "net.anapaya.ktor.scion.sample"
