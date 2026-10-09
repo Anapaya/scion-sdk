@@ -23,10 +23,10 @@
       # ndkVersions must match androidNdk in gradle/libs.versions.toml.
       # Gobley reads android.ndkVersion and looks for <sdk>/ndk/<version>.
       android = pkgs.androidenv.composeAndroidPackages {
-        platformVersions = ["35"];
+        platformVersions = ["36"];
         buildToolsVersions = ["35.0.0"];
         includeNDK = true;
-        ndkVersions = ["27.2.12479018"];
+        ndkVersions = ["29.0.14206865"];
         # An emulator for the instrumented tests. The image has the ABI of
         # the host, so KVM or the Apple hypervisor runs it at full speed.
         includeEmulator = true;

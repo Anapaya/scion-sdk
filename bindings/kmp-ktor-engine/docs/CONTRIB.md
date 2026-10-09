@@ -82,3 +82,9 @@ Add the Kotlin target in `build-logic/src/main/kotlin/rust-kmp-library.gradle.kt
 Gobley derives the Rust target from it and builds the library. For a native
 target, also add its Rust triple to `nativeTargets` in
 `rust-staticlib-isolation.gradle.kts`. The Kotlin sources do not change.
+
+## Android Gradle plugin 9
+
+The build stays on AGP 8. With AGP 9, Gobley 0.3.7 cannot put the Rust
+library into the Android AAR
+([gobley#153](https://github.com/gobley/gobley/issues/153)).

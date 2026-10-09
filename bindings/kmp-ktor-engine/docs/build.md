@@ -72,7 +72,7 @@ There is no dev shell. Install these and put them on `PATH`:
 - cmake, nasm, and LLVM. bindgen loads libclang from LLVM.
 - A MinGW-w64 toolchain with `gcc`, `ar`, `nm`, and `objcopy`. The tested
   build used the WinLibs toolchain from Strawberry Perl.
-- The Android SDK with platform 35, build-tools 35, and the NDK version from
+- The Android SDK with platform 36, build-tools 35, and the NDK version from
   `androidNdk`. Set `ANDROID_HOME`. Gobley reads the NDK when Gradle
   configures the project, also for a build without Android tasks.
 
@@ -143,7 +143,7 @@ The dev shell supplies the emulator and a system image with the ABI of the
 host: `x86_64` on Linux, `arm64-v8a` on a Mac. Set `ABI` to that value:
 
 ```sh
-echo no | avdmanager create avd -n ktor-scion -k "system-images;android-35;google_apis;$ABI"
+echo no | avdmanager create avd -n ktor-scion -k "system-images;android-36;google_apis;$ABI"
 emulator -avd ktor-scion -no-window -no-audio -no-snapshot &
 adb wait-for-device
 ./gradlew connectedAndroidTest -Pscion.androidAbis=$ABI

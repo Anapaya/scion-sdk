@@ -1,14 +1,15 @@
 [versions]
-kotlin = "2.4.20"
+kotlin = "2.4.21"
 ktor = "3.6.0"
 coroutines = "1.11.0"
+# Stay on AGP 8. "Android Gradle plugin 9" in docs/CONTRIB.md gives the reason.
 agp = "8.13.2"
 gobley = "0.3.7"
 androidxTestRunner = "1.7.0"
 androidxTestCore = "1.7.0"
-androidCompileSdk = "35"
+androidCompileSdk = "36"
 androidMinSdk = "21"
-androidNdk = "27.2.12479018"
+androidNdk = "29.0.14206865"
 
 [libraries]
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
