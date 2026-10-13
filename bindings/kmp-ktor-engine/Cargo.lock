@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-aa-client"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "anapaya-aa-protobuf",
  "anyhow",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-aa-protobuf"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "buffa",
  "serde",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-ead-api"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "anapaya-ead-models",
  "axum",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-ead-client"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "anapaya-ead-models",
  "anyhow",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "anapaya-ead-models"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "buffa",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "axum-connect-rpc"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "axum",
  "buffa",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "dhsd"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "ring",
  "zeroize",
@@ -1444,7 +1444,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "axum",
  "axum-connect-rpc",
@@ -1456,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api-client"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "endhost-api",
@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api-models"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "sciparse",
@@ -1482,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "endhost-api-protobuf"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "buffa",
  "endhost-api-models",
@@ -3225,7 +3225,7 @@ dependencies = [
 
 [[package]]
 name = "pocketscion"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "anapaya-ead-api",
  "anapaya-ead-models",
@@ -3742,7 +3742,7 @@ dependencies = [
 
 [[package]]
 name = "reqwest-connect-rpc"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "buffa",
@@ -4016,7 +4016,7 @@ dependencies = [
 
 [[package]]
 name = "scion-connect-rpc"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "buffa",
@@ -4036,7 +4036,7 @@ dependencies = [
 
 [[package]]
 name = "scion-h3-axum"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "axum",
  "scion-quic",
@@ -4046,7 +4046,7 @@ dependencies = [
 
 [[package]]
 name = "scion-http3"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4064,7 +4064,7 @@ dependencies = [
 
 [[package]]
 name = "scion-protobuf"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "buffa",
  "buffa-types",
@@ -4074,7 +4074,7 @@ dependencies = [
 
 [[package]]
 name = "scion-quic"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4094,7 +4094,7 @@ dependencies = [
 
 [[package]]
 name = "scion-sdk-observability"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "axum",
  "chacha20 0.10.2",
@@ -4116,7 +4116,7 @@ dependencies = [
 
 [[package]]
 name = "scion-sdk-token-validator"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "ed25519-dalek",
  "jsonwebtoken",
@@ -4127,7 +4127,7 @@ dependencies = [
 
 [[package]]
 name = "scion-sdk-utils"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "num-traits",
  "rand 0.10.2",
@@ -4142,7 +4142,7 @@ dependencies = [
 
 [[package]]
 name = "scion-stack"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "ana-gotatun",
  "anapaya-ead-client",
@@ -4176,7 +4176,7 @@ dependencies = [
 
 [[package]]
 name = "scion-trc"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "cms",
  "der",
@@ -4187,7 +4187,7 @@ dependencies = [
 
 [[package]]
 name = "sciparse"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "aes",
  "bitflags 2.13.1",
@@ -4559,7 +4559,7 @@ dependencies = [
 
 [[package]]
 name = "snap-control"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4601,7 +4601,7 @@ dependencies = [
 
 [[package]]
 name = "snap-dataplane"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "ana-gotatun",
  "anyhow",
@@ -4623,7 +4623,7 @@ dependencies = [
 
 [[package]]
 name = "snap-tokens"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "base64 0.23.1",
  "jsonwebtoken",
@@ -4637,7 +4637,7 @@ dependencies = [
 
 [[package]]
 name = "snap-tun"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "ana-gotatun",
  "async-channel",
