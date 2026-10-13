@@ -14,6 +14,7 @@
 
 package com.anapaya.scion.http3.internal
 
+import com.anapaya.scion.http3.AuthTokenSource
 import com.anapaya.scion.http3.PreferredUnderlay
 import com.anapaya.scion.http3.ScionHttp3Exception
 import com.anapaya.scion.http3.ScionHttp3Headers
@@ -28,7 +29,7 @@ import com.anapaya.scion.http3.uniffi.Header
 import com.anapaya.scion.http3.uniffi.HttpRequest
 import com.anapaya.scion.http3.uniffi.HttpResponse
 import com.anapaya.scion.http3.uniffi.Underlay
-import com.anapaya.scion.http3.uniffi.ApiKeyAuth as FfiApiKeyAuth
+import com.anapaya.scion.http3.uniffi.AuthTokenSource as FfiAuthTokenSource
 import com.anapaya.scion.http3.uniffi.DnsOverride as FfiDnsOverride
 import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
 import com.anapaya.scion.http3.uniffi.SnapConfig as FfiSnapConfig
@@ -151,7 +152,7 @@ internal fun ClientSettings.applyTo(
     base.copy(
         endhostApiUrl = endhostApiUrl,
         authToken = authToken ?: base.authToken,
-        apiKey = apiKey?.toFfi() ?: base.apiKey,
+        authTokenSource = authTokenSource?.toFfi() ?: base.authTokenSource,
         preferredUnderlay = preferredUnderlay?.toFfi() ?: base.preferredUnderlay,
         snap = snap?.toFfi() ?: base.snap,
         udp = udp?.toFfi() ?: base.udp,
@@ -170,13 +171,15 @@ internal fun ClientSettings.applyTo(
         maxResponseBodyBytes = maxResponseBodyBytes?.toULong() ?: base.maxResponseBodyBytes,
     )
 
-private fun ApiKeyAuth.toFfi(): FfiApiKeyAuth =
-    FfiApiKeyAuth(
-        key = key,
-        aaUrl = aaUrl,
-        deviceId = ApiKeyAuth.DEVICE_ID,
-        allowInsecureHttp = allowInsecureHttp,
-    )
+private fun AuthTokenSource.toFfi(): FfiAuthTokenSource =
+    when (this) {
+        is AuthTokenSource.AnapayaAa ->
+            FfiAuthTokenSource.AnapayaAa(
+                apiKey = apiKey,
+                aaUrl = aaUrl,
+                deviceId = AuthTokenSource.AnapayaAa.DEVICE_ID,
+            )
+    }
 
 private fun PreferredUnderlay.toFfi(): Underlay =
     when (this) {

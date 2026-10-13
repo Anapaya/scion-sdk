@@ -248,15 +248,21 @@ impl CrpcClient {
                 .await
                 .unwrap_or_else(|_| "<failed to read body>".to_string());
 
-            // Try to parse the body as a CrpcError, otherwise create a generic one.
+            // Try to parse the body as a CrpcError, otherwise create a generic one that names the
+            // HTTP status.
             match serde_json::from_str::<CrpcError>(&response_raw) {
                 Ok(crpc_err) => {
                     return Err(CrpcClientError::CrpcError(crpc_err));
                 }
                 Err(_) => {
+                    let message = if response_raw.is_empty() {
+                        format!("HTTP {status}")
+                    } else {
+                        format!("HTTP {status}: {response_raw}")
+                    };
                     return Err(CrpcClientError::CrpcError(CrpcError::new(
                         status.into(),
-                        response_raw,
+                        message,
                     )));
                 }
             }

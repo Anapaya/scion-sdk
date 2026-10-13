@@ -9,7 +9,7 @@ typealias FfiSnapConfig = ScionHTTP3Uniffi.SnapConfig
 typealias FfiUdpConfig = ScionHTTP3Uniffi.UdpConfig
 typealias FfiTimeoutPhase = ScionHTTP3Uniffi.TimeoutPhase
 typealias FfiDnsOverride = ScionHTTP3Uniffi.DnsOverride
-typealias FfiApiKeyAuth = ScionHTTP3Uniffi.ApiKeyAuth
+typealias FfiAuthTokenSource = ScionHTTP3Uniffi.AuthTokenSource
 
 /// The request as the stack receives it.
 ///
@@ -111,12 +111,14 @@ extension ClientSettings {
         var config = base
         config.endhostApiUrl = endhostApiUrl
         config.authToken = authToken ?? base.authToken
-        config.apiKey =
-            apiKey.map {
-                FfiApiKeyAuth(
-                    key: $0.key, aaUrl: $0.aaUrl, deviceId: apiKeyDeviceId,
-                    allowInsecureHttp: $0.allowInsecureHttp)
-            } ?? base.apiKey
+        config.authTokenSource =
+            authTokenSource.map {
+                switch $0.kind {
+                case let .anapayaAa(apiKey, aaUrl):
+                    return FfiAuthTokenSource.anapayaAa(
+                        apiKey: apiKey, aaUrl: aaUrl, deviceId: anapayaAaDeviceId)
+                }
+            } ?? base.authTokenSource
         config.preferredUnderlay = preferredUnderlay.map(ffiUnderlay) ?? base.preferredUnderlay
         config.snap = FfiSnapConfig(
             dpIndex: snap.dataPlaneIndex.map { UInt32(clamping: $0) } ?? base.snap.dpIndex,
@@ -160,4 +162,4 @@ func ffiTrustAnchors(_ trust: TrustAnchors) -> FfiTrustAnchors {
 
 /// What the AA records for this device. It is not a setting: the SDK sends this until it derives
 /// the value from the device itself.
-let apiKeyDeviceId = "no-device-id"
+let anapayaAaDeviceId = "no-device-id"

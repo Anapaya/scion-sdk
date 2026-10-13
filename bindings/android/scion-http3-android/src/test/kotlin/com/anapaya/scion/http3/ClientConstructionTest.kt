@@ -2,7 +2,6 @@
 
 package com.anapaya.scion.http3
 
-import com.anapaya.scion.http3.internal.ApiKeyAuth
 import com.anapaya.scion.http3.internal.CachingTrustStore
 import com.anapaya.scion.http3.internal.ClientSettings
 import com.anapaya.scion.http3.internal.StalenessTracker
@@ -220,27 +219,30 @@ class ClientConstructionTest {
     }
 
     @Test
-    fun `an API key beside a token, or one that cannot work, is rejected`() {
-        val key = ApiKeyAuth("a-key", "https://aa.example.org")
-        settings(apiKey = key)
-        assertThrows<IllegalArgumentException> { settings(authToken = "a-token", apiKey = key) }
+    fun `a token source beside a token, or one that cannot work, is rejected`() {
+        val source = AuthTokenSource.anapayaAa("a-key", "https://aa.example.org")
+        settings(authTokenSource = source)
         assertThrows<IllegalArgumentException> {
-            settings(apiKey = ApiKeyAuth("", "https://aa.example.org"))
+            settings(authToken = "a-token", authTokenSource = source)
         }
         assertThrows<IllegalArgumentException> {
-            settings(apiKey = ApiKeyAuth("a-key", "aa.example.org"))
+            settings(authTokenSource = AuthTokenSource.anapayaAa("", "https://aa.example.org"))
         }
         assertThrows<IllegalArgumentException> {
-            settings(apiKey = ApiKeyAuth("a-key", "ftp://aa.example.org"))
+            settings(authTokenSource = AuthTokenSource.anapayaAa("a-key", "aa.example.org"))
         }
-    }
-
-    @Test
-    fun `a plain-http AA is rejected unless it is allowed`() {
         assertThrows<IllegalArgumentException> {
-            settings(apiKey = ApiKeyAuth("a-key", "http://aa.example.org"))
+            settings(authTokenSource = AuthTokenSource.anapayaAa("a-key", "ftp://aa.example.org"))
         }
-        settings(apiKey = ApiKeyAuth("a-key", "http://aa.example.org", allowInsecureHttp = true))
+        for (aaUrl in listOf("http://aa.example.org", "http://10.0.2.2:8080")) {
+            assertThrows<IllegalArgumentException> {
+                settings(authTokenSource = AuthTokenSource.anapayaAa("a-key", aaUrl))
+            }
+        }
+        val loopback = listOf("http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080")
+        for (aaUrl in loopback) {
+            settings(authTokenSource = AuthTokenSource.anapayaAa("a-key", aaUrl))
+        }
     }
 
     @Test

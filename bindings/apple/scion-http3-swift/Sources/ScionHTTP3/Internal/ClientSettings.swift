@@ -8,7 +8,7 @@ import Foundation
 struct ClientSettings: Sendable, Equatable {
     let endhostApiUrl: String
     let authToken: String?
-    let apiKey: ScionHttp3Client.ApiKeyAuth?
+    let authTokenSource: AuthTokenSource?
     let preferredUnderlay: PreferredUnderlay?
     let snap: SnapConfig
     let udp: UdpConfig
@@ -27,22 +27,19 @@ struct ClientSettings: Sendable, Equatable {
         if let token = configuration.authToken, token.isEmpty {
             throw ScionHttp3Error.invalidConfiguration(detail: "an auth token cannot be empty")
         }
-        if let apiKey = configuration.apiKey {
+        if let source = configuration.authTokenSource {
             if configuration.authToken != nil {
                 throw ScionHttp3Error.invalidConfiguration(
-                    detail: "a client is built with an authToken or an apiKey, not both")
+                    detail: "a client is built with an authToken or an authTokenSource, not both")
             }
-            if apiKey.key.isEmpty {
-                throw ScionHttp3Error.invalidConfiguration(
-                    detail: "an Anapaya AA API key cannot be empty")
-            }
-            try Self.validateUrl("apiKey.aaUrl", apiKey.aaUrl)
-            let scheme = URLComponents(string: apiKey.aaUrl)?.scheme?.lowercased()
-            if scheme != "https" && !apiKey.allowInsecureHttp {
-                throw ScionHttp3Error.invalidConfiguration(
-                    detail: "apiKey.aaUrl \"\(apiKey.aaUrl)\" is not https, so the API key "
-                        + "would cross the network in cleartext. Set allowInsecureHttp to "
-                        + "permit it.")
+            switch source.kind {
+            case let .anapayaAa(apiKey, aaUrl):
+                if apiKey.isEmpty {
+                    throw ScionHttp3Error.invalidConfiguration(
+                        detail: "an Anapaya AA API key cannot be empty")
+                }
+                try Self.validateUrl("authTokenSource.aaUrl", aaUrl)
+                try Self.validateAaUrl(aaUrl)
             }
         }
         try Self.requirePositive("connectTimeout", configuration.connectTimeout)
@@ -86,7 +83,7 @@ struct ClientSettings: Sendable, Equatable {
 
         endhostApiUrl = configuration.endhostApi
         authToken = configuration.authToken
-        apiKey = configuration.apiKey
+        authTokenSource = configuration.authTokenSource
         preferredUnderlay = configuration.preferredUnderlay
         snap = configuration.snap
         udp = configuration.udp
@@ -141,18 +138,24 @@ struct ClientSettings: Sendable, Equatable {
                 detail: "\(name) \"\(url)\" has to be http or https, not \(scheme)")
         }
     }
-}
 
-/// Says, loudly, that the client accepts a plain-HTTP Anapaya AA.
-///
-/// Logged rather than refused, as `warnIfVerificationDisabled` is: a local AA over plain HTTP is a
-/// real need.
-func warnIfInsecureAaHttp(_ apiKey: ScionHttp3Client.ApiKeyAuth?, log: any LibraryLog) {
-    guard apiKey?.allowInsecureHttp == true else { return }
-    log.error(
-        "This ScionHttp3Client accepts a plain-HTTP Anapaya AA, which sends the API key in "
-            + "cleartext. Anyone on the path can read it. This is for local testing only. "
-            + "allowInsecureHttp should not ship. Point apiKey.aaUrl at an https AA instead.")
+    private static func validateAaUrl(_ url: String) throws {
+        let components = URLComponents(string: url)
+        if components?.scheme?.lowercased() == "https" || isLoopbackHost(components?.host ?? "") {
+            return
+        }
+        throw ScionHttp3Error.invalidConfiguration(
+            detail: "authTokenSource.aaUrl \"\(url)\" has to be https, or http to a loopback host")
+    }
+
+    private static func isLoopbackHost(_ host: String) -> Bool {
+        let name = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if name == "localhost" || name == "::1" || name == "0:0:0:0:0:0:0:1" {
+            return true
+        }
+        let octets = name.split(separator: ".", omittingEmptySubsequences: false)
+        return octets.count == 4 && octets[0] == "127" && octets.allSatisfy { UInt8($0) != nil }
+    }
 }
 
 func warnIfVerificationDisabled(_ trust: TrustAnchors, log: any LibraryLog) {

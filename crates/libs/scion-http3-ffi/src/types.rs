@@ -185,19 +185,18 @@ pub struct UdpConfig {
     pub next_hop_resolver_fetch_interval_ms: Option<u64>,
 }
 
-/// An Anapaya AA API key and where to exchange it for tokens, see [`ClientConfig::api_key`].
-#[derive(Clone, uniffi::Record)]
-pub struct ApiKeyAuth {
-    /// The API key.
-    pub key: String,
-    /// The Anapaya AA service that exchanges the key for tokens.
-    pub aa_url: String,
-    /// Identifies this device to the AA.
-    pub device_id: String,
-    /// Allows an `http` AA URL, which sends the API key in cleartext.
-    ///
-    /// The URL has to be `https` without this. Set it only for local testing.
-    pub allow_insecure_http: bool,
+/// The settings of a Rust token source, as plain data that can cross the FFI boundary.
+#[derive(Clone, uniffi::Enum)]
+pub enum AuthTokenSource {
+    /// Exchanges an API key for tokens at the Anapaya AA.
+    AnapayaAa {
+        /// The API key.
+        api_key: String,
+        /// The URL of the AA: `https`, or `http` to a loopback host.
+        aa_url: String,
+        /// Identifies this device to the AA.
+        device_id: String,
+    },
 }
 
 /// Everything a client is built from.
@@ -218,25 +217,19 @@ pub struct ClientConfig {
     /// without a token cannot be given one later, because `None` installs no token source at all
     /// and there is no second state meaning "a token is coming". A caller who needs a token but
     /// does not hold one yet must therefore wait for it and build the client afterwards, or give
-    /// the client an `api_key` and let it fetch the token.
+    /// the client an `auth_token_source` and let it fetch the token.
     ///
     /// No type on the Rust side derives `Debug` while it holds this, so no Rust log line can print
     /// it by accident. That protection stops at the boundary: uniffi generates `ClientConfig` as a
     /// Kotlin `data class`, and its `toString()` prints every property, this one included. Kotlin
     /// callers must keep the whole config out of their logs.
     pub auth_token: Option<String>,
-    /// An Anapaya AA API key the client exchanges for a token itself, on the first request, and
-    /// renews in the background for as long as it lives.
+    /// The source the client takes its tokens from. A client takes this or `auth_token`, not
+    /// both.
     ///
-    /// A client takes this or `auth_token`, not both. A client built with a key refuses
-    /// [`set_auth_token`](crate::ScionHttp3Client::set_auth_token), because it renews its own
-    /// token. A refused key, or an AA out of reach, fails the first request as
-    /// [`StackBuild`](crate::ScionHttp3Error::StackBuild); `retryable` says which of the two it
-    /// was.
-    ///
-    /// What the note on `auth_token` says about Kotlin's `toString()` applies to the key too.
+    /// What the note on `auth_token` says about Kotlin's `toString()` applies to an API key too.
     #[uniffi(default)]
-    pub api_key: Option<ApiKeyAuth>,
+    pub auth_token_source: Option<AuthTokenSource>,
     /// The preferred underlay, applied to whatever discovery returns.
     pub preferred_underlay: Option<Underlay>,
     /// Endhost API discovery tuning.
@@ -290,7 +283,7 @@ impl ClientConfig {
         ClientConfig {
             endhost_api_url,
             auth_token: None,
-            api_key: None,
+            auth_token_source: None,
             preferred_underlay: None,
             discovery: DiscoveryConfig::default(),
             snap: SnapConfig::default(),

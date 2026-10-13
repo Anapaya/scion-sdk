@@ -43,7 +43,7 @@ use crate::{
 
 /// An HTTP/3-over-SCION client.
 ///
-/// Construction performs no network I/O; the first request builds connectivity. Thread-safe,
+/// The first request builds connectivity. Thread-safe,
 /// cheap to hold, and meant to live as long as the application: it owns a connection pool, and one
 /// client per request would throw away every connection it opened.
 #[derive(uniffi::Object)]
@@ -57,7 +57,7 @@ pub struct ScionHttp3Client {
     /// The token every request authenticates with, or `None` for a client configured without one.
     auth_token: Option<Arc<AuthToken>>,
     /// Whether the client renews its own token, so that none can be set from outside.
-    api_key: bool,
+    token_source: bool,
     /// Fired by `shutdown` and by `Drop`. Every tunnel this client opened watches it.
     closed: CancellationToken,
 }
@@ -73,22 +73,26 @@ impl ScionHttp3Client {
         scion_sdk_utils::rustls::select_ring_crypto_provider();
 
         let max_response_body_bytes = config.max_response_body_bytes;
-        let api_key = config.api_key.is_some();
+        let token_source = config.auth_token_source.is_some();
         // Created before the configuration so that the configuration can hold a handle to it, which
         // is what lets `set_auth_token` reach connectivity that has already been built.
         let auth_token = config.auth_token.clone().map(AuthToken::new).map(Arc::new);
-        let config = config.into_client_config(auth_token.as_ref().map(AuthToken::shared))?;
         // Built here rather than on the first request, so that a machine which cannot start it says
         // so while the caller is still constructing rather than at some later request. This is the
         // only place that can fail on its account.
         let runtime = runtime::runtime()?;
+        let config = {
+            // The AA token source spawns its renewal task when it is built.
+            let _runtime = runtime.enter();
+            config.into_client_config(auth_token.as_ref().map(AuthToken::shared))?
+        };
 
         Ok(Arc::new(ScionHttp3Client {
             inner: Arc::new(Client::new(config)),
             runtime,
             max_response_body_bytes,
             auth_token,
-            api_key,
+            token_source,
             closed: CancellationToken::new(),
         }))
     }
@@ -152,12 +156,12 @@ impl ScionHttp3Client {
     ///
     /// Fails if the client was built without `auth_token`, since there is then nothing to replace
     /// and nothing reading a token; construct a client with one instead. Fails likewise for a
-    /// client built with an `api_key`.
+    /// client built with an `auth_token_source`.
     pub fn set_auth_token(&self, token: String) -> Result<(), Error> {
-        if self.api_key {
+        if self.token_source {
             return Err(Error::invalid_request(
-                "this client was built with an api_key and renews its own token, so there is no \
-                 token to replace",
+                "this client was built with an auth_token_source and renews its own token, so \
+                 there is no token to replace",
             ));
         }
         match &self.auth_token {
@@ -196,9 +200,6 @@ impl ScionHttp3Client {
     /// Idempotent. A caller cancelled while this runs still gets its pool closed, because the close
     /// is spawned and then awaited rather than run inline. A caller cancelled before the call is
     /// ever polled never starts one, and there the object's own disposal closes the pool instead.
-    ///
-    /// A client built with an `api_key` renews its token outside the pool. That renewal stops
-    /// when the caller releases the client.
     pub async fn shutdown(&self) {
         // Before the close, so that a tunnel whose connection fails under it can tell why.
         self.closed.cancel();

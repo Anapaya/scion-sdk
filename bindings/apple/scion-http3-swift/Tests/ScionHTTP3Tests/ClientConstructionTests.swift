@@ -89,21 +89,39 @@ final class ClientConstructionTests: XCTestCase {
         rejected("dnsOverrides") { $0.dnsOverrides = ["example.org": []] }
         let address = try! ScionAddress("1-ff00:0:110,10.0.0.1")
         rejected("dnsOverrides") { $0.dnsOverrides = [" ": [address]] }
-        let key = ScionHttp3Client.ApiKeyAuth(key: "k", aaUrl: "https://aa.example.org")
+        let source = AuthTokenSource.anapayaAa(apiKey: "k", aaUrl: "https://aa.example.org")
         rejected("not both") {
             $0.authToken = "t"
-            $0.apiKey = key
+            $0.authTokenSource = source
         }
-        rejected("API key") { $0.apiKey = .init(key: "", aaUrl: key.aaUrl) }
-        rejected("apiKey.aaUrl") { $0.apiKey = .init(key: "k", aaUrl: "aa.example.org") }
-        rejected("apiKey.aaUrl") {
-            $0.apiKey = .init(key: "k", aaUrl: "ftp://aa.example.org")
+        rejected("API key") {
+            $0.authTokenSource = .anapayaAa(apiKey: "", aaUrl: "https://aa.example.org")
         }
-        rejected("apiKey.aaUrl") { $0.apiKey = .init(key: "k", aaUrl: "http://aa.example.org") }
-        XCTAssertNoThrow(try settings(apiKey: key))
-        XCTAssertNoThrow(
-            try settings(
-                apiKey: .init(key: "k", aaUrl: "http://aa.example.org", allowInsecureHttp: true)))
+        rejected("authTokenSource.aaUrl") {
+            $0.authTokenSource = .anapayaAa(apiKey: "k", aaUrl: "aa.example.org")
+        }
+        rejected("authTokenSource.aaUrl") {
+            $0.authTokenSource = .anapayaAa(apiKey: "k", aaUrl: "ftp://aa.example.org")
+        }
+        for aaUrl in ["http://aa.example.org", "http://10.0.2.2:8080"] {
+            rejected("authTokenSource.aaUrl") {
+                $0.authTokenSource = .anapayaAa(apiKey: "k", aaUrl: aaUrl)
+            }
+        }
+        XCTAssertNoThrow(try settings(authTokenSource: source))
+        for aaUrl in ["http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"] {
+            XCTAssertNoThrow(try settings(authTokenSource: .anapayaAa(apiKey: "k", aaUrl: aaUrl)))
+        }
+    }
+
+    func testTheApiKeyIsKeptOutOfDescriptions() {
+        let source = AuthTokenSource.anapayaAa(
+            apiKey: "super-secret-key", aaUrl: "https://aa.example.org")
+        var configuration = configuration()
+        configuration.authTokenSource = source
+        for text in [String(describing: source), String(reflecting: configuration)] {
+            XCTAssertFalse(text.contains("super-secret-key"), text)
+        }
     }
 
     func testTheIdleThresholdFollowsTheConfiguration() throws {

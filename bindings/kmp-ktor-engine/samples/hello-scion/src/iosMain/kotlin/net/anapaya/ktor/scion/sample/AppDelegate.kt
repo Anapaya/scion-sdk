@@ -13,8 +13,14 @@ import platform.UIKit.UIApplicationDelegateProtocolMeta
 import platform.UIKit.UIApplicationMain
 import platform.UIKit.UIResponder
 import platform.UIKit.UIResponderMeta
-import platform.UIKit.UIScreen
+import platform.UIKit.UIScene
+import platform.UIKit.UISceneConfiguration
+import platform.UIKit.UISceneConnectionOptions
+import platform.UIKit.UISceneSession
 import platform.UIKit.UIWindow
+import platform.UIKit.UIWindowScene
+import platform.UIKit.UIWindowSceneDelegateProtocol
+import platform.UIKit.UIWindowSceneDelegateProtocolMeta
 
 /**
  * The entry point of the iOS app. It starts UIKit with [AppDelegate].
@@ -29,24 +35,42 @@ fun startIosApp() {
     }
 }
 
-/** Shows [SampleViewController] in the one window of the app. */
+/** Gives each scene of the app a [SceneDelegate]. */
 @OptIn(BetaInteropApi::class, ExperimentalForeignApi::class)
 class AppDelegate @ObjCObjectBase.OverrideInit constructor() :
     UIResponder(),
     UIApplicationDelegateProtocol {
     companion object : UIResponderMeta(), UIApplicationDelegateProtocolMeta
 
-    // UIKit keeps no reference to a window that the app creates.
-    private var mainWindow: UIWindow? = null
-
     override fun application(
         application: UIApplication,
-        didFinishLaunchingWithOptions: Map<Any?, *>?,
-    ): Boolean {
-        mainWindow = UIWindow(frame = UIScreen.mainScreen.bounds).apply {
+        configurationForConnectingSceneSession: UISceneSession,
+        options: UISceneConnectionOptions,
+    ): UISceneConfiguration = UISceneConfiguration(
+        name = null,
+        sessionRole = configurationForConnectingSceneSession.role,
+    ).apply {
+        delegateClass = SceneDelegate
+    }
+}
+
+/** Shows [SampleViewController] in the window of the scene. */
+@OptIn(BetaInteropApi::class, ExperimentalForeignApi::class)
+class SceneDelegate @ObjCObjectBase.OverrideInit constructor() :
+    UIResponder(),
+    UIWindowSceneDelegateProtocol {
+    companion object : UIResponderMeta(), UIWindowSceneDelegateProtocolMeta
+
+    private var mainWindow: UIWindow? = null
+
+    override fun scene(
+        scene: UIScene,
+        willConnectToSession: UISceneSession,
+        options: UISceneConnectionOptions,
+    ) {
+        mainWindow = UIWindow(windowScene = scene as UIWindowScene).apply {
             rootViewController = SampleViewController()
             makeKeyAndVisible()
         }
-        return true
     }
 }

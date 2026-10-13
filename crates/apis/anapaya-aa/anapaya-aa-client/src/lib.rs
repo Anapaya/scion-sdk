@@ -14,13 +14,12 @@
 
 //! Client for the Anapaya AA (Auth/n Auth/z) service.
 //!
-//! This crate provides an [`ApiKeyTokenRefresher`] that implements the
-//! [`reqwest_connect_rpc::token_source::refresh::TokenRefresher`]
-//! trait, enabling automatic SNAP token acquisition and renewal using static
-//! API key credentials.
+//! [`AnapayaAaTokenSource`] exchanges an API key for SNAP tokens and renews them.
 
 pub mod client;
 pub mod refresher;
+pub mod token_source;
 
-pub use client::{AaAuthClient, AuthResult, CrpcAaAuthClient};
+pub use client::{AaAuthClient, AuthResult, CrpcAaAuthClient, InsecureAaUrl, check_aa_url};
 pub use refresher::{ApiKeyTokenRefresher, ApiKeyTokenRefresherError};
+pub use token_source::{AnapayaAaStartError, AnapayaAaTokenSource};

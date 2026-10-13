@@ -20,6 +20,7 @@
 
 use std::time::Duration;
 
+use anapaya_aa_client::AnapayaAaTokenSource;
 use scion_http3::{
     Config, Request, Response,
     http::{HeaderMap, HeaderName, HeaderValue, Method},
@@ -37,8 +38,8 @@ use crate::{
     error::Error,
     token::SharedToken,
     types::{
-        ApiKeyAuth, ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse,
-        SnapConfig, TrustAnchors, UdpConfig, Underlay,
+        AuthTokenSource, ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest,
+        HttpResponse, SnapConfig, TrustAnchors, UdpConfig, Underlay,
     },
 };
 
@@ -67,8 +68,7 @@ impl ClientConfig {
             .with_connection_attempt_delay(Duration::from_millis(self.connection_attempt_delay_ms))
             .with_quic_config(quic_config(&self.trust)?);
 
-        // The AA client trusts the same anchors as the control plane, so parse them before the
-        // API key needs them.
+        // Parsed first, because the AA client trusts the same anchors.
         let control_plane_anchors = self
             .control_plane_anchors_pem
             .map(|pem| control_plane_anchors(&pem))
@@ -79,17 +79,6 @@ impl ClientConfig {
         // out unauthenticated, which is what a client configured without a token wants.
         if let Some(token) = auth_token {
             config = config.with_auth_token_source(token);
-        }
-        if let Some(api_key) = self.api_key {
-            if self.auth_token.is_some() {
-                return Err(Error::invalid_request(
-                    "a client is built with an auth_token or an api_key, not both",
-                ));
-            }
-            config = config.with_api_key(validated_api_key(
-                api_key,
-                control_plane_anchors.as_deref(),
-            )?);
         }
 
         for DnsOverride { host, addresses } in self.dns_overrides {
@@ -114,6 +103,17 @@ impl ClientConfig {
         let discovery = self.discovery;
         let snap = validated_snap(self.snap)?;
         let udp = validated_udp(self.udp)?;
+
+        if let Some(source) = self.auth_token_source {
+            if self.auth_token.is_some() {
+                return Err(Error::invalid_request(
+                    "a client is built with an auth_token or an auth_token_source, not both",
+                ));
+            }
+            config = config
+                .with_auth_token_source(token_source(source, control_plane_anchors.as_deref())?);
+        }
+
         if control_plane_anchors.is_some() || customization_needed(&discovery, &snap, &udp) {
             config = config.with_stack_customizer(move |builder| {
                 customize(
@@ -179,46 +179,43 @@ fn customize(
     builder
 }
 
-/// Refuses a key that cannot work at construction, where the reason can still be given.
-///
-/// The AA gets the anchors the control plane trusts, so a private deployment reaches its own AA.
-/// Without anchors the client keeps the default roots.
-fn validated_api_key(
-    auth: ApiKeyAuth,
+/// Builds the token source that `source` describes. The AA client trusts `control_plane_anchors`,
+/// or the default roots without them. Call it inside the runtime, because the source spawns its
+/// renewal task.
+fn token_source(
+    source: AuthTokenSource,
     control_plane_anchors: Option<&[reqwest::Certificate]>,
-) -> Result<scion_http3::ApiKeyAuth, Error> {
-    if auth.key.is_empty() {
+) -> Result<AnapayaAaTokenSource, Error> {
+    let AuthTokenSource::AnapayaAa {
+        api_key,
+        aa_url,
+        device_id,
+    } = source;
+    if api_key.is_empty() {
         return Err(Error::invalid_request(
             "an Anapaya AA API key cannot be empty",
         ));
     }
-    if auth.device_id.is_empty() {
+    if device_id.is_empty() {
         return Err(Error::invalid_request(
-            "an Anapaya AA API key needs a device id",
+            "an Anapaya AA token source needs a device id",
         ));
     }
-    let aa_url: Url = auth
-        .aa_url
+    let aa_url: Url = aa_url
         .parse()
-        .map_err(|e| Error::invalid_request(format!("invalid AA URL `{}`: {e}", auth.aa_url)))?;
-    if !matches!(aa_url.scheme(), "http" | "https") {
-        return Err(Error::invalid_request(format!(
-            "the AA URL `{aa_url}` is not http or https"
-        )));
-    }
-    if aa_url.scheme() == "http" && !auth.allow_insecure_http {
-        return Err(Error::invalid_request(format!(
-            "the AA URL `{aa_url}` is not https, so the API key would cross the network in              cleartext; set `allow_insecure_http` to permit it"
-        )));
-    }
-    let mut validated = scion_http3::ApiKeyAuth::new(auth.key, aa_url, auth.device_id);
-    if auth.allow_insecure_http {
-        validated = validated.allow_insecure_http();
-    }
-    Ok(match control_plane_anchors {
-        Some(anchors) => validated.with_trust_anchors(anchors.to_vec()),
-        None => validated,
-    })
+        .map_err(|e| Error::invalid_request(format!("invalid AA URL `{aa_url}`: {e}")))?;
+    let source = match control_plane_anchors {
+        Some(anchors) => {
+            AnapayaAaTokenSource::new_with_client_builder(
+                api_key,
+                &aa_url,
+                device_id,
+                control_plane_client_builder(anchors.to_vec()),
+            )
+        }
+        None => AnapayaAaTokenSource::new(api_key, &aa_url, device_id),
+    };
+    source.map_err(|e| Error::invalid_request(format!("{e:#}")))
 }
 
 /// Parses the trust anchors for the endhost API and the SNAP control plane, and checks that they
@@ -239,11 +236,15 @@ fn control_plane_anchors(pem: &[u8]) -> Result<Vec<reqwest::Certificate>, Error>
 /// connection pool. After a network change, that pool can hold a connection on the network that
 /// is gone, and a request on that connection gets no answer until the request timeout.
 fn control_plane_client(anchors: Vec<reqwest::Certificate>) -> reqwest::Result<reqwest::Client> {
+    control_plane_client_builder(anchors).build()
+}
+
+/// The settings of an HTTP client that trusts only `anchors`.
+fn control_plane_client_builder(anchors: Vec<reqwest::Certificate>) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         // The same timeout that `CrpcClient::new` sets.
         .timeout(Duration::from_secs(30))
         .tls_certs_only(anchors)
-        .build()
 }
 
 /// A [`SnapConfig`] whose values are known to be usable, so that the customizer cannot fail.
@@ -580,30 +581,39 @@ mod tests {
         assert!(matches!(bad, Error::InvalidRequest { .. }));
     }
 
-    fn api_key(key: &str, aa_url: &str, device_id: &str) -> ApiKeyAuth {
-        ApiKeyAuth {
-            key: key.to_string(),
+    fn anapaya_aa(api_key: &str, aa_url: &str, device_id: &str) -> AuthTokenSource {
+        AuthTokenSource::AnapayaAa {
+            api_key: api_key.to_string(),
             aa_url: aa_url.to_string(),
             device_id: device_id.to_string(),
-            allow_insecure_http: false,
         }
     }
 
     #[test]
-    fn an_api_key_alone_builds_a_configuration() {
-        ClientConfig {
-            api_key: Some(api_key("key", "https://aa.example.org", "device")),
-            ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+    fn a_token_source_alone_builds_a_configuration() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        // The AA token source spawns its renewal task.
+        let _runtime = crate::runtime::runtime().unwrap().enter();
+        for aa_url in [
+            "https://aa.example.org",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+            "http://localhost:8080",
+        ] {
+            ClientConfig {
+                auth_token_source: Some(anapaya_aa("key", aa_url, "device")),
+                ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+            }
+            .into_client_config(None)
+            .unwrap_or_else(|e| panic!("building the configuration for {aa_url}: {e}"));
         }
-        .into_client_config(None)
-        .expect("building the configuration");
     }
 
     #[test]
-    fn an_api_key_and_a_token_together_are_rejected() {
+    fn a_token_source_and_a_token_together_are_rejected() {
         let error = ClientConfig {
             auth_token: Some("token".to_string()),
-            api_key: Some(api_key("key", "https://aa.example.org", "device")),
+            auth_token_source: Some(anapaya_aa("key", "https://aa.example.org", "device")),
             ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
         }
         .into_client_config(None)
@@ -612,35 +622,25 @@ mod tests {
     }
 
     #[test]
-    fn an_unusable_api_key_is_rejected() {
-        for auth in [
-            api_key("", "https://aa.example.org", "device"),
-            api_key("key", "https://aa.example.org", ""),
-            api_key("key", "not a url", "device"),
-            api_key("key", "ftp://aa.example.org", "device"),
-            api_key("key", "http://aa.example.org", "device"),
+    fn an_unusable_token_source_is_rejected() {
+        // Inside the runtime, so that only the source itself can be the reason.
+        let _runtime = crate::runtime::runtime().unwrap().enter();
+        for source in [
+            anapaya_aa("", "https://aa.example.org", "device"),
+            anapaya_aa("key", "https://aa.example.org", ""),
+            anapaya_aa("key", "not a url", "device"),
+            anapaya_aa("key", "ftp://aa.example.org", "device"),
+            anapaya_aa("key", "http://aa.example.org", "device"),
+            anapaya_aa("key", "http://10.0.2.2:8080", "device"),
         ] {
             let error = ClientConfig {
-                api_key: Some(auth),
+                auth_token_source: Some(source),
                 ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
             }
             .into_client_config(None)
-            .expect_err("an unusable key is not a configuration");
+            .expect_err("an unusable source is not a configuration");
             assert!(matches!(error, Error::InvalidRequest { .. }));
         }
-    }
-
-    #[test]
-    fn an_http_aa_url_builds_a_configuration_when_it_is_allowed() {
-        ClientConfig {
-            api_key: Some(ApiKeyAuth {
-                allow_insecure_http: true,
-                ..api_key("key", "http://aa.example.org", "device")
-            }),
-            ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
-        }
-        .into_client_config(None)
-        .expect("building the configuration");
     }
 
     /// A key of the wrong length must be refused at construction, where it can still be explained,

@@ -14,14 +14,13 @@
 
 //! The rules that decide which credential a client is built with.
 //!
-//! The exchange of an Anapaya AA API key needs an AA to answer, which no fixture here provides;
-//! the scion-http3 example covers that end to end.
+//! No fixture here serves an AA, so no test here exchanges an API key.
 
 use std::sync::Arc;
 
 use scion_h3_test_server::{Options, TestServer};
 use scion_http3_ffi::{
-    ApiKeyAuth, ClientConfig, DnsOverride, ScionHttp3Client, ScionHttp3Error, TrustAnchors,
+    AuthTokenSource, ClientConfig, DnsOverride, ScionHttp3Client, ScionHttp3Error, TrustAnchors,
     default_client_config,
 };
 use test_log::test;
@@ -32,12 +31,11 @@ async fn test_server() -> TestServer {
         .expect("starting the test server")
 }
 
-fn api_key(key: &str) -> ApiKeyAuth {
-    ApiKeyAuth {
-        key: key.to_string(),
+fn anapaya_aa(api_key: &str) -> AuthTokenSource {
+    AuthTokenSource::AnapayaAa {
+        api_key: api_key.to_string(),
         aa_url: "http://127.0.0.1:1".to_string(),
         device_id: "ffi-test".to_string(),
-        allow_insecure_http: true,
     }
 }
 
@@ -54,9 +52,9 @@ fn config(server: &TestServer) -> ClientConfig {
     }
 }
 
-fn client(server: &TestServer, key: &str) -> Arc<ScionHttp3Client> {
+fn client(server: &TestServer, api_key: &str) -> Arc<ScionHttp3Client> {
     ScionHttp3Client::new(ClientConfig {
-        api_key: Some(api_key(key)),
+        auth_token_source: Some(anapaya_aa(api_key)),
         ..config(server)
     })
     .expect("building a client")
@@ -76,12 +74,12 @@ async fn set_auth_token_is_refused_on_a_client_that_renews_its_own() {
 }
 
 #[test(tokio::test)]
-async fn a_key_and_a_token_together_fail_construction() {
+async fn a_token_source_and_a_token_together_fail_construction() {
     let server = test_server().await;
 
     let Err(error) = ScionHttp3Client::new(ClientConfig {
         auth_token: Some(server.auth_token()),
-        api_key: Some(api_key("a-key")),
+        auth_token_source: Some(anapaya_aa("a-key")),
         ..config(&server)
     }) else {
         panic!("two credentials are not a configuration");

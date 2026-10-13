@@ -31,7 +31,7 @@ use std::thread;
 
 use scion_h3_test_server::{Options, TestServer};
 use scion_http3_ffi::{
-    ApiKeyAuth, CancelHandle, ClientConfig, DnsOverride, HttpRequest, ScionHttp3Client,
+    AuthTokenSource, CancelHandle, ClientConfig, DnsOverride, HttpRequest, ScionHttp3Client,
     ScionHttp3Error, TrustAnchors, default_client_config,
 };
 
@@ -221,14 +221,13 @@ fn reset_and_construction_need_no_runtime() {
 }
 
 #[test]
-fn an_api_key_client_is_pollable_without_a_runtime() {
+fn a_token_source_client_is_pollable_without_a_runtime() {
     let result = on_a_foreign_thread(|| {
         let client = ScionHttp3Client::new(ClientConfig {
-            api_key: Some(ApiKeyAuth {
-                key: "key".to_string(),
+            auth_token_source: Some(AuthTokenSource::AnapayaAa {
+                api_key: "key".to_string(),
                 aa_url: UNREACHABLE_URL.to_string(),
                 device_id: "device".to_string(),
-                allow_insecure_http: true,
             }),
             ..config()
         })

@@ -160,15 +160,15 @@ final class LifecycleTests: XCTestCase {
         XCTAssertTrue(detail.contains("without an authToken"), detail)
     }
 
-    func testARenewalOnAnApiKeyClientIsRefused() throws {
+    func testARenewalOnATokenSourceClientIsRefused() throws {
         let factory = FakeBackendFactory()
-        let key = ScionHttp3Client.ApiKeyAuth(key: "k", aaUrl: "https://aa.example.org")
-        let client = try client(factory: factory, settings: settings(apiKey: key))
+        let source = AuthTokenSource.anapayaAa(apiKey: "k", aaUrl: "https://aa.example.org")
+        let client = try client(factory: factory, settings: settings(authTokenSource: source))
         let error = thrown { try client.setAuthToken("t2") } as? ScionHttp3Error
         guard case .invalidConfiguration(let detail)? = error else {
             return XCTFail("\(String(describing: error))")
         }
-        XCTAssertTrue(detail.contains("API key"), detail)
+        XCTAssertTrue(detail.contains("authTokenSource"), detail)
         XCTAssertTrue(factory.backend.tokens.isEmpty)
     }
 

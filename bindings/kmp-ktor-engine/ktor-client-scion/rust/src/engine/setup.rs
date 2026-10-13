@@ -122,7 +122,8 @@ fn client_config(config: Config, quic: QuicConfigBuilder) -> Result<ClientConfig
     }
 
     // Set up authentication.
-    let cp_client = config.control_plane_client;
+    let control_plane = config.control_plane;
+    let cp_client = control_plane.as_ref().map(|trust| trust.client.clone());
     let mut aa_discovery = None;
     match config.token_source {
         None => {}
@@ -133,7 +134,7 @@ fn client_config(config: Config, quic: QuicConfigBuilder) -> Result<ClientConfig
             device_id,
         }) => {
             // Build the AA refresher.
-            let refresher = aa::AaRefresher::new(&url, api_key, device_id, cp_client.clone())
+            let refresher = aa::AaRefresher::new(&url, api_key, device_id, control_plane.as_ref())
                 .map_err(|error| CoreError::invalid(format!("bad AA config: {error:#}")))?;
             aa_discovery = Some(refresher.discovery());
             out = out.with_auth_token_source(

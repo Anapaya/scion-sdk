@@ -119,6 +119,7 @@ dependencies = [
  "reqwest-connect-rpc",
  "serde",
  "thiserror 2.0.20",
+ "tokio",
  "tracing",
  "url",
 ]
@@ -4047,7 +4048,6 @@ dependencies = [
 name = "scion-http3"
 version = "0.8.3"
 dependencies = [
- "anapaya-aa-client",
  "async-trait",
  "bytes",
  "futures",

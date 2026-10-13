@@ -40,6 +40,8 @@ use scion_http3::{
 };
 use tokio::sync::watch;
 
+use super::config::ControlPlaneTrust;
+
 /// What the last AA answer said about discovery. `None` until the first answer.
 type DiscoveryState = Option<Result<Option<Url>, AaFailure>>;
 
@@ -57,22 +59,22 @@ pub(crate) struct AaRefresher {
 }
 
 impl AaRefresher {
-    /// `http` carries the trust anchors for the AA and the discovery service.
-    /// If `None`, both use the reqwest default.
+    /// `trust` carries the anchors for the AA and the discovery service. If
+    /// `None`, both use the reqwest default.
     pub(crate) fn new(
         aa_url: &Url,
         api_key: String,
         device_id: String,
-        http: Option<reqwest::Client>,
+        trust: Option<&ControlPlaneTrust>,
     ) -> anyhow::Result<Self> {
-        let client = match http.clone() {
-            Some(http) => CrpcAaAuthClient::new_with_client(aa_url, http)?,
+        let client = match trust {
+            Some(trust) => CrpcAaAuthClient::new_with_client_builder(aa_url, trust.builder())?,
             None => CrpcAaAuthClient::new(aa_url)?,
         };
         Ok(AaRefresher {
             refresher: ApiKeyTokenRefresher::new(client, api_key, device_id),
             discovery: watch::Sender::new(None),
-            http,
+            http: trust.map(|trust| trust.client.clone()),
         })
     }
 
@@ -182,5 +184,42 @@ pub(crate) fn attach_http_client(
     match http {
         Some(http) => discovery.with_http_client(http),
         None => discovery,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AaRefresher;
+    use crate::engine::config::ControlPlaneTrust;
+
+    fn refresher(aa_url: &str, trust: Option<&ControlPlaneTrust>) -> anyhow::Result<AaRefresher> {
+        AaRefresher::new(
+            &aa_url.parse().unwrap(),
+            "key".into(),
+            "device".into(),
+            trust,
+        )
+    }
+
+    #[test]
+    fn the_aa_client_takes_the_control_plane_anchors() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        let pem = rcgen::CertificateParams::new(Vec::new())
+            .unwrap()
+            .self_signed(&rcgen::KeyPair::generate().unwrap())
+            .unwrap()
+            .pem();
+        let trust = ControlPlaneTrust::new(pem.as_bytes()).unwrap();
+
+        let refresher = refresher("https://aa.example.com", Some(&trust)).unwrap();
+
+        assert!(refresher.http.is_some());
+    }
+
+    #[test]
+    fn an_http_aa_url_is_refused_unless_it_is_loopback() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        assert!(refresher("http://aa.example.com", None).is_err());
+        assert!(refresher("http://127.0.0.1:8080", None).is_ok());
     }
 }

@@ -138,10 +138,13 @@ dependencies = [
  "anapaya-aa-protobuf",
  "anyhow",
  "async-trait",
+ "axum",
+ "axum-connect-rpc",
  "jsonwebtoken",
  "mockall",
  "reqwest",
  "reqwest-connect-rpc",
+ "scion-sdk-utils",
  "serde",
  "thiserror 2.0.20",
  "tokio",
@@ -5032,6 +5035,7 @@ dependencies = [
 name = "scion-http3-ffi"
 version = "0.0.0"
 dependencies = [
+ "anapaya-aa-client",
  "futures",
  "ntest",
  "rcgen",

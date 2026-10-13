@@ -19,7 +19,6 @@ import com.anapaya.scion.http3.internal.AndroidClock
 import com.anapaya.scion.http3.internal.AndroidDebugGuard
 import com.anapaya.scion.http3.internal.AndroidLog
 import com.anapaya.scion.http3.internal.AndroidSystemTrustStore
-import com.anapaya.scion.http3.internal.ApiKeyAuth
 import com.anapaya.scion.http3.internal.CachingTrustStore
 import com.anapaya.scion.http3.internal.ClientSettings
 import com.anapaya.scion.http3.internal.ConnectivityNetworkMonitor
@@ -33,7 +32,6 @@ import com.anapaya.scion.http3.internal.SystemTrustStore
 import com.anapaya.scion.http3.internal.UniffiHttp3BackendFactory
 import com.anapaya.scion.http3.internal.toFfi
 import com.anapaya.scion.http3.internal.toPublic
-import com.anapaya.scion.http3.internal.warnIfInsecureAaHttp
 import com.anapaya.scion.http3.internal.warnIfVerificationDisabled
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -195,12 +193,13 @@ public class ScionHttp3Client internal constructor(
      *
      * @throws IllegalStateException if the client was built without `authToken`. There is then
      *   nothing reading a token, so there is nothing to replace: build a client with one instead.
-     *   Likewise if it was built with an API key.
+     *   Likewise if it was built with an `authTokenSource`.
      */
     public fun setAuthToken(token: String) {
         require(token.isNotEmpty()) { "an auth token cannot be empty" }
-        check(settings.apiKey == null) {
-            "this client was built with an API key, setting a specific token is not allowed"
+        check(settings.authTokenSource == null) {
+            "this client was built with an authTokenSource and renews its own token, so there is " +
+                "no token to replace"
         }
         checkNotNull(settings.authToken) {
             "this client was built without an authToken, so there is no token to replace. " +
@@ -364,7 +363,7 @@ public class ScionHttp3Client internal constructor(
      * Collects what a client needs, and builds it.
      *
      * Two settings cover the common case: where the endhost API is, and the credential for it, an
-     * [Builder.authToken] or an [Builder.apiKey]. Everything
+     * [Builder.authToken] or an [Builder.authTokenSource]. Everything
      * else has a default that comes from the SCION stack itself rather than from this library, so an
      * unset setting is not a value restated here that could drift from the real one.
      *
@@ -379,7 +378,7 @@ public class ScionHttp3Client internal constructor(
 
         private var endhostApi: String? = null
         private var authToken: String? = null
-        private var apiKey: ApiKeyAuth? = null
+        private var authTokenSource: AuthTokenSource? = null
         private var preferredUnderlay: PreferredUnderlay? = null
         private var snap: SnapConfig? = null
         private var udp: UdpConfig? = null
@@ -407,7 +406,7 @@ public class ScionHttp3Client internal constructor(
         /**
          * The token for the endhost API and the SNAP control plane.
          *
-         * A client takes this or [apiKey], not both.
+         * A client takes this or [authTokenSource], not both.
          */
         public fun authToken(token: String): Builder {
             authToken = token
@@ -415,24 +414,12 @@ public class ScionHttp3Client internal constructor(
         }
 
         /**
-         * An Anapaya AA API key the client exchanges for a token itself, at the AA at [aaUrl], and
-         * renews for as long as it runs.
+         * The source the client takes its tokens from.
          *
-         * A client takes this or [authToken], not both. The exchange happens on the first request.
-         * A refused key fails that request with [ScionHttp3Exception.Connectivity], and so does an
-         * AA out of reach; `isRetryable` tells the two apart.
-         *
-         * [aaUrl] has to be `https`, so that the key does not cross the network in cleartext. Pass
-         * [allowInsecureHttp] to permit an `http` AA for local testing. A client built with it logs
-         * an error, and logs a second one when the application is not debuggable.
+         * A client takes this or [authToken], not both.
          */
-        @JvmOverloads
-        public fun apiKey(
-            key: String,
-            aaUrl: String,
-            allowInsecureHttp: Boolean = false,
-        ): Builder {
-            apiKey = ApiKeyAuth(key, aaUrl, allowInsecureHttp)
+        public fun authTokenSource(source: AuthTokenSource): Builder {
+            authTokenSource = source
             return this
         }
 
@@ -584,7 +571,7 @@ public class ScionHttp3Client internal constructor(
                     endhostApiUrl = endhostApi.orEmpty(),
                     trust = trust,
                     authToken = authToken,
-                    apiKey = apiKey,
+                    authTokenSource = authTokenSource,
                     preferredUnderlay = preferredUnderlay,
                     snap = snap,
                     udp = udp,
@@ -597,7 +584,6 @@ public class ScionHttp3Client internal constructor(
                     dnsOverrides = dnsOverrides.toMap(),
                 )
             warnIfVerificationDisabled(trust, AndroidDebugGuard(context), AndroidLog)
-            warnIfInsecureAaHttp(apiKey, AndroidDebugGuard(context), AndroidLog)
             return ScionHttp3Client(
                 settings = settings,
                 backends = UniffiHttp3BackendFactory(sharedTrustStore),

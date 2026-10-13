@@ -15,9 +15,9 @@
 //! # Foreign-language bindings for the SCION HTTP/3 client
 //!
 //! A UniFFI wrapper over [`scion_http3`], built as a shared library and consumed from Kotlin and
-//! Swift through generated bindings. It translates and nothing else: types in, types out, one error
-//! mapping, and ownership of the async runtime. Every decision about what a request does lives in
-//! `scion-http3`, where all platforms share it, and everything platform-specific lives in the
+//! Swift through generated bindings. It translates: types in, types out, one error mapping, the AA
+//! token source, and ownership of the async runtime. Every decision about what a request does lives
+//! in `scion-http3`, where all platforms share it, and everything platform-specific lives in the
 //! hand-written library above these bindings.
 //!
 //! ## The runtime is owned here, deliberately
@@ -125,7 +125,7 @@ pub use client::ScionHttp3Client;
 pub use error::{ScionHttp3Error, TimeoutPhase};
 pub use tunnel::Tunnel;
 pub use types::{
-    ApiKeyAuth, ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse,
+    AuthTokenSource, ClientConfig, DiscoveryConfig, DnsOverride, Header, HttpRequest, HttpResponse,
     SnapConfig, TrustAnchors, UdpConfig, Underlay,
 };
 

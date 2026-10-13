@@ -60,15 +60,14 @@ final class ConfigMappingTests: XCTestCase {
         XCTAssertEqual(try settings().applyTo(base), expected)
     }
 
-    func testAnApiKeyCrossesWithItsAaAndDeviceId() throws {
+    func testAnAnapayaAaTokenSourceCrossesWithItsAaAndDeviceId() throws {
         var configuration = configuration()
-        configuration.apiKey = .init(key: "k", aaUrl: "https://aa.example.org")
+        configuration.authTokenSource = .anapayaAa(apiKey: "k", aaUrl: "https://aa.example.org")
         let config = try ClientSettings(configuration).applyTo(base)
         XCTAssertEqual(
-            config.apiKey,
-            FfiApiKeyAuth(
-                key: "k", aaUrl: "https://aa.example.org", deviceId: apiKeyDeviceId,
-                allowInsecureHttp: false))
+            config.authTokenSource,
+            FfiAuthTokenSource.anapayaAa(
+                apiKey: "k", aaUrl: "https://aa.example.org", deviceId: anapayaAaDeviceId))
         XCTAssertNil(config.authToken)
     }
 

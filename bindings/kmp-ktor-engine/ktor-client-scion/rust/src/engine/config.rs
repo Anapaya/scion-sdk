@@ -56,9 +56,9 @@ pub(crate) struct Config {
     pub(crate) token_source: Option<TokenSource>,
     pub(crate) preferred_underlay: Option<PreferredUnderlay>,
     pub(crate) origin_trust: Trust,
-    /// The client for the AA, the discovery service, and the control plane.
+    /// The anchors for the AA, the discovery service, and the control plane.
     /// If `None`, they use the reqwest default.
-    pub(crate) control_plane_client: Option<reqwest::Client>,
+    pub(crate) control_plane: Option<ControlPlaneTrust>,
     pub(crate) dns_overrides: Vec<(String, Vec<ScionIpAddr>)>,
     pub(crate) connect_timeout: Duration,
     pub(crate) request_timeout: Duration,
@@ -93,6 +93,42 @@ pub(crate) enum Trust {
     None,
 }
 
+/// The caller anchors for the AA, the discovery service, and the control
+/// plane.
+pub(crate) struct ControlPlaneTrust {
+    anchors: Vec<reqwest::Certificate>,
+    /// The client that the discovery service and the control plane share.
+    pub(crate) client: reqwest::Client,
+}
+
+impl ControlPlaneTrust {
+    /// Builds the shared client, so that a bad bundle fails now, not at the
+    /// first request.
+    pub(crate) fn new(pem: &[u8]) -> Result<Self, CoreError> {
+        let trust = reqwest::Certificate::from_pem_bundle(pem).and_then(|anchors| {
+            let client = ControlPlaneTrust::builder_with(anchors.clone()).build()?;
+            Ok(ControlPlaneTrust { anchors, client })
+        });
+        trust.map_err(|error| {
+            CoreError::invalid(format!(
+                "bad control-plane anchors: {}",
+                describe_error(&error)
+            ))
+        })
+    }
+
+    /// A new client builder with the anchors and the control-plane timeout.
+    pub(crate) fn builder(&self) -> reqwest::ClientBuilder {
+        ControlPlaneTrust::builder_with(self.anchors.clone())
+    }
+
+    fn builder_with(anchors: Vec<reqwest::Certificate>) -> reqwest::ClientBuilder {
+        reqwest::Client::builder()
+            .timeout(CONTROL_PLANE_TIMEOUT)
+            .tls_certs_only(anchors)
+    }
+}
+
 impl Config {
     pub(crate) fn new(config: CoreConfig) -> Result<Self, CoreError> {
         let endhost_api = config
@@ -114,10 +150,9 @@ impl Config {
             (false, None) => Trust::Platform,
         };
 
-        // Built here to report a bad bundle now, not at the first request.
-        let control_plane_client = config
+        let control_plane = config
             .control_plane_ca_certificates_pem
-            .map(|pem| Config::control_plane_client(&pem))
+            .map(|pem| ControlPlaneTrust::new(&pem))
             .transpose()?;
 
         let dns_overrides = config
@@ -144,7 +179,7 @@ impl Config {
             token_source,
             preferred_underlay,
             origin_trust,
-            control_plane_client,
+            control_plane,
             dns_overrides,
             connect_timeout: Config::fallback_duration(
                 "connect_timeout_ms",
@@ -182,21 +217,6 @@ impl Config {
     fn url(name: &str, url: &str) -> Result<Url, CoreError> {
         url.parse()
             .map_err(|error| CoreError::invalid(format!("bad {name} URL: {error}")))
-    }
-
-    fn control_plane_client(pem: &[u8]) -> Result<reqwest::Client, CoreError> {
-        let client = reqwest::Certificate::from_pem_bundle(pem).and_then(|anchors| {
-            reqwest::Client::builder()
-                .timeout(CONTROL_PLANE_TIMEOUT)
-                .tls_certs_only(anchors)
-                .build()
-        });
-        client.map_err(|error| {
-            CoreError::invalid(format!(
-                "bad control-plane anchors: {}",
-                describe_error(&error)
-            ))
-        })
     }
 
     fn dns_override(

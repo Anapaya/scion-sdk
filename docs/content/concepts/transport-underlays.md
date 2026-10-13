@@ -92,18 +92,16 @@ Locally, the examples use a fixed development token that PocketSCION accepts
 ```
 
 In production you obtain real, short-lived tokens from an **AA** (Authentication and Authorization)
-service by presenting an API key, wrapped in a refreshing token source so the SDK fetches a new
-token before the current one expires. The HTTP/3 client does that for you: give it the key with
-[`Config::with_api_key`](https://docs.rs/scion-http3/latest/scion_http3/struct.Config.html#method.with_api_key):
+service by presenting an API key. The `anapaya-aa-client` crate supplies
+[`AnapayaAaTokenSource`](https://docs.rs/anapaya-aa-client/latest/anapaya_aa_client/struct.AnapayaAaTokenSource.html),
+a token source that exchanges an API key and fetches a new token before the current one expires. The
+HTTP/3 client takes it through
+[`Config::with_auth_token_source`](https://docs.rs/scion-http3/latest/scion_http3/struct.Config.html#method.with_auth_token_source):
 
 ```rust reference="@sdk/crates/libs/scion-http3/examples/http3_get_post.rs#api-key" title="examples/http3_get_post.rs"
 ```
 
-For a stack built directly, the same exchange is
-[`ApiKeyTokenRefresher`](https://docs.rs/anapaya-aa-client/latest/anapaya_aa_client/struct.ApiKeyTokenRefresher.html)
-wrapped in a
-[`RefreshTokenSource`](https://docs.rs/reqwest-connect-rpc/latest/reqwest_connect_rpc/token_source/refresh/struct.RefreshTokenSource.html),
-handed to `with_auth_token_source`.
+A stack built directly takes the same source through `with_auth_token_source`.
 
 Obtaining API keys and choosing a subscription is an operational step covered in the
 going-to-production material.

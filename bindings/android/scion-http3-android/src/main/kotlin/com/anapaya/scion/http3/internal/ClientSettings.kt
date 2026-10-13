@@ -14,6 +14,7 @@
 
 package com.anapaya.scion.http3.internal
 
+import com.anapaya.scion.http3.AuthTokenSource
 import com.anapaya.scion.http3.PreferredUnderlay
 import com.anapaya.scion.http3.ScionAddress
 import com.anapaya.scion.http3.SnapConfig
@@ -37,7 +38,7 @@ internal class ClientSettings(
     val endhostApiUrl: String,
     val trust: TrustAnchors,
     val authToken: String? = null,
-    val apiKey: ApiKeyAuth? = null,
+    val authTokenSource: AuthTokenSource? = null,
     val preferredUnderlay: PreferredUnderlay? = null,
     val snap: SnapConfig? = null,
     val udp: UdpConfig? = null,
@@ -52,15 +53,12 @@ internal class ClientSettings(
     init {
         validateEndhostApiUrl(endhostApiUrl)
         authToken?.let { require(it.isNotEmpty()) { "an auth token cannot be empty" } }
-        apiKey?.let {
+        authTokenSource?.let { source ->
             require(authToken == null) {
-                "a client is built with an authToken or an apiKey, not both"
+                "a client is built with an authToken or an authTokenSource, not both"
             }
-            require(it.key.isNotEmpty()) { "an Anapaya AA API key cannot be empty" }
-            validateUrl("apiKey.aaUrl", it.aaUrl)
-            require(it.allowInsecureHttp || URI(it.aaUrl).scheme.lowercase() == "https") {
-                "apiKey.aaUrl \"${it.aaUrl}\" is not https, so the API key would cross the " +
-                    "network in cleartext. Pass allowInsecureHttp = true to permit it."
+            when (source) {
+                is AuthTokenSource.AnapayaAa -> validateAnapayaAa(source)
             }
         }
         requirePositive("connectTimeout", connectTimeoutMillis)
@@ -104,6 +102,27 @@ internal class ClientSettings(
             millis?.let { require(it > 0) { "$name has to be positive, got $it ms" } }
         }
 
+        fun validateAnapayaAa(source: AuthTokenSource.AnapayaAa) {
+            require(source.apiKey.isNotEmpty()) { "an Anapaya AA API key cannot be empty" }
+            validateUrl("authTokenSource.aaUrl", source.aaUrl)
+            val aaUrl = URI(source.aaUrl)
+            require(aaUrl.scheme.lowercase() == "https" || isLoopbackHost(aaUrl.host)) {
+                "authTokenSource.aaUrl \"${source.aaUrl}\" has to be https, or http to a " +
+                    "loopback host"
+            }
+        }
+
+        fun isLoopbackHost(host: String): Boolean {
+            val name = host.removePrefix("[").removeSuffix("]").lowercase()
+            if (name == "localhost" || name == "::1" || name == "0:0:0:0:0:0:0:1") {
+                return true
+            }
+            val octets = name.split('.')
+            return octets.size == 4 &&
+                octets[0] == "127" &&
+                octets.all { octet -> octet.toIntOrNull()?.let { it in 0..255 } ?: false }
+        }
+
         fun validateEndhostApiUrl(url: String) {
             require(url.isNotEmpty()) {
                 "endhostApi is required: it is the address the client discovers SCION " +
@@ -136,25 +155,6 @@ internal class ClientSettings(
 }
 
 /**
- * An Anapaya AA API key and where to exchange it for a token.
- *
- * The device id the AA records is not a setting: the SDK sends [DEVICE_ID] until it derives one
- * from the device itself.
- *
- * [allowInsecureHttp] permits an `http` [aaUrl], which sends the key in cleartext. The URL has to
- * be `https` without it.
- */
-internal class ApiKeyAuth(
-    val key: String,
-    val aaUrl: String,
-    val allowInsecureHttp: Boolean = false,
-) {
-    internal companion object {
-        const val DEVICE_ID: String = "no-device-id"
-    }
-}
-
-/**
  * Says, loudly, that certificate verification is off.
  *
  * Logged rather than refused, deliberately: a test against a throwaway server is a real need, and
@@ -176,31 +176,6 @@ internal fun warnIfVerificationDisabled(
             "Worse: this application is not debuggable, so this is a release build. " +
                 "TrustAnchors.insecureNoVerify() must not ship. Use TrustAnchors.pinned() with " +
                 "the deployment's own certificate authority instead.",
-        )
-    }
-}
-
-/**
- * Says, loudly, that the client accepts a plain-HTTP Anapaya AA.
- *
- * Logged rather than refused, as [warnIfVerificationDisabled] is, and for the same reasons: a local
- * AA over plain HTTP is a real need, and the debuggable flag cannot tell an internal beta from a
- * shipped app.
- */
-internal fun warnIfInsecureAaHttp(
-    apiKey: ApiKeyAuth?,
-    debug: DebugGuard,
-    log: LibraryLog,
-) {
-    if (apiKey?.allowInsecureHttp != true) return
-    log.error(
-        "This ScionHttp3Client accepts a plain-HTTP Anapaya AA, which sends the API key in " +
-            "cleartext. Anyone on the path can read it. This is for local testing only.",
-    )
-    if (!debug.isDebuggable()) {
-        log.error(
-            "Worse: this application is not debuggable, so this is a release build. " +
-                "allowInsecureHttp must not ship. Point apiKey at an https AA instead.",
         )
     }
 }

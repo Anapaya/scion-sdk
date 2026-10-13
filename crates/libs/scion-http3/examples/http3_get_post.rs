@@ -14,8 +14,7 @@
 
 //! URL-driven HTTP/3 over SCION: GET and POST with [`scion_http3::Client`].
 //!
-//! The client authenticates with an Anapaya AA API key. It exchanges the key
-//! for a SNAP token on the first request and renews the token itself.
+//! The client authenticates with an Anapaya AA API key.
 //!
 //! The example starts a local two-AS PocketSCION network, serves an axum app
 //! over HTTP/3 in one AS, and talks to it from the other. It also serves a
@@ -37,6 +36,7 @@
 
 use std::{io::Write, net::SocketAddr, sync::Arc, time::Duration};
 
+use anapaya_aa_client::AnapayaAaTokenSource;
 use anapaya_aa_protobuf::proto::anapaya::aa::v1::{
     AuthenticateByKeyRequest, AuthenticateByKeyResponse,
 };
@@ -55,7 +55,7 @@ use pocketscion::util::{
     topologies::{IA132, IA212, PsSetup, UnderlayType, minimal::minimal_topology},
 };
 use scion_h3_axum::ScionH3AxumServer;
-use scion_http3::{ApiKeyAuth, Client, Config, Request, scion_quic::quic::config::QuicConfig};
+use scion_http3::{Client, Config, Request, scion_quic::quic::config::QuicConfig};
 use scion_stack::{ScionStackBuilder, resolver::txt::ScionTxtDnsResolver};
 use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use tempfile::NamedTempFile;
@@ -98,15 +98,9 @@ async fn run() -> anyhow::Result<()> {
     let endhost_api = ps.endhost_api(IA132).context("no endhost API")?;
 
     // ANCHOR: api-key
-    // The endhost API is where the client discovers SCION connectivity. The
-    // client exchanges the API key for a SNAP token at the AA on the first
-    // request, and renews the token for as long as it lives.
-    //
-    // The stand-in AA below serves plain HTTP, which the client permits only
-    // when it is told to. A deployment reaches the Anapaya AA over HTTPS and
-    // drops that call.
+    // The client discovers SCION connectivity through the endhost API.
     let config = Config::new(endhost_api)
-        .with_api_key(ApiKeyAuth::new(API_KEY, aa_url, DEVICE_ID).allow_insecure_http());
+        .with_auth_token_source(AnapayaAaTokenSource::new(API_KEY, &aa_url, DEVICE_ID)?);
     // ANCHOR_END: api-key
 
     let config = config
@@ -122,8 +116,8 @@ async fn run() -> anyhow::Result<()> {
         ));
     let client = Client::new(config);
 
-    // GET by URL. This request performs the key exchange; a refused key fails
-    // it as `Error::StackBuild`, and `is_retryable` is then false.
+    // GET by URL. A refused key fails it as `Error::StackBuild`, and
+    // `is_retryable` is then false.
     let url = format!("https://{SERVER_NAME}:{}/hello", server_addr.port());
     let response = client.get(&url).await?;
     let (body, _trailers) = response.text(Some(MAX_BODY_SIZE)).await?;

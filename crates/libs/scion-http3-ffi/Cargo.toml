@@ -25,6 +25,7 @@ name = "scion_http3_ffi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+anapaya-aa-client = { workspace = true }
 scion-http3 = { workspace = true }
 scion-sdk-utils = { workspace = true }
 thiserror = { workspace = true }

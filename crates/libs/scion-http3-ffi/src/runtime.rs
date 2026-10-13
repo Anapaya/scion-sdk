@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The Tokio runtime this crate owns, and the only three ways to reach it.
+//! The Tokio runtime this crate owns, and how to reach it.
 //!
 //! UniFFI polls exported futures from foreign threads, which have no ambient Tokio runtime, so
 //! nothing here may assume one: [`spawn`], [`spawn_detached`] and [`spawn_forget`] hand the work to

@@ -32,8 +32,12 @@
     <array>
         <string>arm64</string>
     </array>
-    <!-- Without a launch screen, iOS runs the app in a legacy screen size. -->
     <key>UILaunchScreen</key>
     <dict/>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
 </dict>
 </plist>

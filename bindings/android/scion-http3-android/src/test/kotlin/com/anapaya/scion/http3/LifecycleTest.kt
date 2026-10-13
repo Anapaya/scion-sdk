@@ -2,7 +2,6 @@
 
 package com.anapaya.scion.http3
 
-import com.anapaya.scion.http3.internal.ApiKeyAuth
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -384,14 +383,14 @@ class LifecycleTest {
     }
 
     @Test
-    fun `renewing a token on a client built with an API key is refused`() {
+    fun `renewing a token on a client built with a token source is refused`() {
         val factory = FakeBackendFactory()
-        val key = ApiKeyAuth("a-key", "https://aa.example.org")
-        val client = client(factory = factory, settings = settings(apiKey = key))
+        val source = AuthTokenSource.anapayaAa("a-key", "https://aa.example.org")
+        val client = client(factory = factory, settings = settings(authTokenSource = source))
 
         val failure = assertThrows<IllegalStateException> { client.setAuthToken("second") }
 
-        assertTrue(failure.message!!.contains("API key"))
+        assertTrue(failure.message!!.contains("authTokenSource"))
         assertEquals(emptyList<String>(), factory.backend.tokens)
     }
 

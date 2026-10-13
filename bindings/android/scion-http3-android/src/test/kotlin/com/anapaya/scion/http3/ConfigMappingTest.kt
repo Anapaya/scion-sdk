@@ -2,7 +2,6 @@
 
 package com.anapaya.scion.http3
 
-import com.anapaya.scion.http3.internal.ApiKeyAuth
 import com.anapaya.scion.http3.internal.ClientSettings
 import com.anapaya.scion.http3.internal.applyTo
 import com.anapaya.scion.http3.uniffi.ClientConfig
@@ -13,7 +12,7 @@ import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
-import com.anapaya.scion.http3.uniffi.ApiKeyAuth as FfiApiKeyAuth
+import com.anapaya.scion.http3.uniffi.AuthTokenSource as FfiAuthTokenSource
 import com.anapaya.scion.http3.uniffi.SnapConfig as FfiSnapConfig
 import com.anapaya.scion.http3.uniffi.TrustAnchors as FfiTrustAnchors
 import com.anapaya.scion.http3.uniffi.UdpConfig as FfiUdpConfig
@@ -36,7 +35,7 @@ class ConfigMappingTest {
         ClientConfig(
             endhostApiUrl = "https://placeholder.invalid",
             authToken = null,
-            apiKey = null,
+            authTokenSource = null,
             preferredUnderlay = null,
             discovery = DiscoveryConfig(),
             snap = FfiSnapConfig(),
@@ -119,17 +118,16 @@ class ConfigMappingTest {
             ClientSettings(
                 endhostApiUrl = "https://endhost-api.example.org",
                 trust = TrustAnchors.systemDefault(),
-                apiKey = ApiKeyAuth("a-key", "https://aa.example.org"),
+                authTokenSource = AuthTokenSource.anapayaAa("a-key", "https://aa.example.org"),
             ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
 
         assertEquals(
-            FfiApiKeyAuth(
-                key = "a-key",
+            FfiAuthTokenSource.AnapayaAa(
+                apiKey = "a-key",
                 aaUrl = "https://aa.example.org",
-                deviceId = ApiKeyAuth.DEVICE_ID,
-                allowInsecureHttp = false,
+                deviceId = AuthTokenSource.AnapayaAa.DEVICE_ID,
             ),
-            config.apiKey,
+            config.authTokenSource,
         )
         assertNull(config.authToken)
     }
