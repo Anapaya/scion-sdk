@@ -71,6 +71,11 @@ impl RunningServerHarness {
         self.harness.send_to_tunnel(packet, target_addr);
     }
 
+    /// Makes the server send each tunnel data packet twice.
+    pub fn set_duplicate_data_packets(&self, duplicate: bool) {
+        self.harness.set_duplicate_data_packets(duplicate);
+    }
+
     /// Receive packet from tunnel
     pub async fn recv_from_tunnel(
         &self,

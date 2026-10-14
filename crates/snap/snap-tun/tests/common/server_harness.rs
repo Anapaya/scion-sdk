@@ -12,7 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::VecDeque, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use ana_gotatun::{
     noise::TunnResult,
@@ -41,6 +49,8 @@ pub struct ServerHarness<T: SnapTunAuthorization> {
     tunnel_to_server_tx: mpsc::UnboundedSender<(BytesMut, SocketAddr)>,
     /// Cancellation token for shutdown
     cancel_token: CancellationToken,
+    /// If set, the server sends each tunnel data packet twice.
+    duplicate_data_packets: AtomicBool,
 }
 
 impl<T: SnapTunAuthorization + 'static> ServerHarness<T> {
@@ -63,6 +73,7 @@ impl<T: SnapTunAuthorization + 'static> ServerHarness<T> {
             tunnel_to_server_rx: Arc::new(tokio::sync::Mutex::new(to_server_rx)),
             tunnel_to_server_tx: to_server_tx,
             cancel_token: CancellationToken::new(),
+            duplicate_data_packets: AtomicBool::new(false),
         })
     }
 
@@ -127,6 +138,7 @@ impl<T: SnapTunAuthorization + 'static> ServerHarness<T> {
                     let mut server = self.server.lock().await;
 
                     if let Some(wg_packet) = server.handle_outgoing_packet(packet, target_addr) {
+                        let is_data = matches!(wg_packet, WgKind::Data(_));
                         let bytes = match wg_packet {
                             WgKind::HandshakeInit(p) => p.into_bytes(),
                             WgKind::HandshakeResp(p) => p.into_bytes(),
@@ -134,6 +146,9 @@ impl<T: SnapTunAuthorization + 'static> ServerHarness<T> {
                             WgKind::Data(p) => p.into_bytes(),
                         };
                         let _ = self.network_socket.send_to(bytes.as_bytes(), target_addr).await;
+                        if is_data && self.duplicate_data_packets.load(Ordering::Relaxed) {
+                            let _ = self.network_socket.send_to(bytes.as_bytes(), target_addr).await;
+                        }
                     }
                 }
 
@@ -154,6 +169,13 @@ impl<T: SnapTunAuthorization + 'static> ServerHarness<T> {
                 }
             }
         }
+    }
+
+    /// Makes the server send each tunnel data packet twice, like a network that duplicates
+    /// packets.
+    pub fn set_duplicate_data_packets(&self, duplicate: bool) {
+        self.duplicate_data_packets
+            .store(duplicate, Ordering::Relaxed);
     }
 
     /// Get cancellation token for shutdown

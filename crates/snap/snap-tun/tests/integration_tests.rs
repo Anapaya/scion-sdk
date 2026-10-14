@@ -334,3 +334,48 @@ async fn test_client_reregisters_with_new_token() {
     drop(tunnel);
     env.server_harness.stop().await;
 }
+
+#[test_log::test(tokio::test)]
+async fn test_duplicate_packets_do_not_drop_other_packets() {
+    const PACKET_COUNT: usize = 200;
+    let env = setup_test_environment().await;
+
+    let tunnel = env
+        .endpoint
+        .connect_tunnel(
+            env.server_static_identity,
+            env.server_harness.socket_addr(),
+            url::Url::parse("http://localhost:8080").unwrap(),
+            env.mock_control_plane.clone(),
+            env.client_socket.clone(),
+            PACKET_COUNT,
+            PacketBufPool::<PACKET_BUF_POOL_SIZE>::new(1024),
+        )
+        .await
+        .expect("Failed to connect tunnel");
+
+    env.server_harness.set_duplicate_data_packets(true);
+    let mut sent = Vec::with_capacity(PACKET_COUNT);
+    for i in 0..PACKET_COUNT {
+        let payload = format!("packet {i}");
+        let mut packet = build_test_scion_packet(payload.as_bytes());
+        let bytes = packet.buf_mut().clone();
+        sent.push(bytes.clone());
+        env.server_harness
+            .send_to_tunnel(bytes, tunnel.local_addr());
+    }
+
+    // The client must deliver each packet exactly once.
+    for (i, expected) in sent.iter().enumerate() {
+        let received = tokio::time::timeout(Duration::from_secs(2), tunnel.recv())
+            .await
+            .unwrap_or_else(|_| panic!("Timeout waiting for packet {i}"))
+            .expect("Failed to receive packet");
+        assert_eq!(received, expected, "Packet {i} should arrive in order");
+    }
+    let extra = tokio::time::timeout(Duration::from_millis(200), tunnel.recv()).await;
+    assert!(extra.is_err(), "No duplicate packet should be delivered");
+
+    drop(tunnel);
+    env.server_harness.stop().await;
+}

@@ -347,7 +347,13 @@ impl SnapTunnelDriver {
                 match result {
                     TunnResult::Done => {}
                     TunnResult::Err(e) => {
-                        return Err(SnapTunnelDriverError::WireguardError(e));
+                        let error = SnapTunnelDriverError::WireguardError(e);
+                        // Drop only this datagram. An error stops the rest of the batch.
+                        if error.is_transient() {
+                            tracing::debug!(err=?error, "dropping invalid WireGuard packet");
+                            return Ok(());
+                        }
+                        return Err(error);
                     }
                     TunnResult::WriteToNetwork(p) => {
                         if let Err(error) = self
