@@ -1,0 +1,28 @@
+[package]
+name = "wgx-proto"
+publish = true
+version = "0.8.5"
+edition = { workspace = true }
+authors = ["Anapaya & contributors"]
+license = "Apache-2.0"
+description = "Sans-io implementation of the WireGuard protocol for the SNAP underlay"
+repository = "https://github.com/anapaya/scion-sdk"
+keywords = ["SCION", "networking", "wireguard"]
+categories = ["network-programming"]
+
+[dependencies]
+blake2 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+constant_time_eq = { workspace = true }
+hmac = { workspace = true }
+ring = { workspace = true }
+thiserror = { workspace = true }
+x25519-dalek = { workspace = true }
+zerocopy = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }
+gotatun = { workspace = true }
+
+[lints]
+workspace = true
