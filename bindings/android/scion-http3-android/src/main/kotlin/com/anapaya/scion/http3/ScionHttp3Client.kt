@@ -156,7 +156,7 @@ public class ScionHttp3Client internal constructor(
      *   carries the status the gateway answered with.
      */
     public suspend fun openTunnel(authority: ScionHttp3Authority): ScionHttp3Tunnel =
-        withBackend { ScionHttp3Tunnel(it.openTunnel(authority.toString())) }
+        withBackend { ScionHttp3Tunnel(it.openTunnel(via = null, target = authority.toString())) }
 
     /**
      * Opens a `CONNECT` tunnel to [host] and [port].
@@ -168,6 +168,27 @@ public class ScionHttp3Client internal constructor(
         host: String,
         port: Int,
     ): ScionHttp3Tunnel = openTunnel(ScionHttp3Authority(host, port))
+
+    /**
+     * Opens a `CONNECT` tunnel to [target] through the tunnel server at [via].
+     *
+     * The client dials [via] and sends [target] as the `CONNECT` authority. A tunnel server that
+     * listens on one port for all its targets needs this, for example a tunnel server on port 443
+     * that forwards to port 5222. Otherwise it works like the [openTunnel] that takes one
+     * authority.
+     *
+     * The client does not verify the certificate of [via]. Authenticate [target] inside the
+     * tunnel, for example with TLS.
+     *
+     * @throws ScionHttp3Exception if no tunnel was opened.
+     */
+    public suspend fun openTunnel(
+        via: ScionHttp3Authority,
+        target: ScionHttp3Authority,
+    ): ScionHttp3Tunnel =
+        withBackend {
+            ScionHttp3Tunnel(it.openTunnel(via = via.toString(), target = target.toString()))
+        }
 
     /**
      * Marks connectivity stale, so the next request rebuilds it.

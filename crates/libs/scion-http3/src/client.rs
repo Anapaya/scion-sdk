@@ -169,24 +169,26 @@ impl Client {
         self.connect_via(authority, authority).await
     }
 
-    /// Opens a `CONNECT` tunnel to `target` through the proxy at `proxy`.
+    /// Opens a `CONNECT` tunnel to `target` through the tunnel server at `via`.
     ///
-    /// The client dials `proxy` and sends `target` as the `CONNECT`
-    /// authority. Otherwise it works like [`connect`](Self::connect).
-    pub async fn connect_via(
+    /// The client dials `via` and sends `target` as the `CONNECT` authority.
+    /// Otherwise it works like [`connect`](Self::connect).
+    pub async fn connect_via(&self, via: &Authority, target: &Authority) -> Result<Tunnel, Error> {
+        self.connect_tunnel(Origin::from_authority(via), target)
+            .await
+    }
+
+    /// Like [`connect_via`](Self::connect_via), but does not verify the
+    /// certificate of `via`.
+    ///
+    /// The caller must authenticate `target` inside the tunnel, for example
+    /// with TLS.
+    pub async fn connect_via_unverified(
         &self,
-        proxy: &Authority,
+        via: &Authority,
         target: &Authority,
     ) -> Result<Tunnel, Error> {
-        let timeout = self.config.request_timeout;
-        tokio::time::timeout_at(deadline_after(timeout), self.connect_tunnel(proxy, target))
-            .await
-            .map_err(|_| {
-                Error::Timeout {
-                    phase: TimeoutPhase::Request,
-                    timeout,
-                }
-            })?
+        self.connect_tunnel(Origin::unverified(via), target).await
     }
 
     /// Pre-establishes connectivity to `url`'s origin: builds the stack if
@@ -243,8 +245,19 @@ impl Client {
 
     /// The tunnel path up to the response head. The request timeout is
     /// applied around this by [`connect`](Self::connect).
-    async fn connect_tunnel(&self, proxy: &Authority, target: &Authority) -> Result<Tunnel, Error> {
-        let origin = Origin::from_authority(proxy);
+    async fn connect_tunnel(&self, origin: Origin, target: &Authority) -> Result<Tunnel, Error> {
+        let timeout = self.config.request_timeout;
+        tokio::time::timeout_at(deadline_after(timeout), self.open_tunnel(origin, target))
+            .await
+            .map_err(|_| {
+                Error::Timeout {
+                    phase: TimeoutPhase::Request,
+                    timeout,
+                }
+            })?
+    }
+
+    async fn open_tunnel(&self, origin: Origin, target: &Authority) -> Result<Tunnel, Error> {
         let (host, port) = (origin.host.clone(), origin.port);
         let ((response, writer), connection) = self
             .with_connection(origin, |connection| {
@@ -480,7 +493,7 @@ mod tests {
 
     #[test(tokio::test)]
     #[ntest::timeout(10_000)]
-    async fn connect_via_sends_the_target_to_the_proxy() {
+    async fn connect_via_sends_the_target_to_the_tunnel_server() {
         let (client, _, service) = tunnel_client(test_config());
         let target = Authority::new("backend.test", 8443).unwrap();
 
@@ -488,10 +501,51 @@ mod tests {
             .connect_via(&authority("localhost"), &target)
             .await
             .unwrap();
-        echo_round_trip(&mut tunnel, b"through the proxy").await;
+        echo_round_trip(&mut tunnel, b"through the tunnel server").await;
         assert_eq!(
             service.requests(),
             vec![(http::Method::CONNECT, Some(target.to_string()))]
+        );
+    }
+
+    /// [`test_config`] with the peer check on, so the self-signed harness
+    /// certificate fails it.
+    fn verifying_config() -> Config {
+        let mut config = test_config();
+        config.quic.verify_peer = true;
+        config
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn connect_via_unverified_skips_the_peer_check() {
+        let (client, _, service) = tunnel_client(verifying_config());
+        let target = Authority::new("backend.test", 5222).unwrap();
+
+        let mut tunnel = client
+            .connect_via_unverified(&authority("localhost"), &target)
+            .await
+            .unwrap();
+        echo_round_trip(&mut tunnel, b"through the tunnel server").await;
+        assert_eq!(
+            service.requests(),
+            vec![(http::Method::CONNECT, Some(target.to_string()))]
+        );
+    }
+
+    #[test(tokio::test)]
+    #[ntest::timeout(10_000)]
+    async fn an_unverified_connection_does_not_carry_a_verified_tunnel() {
+        let (client, ..) = tunnel_client(verifying_config());
+        let _unverified = client
+            .connect_via_unverified(&authority("localhost"), &authority("localhost"))
+            .await
+            .unwrap();
+
+        let err = client.connect(&authority("localhost")).await.err().unwrap();
+        assert!(
+            matches!(err, Error::Connect { .. } | Error::Tls { .. }),
+            "{err:?}"
         );
     }
 

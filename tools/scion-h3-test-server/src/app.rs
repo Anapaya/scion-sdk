@@ -31,7 +31,7 @@
 //! | `GET /invalid-utf8` | Two bytes that are not UTF-8 | Bodies that must not be decoded on the way through. |
 //! | `GET /endless-body?tag=` | A chunk every [`ENDLESS_BODY_INTERVAL`], forever | Cancellation. See [`Counters::endless_chunks`] and [`Counters::endless_released`]. |
 //! | `GET /reset-stream` | A status, one chunk, then a stream reset | The failure in between a clean response and an unreachable peer, which cannot be provoked from the client side. |
-//! | `CONNECT localhost:<port>` | Every byte written into the tunnel, echoed back | Byte streams through a `CONNECT` tunnel. See [`Counters::tunnels_started`], [`Counters::tunnel_bytes`] and [`Counters::tunnels_reset`]. |
+//! | `CONNECT localhost:<port>` | Every byte written into the tunnel, echoed back | Byte streams through a `CONNECT` tunnel. See [`Counters::tunnels_started`], [`Counters::tunnel_bytes`], [`Counters::tunnels_reset`] and [`Counters::last_tunnel_authority`]. |
 //! | `CONNECT status-<code>.invalid:<port>` | That status and no tunnel | A refused tunnel. The certificate names `localhost` only, so the client must not verify the server for this authority. |
 //! | `CONNECT reset.invalid:<port>` | The first chunk echoed, then a stream reset | A tunnel the peer resets while it is in use. |
 //! | `CONNECT http.invalid:<port>` | An HTTP/1.1 server inside the tunnel, with these same routes | A protocol client that speaks through a `java.net.Socket` or another byte stream. |
@@ -141,6 +141,8 @@ pub struct Counters {
     /// Accepted tunnels that ended with a transport error or before the end of the stream rather
     /// than with a clean end of stream.
     tunnels_reset: AtomicU64,
+    /// The authority of the last `CONNECT` request, so a test can check the port it sent.
+    last_tunnel_authority: Mutex<Option<String>>,
 }
 
 impl Counters {
@@ -241,6 +243,14 @@ impl Counters {
         self.tunnels_reset.load(Ordering::Relaxed)
     }
 
+    /// The authority of the last `CONNECT` request.
+    pub fn last_tunnel_authority(&self) -> Option<String> {
+        self.last_tunnel_authority
+            .lock()
+            .expect("lock poisoned")
+            .clone()
+    }
+
     /// What `GET /stats` reports.
     pub fn snapshot(&self) -> serde_json::Value {
         let requests = self.requests.lock().expect("lock poisoned").clone();
@@ -256,6 +266,7 @@ impl Counters {
             "tunnels_started": self.tunnels_started.load(Ordering::Relaxed),
             "tunnel_bytes": self.tunnel_bytes.load(Ordering::Relaxed),
             "tunnels_reset": self.tunnels_reset.load(Ordering::Relaxed),
+            "last_tunnel_authority": self.last_tunnel_authority(),
         })
     }
 }
@@ -486,6 +497,10 @@ async fn tunnel(
     if request.method() != Method::CONNECT {
         return StatusCode::NOT_FOUND.into_response();
     }
+    *counters
+        .last_tunnel_authority
+        .lock()
+        .expect("lock poisoned") = request.uri().authority().map(|a| a.to_string());
     let host = request.uri().host().unwrap_or_default().to_owned();
     if host == HTTP1_HOST || host == TLS_HOST {
         counters.tunnels_started.fetch_add(1, Ordering::Relaxed);

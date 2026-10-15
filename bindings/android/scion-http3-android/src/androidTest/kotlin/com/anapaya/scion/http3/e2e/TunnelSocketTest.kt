@@ -16,6 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.IOException
 import java.io.InputStream
+import java.net.InetSocketAddress
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicReference
@@ -57,6 +58,21 @@ class TunnelSocketTest {
         }
         assertEquals(started + 1, Fixture.tunnelsStarted())
         assertEquals("a clean end of stream is not a reset", reset, Fixture.tunnelsReset())
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MILLIS)
+    fun withAViaPortTheSocketDialsTheViaPortWithoutVerifyingItAndSendsTheEndpoint() {
+        val endpoint = InetSocketAddress.createUnresolved(Fixture.UNNAMED_HOST, Fixture.CLOSED_PORT)
+        Fixture.clientFor(Fixture.UNNAMED_HOST).use { client ->
+            ScionTunnelSocket(client, viaPort = Fixture.port).use { socket ->
+                socket.connect(endpoint)
+                val payload = "through the tunnel server".toByteArray()
+                socket.getOutputStream().write(payload)
+                assertArrayEquals(payload, socket.getInputStream().readExactly(payload.size))
+            }
+        }
+        val target = "${Fixture.UNNAMED_HOST}:${Fixture.CLOSED_PORT}"
+        assertEquals(target, Fixture.lastTunnelAuthority())
     }
 
     @Test(timeout = TEST_TIMEOUT_MILLIS)

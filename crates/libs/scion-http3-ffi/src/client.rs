@@ -130,7 +130,7 @@ impl ScionHttp3Client {
     /// Dropping this call on the foreign side ends the connect: a stream that is already open is
     /// reset, and no tunnel is returned.
     pub async fn connect(&self, authority: String) -> Result<Arc<Tunnel>, Error> {
-        runtime::spawn(self.runtime, self.connect_work(authority)?).await
+        runtime::spawn(self.runtime, self.connect_work(None, &authority)?).await
     }
 
     /// Opens a tunnel as [`connect`](Self::connect) does and stops when `cancel` fires.
@@ -139,7 +139,28 @@ impl ScionHttp3Client {
         authority: String,
         cancel: Arc<CancelHandle>,
     ) -> Result<Arc<Tunnel>, Error> {
-        let work = self.connect_work(authority)?;
+        let work = self.connect_work(None, &authority)?;
+        let token = cancel.token();
+        runtime::spawn(self.runtime, cancellable(token, work)).await
+    }
+
+    /// Opens a `CONNECT` tunnel to `target` through the tunnel server at `via` (both `host:port`).
+    ///
+    /// The client dials `via`, does not verify its certificate, and sends `target` as the
+    /// `CONNECT` authority. The caller must authenticate `target` inside the tunnel, for example
+    /// with TLS. Otherwise it works like [`connect`](Self::connect).
+    pub async fn connect_via(&self, via: String, target: String) -> Result<Arc<Tunnel>, Error> {
+        runtime::spawn(self.runtime, self.connect_work(Some(&via), &target)?).await
+    }
+
+    /// Opens a tunnel as [`connect_via`](Self::connect_via) does and stops when `cancel` fires.
+    pub async fn connect_via_cancellable(
+        &self,
+        via: String,
+        target: String,
+        cancel: Arc<CancelHandle>,
+    ) -> Result<Arc<Tunnel>, Error> {
+        let work = self.connect_work(Some(&via), &target)?;
         let token = cancel.token();
         runtime::spawn(self.runtime, cancellable(token, work)).await
     }
@@ -231,24 +252,33 @@ impl ScionHttp3Client {
         })
     }
 
-    /// Parses `authority` and returns the future that opens the tunnel, in the shape of
+    /// Parses `via` and `target` and returns the future that opens the tunnel, in the shape of
     /// [`work`](Self::work).
     fn connect_work(
         &self,
-        authority: String,
+        via: Option<&str>,
+        target: &str,
     ) -> Result<impl Future<Output = Result<Arc<Tunnel>, Error>> + Send + 'static, Error> {
-        let authority: Authority = authority
-            .parse()
-            .map_err(|e| Error::invalid_request(format!("invalid authority `{authority}`: {e}")))?;
+        let via = via.map(parse_authority).transpose()?;
+        let target = parse_authority(target)?;
         let client = self.inner.clone();
         let runtime = self.runtime;
         let client_closed = self.closed.clone();
 
         Ok(async move {
-            let tunnel = client.connect(&authority).await?;
+            let tunnel = match via {
+                None => client.connect(&target).await?,
+                Some(via) => client.connect_via_unverified(&via, &target).await?,
+            };
             Ok(Tunnel::new(tunnel, runtime, client_closed))
         })
     }
+}
+
+fn parse_authority(authority: &str) -> Result<Authority, Error> {
+    authority
+        .parse()
+        .map_err(|e| Error::invalid_request(format!("invalid authority `{authority}`: {e}")))
 }
 
 impl Drop for ScionHttp3Client {

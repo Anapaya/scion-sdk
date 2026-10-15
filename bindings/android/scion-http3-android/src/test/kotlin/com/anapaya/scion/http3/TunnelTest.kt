@@ -29,8 +29,24 @@ class TunnelTest {
 
             val tunnel = client.openTunnel("chat.example.org", 5222)
 
-            assertEquals(listOf("chat.example.org:5222"), factory.backend.authorities)
+            assertEquals(listOf("chat.example.org:5222"), factory.backend.targets)
+            assertEquals(listOf(null), factory.backend.vias)
             assertFalse(tunnel.isClosed)
+        }
+
+    @Test
+    fun `a tunnel through a tunnel server hands the via and the target to the stack`(): Unit =
+        runBlocking {
+            val factory = FakeBackendFactory()
+            val client = client(factory = factory)
+
+            client.openTunnel(
+                ScionHttp3Authority("gateway.example.org", 443),
+                ScionHttp3Authority("chat.example.org", 5222),
+            )
+
+            assertEquals(listOf("chat.example.org:5222"), factory.backend.targets)
+            assertEquals(listOf("gateway.example.org:443"), factory.backend.vias)
         }
 
     @Test
@@ -41,7 +57,7 @@ class TunnelTest {
 
             assertThrows<IllegalArgumentException> { client.openTunnel("chat.example.org", 0) }
             assertThrows<IllegalArgumentException> { client.openTunnel("", 5222) }
-            assertTrue(factory.backend.authorities.isEmpty())
+            assertTrue(factory.backend.targets.isEmpty())
         }
 
     @Test
@@ -67,7 +83,7 @@ class TunnelTest {
             client.close()
 
             assertThrows<ScionHttp3Exception.Closed> { client.openTunnel("chat.example.org", 5222) }
-            assertTrue(factory.backend.authorities.isEmpty())
+            assertTrue(factory.backend.targets.isEmpty())
         }
 
     @Test

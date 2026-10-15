@@ -32,7 +32,10 @@ import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
 internal class FakeBackend : Http3Backend {
     val requests: MutableList<HttpRequest> = Collections.synchronizedList(mutableListOf())
     val warmedUp: MutableList<String> = Collections.synchronizedList(mutableListOf())
-    val authorities: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    val targets: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    /** The via of each tunnel, in the order of [targets]. `null` if the tunnel had none. */
+    val vias: MutableList<String?> = Collections.synchronizedList(mutableListOf())
     val tokens: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
     val resets = AtomicInteger(0)
@@ -93,8 +96,12 @@ internal class FakeBackend : Http3Backend {
         failure?.let { throw it }
     }
 
-    override suspend fun openTunnel(authority: String): TunnelBackend {
-        authorities += authority
+    override suspend fun openTunnel(
+        via: String?,
+        target: String,
+    ): TunnelBackend {
+        targets += target
+        vias += via
         gate?.await()
         requireLive()
         failure?.let { throw it }

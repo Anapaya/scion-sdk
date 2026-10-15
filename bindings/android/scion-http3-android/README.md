@@ -221,6 +221,20 @@ tunnel.shutdownWrite()             // the peer sees the end of the stream; reads
 tunnel.close()
 ```
 
+This call dials the tunnel server on port 5222. A tunnel server that listens on one port for all its
+targets, such as a PathGuard WebGateway on port 443, needs `openTunnel(via, target)`. The client does
+not verify the tunnel server at `via`, so authenticate the target inside the tunnel, for example with
+TLS:
+
+```kotlin
+val tunnel = client.openTunnel(
+    via = ScionHttp3Authority("chat.example.org", 443),
+    target = ScionHttp3Authority("chat.example.org", 5222),
+)
+```
+
+`ScionTunnelSocket` and `ScionTunnelSocketFactory` take a `viaPort` for the same case.
+
 Cancelling a pending read or write closes the tunnel. The dropped call may have lost the bytes it
 just read or written part of its data, so the stream is not usable after it.
 

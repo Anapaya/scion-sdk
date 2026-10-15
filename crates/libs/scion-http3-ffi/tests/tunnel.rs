@@ -437,6 +437,119 @@ async fn a_refused_tunnel_reports_its_status() {
 
 #[test(tokio::test)]
 #[ntest::timeout(120_000)]
+async fn connect_via_dials_the_proxy_port() {
+    let server = test_server().await;
+    let client = client(&server);
+    let started = server.counters().tunnels_started();
+
+    // Nothing listens on port 1, so the tunnel opens only if the client dials the via port.
+    let tunnel = client
+        .connect_via(authority(&server, "localhost"), "localhost:1".to_string())
+        .await
+        .expect("opening a tunnel through the tunnel server");
+    echo_round_trip(&tunnel, b"through the tunnel server").await;
+
+    assert_eq!(server.counters().tunnels_started(), started + 1);
+    assert_eq!(
+        server.counters().last_tunnel_authority().as_deref(),
+        Some("localhost:1")
+    );
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(120_000)]
+async fn connect_via_sends_the_target_to_the_tunnel_server() {
+    let server = test_server().await;
+    let client = client(&server);
+
+    let result = client
+        .connect_via(
+            authority(&server, "localhost"),
+            "status-404.invalid:5222".to_string(),
+        )
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(ScionHttp3Error::TunnelRefused { status: 404, .. })
+        ),
+        "a tunnel to a refused target ended as {result:?}"
+    );
+    assert_eq!(
+        server.counters().last_tunnel_authority().as_deref(),
+        Some("status-404.invalid:5222")
+    );
+}
+
+/// A host that resolves to the server and that the certificate does not name.
+const UNNAMED_HOST: &str = "gateway.invalid";
+
+/// A client that trusts the server's certificate and resolves `localhost` and [`UNNAMED_HOST`].
+fn client_with_unnamed_host(server: &TestServer) -> Arc<ScionHttp3Client> {
+    client_with_trust(
+        server,
+        TrustAnchors::Pem {
+            pem: server.ca_pem().as_bytes().to_vec(),
+        },
+        &["localhost", UNNAMED_HOST],
+    )
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(120_000)]
+async fn connect_via_does_not_verify_the_tunnel_server() {
+    let server = test_server().await;
+    let client = client_with_unnamed_host(&server);
+
+    let tunnel = client
+        .connect_via(authority(&server, UNNAMED_HOST), "localhost:1".to_string())
+        .await
+        .expect("opening a tunnel through a tunnel server the certificate does not name");
+    echo_round_trip(&tunnel, b"through the tunnel server").await;
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(120_000)]
+async fn a_request_does_not_use_the_unverified_tunnel_server_connection() {
+    let server = test_server().await;
+    let client = client_with_unnamed_host(&server);
+    let _tunnel = client
+        .connect_via(authority(&server, UNNAMED_HOST), "localhost:1".to_string())
+        .await
+        .expect("opening a tunnel through a tunnel server the certificate does not name");
+
+    let result = client
+        .execute(HttpRequest {
+            url: format!("https://{}/hello", authority(&server, UNNAMED_HOST)),
+            ..hello(&server)
+        })
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(ScionHttp3Error::Connect { .. } | ScionHttp3Error::Tls { .. })
+        ),
+        "a request to a host the certificate does not name ended as {result:?}"
+    );
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(120_000)]
+async fn connect_via_rejects_an_invalid_target() {
+    let server = test_server().await;
+    let client = client(&server);
+
+    let result = client
+        .connect_via(authority(&server, "localhost"), "no port".to_string())
+        .await;
+    assert!(
+        matches!(result, Err(ScionHttp3Error::InvalidRequest { .. })),
+        "an invalid target ended as {result:?}"
+    );
+}
+
+#[test(tokio::test)]
+#[ntest::timeout(120_000)]
 async fn a_peer_reset_reports_tunnel_reset() {
     let server = test_server().await;
     let client = insecure_client(&server);

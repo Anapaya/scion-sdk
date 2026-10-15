@@ -34,8 +34,16 @@ internal class UniffiHttp3Backend(
         client.warmUp(url)
     }
 
-    override suspend fun openTunnel(authority: String): TunnelBackend =
-        UniffiTunnelBackend(client.connect(authority))
+    override suspend fun openTunnel(
+        via: String?,
+        target: String,
+    ): TunnelBackend =
+        UniffiTunnelBackend(
+            when (via) {
+                null -> client.connect(target)
+                else -> client.connectVia(via = via, target = target)
+            },
+        )
 
     override fun reset() {
         client.reset()

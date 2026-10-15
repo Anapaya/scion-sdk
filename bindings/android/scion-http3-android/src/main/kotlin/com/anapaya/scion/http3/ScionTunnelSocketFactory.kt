@@ -47,11 +47,26 @@ import javax.net.SocketFactory
  * device itself. Set both on one client and let the `Dns` refuse the hosts that are not meant
  * for SCION rather than hand them the placeholder. A client derived with `newBuilder()` inherits
  * both.
+ *
+ * With a [viaPort], every socket dials its host on [viaPort] and sends its endpoint as the
+ * `CONNECT` authority, see [ScionTunnelSocket].
+ *
+ * @throws IllegalArgumentException if [viaPort] is not a port from 1 to 65535.
  */
 public class ScionTunnelSocketFactory(
     private val client: ScionHttp3Client,
+    private val viaPort: Int?,
 ) : SocketFactory() {
-    override fun createSocket(): Socket = ScionTunnelSocket(client)
+    /** A factory whose sockets dial the port of their endpoint. */
+    public constructor(client: ScionHttp3Client) : this(client, null)
+
+    init {
+        require(viaPort == null || viaPort in 1..65535) {
+            "$viaPort is not a port from 1 to 65535"
+        }
+    }
+
+    override fun createSocket(): Socket = ScionTunnelSocket(client, viaPort)
 
     override fun createSocket(
         host: String,
@@ -78,7 +93,7 @@ public class ScionTunnelSocketFactory(
     ): Socket = createSocket(address, port)
 
     private fun connected(endpoint: InetSocketAddress): Socket {
-        val socket = ScionTunnelSocket(client)
+        val socket = ScionTunnelSocket(client, viaPort)
         try {
             socket.connect(endpoint)
         } catch (e: IOException) {

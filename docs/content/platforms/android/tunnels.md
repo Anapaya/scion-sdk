@@ -16,13 +16,45 @@ same sample app.
 
 `openTunnel` asks the client for a byte stream to a `host:port`. The client resolves `host` to a
 SCION address, as it does for the host of a request URL, and opens an HTTP/3 connection to the
-server at that address. That server is the gateway. It accepts a `CONNECT` request for the
+server at that address. That server is the tunnel server. It accepts a `CONNECT` request for the
 `host:port`, opens a TCP connection to that port, and passes bytes between the two connections. The
 tunnel is your end of that byte stream. It travels on the HTTP/3 connection your requests use, and
 it has no framing of its own.
 
-The gateway decides which hosts and ports it forwards a tunnel to. The client verifies the gateway's
-certificate against `host`, as it does for a request URL.
+The tunnel server decides which hosts and ports it forwards a tunnel to. The client verifies the
+certificate of the tunnel server against `host`, as it does for a request URL.
+
+### A tunnel server on one port
+
+The client dials the tunnel server on the port of the tunnel. A tunnel to `chat.example.org:5222`
+thus opens an HTTP/3 connection to port 5222. Some tunnel servers listen on one port for all their
+targets, for example on port 443. For such a tunnel server, use `openTunnel(via, target)`. The
+client dials `via` and sends `target` in the `CONNECT` request:
+
+```kotlin
+val tunnel = client.openTunnel(
+    via = ScionHttp3Authority("chat.example.org", 443),
+    target = ScionHttp3Authority("chat.example.org", 5222),
+)
+```
+
+The tunnel server has the SCION address of the target host, so `via` usually has the same host as
+`target`. The client resolves the host of `via`. Thus a `dnsOverride` applies to the host of `via`.
+The client does not resolve `target`. The tunnel server gets it unchanged.
+
+The client does not verify the certificate of the tunnel server at `via`. A tunnel server on one
+port, such as a PathGuard WebGateway, cannot show a certificate for each of its targets.
+Authenticate `target` inside the tunnel. With OkHttp, use an `https` URL. With your own protocol
+client, run TLS over the tunnel. The client keeps the connection to `via` apart from its verified
+connections, so a request never uses it.
+
+`ScionTunnelSocket` and `ScionTunnelSocketFactory` take a `viaPort`. With it, each socket opens its
+tunnel with `openTunnel(via, target)`. `via` is the host of the endpoint on `viaPort`, and the
+endpoint of the socket is `target`:
+
+```kotlin
+val sockets = ScionTunnelSocketFactory(client, viaPort = 443)
+```
 
 ### How a SCION host is named
 
@@ -33,9 +65,9 @@ exists on SCION alone has none, so a platform lookup fails for it. Nothing on th
 platform lookup: every API below takes the host name and hands it to the client, which resolves it.
 A `dnsOverride` replaces the TSAR lookup for one host, for a tunnel as for a request.
 
-The test network's server is its own gateway with two behaviours. A tunnel to `localhost` is an
-echo: every byte written into it comes back. A tunnel to `http.invalid` reaches an HTTP/1.1 server
-inside the tunnel.
+The test network's server is also a tunnel server, with two behaviours. A tunnel to `localhost` is
+an echo: every byte written into it comes back. A tunnel to `http.invalid` reaches an HTTP/1.1
+server inside the tunnel.
 
 ## The byte stream
 
@@ -66,7 +98,9 @@ library that takes a socket and knows nothing about SCION:
 ```kotlin reference="@sdk/bindings/android/hello-scion/src/main/kotlin/com/anapaya/scion/http3/hello/Tunnels.kt#socket" title="Tunnels.kt"
 ```
 
-`connect` opens the tunnel to the endpoint's host name and port. Use
+`connect` opens the tunnel to the endpoint's host name and port. A socket with a `viaPort`
+dials the tunnel server on that port, as
+[A tunnel server on one port](#a-tunnel-server-on-one-port) explains. Use
 `InetSocketAddress.createUnresolved`, so that no platform lookup happens. That lookup fails for a
 host that exists on SCION alone, as [How a SCION host is named](#how-a-scion-host-is-named)
 explains. A resolved address works too: the socket takes the host name from it and ignores the IP
@@ -116,7 +150,7 @@ OkHttp client, its socket factory, and the client under them are built once and 
 
 The tunnel arms of `ScionHttp3Exception` add to the arms the guide lists:
 
-- `TunnelRefused` is a `CONNECT` the gateway answered with a status other than 2xx. It carries
+- `TunnelRefused` is a `CONNECT` the tunnel server answered with a status other than 2xx. It carries
   the status. `isRetryable` is true for a 5xx status and false for a 4xx status.
 - `TunnelReset` is a tunnel the peer reset while it was open.
 - `TunnelDisconnected` is a tunnel that ended because the connection under it went away, for

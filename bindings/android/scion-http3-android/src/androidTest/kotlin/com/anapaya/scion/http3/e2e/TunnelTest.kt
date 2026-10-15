@@ -3,6 +3,7 @@
 package com.anapaya.scion.http3.e2e
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.anapaya.scion.http3.ScionHttp3Authority
 import com.anapaya.scion.http3.ScionHttp3Exception
 import com.anapaya.scion.http3.ScionHttp3Tunnel
 import kotlinx.coroutines.cancelAndJoin
@@ -37,6 +38,21 @@ class TunnelTest {
                 }
             }
             assertEquals(bytesBefore + 100_000, Fixture.tunnelBytes())
+        }
+
+    @Test(timeout = TEST_TIMEOUT_MILLIS)
+    fun aTunnelThroughATunnelServerDialsViaWithoutVerifyingItAndSendsTheTarget() =
+        runBlocking {
+            val target = ScionHttp3Authority(Fixture.host, Fixture.CLOSED_PORT)
+            Fixture.clientFor(Fixture.UNNAMED_HOST).use { client ->
+                val via = Fixture.tunnelAuthority(Fixture.UNNAMED_HOST)
+                client.openTunnel(via, target).use { tunnel ->
+                    val payload = "through the tunnel server".toByteArray()
+                    tunnel.write(payload)
+                    assertArrayEquals(payload, tunnel.readExactly(payload.size))
+                }
+            }
+            assertEquals(target.toString(), Fixture.lastTunnelAuthority())
         }
 
     @Test(timeout = TEST_TIMEOUT_MILLIS)

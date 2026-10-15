@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.UnknownHostException
 import com.anapaya.scion.http3.uniffi.ScionHttp3Exception as FfiException
 
@@ -26,7 +27,7 @@ class TunnelSocketFactoryTest {
 
         assertInstanceOf(ScionTunnelSocket::class.java, socket)
         assertFalse(socket.isConnected)
-        assertTrue(factory.backend.authorities.isEmpty())
+        assertTrue(factory.backend.targets.isEmpty())
     }
 
     @Test
@@ -48,8 +49,30 @@ class TunnelSocketFactoryTest {
                 "chat.example.org:443",
                 "chat.example.org:444",
             ),
-            factory.backend.authorities,
+            factory.backend.targets,
         )
+    }
+
+    @Test
+    fun `with a via port every form dials the via port`() {
+        val sockets = ScionTunnelSocketFactory(client(factory = factory), viaPort = 443)
+
+        sockets.createSocket().connect(InetSocketAddress.createUnresolved("chat.example.org", 5222))
+        sockets.createSocket("chat.example.org", 5222)
+        sockets.createSocket(address, 8765)
+
+        assertEquals(
+            listOf("chat.example.org:5222", "chat.example.org:5222", "chat.example.org:8765"),
+            factory.backend.targets,
+        )
+        assertEquals(List(3) { "chat.example.org:443" }, factory.backend.vias)
+    }
+
+    @Test
+    fun `a via port out of range is refused`() {
+        assertThrows<IllegalArgumentException> {
+            ScionTunnelSocketFactory(client(factory = factory), viaPort = 0)
+        }
     }
 
     @Test
@@ -79,7 +102,7 @@ class TunnelSocketFactoryTest {
             }
 
         assertEquals("world", body)
-        assertEquals(listOf("chat.example.org:8080"), factory.backend.authorities)
+        assertEquals(listOf("chat.example.org:8080"), factory.backend.targets)
         val sent = tunnel.written.fold(ByteArray(0)) { all, part -> all + part }.decodeToString()
         assertTrue(sent.startsWith("GET /hello HTTP/1.1\r\n"), sent)
         assertTrue(sent.contains("Host: chat.example.org:8080\r\n"), sent)

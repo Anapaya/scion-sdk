@@ -42,8 +42,21 @@ import java.util.concurrent.atomic.AtomicReference
 public class ScionTunnelSocket private constructor(
     impl: TunnelSocketImpl,
 ) : Socket(impl) {
-    /** An unconnected socket over [client]. [connect] opens the tunnel. */
-    public constructor(client: ScionHttp3Client) : this(TunnelSocketImpl(client))
+    /**
+     * An unconnected socket over [client]. [connect] opens the tunnel.
+     *
+     * With a [viaPort], [connect] calls `openTunnel(via, target)` with the host of the endpoint on
+     * [viaPort] as `via` and the endpoint as `target`. Use it for a tunnel server that listens
+     * on one port for all its targets. The client does not verify the tunnel server, so
+     * authenticate the endpoint inside the tunnel, for example with TLS.
+     *
+     * @throws IllegalArgumentException if [viaPort] is not a port from 1 to 65535.
+     */
+    @JvmOverloads
+    public constructor(
+        client: ScionHttp3Client,
+        viaPort: Int? = null,
+    ) : this(TunnelSocketImpl(client, viaPort))
 
     init {
         impl.attach(this)
@@ -53,7 +66,14 @@ public class ScionTunnelSocket private constructor(
 /** The [SocketImpl] under [ScionTunnelSocket]. */
 internal class TunnelSocketImpl(
     private val client: ScionHttp3Client,
+    private val viaPort: Int?,
 ) : SocketImpl() {
+    init {
+        require(viaPort == null || viaPort in 1..65535) {
+            "$viaPort is not a port from 1 to 65535"
+        }
+    }
+
     private lateinit var socket: Socket
 
     private val tunnel = AtomicReference<ScionHttp3Tunnel?>(null)
@@ -105,14 +125,18 @@ internal class TunnelSocketImpl(
                 ?: throw IllegalArgumentException("unsupported address type: ${address.javaClass}")
         if (closed.get()) throw SocketException("Socket closed")
         if (tunnel.get() != null) throw SocketException("already connected")
-        val authority = ScionHttp3Authority.of(endpoint)
+        val target = ScionHttp3Authority.of(endpoint)
+        val via = viaPort?.let { ScionHttp3Authority(target.host, it) }
+        val open: suspend () -> ScionHttp3Tunnel = {
+            if (via == null) client.openTunnel(target) else client.openTunnel(via, target)
+        }
         val opened =
             try {
                 runBlocking {
                     if (timeout > 0) {
-                        withTimeout(timeout.toLong()) { client.openTunnel(authority) }
+                        withTimeout(timeout.toLong()) { open() }
                     } else {
-                        client.openTunnel(authority)
+                        open()
                     }
                 }
             } catch (e: TimeoutCancellationException) {

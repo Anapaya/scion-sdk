@@ -95,10 +95,15 @@ pub(crate) struct OriginClient {
 
 impl OriginClient {
     fn new(origin: Origin, config: &Config, now: Instant, network: Arc<Network>) -> Self {
+        let mut quic = config.quic.clone();
+        if !origin.verify_peer {
+            quic.verify_peer = false;
+            quic.cert_verifier = None;
+        }
         OriginClient {
             origin,
             network,
-            quic: config.quic.clone(),
+            quic,
             attempt_delay: config.connection_attempt_delay,
             connect_timeout: config.connect_timeout,
             current: tokio::sync::Mutex::new((None, Generation::default())),
@@ -353,6 +358,7 @@ mod tests {
         Origin {
             host: host.to_string(),
             port: SERVER_PORT,
+            verify_peer: true,
         }
     }
 

@@ -24,7 +24,7 @@ use std::fmt;
 
 use crate::{authority::Authority, error::Error, request::Request};
 
-/// The pool key: host and port.
+/// The pool key: host, port, and peer check.
 ///
 /// Connection reuse is defined per origin, not per resolved address: keying
 /// by address would fragment the pool every time resolution returns a
@@ -39,6 +39,9 @@ pub(crate) struct Origin {
     /// The port. Single-sourced from the URL; resolved addresses deliberately
     /// carry no port so the two cannot disagree.
     pub(crate) port: u16,
+    /// Part of the key, so an unverified connection never carries a verified
+    /// request.
+    pub(crate) verify_peer: bool,
 }
 
 impl Origin {
@@ -55,7 +58,11 @@ impl Origin {
             })?
             .to_string();
         let port = url.port_or_known_default().unwrap_or(443);
-        Ok(Origin { host, port })
+        Ok(Origin {
+            host,
+            port,
+            verify_peer: true,
+        })
     }
 
     /// Derives a DNS-resolved origin from a `CONNECT` authority.
@@ -63,6 +70,15 @@ impl Origin {
         Origin {
             host: authority.host().to_string(),
             port: authority.port(),
+            verify_peer: true,
+        }
+    }
+
+    /// Like [`from_authority`](Self::from_authority), without the peer check.
+    pub(crate) fn unverified(authority: &Authority) -> Origin {
+        Origin {
+            verify_peer: false,
+            ..Origin::from_authority(authority)
         }
     }
 }
@@ -105,5 +121,15 @@ mod tests {
         let origin = Origin::from_authority(&authority);
         assert_eq!(origin.host, "example.org");
         assert_eq!(origin.port, 8443);
+        assert!(origin.verify_peer);
+    }
+
+    #[test]
+    fn an_unverified_origin_is_another_pool_key() {
+        let authority = Authority::new("example.org", 443).unwrap();
+        assert_ne!(
+            Origin::unverified(&authority),
+            Origin::from_authority(&authority)
+        );
     }
 }

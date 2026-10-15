@@ -35,6 +35,12 @@ object Fixture {
     /** The `CONNECT` host the server answers with HTTPS inside the tunnel. */
     const val TLS_HOST = "https.invalid"
 
+    /** A host the server's certificate does not name. */
+    const val UNNAMED_HOST = "gateway.invalid"
+
+    /** A port where nothing listens. */
+    const val CLOSED_PORT = 1
+
     /** What `GET /info` says. The fields are the test server's, named as it names them. */
     data class Info(
         val endhostApiUrl: String,
@@ -137,6 +143,10 @@ object Fixture {
 
     /** Bytes the server echoed through tunnels. */
     fun tunnelBytes(): Long = stats().get("tunnel_bytes").asLong
+
+    /** The authority of the last `CONNECT` request the server got. */
+    fun lastTunnelAuthority(): String? =
+        stats().get("last_tunnel_authority")?.takeUnless { it.isJsonNull }?.asString
 
     /** Tunnels that ended in a reset rather than a clean end of stream. */
     fun tunnelsReset(): Long = stats().get("tunnels_reset").asLong

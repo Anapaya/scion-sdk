@@ -82,7 +82,31 @@ class TunnelSocketTest {
 
         cases.forEach { (endpoint, _) -> ScionTunnelSocket(client).connect(endpoint) }
 
-        assertEquals(cases.map { it.second }, factory.backend.authorities)
+        assertEquals(cases.map { it.second }, factory.backend.targets)
+    }
+
+    @Test
+    fun `with a via port the socket dials the via port and sends the endpoint`() {
+        val socket = ScionTunnelSocket(client, viaPort = 443)
+
+        socket.connect(endpoint)
+
+        assertEquals(listOf("chat.example.org:5222"), factory.backend.targets)
+        assertEquals(listOf("chat.example.org:443"), factory.backend.vias)
+        assertEquals(5222, socket.port)
+    }
+
+    @Test
+    fun `without a via port the socket sends no via`() {
+        connected()
+
+        assertEquals(listOf(null), factory.backend.vias)
+    }
+
+    @Test
+    fun `a via port out of range is refused`() {
+        assertThrows<IllegalArgumentException> { ScionTunnelSocket(client, viaPort = 0) }
+        assertThrows<IllegalArgumentException> { ScionTunnelSocket(client, viaPort = 65536) }
     }
 
     @Test
@@ -126,7 +150,7 @@ class TunnelSocketTest {
         val socket = connected()
 
         assertThrows<SocketException> { socket.connect(endpoint) }
-        assertEquals(1, factory.backend.authorities.size)
+        assertEquals(1, factory.backend.targets.size)
     }
 
     @Test
@@ -135,7 +159,7 @@ class TunnelSocketTest {
         socket.close()
 
         assertThrows<SocketException> { socket.connect(endpoint) }
-        assertTrue(factory.backend.authorities.isEmpty())
+        assertTrue(factory.backend.targets.isEmpty())
     }
 
     @Test

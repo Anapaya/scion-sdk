@@ -82,9 +82,9 @@ impl GatewayConfig {
 
         // Build both authorities.
         let bad = |error| format!("bad gateway authority: {error}");
-        let proxy = Authority::new(host, self.port).map_err(bad)?;
+        let via = Authority::new(host, self.port).map_err(bad)?;
         let target = Authority::new(host, port).map_err(bad)?;
-        Ok((proxy, target))
+        Ok((via, target))
     }
 }
 
@@ -353,8 +353,8 @@ impl Service<Uri> for TunnelConnector {
         let authorities = self.gateway.authorities(&uri);
 
         Box::pin(async move {
-            let (proxy, target) = authorities?;
-            let tunnel = client.connect_via(&proxy, &target).await?;
+            let (via, target) = authorities?;
+            let tunnel = client.connect_via(&via, &target).await?;
             Ok(TokioIo::new(TunnelStream(tunnel)))
         })
     }

@@ -37,8 +37,8 @@ async fn tunnel(client: &scion_http3::Client) -> Result<(), Box<dyn std::error::
 }
 ```
 
-`Client::connect_via` dials a proxy and sends another authority as the
-`CONNECT` target.
+`Client::connect_via(via, target)` dials the tunnel server at `via` and sends
+`target` as the `CONNECT` authority.
 
 `Config::with_dns_override` maps a host that has no TSAR records to fixed addresses. It
 applies to URLs and to `CONNECT` authorities alike.
