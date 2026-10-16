@@ -174,6 +174,11 @@ where
         }
     }
 
+    /// Returns the number of active tunnels.
+    pub fn active_tunnel_count(&self) -> usize {
+        self.active_tunnels.active_tunnels.len()
+    }
+
     /// Handle incoming packet for a tunnel assocated with remote socket address
     /// `network_remote`.
     ///
@@ -948,8 +953,10 @@ mod tests {
         let policy = Arc::new(AllowAllPolicy);
         let mut srv = make_server(authz, policy, server_secret);
         let mut client = make_client(client_secret, server_public);
+        assert_eq!(srv.active_tunnel_count(), 0);
 
         do_handshake(&mut client, &mut srv);
+        assert_eq!(srv.active_tunnel_count(), 1);
     }
 
     /// After a successful handshake, an outgoing packet from the server to the
@@ -1175,6 +1182,7 @@ mod tests {
 
         // update_timers must not panic and will evict the tunnel.
         let _ = srv.update_timers();
+        assert_eq!(srv.active_tunnel_count(), 0);
 
         // After eviction, outgoing packets to the tunnel address must be dropped.
         let pool = test_pool();
