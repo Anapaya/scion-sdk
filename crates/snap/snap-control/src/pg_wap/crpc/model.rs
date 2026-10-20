@@ -14,16 +14,15 @@
 
 //! Models of the WAP control plane API, and the trait that serves them.
 //!
-//! There is one model per message of the `anapaya.wap.v1.WapControl` service. A model is the
-//! parsed and validated form of its message: domains are [`CustomerDomain`]s, segments are
-//! [`SignedPathSegment`]s and timestamps are [`SystemTime`]s, so a
-//! [`ControlServiceAPIHandler`] never sees an unvalidated string or an untyped number.
+//! There is one model per message of the `anapaya.wap.v1.WapControl` service.
+//!
+//! A model is the  parsed and validated form of its message.
 
 use std::{collections::BTreeMap, net::IpAddr, time::SystemTime};
 
-use sciparse::segment::SignedPathSegment;
+use sciparse::{identifier::isd_asn::IsdAsn, segment::SignedPathSegment};
 
-use crate::pg_wap::sni::CustomerDomain;
+use crate::pg_wap::sni::{CustomerDomain, NamespacedDomain};
 
 /// A request to authorize a client for a set of targets.
 ///
@@ -96,10 +95,41 @@ pub enum AuthorizeTargetsError {
     Internal(#[from] anyhow::Error),
 }
 
+/// A request to resolve the gateways of a domain.
+///
+/// The model of `anapaya.wap.v1.ResolveDomainRequest`.
+#[derive(Debug)]
+pub struct ResolveDomainRequest {
+    /// The part of the data plane SNI after the WAP ID.
+    pub domain: NamespacedDomain,
+}
+
+/// The ISD-ASes a [`ResolveDomainRequest`] resolved to.
+///
+/// The model of `anapaya.wap.v1.ResolveDomainResponse`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ResolveDomainResponse {
+    /// The ISD-ASes of the gateways, each once.
+    pub isd_ases: Vec<IsdAsn>,
+}
+
+/// The failures of [`ControlServiceAPIHandler::resolve_domain`].
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveDomainError {
+    /// The domain has no SCION gateway.
+    #[error("{0}")]
+    NotFound(String),
+    /// The DNS lookup failed. A retry can succeed. The endpoint logs it and returns a fixed
+    /// message.
+    #[error(transparent)]
+    Unavailable(anyhow::Error),
+}
+
 /// Serves the requests of the `anapaya.wap.v1.WapControl` service.
 ///
 /// Implemented by the WAP control plane and served by
 /// [`nest_crpc_api`](super::api::nest_crpc_api).
+#[async_trait::async_trait]
 pub trait ControlServiceAPIHandler: Send + Sync {
     /// Authorizes `client_ip` for the targets and segments of `request`, as of `now`.
     ///
@@ -117,4 +147,14 @@ pub trait ControlServiceAPIHandler: Send + Sync {
         request: AuthorizeTargetsRequest,
         now: SystemTime,
     ) -> Result<AuthorizeTargetsResponse, AuthorizeTargetsError>;
+
+    /// Resolves the gateways of `request`, as of `now`.
+    ///
+    /// Returns the gateways the data plane connects to for an SNI with this domain after the WAP
+    /// ID.
+    async fn resolve_domain(
+        &self,
+        request: ResolveDomainRequest,
+        now: SystemTime,
+    ) -> Result<ResolveDomainResponse, ResolveDomainError>;
 }

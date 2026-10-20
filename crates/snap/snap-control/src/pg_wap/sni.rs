@@ -14,12 +14,24 @@
 
 //! Wrapper type around the extracted SNI from the TLS handshake.
 //!
-//! Implements logic around the different `domains` we exctract from the SNI.
+//! Implements logic around the different `domains` we extract from the SNI.
 //!
-//! In the wap we differentiate between:
-//! 1. `WapSNI`: The entire SNI extracted from the TLS handshake.
-//! 2. `gateway_domain`: The domain used to resolve the WebGateway the WAP should connect to.
-//! 3. `customer_domain`: The domain of the server that the WAP is forwarding to.
+//! The full SNI format is: `<wap-id>.<wap-namespace>.<customer-domain>`
+//!
+//! Where:
+//! 1. `wap-id`: The ID of this WAP instance, pinning the DNS resolution to a specific gateway.
+//! 2. `wap-namespace`: A DNS namespace for connections through the WAP. Selected by the customer.
+//! 3. `customer-domain`: The domain of the server that the WAP is forwarding to.
+//!
+//! Naming schemes:
+//! 1. [`WapSNI`]: The entire SNI extracted from the TLS handshake.
+//!    (`<wap-id>.<wap-namespace>.<customer-domain>`)
+//! 2. [`GatewayDomain`]: The domain used to resolve the WebGateway the WAP should connect to.
+//!    (`wg-<wap-namespace>.<customer-domain>`)
+//! 3. [`CustomerDomain`]: The domain of the server that the WAP is forwarding to.
+//!    (`<customer-domain>`)
+//! 4. [`NamespacedDomain`]: The SNI without the WAP ID used for IsdAs resolution.
+//!    (`<wap-namespace>.<customer-domain>`)
 
 /// The extracted, validated SNI from the TLS handshake.
 ///
@@ -47,7 +59,10 @@ impl WapSNI {
         sni.make_ascii_lowercase();
         validate_hostname(&sni, Self::MIN_LABELS)?;
 
-        Ok(Self(sni))
+        let sni = Self(sni);
+        validate_gateway_domain(sni.wap_namespace(), sni.customer_domain().as_str())?;
+
+        Ok(sni)
     }
 
     /// Returns the Wap ID from the SNI.
@@ -84,20 +99,13 @@ impl WapSNI {
     /// The gateway domain is used for the WAP to resolve the WebGateway it should connect to.
     ///
     /// The gateway domain is a combination of:
-    /// GATEWAY_DOMAIN_SUFFIX + "-" + wap_id + "." + wap_namespace
+    /// GATEWAY_DOMAIN_SUFFIX + "-" + wap_namespace + "." + customer_domain
     ///
     /// e.g. `id.wap.domain.com` -> `wg-wap.domain.com`
     ///
-    /// The derived name is not validated again. It inherits the syntax of the SNI it is built
-    /// from, but a one character WAP ID or a namespace close to `MAX_LABEL_LEN` can push it
-    /// past the length caps that `validate_hostname` enforces.
+    /// [`WapSNI::new`] rejects names whose gateway domain is not a valid hostname.
     pub fn gateway_domain(&self) -> GatewayDomain {
-        GatewayDomain(format!(
-            "{}-{}.{}",
-            Self::GATEWAY_DOMAIN_SUFFIX,
-            self.wap_namespace(),
-            self.customer_domain()
-        ))
+        gateway_domain(self.wap_namespace(), self.customer_domain().as_str())
     }
 
     /// Returns the full SNI string.
@@ -115,6 +123,8 @@ impl std::fmt::Display for WapSNI {
 }
 
 /// The domain of the server that the WAP forwards to.
+///
+/// e.g. for `id.wap.domain.com` it is `domain.com`.
 ///
 /// This is the part of a [`WapSNI`] that follows the WAP ID and the namespace, e.g.
 /// `domain.com` for `id.wap.domain.com`. Authorization grants are held per customer domain, so
@@ -185,7 +195,78 @@ impl std::fmt::Display for CustomerDomainRef<'_> {
     }
 }
 
+/// The part of a [`WapSNI`] after the WAP ID.
+///
+/// e.g. for `id.wap.domain.com` it is `wap.domain.com`.
+///
+/// A client names this domain before it knows the WAP ID, e.g. to resolve the gateways of a
+/// target.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NamespacedDomain(String);
+
+impl NamespacedDomain {
+    /// The `<wap-namespace>.<customer-domain>` format needs at least two labels.
+    const MIN_LABELS: usize = 2;
+
+    /// Creates a namespaced domain from the given string.
+    ///
+    /// The name is lowercased and then validated, see `validate_hostname`.
+    pub fn new(mut domain: String) -> Result<Self, SniFormatError> {
+        domain.make_ascii_lowercase();
+        validate_hostname(&domain, Self::MIN_LABELS)?;
+
+        let domain = Self(domain);
+        validate_gateway_domain(domain.wap_namespace(), domain.customer_domain().as_str())?;
+
+        Ok(domain)
+    }
+
+    /// Returns the WAP namespace, e.g. `wap` for `wap.domain.com`.
+    pub fn wap_namespace(&self) -> &str {
+        self.0
+            .split('.')
+            .next()
+            .expect("a namespaced domain has at least 2 labels")
+    }
+
+    /// Returns the customer domain, e.g. `domain.com` for `wap.domain.com`.
+    pub fn customer_domain(&self) -> CustomerDomainRef<'_> {
+        CustomerDomainRef(
+            self.0
+                .split_once('.')
+                .expect("a namespaced domain has at least 2 labels")
+                .1,
+        )
+    }
+
+    /// Returns the gateway domain.
+    pub fn gateway_domain(&self) -> GatewayDomain {
+        gateway_domain(self.wap_namespace(), self.customer_domain().as_str())
+    }
+
+    /// Returns the domain as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for NamespacedDomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Builds the gateway domain `wg-<wap_namespace>.<customer_domain>`.
+fn gateway_domain(wap_namespace: &str, customer_domain: &str) -> GatewayDomain {
+    GatewayDomain(format!(
+        "{}-{wap_namespace}.{customer_domain}",
+        WapSNI::GATEWAY_DOMAIN_SUFFIX
+    ))
+}
+
 /// The domain the WAP resolves to find the WebGateway it connects to.
+///
+/// e.g. for `id.wap.domain.com` it is `wg-wap.domain.com`.
 ///
 /// This is derived from a [`WapSNI`], see [`WapSNI::gateway_domain`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -252,6 +333,32 @@ impl std::fmt::Display for GatewayDomainRef<'_> {
 const MAX_NAME_LEN: usize = 253;
 /// Maximum length of a single DNS label (RFC 1035 §2.3.4).
 const MAX_LABEL_LEN: usize = 63;
+/// Length of the `wg-` prefix that [`WapSNI::gateway_domain`] puts in front of the namespace.
+const GATEWAY_PREFIX_LEN: usize = WapSNI::GATEWAY_DOMAIN_SUFFIX.len() + 1;
+/// Maximum length of the WAP namespace label, so that `wg-<wap-namespace>` fits in one label.
+const MAX_WAP_NAMESPACE_LEN: usize = MAX_LABEL_LEN - GATEWAY_PREFIX_LEN;
+
+/// Validates that the gateway domain of `wap_namespace` and `customer_domain` stays within
+/// [`MAX_LABEL_LEN`] and [`MAX_NAME_LEN`].
+///
+/// Both parts are valid hostnames already, so only the `wg-` prefix can break the caps.
+fn validate_gateway_domain(
+    wap_namespace: &str,
+    customer_domain: &str,
+) -> Result<(), SniFormatError> {
+    if wap_namespace.len() > MAX_WAP_NAMESPACE_LEN {
+        return Err(SniFormatError::WapNamespaceTooLong(
+            wap_namespace.to_owned(),
+        ));
+    }
+
+    let len = GATEWAY_PREFIX_LEN + wap_namespace.len() + 1 + customer_domain.len();
+    if len > MAX_NAME_LEN {
+        return Err(SniFormatError::GatewayDomainTooLong);
+    }
+
+    Ok(())
+}
 
 /// Validates that `name` is a lowercase DNS hostname of at least `min_labels` labels.
 ///
@@ -309,6 +416,15 @@ pub enum SniFormatError {
     /// A segment of the SNI is longer than a DNS label may be.
     #[error("the segment {0:?} is longer than {max} characters", max = MAX_LABEL_LEN)]
     LabelTooLong(String),
+    /// The WAP namespace is too long to carry the `wg-` prefix in one DNS label.
+    #[error(
+        "the WAP namespace {0:?} is longer than {max} characters",
+        max = MAX_WAP_NAMESPACE_LEN
+    )]
+    WapNamespaceTooLong(String),
+    /// The gateway domain derived from the name is longer than a DNS name may be.
+    #[error("the gateway domain is longer than {max} characters", max = MAX_NAME_LEN)]
+    GatewayDomainTooLong,
     /// A segment of the SNI contains characters that are not valid in a hostname.
     #[error("the segment {0:?} contains characters outside of [a-z0-9-]")]
     InvalidCharacters(String),
@@ -319,7 +435,10 @@ pub enum SniFormatError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CustomerDomain, GatewayDomain, MAX_LABEL_LEN, SniFormatError, WapSNI};
+    use super::{
+        CustomerDomain, GatewayDomain, MAX_LABEL_LEN, MAX_NAME_LEN, MAX_WAP_NAMESPACE_LEN,
+        NamespacedDomain, SniFormatError, WapSNI,
+    };
 
     fn sni(s: &str) -> Result<WapSNI, SniFormatError> {
         WapSNI::new(s.to_owned())
@@ -438,5 +557,83 @@ mod tests {
         let long_name = [label.as_str(); 4].join(".");
         assert_eq!(long_name.len(), 255);
         assert_eq!(sni(&long_name).unwrap_err(), SniFormatError::NameTooLong);
+    }
+
+    #[test]
+    fn the_gateway_label_of_the_longest_namespace_fits() {
+        let namespace = "a".repeat(MAX_WAP_NAMESPACE_LEN);
+        let sni = sni(&format!("id.{namespace}.example.com")).expect("valid SNI");
+        let gateway_label = sni
+            .gateway_domain()
+            .as_str()
+            .split('.')
+            .next()
+            .unwrap()
+            .len();
+
+        assert_eq!(gateway_label, MAX_LABEL_LEN);
+    }
+
+    #[test]
+    fn rejects_namespaces_that_overflow_the_gateway_label() {
+        let namespace = "a".repeat(MAX_WAP_NAMESPACE_LEN + 1);
+        let want = SniFormatError::WapNamespaceTooLong(namespace.clone());
+
+        assert_eq!(
+            sni(&format!("id.{namespace}.example.com")).unwrap_err(),
+            want
+        );
+        assert_eq!(
+            NamespacedDomain::new(format!("{namespace}.example.com")).unwrap_err(),
+            want,
+        );
+    }
+
+    #[test]
+    fn rejects_names_whose_gateway_domain_is_too_long() {
+        // The gateway domain replaces `<wap-id>.` with `wg-`, so a one character WAP ID makes
+        // it one character longer than the SNI.
+        assert_eq!(
+            sni(&format!("x.{}", namespaced_of_len(MAX_NAME_LEN - 2))).unwrap_err(),
+            SniFormatError::GatewayDomainTooLong,
+        );
+        let longest = sni(&format!("xy.{}", namespaced_of_len(MAX_NAME_LEN - 3))).unwrap();
+        assert!(GatewayDomain::new(longest.gateway_domain().to_string()).is_ok());
+
+        // The gateway domain puts `wg-` in front of a namespaced domain.
+        assert_eq!(
+            NamespacedDomain::new(namespaced_of_len(MAX_NAME_LEN - 2)).unwrap_err(),
+            SniFormatError::GatewayDomainTooLong,
+        );
+        let longest = NamespacedDomain::new(namespaced_of_len(MAX_NAME_LEN - 3)).unwrap();
+        assert!(GatewayDomain::new(longest.gateway_domain().to_string()).is_ok());
+
+        return;
+
+        fn namespaced_of_len(len: usize) -> String {
+            let label = "a".repeat(MAX_LABEL_LEN);
+            let tail = "b".repeat(len - "ns.".len() - 3 * (MAX_LABEL_LEN + 1));
+            format!("ns.{label}.{label}.{label}.{tail}")
+        }
+    }
+
+    #[test]
+    fn a_namespaced_domain_resolves_the_gateway_domain_of_its_sni() {
+        let namespaced = NamespacedDomain::new("Wap.Example.com".to_owned()).unwrap();
+        let sni = sni("id.wap.example.com").unwrap();
+
+        assert_eq!(namespaced.as_str(), "wap.example.com");
+        assert_eq!(namespaced.wap_namespace(), sni.wap_namespace());
+        assert_eq!(namespaced.customer_domain(), sni.customer_domain());
+        assert_eq!(namespaced.gateway_domain(), sni.gateway_domain());
+    }
+
+    #[test]
+    fn a_namespaced_domain_needs_two_labels() {
+        assert!(matches!(
+            NamespacedDomain::new("example".to_owned()),
+            Err(SniFormatError::TooFewSegments)
+        ));
+        assert!(NamespacedDomain::new("wap.example".to_owned()).is_ok());
     }
 }

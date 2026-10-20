@@ -31,7 +31,7 @@ use axum_connect_rpc::{
 };
 
 use crate::{
-    pg_wap::crpc::model::{AuthorizeTargetsError, ControlServiceAPIHandler},
+    pg_wap::crpc::model::{AuthorizeTargetsError, ControlServiceAPIHandler, ResolveDomainError},
     proto::anapaya::wap::v1 as rpc,
 };
 
@@ -39,6 +39,8 @@ use crate::{
 pub const SERVICE_PATH: &str = "/anapaya.wap.v1.WapControl";
 /// The path of the `AuthorizeTargets` method, relative to [`SERVICE_PATH`].
 pub const AUTHORIZE_TARGETS: &str = "/AuthorizeTargets";
+/// The path of the `ResolveDomain` method, relative to [`SERVICE_PATH`].
+pub const RESOLVE_DOMAIN: &str = "/ResolveDomain";
 
 /// Nests the WAP control plane API routes into the provided `router`.
 pub fn nest_crpc_api(router: Router, handler: Arc<dyn ControlServiceAPIHandler>) -> Router {
@@ -49,6 +51,7 @@ pub fn nest_crpc_api(router: Router, handler: Arc<dyn ControlServiceAPIHandler>)
                 AUTHORIZE_TARGETS,
                 axum::routing::post(authorize_targets_handler),
             )
+            .route(RESOLVE_DOMAIN, axum::routing::post(resolve_domain_handler))
             .with_state(handler),
     )
 }
@@ -87,6 +90,30 @@ async fn authorize_targets_handler(
     }
 }
 
+async fn resolve_domain_handler(
+    State(handler): State<Arc<dyn ControlServiceAPIHandler>>,
+    request: ConnectRpcAny<rpc::ResolveDomainRequest>,
+) -> Result<ConnectRpcAny<rpc::ResolveDomainResponse>, CrpcError> {
+    let codec = request.codec();
+
+    let request = request.into_inner().try_into_model().map_err(|err| {
+        tracing::debug!("Rejecting a resolve request: {err}");
+        CrpcError::new(CrpcErrorCode::InvalidArgument, err.to_string())
+    })?;
+
+    match handler.resolve_domain(request, SystemTime::now()).await {
+        Ok(res) => Ok(ConnectRpcAny::from_parts(res.into(), codec)),
+        Err(ResolveDomainError::NotFound(msg)) => Err(CrpcError::new(CrpcErrorCode::NotFound, msg)),
+        Err(ResolveDomainError::Unavailable(err)) => {
+            tracing::info!(?err, "Resolve request failed");
+            Err(CrpcError::new(
+                CrpcErrorCode::Unavailable,
+                "the DNS lookup failed".to_owned(),
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -104,7 +131,10 @@ mod tests {
 
     use super::*;
     use crate::pg_wap::{
-        crpc::model::{AuthorizeTargetsRequest, AuthorizeTargetsResponse},
+        crpc::model::{
+            AuthorizeTargetsRequest, AuthorizeTargetsResponse, ResolveDomainRequest,
+            ResolveDomainResponse,
+        },
         sni::CustomerDomain,
         test_util::{client_ip, sni},
     };
@@ -145,6 +175,7 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl ControlServiceAPIHandler for MockHandler {
         fn authorize_targets(
             &self,
@@ -167,7 +198,34 @@ mod tests {
                 expiry_time: UNIX_EPOCH + Duration::from_secs(EXPIRY_SECS),
             })
         }
+
+        /// Resolves `wap.example.com` to [`RESOLVED_ISD_AS`], fails for `timeout.example.com`,
+        /// and finds nothing for every other domain.
+        async fn resolve_domain(
+            &self,
+            request: ResolveDomainRequest,
+            _now: SystemTime,
+        ) -> Result<ResolveDomainResponse, ResolveDomainError> {
+            match request.domain.as_str() {
+                "wap.example.com" => {
+                    Ok(ResolveDomainResponse {
+                        isd_ases: vec![RESOLVED_ISD_AS.parse().unwrap()],
+                    })
+                }
+                "timeout.example.com" => {
+                    Err(ResolveDomainError::Unavailable(anyhow::anyhow!("timeout")))
+                }
+                domain => {
+                    Err(ResolveDomainError::NotFound(format!(
+                        "nothing for {domain}"
+                    )))
+                }
+            }
+        }
     }
+
+    /// The ISD-AS the [`MockHandler`] resolves `wap.example.com` to.
+    const RESOLVED_ISD_AS: &str = "1-ff00:0:110";
 
     /// The address the requests in these tests come from.
     fn client_addr() -> SocketAddr {
@@ -179,11 +237,16 @@ mod tests {
         handler: Arc<MockHandler>,
         request: rpc::AuthorizeTargetsRequest,
     ) -> Response<Body> {
+        call_method(handler, AUTHORIZE_TARGETS, request.encode_to_vec()).await
+    }
+
+    /// Posts the encoded `body` to the `method` endpoint of a router serving `handler`.
+    async fn call_method(handler: Arc<MockHandler>, method: &str, body: Vec<u8>) -> Response<Body> {
         let mut http_request = Request::builder()
             .method("POST")
-            .uri(format!("{SERVICE_PATH}{AUTHORIZE_TARGETS}"))
+            .uri(format!("{SERVICE_PATH}{method}"))
             .header(header::CONTENT_TYPE, "application/proto")
-            .body(Body::from(request.encode_to_vec()))
+            .body(Body::from(body))
             .expect("a valid request");
 
         // The router is served with `into_make_service_with_connect_info` in production, which is
@@ -295,5 +358,51 @@ mod tests {
             error.message, "internal error",
             "the endpoint returns the message of the handler"
         );
+    }
+
+    /// Posts a resolve request for `domain`.
+    async fn call_resolve(domain: &str) -> Response<Body> {
+        let request = rpc::ResolveDomainRequest {
+            domain: domain.to_owned(),
+        };
+        call_method(MockHandler::new(), RESOLVE_DOMAIN, request.encode_to_vec()).await
+    }
+
+    #[tokio::test]
+    async fn a_resolved_domain_returns_its_isd_ases() {
+        let response = call_resolve("wap.example.com").await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = rpc::ResolveDomainResponse::decode_from_slice(&body_bytes(response).await)
+            .expect("a response message");
+        assert_eq!(response.isdas, vec![RESOLVED_ISD_AS]);
+    }
+
+    #[tokio::test]
+    async fn resolve_errors_map_to_connect_codes() {
+        for (domain, want_status, want_code) in [
+            (
+                "example",
+                StatusCode::BAD_REQUEST,
+                CrpcErrorCode::InvalidArgument,
+            ),
+            (
+                "other.example.com",
+                StatusCode::NOT_FOUND,
+                CrpcErrorCode::NotFound,
+            ),
+            (
+                "timeout.example.com",
+                StatusCode::SERVICE_UNAVAILABLE,
+                CrpcErrorCode::Unavailable,
+            ),
+        ] {
+            let response = call_resolve(domain).await;
+            assert_eq!(response.status(), want_status, "for {domain}");
+
+            let error: CrpcError = serde_json::from_slice(&body_bytes(response).await)
+                .expect("a connect RPC error body");
+            assert_eq!(error.code, want_code, "for {domain}");
+        }
     }
 }

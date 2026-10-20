@@ -42,13 +42,16 @@
 //! - A grant with a live [`SegmentGrantGuard`] or [`TargetGrantGuard`] is never evicted.
 
 use std::{
-    collections::{BTreeMap, HashMap, hash_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry},
     net::IpAddr,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::{Duration, SystemTime},
 };
 
-use sciparse::segment::{SegmentFp, SignedPathSegment};
+use sciparse::{
+    identifier::isd_asn::IsdAsn,
+    segment::{SegmentFp, SignedPathSegment},
+};
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSeconds, serde_as};
 use tokio_util::sync::CancellationToken;
@@ -1297,6 +1300,21 @@ impl DstGrant {
     pub fn has_non_core_segment(&self, fp: SegmentFp) -> bool {
         self.non_core_segments.contains_key(&fp)
     }
+
+    /// Returns the ISD-ASes where a granted segment starts or ends, without `local_as`.
+    ///
+    /// A client grants hidden segments for one gateway, and a granted segment starts or ends in the
+    /// AS of that gateway. So if DNS resolves a gateway domain to several gateways, the ones in
+    /// these ISD-ASes come first.
+    pub fn segment_ends(&self, local_as: IsdAsn) -> BTreeSet<IsdAsn> {
+        // Every path starts in the local AS, so an end there says nothing about the gateway.
+        self.iter_non_core_segments()
+            .chain(self.iter_core_segments())
+            .flat_map(|segment| [segment.first_ia(), segment.last_ia()])
+            .flatten()
+            .filter(|ia| *ia != local_as)
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -1305,8 +1323,9 @@ mod tests {
 
     use super::*;
     use crate::pg_wap::test_util::{
-        Fixture, MockFetcher, at, client_ip, granted_id, nth_sni, nth_up_segment, other_client_ip,
-        other_sni, other_up_segment, secs_since_epoch, sni, up_segment,
+        Fixture, MockFetcher, at, client_ip, core_ia, core_segment, down_segment, granted_id,
+        leaf_ia, nth_sni, nth_up_segment, other_client_ip, other_core_ia, other_leaf_ia, other_sni,
+        other_up_segment, secs_since_epoch, sni, up_segment,
     };
 
     #[test]
@@ -2474,5 +2493,39 @@ mod tests {
             Some(at(100)),
             "another IP at its own limit is untouched"
         );
+    }
+
+    #[test]
+    fn segment_ends_are_where_the_granted_segments_start_or_end() {
+        let fixture = Fixture::new(MockFetcher::empty(), Duration::from_secs(100));
+        fixture.grant_for(
+            client_ip(),
+            sni().customer_domain(),
+            AuthSegments {
+                up_segments: vec![up_segment(0)],
+                core_segments: vec![core_segment(0)],
+                down_segments: vec![down_segment(0)],
+            },
+            at(0),
+        );
+        fixture.grant_target(client_ip(), other_sni().customer_domain(), at(0));
+
+        let ends = fixture
+            .grant
+            .dst_grant(client_ip(), sni().customer_domain(), at(0))
+            .expect("the target is granted")
+            .segment_ends(leaf_ia());
+        assert_eq!(
+            ends,
+            BTreeSet::from([core_ia(), other_core_ia(), other_leaf_ia()]),
+            "the local AS is no segment end"
+        );
+
+        let without_segments = fixture
+            .grant
+            .dst_grant(client_ip(), other_sni().customer_domain(), at(0))
+            .expect("the other target is granted")
+            .segment_ends(leaf_ia());
+        assert!(without_segments.is_empty());
     }
 }

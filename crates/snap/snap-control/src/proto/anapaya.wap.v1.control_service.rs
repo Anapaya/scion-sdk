@@ -518,3 +518,221 @@ pub const __AUTHORIZE_TARGETS_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAny
     from_json: ::buffa::type_registry::any_from_json::<AuthorizeTargetsResponse>,
     is_wkt: false,
 };
+/// Resolves a domain to the ISD-ASes of the gateways the WAP connects to for it.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ResolveDomainRequest {
+    /// The part of the data plane SNI after the WAP ID: `<wap-namespace>.<customer-domain>`.
+    ///
+    /// Field 1: `domain`
+    #[serde(
+        rename = "domain",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub domain: ::buffa::alloc::string::String,
+}
+impl ::core::fmt::Debug for ResolveDomainRequest {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ResolveDomainRequest").field("domain", &self.domain).finish()
+    }
+}
+impl ResolveDomainRequest {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/anapaya.wap.v1.ResolveDomainRequest";
+}
+::buffa::impl_default_instance!(ResolveDomainRequest);
+impl ::buffa::MessageName for ResolveDomainRequest {
+    const PACKAGE: &'static str = "anapaya.wap.v1";
+    const NAME: &'static str = "ResolveDomainRequest";
+    const FULL_NAME: &'static str = "anapaya.wap.v1.ResolveDomainRequest";
+    const TYPE_URL: &'static str = "type.googleapis.com/anapaya.wap.v1.ResolveDomainRequest";
+}
+impl ::buffa::Message for ResolveDomainRequest {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        if !self.domain.is_empty() {
+            size += 1u32 + ::buffa::types::string_encoded_len(&self.domain) as u32;
+        }
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        if !self.domain.is_empty() {
+            ::buffa::types::put_string_field(1u32, &self.domain, buf);
+        }
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.domain, buf)?;
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, buf, ctx.depth())?;
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.domain.clear();
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ResolveDomainRequest {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RESOLVE_DOMAIN_REQUEST_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/anapaya.wap.v1.ResolveDomainRequest",
+    to_json: ::buffa::type_registry::any_to_json::<ResolveDomainRequest>,
+    from_json: ::buffa::type_registry::any_from_json::<ResolveDomainRequest>,
+    is_wkt: false,
+};
+/// The ISD-ASes that a ResolveDomainRequest resolved to.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct ResolveDomainResponse {
+    /// The ISD-ASes of the gateways.
+    ///
+    /// Field 1: `isdas`
+    #[serde(
+        rename = "isdas",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_vec",
+        deserialize_with = "::buffa::json_helpers::null_as_default"
+    )]
+    pub isdas: ::buffa::alloc::vec::Vec<::buffa::alloc::string::String>,
+}
+impl ::core::fmt::Debug for ResolveDomainResponse {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("ResolveDomainResponse").field("isdas", &self.isdas).finish()
+    }
+}
+impl ResolveDomainResponse {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/anapaya.wap.v1.ResolveDomainResponse";
+}
+::buffa::impl_default_instance!(ResolveDomainResponse);
+impl ::buffa::MessageName for ResolveDomainResponse {
+    const PACKAGE: &'static str = "anapaya.wap.v1";
+    const NAME: &'static str = "ResolveDomainResponse";
+    const FULL_NAME: &'static str = "anapaya.wap.v1.ResolveDomainResponse";
+    const TYPE_URL: &'static str = "type.googleapis.com/anapaya.wap.v1.ResolveDomainResponse";
+}
+impl ::buffa::Message for ResolveDomainResponse {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// The result is a `u32`; the protobuf specification requires all
+    /// messages to fit within 2 GiB (2,147,483,647 bytes), so a
+    /// compliant message will never overflow this type.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u32;
+        for v in &self.isdas {
+            size += 1u32 + ::buffa::types::string_encoded_len(v) as u32;
+        }
+        size
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::bytes::BufMut,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        for v in &self.isdas {
+            ::buffa::types::put_string_field(1u32, v, buf);
+        }
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                self.isdas.push(::buffa::types::decode_string(buf)?);
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, buf, ctx.depth())?;
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.isdas.clear();
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for ResolveDomainResponse {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __RESOLVE_DOMAIN_RESPONSE_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/anapaya.wap.v1.ResolveDomainResponse",
+    to_json: ::buffa::type_registry::any_to_json::<ResolveDomainResponse>,
+    from_json: ::buffa::type_registry::any_from_json::<ResolveDomainResponse>,
+    is_wkt: false,
+};

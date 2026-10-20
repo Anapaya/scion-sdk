@@ -14,7 +14,7 @@
 
 //! PathGuard WAP SNAP extension.
 //!
-//! The WAP control plane is assembled from four components:
+//! The WAP control plane is assembled from five components:
 //!
 //! * [`grants::GrantManager`] - Manages which client IPs are authorized for which targets and
 //!   segments, and when those authorizations expire.
@@ -23,6 +23,8 @@
 //!   reports which segments it used.
 //! * [`uplinks::UplinkManager`] - Creates and manages one uplink per (path, WAG) pair, multiplexes
 //!   SNI streams over it, refreshes its path, cleans it when unused or closed.
+//! * [`dns::DnsManager`] - Resolves passthrough DNS requests to SCION addresses, and caches the
+//!   answers.
 //!
 //! Clients reach the control plane over the Connect RPC API in [`crpc`], which is where the
 //! authorizations that [`grants::GrantManager`] hands out come from.
@@ -37,6 +39,7 @@
 //! clock themselves.
 
 use crate::pg_wap::{
+    dns::{DnsManager, DnsResolver},
     grants::GrantManager,
     paths::PathManager,
     segments::SegmentManager,
@@ -44,6 +47,7 @@ use crate::pg_wap::{
 };
 
 pub mod crpc;
+pub mod dns;
 pub mod grants;
 pub mod paths;
 pub mod segments;
@@ -54,7 +58,7 @@ pub mod uplinks;
 mod test_util;
 
 /// The WAP control plane
-pub struct WapControlPlane<EstablisherType: UplinkEstablisher> {
+pub struct WapControlPlane<EstablisherType: UplinkEstablisher, ResolverType: DnsResolver> {
     /// Decides which client IP may reach which target over which private segments.
     pub grant: GrantManager,
     /// Public segments for all (src, dst) pairs currently in use.
@@ -63,20 +67,24 @@ pub struct WapControlPlane<EstablisherType: UplinkEstablisher> {
     pub paths: PathManager,
     /// Uplinks towards the WAGs, keyed by the (path, WAG) pair they were established for.
     pub uplinks: UplinkManager<EstablisherType>,
+    /// Resolves passthrough DNS requests.
+    pub dns: DnsManager<ResolverType>,
 }
-impl<T: UplinkEstablisher> WapControlPlane<T> {
+impl<T: UplinkEstablisher, R: DnsResolver> WapControlPlane<T, R> {
     /// Creates a new WAP control plane.
     pub fn new(
         grant: GrantManager,
         segments: SegmentManager,
         paths: PathManager,
         uplinks: UplinkManager<T>,
+        dns: DnsManager<R>,
     ) -> Self {
         Self {
             grant,
             segments,
             paths,
             uplinks,
+            dns,
         }
     }
 
@@ -84,17 +92,23 @@ impl<T: UplinkEstablisher> WapControlPlane<T> {
     ///
     /// Never returns, unless one of the loops panics.
     pub async fn run(&self) {
-        tokio::join!(self.grant.run(), self.segments.run(), self.uplinks.run());
+        tokio::join!(
+            self.grant.run(),
+            self.segments.run(),
+            self.uplinks.run(),
+            self.dns.run()
+        );
     }
 }
 
-impl<T: UplinkEstablisher> Clone for WapControlPlane<T> {
+impl<T: UplinkEstablisher, R: DnsResolver> Clone for WapControlPlane<T, R> {
     fn clone(&self) -> Self {
         Self {
             grant: self.grant.clone(),
             segments: self.segments.clone(),
             paths: self.paths.clone(),
             uplinks: self.uplinks.clone(),
+            dns: self.dns.clone(),
         }
     }
 }

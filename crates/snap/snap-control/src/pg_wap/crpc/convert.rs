@@ -23,7 +23,7 @@ use sciparse::{rpc::FromRpcError, segment::SignedPathSegment};
 use crate::{
     pg_wap::{
         crpc::model,
-        sni::{CustomerDomain, SniFormatError},
+        sni::{CustomerDomain, NamespacedDomain, SniFormatError},
     },
     proto::anapaya::wap::v1 as rpc,
 };
@@ -43,6 +43,14 @@ pub enum ConvertError {
         /// The target as it arrived.
         target: String,
         /// Why it is not a domain name.
+        source: SniFormatError,
+    },
+    /// The domain of a resolve request is not a `<wap-namespace>.<customer-domain>` name.
+    #[error("the domain {domain:?} is not a valid namespaced domain: {source}")]
+    InvalidDomain {
+        /// The domain as it arrived.
+        domain: String,
+        /// Why it is not a namespaced domain.
         source: SniFormatError,
     },
     /// A granted segment could not be parsed.
@@ -131,6 +139,28 @@ impl From<model::AuthorizeTargetsResponse> for rpc::AuthorizeTargetsResponse {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+        }
+    }
+}
+
+impl rpc::ResolveDomainRequest {
+    /// Builds the model of this request.
+    pub fn try_into_model(self) -> Result<model::ResolveDomainRequest, ConvertError> {
+        let domain = NamespacedDomain::new(self.domain.clone()).map_err(|source| {
+            ConvertError::InvalidDomain {
+                domain: self.domain,
+                source,
+            }
+        })?;
+
+        Ok(model::ResolveDomainRequest { domain })
+    }
+}
+
+impl From<model::ResolveDomainResponse> for rpc::ResolveDomainResponse {
+    fn from(response: model::ResolveDomainResponse) -> Self {
+        Self {
+            isdas: response.isd_ases.iter().map(ToString::to_string).collect(),
         }
     }
 }
@@ -257,5 +287,37 @@ mod tests {
         });
 
         assert_eq!(response.expiry_time, 0);
+    }
+
+    #[test]
+    fn a_resolve_request_needs_a_namespaced_domain() {
+        let converted = rpc::ResolveDomainRequest {
+            domain: "Wap.Example.com".to_owned(),
+        }
+        .try_into_model()
+        .expect("the request is convertible");
+        assert_eq!(converted.domain.as_str(), "wap.example.com");
+
+        let err = rpc::ResolveDomainRequest {
+            domain: "example".to_owned(),
+        }
+        .try_into_model()
+        .expect_err("a single label is rejected");
+        assert!(
+            matches!(err, ConvertError::InvalidDomain { .. }),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn a_resolve_response_carries_the_isd_ases_as_strings() {
+        let response = rpc::ResolveDomainResponse::from(model::ResolveDomainResponse {
+            isd_ases: vec![
+                "1-ff00:0:110".parse().unwrap(),
+                "2-ff00:0:210".parse().unwrap(),
+            ],
+        });
+
+        assert_eq!(response.isdas, vec!["1-ff00:0:110", "2-ff00:0:210"]);
     }
 }

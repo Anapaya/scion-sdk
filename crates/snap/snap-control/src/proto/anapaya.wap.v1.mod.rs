@@ -25,6 +25,8 @@ pub mod __buffa {
         reg.register_json_any(super::__AUTHORIZE_TARGETS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__AUTH_SEGMENTS_JSON_ANY);
         reg.register_json_any(super::__AUTHORIZE_TARGETS_RESPONSE_JSON_ANY);
+        reg.register_json_any(super::__RESOLVE_DOMAIN_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__RESOLVE_DOMAIN_RESPONSE_JSON_ANY);
     }
 }
 #[doc(inline)]
@@ -39,5 +41,13 @@ pub use self::__buffa::view::AuthSegmentsOwnedView;
 pub use self::__buffa::view::AuthorizeTargetsResponseView;
 #[doc(inline)]
 pub use self::__buffa::view::AuthorizeTargetsResponseOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ResolveDomainRequestView;
+#[doc(inline)]
+pub use self::__buffa::view::ResolveDomainRequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::ResolveDomainResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::ResolveDomainResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::register_types;
