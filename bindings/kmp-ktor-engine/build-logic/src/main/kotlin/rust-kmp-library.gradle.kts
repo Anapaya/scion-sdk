@@ -16,6 +16,7 @@ import com.android.build.api.variant.LibraryAndroidComponentsExtension
 import gobley.gradle.Variant
 import gobley.gradle.cargo.dsl.CargoExtension
 import gobley.gradle.cargo.dsl.jvm
+import gobley.gradle.cargo.profiles.CargoProfile
 import gobley.gradle.rust.targets.RustTarget
 import gobley.gradle.uniffi.dsl.UniFfiExtension
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
@@ -80,6 +81,9 @@ configure<CargoExtension> {
     // this module, only the Kotlin side.
     jvmVariant = Variant.Release
     nativeVariant = Variant.Release
+    // The kmp profile of the endhost/public workspace. Its release profile
+    // serves every other crate.
+    release { profile = CargoProfile("kmp") }
     builds.jvm {
         // native-jar-combiner puts every JVM library into the main jar.
         embedRustLibrary = false

@@ -1,5 +1,7 @@
 // Copyright 2026 Anapaya Systems
 
+import gobley.gradle.cargo.dsl.CargoExtension
+
 /*
  * Keeps only the UniFFI symbols of the Rust static library of the crate in
  * `rust/` under their own names, as a cdylib does.
@@ -16,6 +18,11 @@
  */
 
 val crateDirectory: File = layout.projectDirectory.dir("rust").asFile
+
+/** The folder of the release profile under `target/<triple>/`. */
+val profileDirectory: Provider<String> = providers.provider {
+    the<CargoExtension>().release.profile.get().targetChildDirectoryName
+}
 
 /** The library name of the crate, for example `ktor_scion_core`. */
 val libraryName: Provider<String> = providers.provider {
@@ -51,7 +58,7 @@ for ((gobleyTarget, rustTriple) in nativeTargets) {
         doLast {
             // Find the archive.
             val name = libraryName.get()
-            val archive = Cargo.targetDirectory(crateDirectory).resolve("$rustTriple/release/lib$name.a")
+            val archive = Cargo.targetDirectory(crateDirectory).resolve("$rustTriple/${profileDirectory.get()}/lib$name.a")
 
             // A fresh folder per run, so that no other run can change its files.
             val runDirectory = java.nio.file.Files.createTempDirectory(work.toPath(), "run").toFile()

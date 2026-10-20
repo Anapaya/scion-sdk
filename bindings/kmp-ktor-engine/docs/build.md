@@ -116,7 +116,9 @@ Each Kotlin Multiplatform target publishes its own module. The engine and
 
 1. **Rust build.** For each Rust target, Gobley runs cargo on the crate in
    `rust/`. The crate builds a `staticlib` for Kotlin/Native and a `cdylib`
-   for the JVM and Android.
+   for the JVM and Android. The crates are members of the `endhost/public`
+   workspace and build with its `kmp` profile, into `<triple>/kmp/` of the
+   cargo target directory.
 2. **Symbols.** `rust-staticlib-isolation` in `build-logic` rewrites each
    static library right after the cargo build. On ELF and Mach-O, it makes every
    symbol local except the UniFFI ones. On COFF, it renames them to
