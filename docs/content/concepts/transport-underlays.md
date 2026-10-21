@@ -40,7 +40,8 @@ underlay carries your SCION packets through an authenticated tunnel to a SNAP *d
 forwards them on to the SCION routers. Use it when you reach SCION through an access point rather
 than directly. It is designed to work from behind NAT and across changing networks, and because it
 is authenticated it lets the operator authorize and account for your traffic. This is the underlay
-you use on real deployments, and the one that requires a SNAP token (see below).
+you use on real deployments, and the one that requires a SNAP token (see
+[Access and authentication](./access-and-authentication.md)).
 
 ### Choosing an underlay
 
@@ -60,51 +61,10 @@ network with `UnderlayType::Snap`, so they exercise the SNAP underlay end to end
 
 ## Using the SNAP underlay: tokens
 
-To use the SNAP underlay you must prove you are allowed to. You do that by presenting a **SNAP
-token**: a short-lived bearer credential (a signed JWT) that the SNAP verifies before it will carry
-your traffic. The token also encodes what you are authorized to do and an identifier the network uses
-for accounting. Your application treats it as an opaque string it must supply and keep fresh.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant App as Your app (SDK)
-    participant AA as AA service
-    participant SNAP as SNAP
-    App->>AA: authenticate (API key)
-    AA-->>App: SNAP token (bearer JWT)
-    App->>SNAP: open tunnel, presenting the token
-    SNAP->>SNAP: verify token (signature, expiry, scope)
-    SNAP-->>App: tunnel established
-    Note over App,AA: the SDK refreshes the token before it expires
-```
-
-You give the stack a token through a **token source**
-([`TokenSource`](https://docs.rs/reqwest-connect-rpc/latest/reqwest_connect_rpc/token_source/trait.TokenSource.html)),
-either a static string via
-[`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)
-or a self-refreshing source via
-[`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source).
-Locally, the examples use a fixed development token that PocketSCION accepts
-([`pocketscion::util::dev_auth_token`](https://docs.rs/pocketscion/latest/pocketscion/util/fn.dev_auth_token.html)):
-
-```rust reference="@sdk/crates/scion-stack/examples/common/mod.rs#build-stack" title="examples/common/mod.rs"
-```
-
-In production you obtain real, short-lived tokens from an **AA** (Authentication and Authorization)
-service by presenting an API key. The `anapaya-aa-client` crate supplies
-[`AnapayaAaTokenSource`](https://docs.rs/anapaya-aa-client/latest/anapaya_aa_client/struct.AnapayaAaTokenSource.html),
-a token source that exchanges an API key and fetches a new token before the current one expires. The
-HTTP/3 client takes it through
-[`Config::with_auth_token_source`](https://docs.rs/scion-http3/latest/scion_http3/struct.Config.html#method.with_auth_token_source):
-
-```rust reference="@sdk/crates/libs/scion-http3/examples/http3_get_post.rs#api-key" title="examples/http3_get_post.rs"
-```
-
-A stack built directly takes the same source through `with_auth_token_source`.
-
-Obtaining API keys and choosing a subscription is an operational step covered in the
-going-to-production material.
+To use the SNAP underlay, the stack must show a valid **SNAP token** to the SNAP. The stack gets the
+token from a **token source** that you give it when you build the stack. The Anapaya AA is one token
+source. [Access and authentication](./access-and-authentication.md) explains what a SNAP token is,
+how token sources work, and how you get an API key for the Anapaya AA.
 
 ## Where to go next
 
@@ -112,3 +72,5 @@ going-to-production material.
   responsibilities.
 - **[Addressing](./addressing.md)** and **[Paths and path policies](./paths-and-policies.md):** what
   rides on top of the underlay once it is established.
+- **[Access and authentication](./access-and-authentication.md):** subscriptions, API keys, and
+  the SNAP token that the SNAP underlay needs.

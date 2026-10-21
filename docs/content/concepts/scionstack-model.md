@@ -61,8 +61,11 @@ The builder is where the cross-cutting choices live: which underlay to prefer
 how to reach the endhost API
 ([`with_endhost_api`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_endhost_api)),
 and how to obtain a SNAP token
-([`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)).
-Those knobs are covered on the [transport underlays](./transport-underlays.md) page.
+([`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)
+or
+[`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source)).
+The [transport underlays](./transport-underlays.md) page covers the underlay settings, and
+[access and authentication](./access-and-authentication.md) covers the SNAP token.
 For the full set, see the
 [`ScionStackBuilder` reference](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html).
 
@@ -110,8 +113,10 @@ can reply without your code ever touching path selection. Path awareness is ther
 - **[Addressing](./addressing.md):** how SCION addresses name a network and an endpoint.
 - **[Paths and path policies](./paths-and-policies.md):** inspect the paths to a destination and
   choose how your traffic is routed.
-- **[Transport underlays](./transport-underlays.md):** UDP versus SNAP, and how tokens
-  authorize you to the network.
+- **[Transport underlays](./transport-underlays.md):** UDP versus SNAP, and how your packets reach
+  the network.
+- **[Access and authentication](./access-and-authentication.md):** subscriptions, API keys, and
+  the SNAP token that authorizes you to the network.
 - **[Getting started](../getting-started.md):** build a stack and run a real program end to end on
   PocketSCION.
 - **[`scion-stack` API reference](https://docs.rs/scion-stack):** the complete stack and socket API.
