@@ -138,11 +138,35 @@ The topology reaches your app's server in one of two ways:
 
 [`samples/app-testing`](samples/app-testing) shows the WebGateway case: a
 Ktor server on TCP as the API of the app, and a test that sends requests to it
-over SCION. The test is in `commonTest`, so it runs on the JVM and on the
-native targets of the host: `./gradlew :app-testing:allTests`.
+over SCION. The test is in `commonTest`, so it runs on the JVM, as an Android
+host test, and on the native targets of the host:
+`./gradlew :app-testing:allTests :app-testing:testReleaseUnitTest`.
 
 The built-in server also serves a test API at `testApiUrl`, with the CA
 `testApiCaPem`.
+
+### Android host tests
+
+An Android host test (`androidUnitTest`, or `androidHostTest` with
+`com.android.kotlin.multiplatform.library`) runs on the desktop JVM, but gets
+the AAR, which holds only the Android native libraries. Without extra setup,
+it fails with:
+
+```text
+java.lang.UnsatisfiedLinkError: Unable to load library 'ktor_scion_testing'
+```
+
+To fix this, add the JVM artifacts, which hold the desktop libraries,
+to the host test.
+
+Use the same version as for the AAR:
+
+```kotlin
+androidUnitTest.dependencies {
+    runtimeOnly("net.anapaya.ktor:ktor-client-scion-jvm:0.1.0")
+    runtimeOnly("net.anapaya.ktor:ktor-client-scion-testing-jvm:0.1.0")
+}
+```
 
 ## Samples
 

@@ -1,5 +1,10 @@
 // Copyright 2026 Anapaya Systems
 
+import com.android.build.api.variant.HasHostTestsBuilder
+import com.android.build.api.variant.HostTestBuilder
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.plugin.KotlinSourceSetTree
+
 plugins {
     id("rust-kmp-library")
 }
@@ -26,6 +31,28 @@ kotlin {
 android {
     namespace = "net.anapaya.ktor.scion"
     defaultConfig { consumerProguardFiles("consumer-rules.pro") }
+}
+
+// commonTest also runs as an Android host test: the Android classes on a
+// desktop JVM, as in the host test of an app. rust-kmp-library disables host
+// tests, so this module turns them on again.
+kotlin {
+    androidTarget {
+        @OptIn(ExperimentalKotlinGradlePluginApi::class)
+        unitTestVariant.sourceSetTree.set(KotlinSourceSetTree.test)
+    }
+}
+
+androidComponents {
+    beforeVariants { variant ->
+        (variant as HasHostTestsBuilder).hostTests.getValue(HostTestBuilder.UNIT_TEST_TYPE).enable = true
+    }
+}
+
+dependencies {
+    // The host library of the test network. Gobley adds the host libraries
+    // of commonMain dependencies only.
+    "rustRuntimeOnly"(project(":ktor-client-scion-testing"))
 }
 
 // The Android platform verifier.

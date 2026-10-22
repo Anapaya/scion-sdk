@@ -87,6 +87,10 @@ configure<CargoExtension> {
     builds.jvm {
         // native-jar-combiner puts every JVM library into the main jar.
         embedRustLibrary = false
+        // Puts the host library on the Android host test classpath of this
+        // module and of the modules in this build that depend on it. The
+        // default follows embedRustLibrary.
+        androidUnitTest = rustTarget.rustTriple == NativeTarget.host.rustTriple
     }
 }
 

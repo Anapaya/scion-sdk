@@ -9,6 +9,9 @@ import android.database.Cursor
 import android.net.Uri
 
 internal actual fun initPlatformTrust() {
+    // An Android host test runs this on a desktop JVM. There, the verifier
+    // reads the trust store of the OS, as on the JVM target.
+    if (System.getProperty("java.vm.name") != "Dalvik") return
     AndroidTrust.ensureInitialized()
 }
 
