@@ -40,6 +40,7 @@ use std::{
 use bytes::Bytes;
 use futures::FutureExt;
 use http_body::{Body, Frame};
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use squiche::h3::{Header, NameValue};
 
 pub use crate::h3::common::H3Error;
@@ -78,6 +79,7 @@ pub struct Http3Server<S: HttpService> {
     /// `None` until/unless the HTTP/3 layer is successfully set up (e.g. the
     /// ALPN must be `h3`).
     h3: Option<squiche::h3::Connection>,
+    peer: PeerAddr,
     service: Arc<S>,
     self_handle: Option<WeakConnectionHandle<Http3Server<S>>>,
     streams: HashMap<u64, StreamState>,
@@ -92,9 +94,14 @@ where
 {
     type Config = Http3ServerConfig<S>;
 
-    fn on_established(conn: &mut squiche::Connection, config: &Self::Config) -> Self {
+    fn on_established(
+        conn: &mut squiche::Connection,
+        peer: ScionSocketIpAddr,
+        config: &Self::Config,
+    ) -> Self {
         let mut app = Http3Server {
             h3: None,
+            peer: PeerAddr(peer),
             service: config.service.clone(),
             self_handle: None,
             streams: HashMap::new(),
@@ -128,6 +135,7 @@ where
     fn update(&mut self, conn: &mut squiche::Connection, wakeups: &mut Wakeups) {
         let Http3Server {
             h3,
+            peer,
             service,
             self_handle,
             streams,
@@ -153,6 +161,7 @@ where
                             stream_id,
                             list,
                             more_frames,
+                            *peer,
                             service,
                             reader_handle,
                             streams,
@@ -215,6 +224,13 @@ where
     }
 }
 
+/// The SCION address of the client that sent a request.
+///
+/// The [`Http3Server`] adds this value to the extensions of every request it
+/// passes to the [`HttpService`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerAddr(pub ScionSocketIpAddr);
+
 /// Configuration for an [`Http3Server`]: the service shared across all
 /// connections of an endpoint.
 pub struct Http3ServerConfig<S> {
@@ -263,6 +279,7 @@ fn dispatch_request<S>(
     stream_id: u64,
     list: Vec<squiche::h3::Header>,
     more_frames: bool,
+    peer: PeerAddr,
     service: &Arc<S>,
     reader_handle: WeakConnectionHandle<Http3Server<S>>,
     streams: &mut HashMap<u64, StreamState>,
@@ -277,7 +294,7 @@ fn dispatch_request<S>(
     });
     let body = H3RequestBody { reader, stream_id };
 
-    let Some(request) = build_request(&list, body) else {
+    let Some(mut request) = build_request(&list, body) else {
         tracing::warn!(
             stream_id,
             "failed to build request from headers; resetting stream"
@@ -287,6 +304,7 @@ fn dispatch_request<S>(
         shutdown_stream(&reader_handle, stream_id, true);
         return;
     };
+    request.extensions_mut().insert(peer);
 
     // Register the stream. A header-only request (no body) is immediately at
     // EOF on the read side.

@@ -20,6 +20,8 @@
 //! driver iteration and collects the readers/writers to wake into a [`Wakeups`]
 //! batch, which the driver fires after releasing the connection lock.
 
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
+
 use crate::quic::connection::ConnectionHandle;
 
 /// Deferred consumer wakeups, opaque to the driver. Fired *after* the
@@ -61,8 +63,13 @@ pub trait QuicScionApplication: Send {
     /// simply observe the connection being torn down.
     ///
     /// * `conn` is the freshly established QUIC connection.
+    /// * `peer` is the SCION address of the remote end of the connection.
     /// * `config` is the shared configuration provided to the endpoint driver.
-    fn on_established(conn: &mut squiche::Connection, config: &Self::Config) -> Self
+    fn on_established(
+        conn: &mut squiche::Connection,
+        peer: ScionSocketIpAddr,
+        config: &Self::Config,
+    ) -> Self
     where
         Self: Sized;
 
@@ -101,7 +108,11 @@ pub trait QuicScionApplication: Send {
 pub struct NoApp;
 impl QuicScionApplication for NoApp {
     type Config = ();
-    fn on_established(_conn: &mut squiche::Connection, _config: &()) -> Self {
+    fn on_established(
+        _conn: &mut squiche::Connection,
+        _peer: ScionSocketIpAddr,
+        _config: &(),
+    ) -> Self {
         NoApp
     }
     fn update(&mut self, _: &mut squiche::Connection, _: &mut Wakeups) {}

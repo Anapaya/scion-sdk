@@ -123,7 +123,7 @@ pub(crate) async fn connect(
             return;
         }
 
-        let app = Http3ClientApp::on_established(&mut inner, &());
+        let app = Http3ClientApp::on_established(&mut inner, remote, &());
         if app.h3.is_none() {
             let _ = tx.send(Err(EstablishError::H3Init));
             return;

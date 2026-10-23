@@ -34,6 +34,7 @@
 
 use std::{collections::HashMap, task::Waker};
 
+use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 use squiche::h3::NameValue;
 
 use crate::{
@@ -82,7 +83,11 @@ pub struct Http3ClientApp {
 impl QuicScionApplication for Http3ClientApp {
     type Config = ();
 
-    fn on_established(conn: &mut squiche::Connection, _config: &Self::Config) -> Self {
+    fn on_established(
+        conn: &mut squiche::Connection,
+        _peer: ScionSocketIpAddr,
+        _config: &Self::Config,
+    ) -> Self {
         let mut app = Http3ClientApp {
             h3: None,
             self_handle: None,
