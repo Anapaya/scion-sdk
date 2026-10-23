@@ -53,6 +53,21 @@ The ISD-AS `0` (all-zero) is the **wildcard**, available as `IsdAsn::WILDCARD`. 
 AS", for instance to bind without pinning a specific local AS, or in path-policy matching. It is a
 match-any value, not a real address to send to.
 
+## Resolve a host name's SCION address with TSAR {#tsar}
+
+A server publishes its SCION address in a DNS TXT record on its host name, in the TXT-based SCION
+address resolution (TSAR) format. The SDK reads this record to find the SCION address of a host
+name.
+
+The record value starts with `scion=v1;`. A list of `[ISD-AS,host]` entries follows:
+
+```text
+example.org. IN TXT "scion=v1;[1-ff00:0:110,192.0.2.1],[1-ff00:0:110,2001:db8::1]"
+```
+
+For a server without a TSAR record, for example in a test network, use DNS overrides to map a host
+name to a SCION address.
+
 ## Where to go next
 
 - **[Paths and path policies](./paths-and-policies.md):** once you can name a destination AS, this is

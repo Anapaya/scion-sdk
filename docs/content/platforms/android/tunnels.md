@@ -58,12 +58,12 @@ val sockets = ScionTunnelSocketFactory(client, viaPort = 443)
 
 ### How a SCION host is named
 
-A host on SCION publishes its SCION address in DNS as a TXT record, in the TXT-based SCION address
-resolution (TSAR) format. The client's own resolver reads that record. The platform's resolver,
-which `InetAddress` and OkHttp's default `Dns` use, reads A and AAAA records only. A host that
-exists on SCION alone has none, so a platform lookup fails for it. Nothing on this page needs a
-platform lookup: every API below takes the host name and hands it to the client, which resolves it.
-A `dnsOverride` replaces the TSAR lookup for one host, for a tunnel as for a request.
+The client resolves a host name with its own resolver, which reads the TSAR records of the host.
+[Resolve a host name with TSAR](../../concepts/addressing.md#tsar) explains these records. The
+platform's resolver, which `InetAddress` and OkHttp's default `Dns` use, reads A and AAAA records
+only. A host that exists on SCION alone has none, so a platform lookup fails for it. Nothing on this
+page needs a platform lookup: every API below takes the host name and hands it to the client, which
+resolves it. A `dnsOverride` replaces the TSAR lookup for one host, for a tunnel as for a request.
 
 The test network's server is also a tunnel server, with two behaviours. A tunnel to `localhost` is
 an echo: every byte written into it comes back. A tunnel to `http.invalid` reaches an HTTP/1.1
