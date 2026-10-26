@@ -1,7 +1,7 @@
 ---
 title: Paths and path policies
 description: Path awareness is SCION's defining feature. What a path is, how to inspect the paths to a destination, and how to choose one.
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 import PathFromSegments from './fig/path-from-segments.drawio.svg';

@@ -4,6 +4,6 @@
   "link": {
     "type": "generated-index",
     "title": "Concepts",
-    "description": "The ideas behind the SCION SDK: the ScionStack you build everything on, how SCION addresses work, path awareness and path policies, how your traffic reaches the network through a transport underlay, and how your app gets access with a subscription and a SNAP token."
+    "description": "The ideas behind the SCION SDK: the ScionStack you build everything on, the endhost API, how SCION addresses work, path awareness and path policies, how your traffic reaches the network through a transport underlay, and how your app gets access with a subscription and a SNAP token."
   }
 }

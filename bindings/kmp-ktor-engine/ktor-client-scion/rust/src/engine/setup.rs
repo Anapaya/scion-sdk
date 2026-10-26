@@ -16,18 +16,14 @@
 
 use std::sync::Arc;
 
+use anapaya_aa_client::AnapayaAaTokenSource;
 use scion_http3::{
     Client, Config as ClientConfig,
     scion_quic::quic::config::{QuicConfig, QuicConfigBuilder},
-    scion_stack::{
-        ea_source::StaticEndhostApiDiscovery,
-        reqwest_connect_rpc::token_source::refresh::RefreshTokenSource,
-    },
-    url::Url,
+    scion_stack::ea_source::StaticEndhostApiDiscovery,
 };
 
 use super::{
-    aa,
     config::{Config, TokenSource, Trust},
     platform,
     transport::{
@@ -37,10 +33,6 @@ use super::{
     },
 };
 use crate::ffi::types::CoreError;
-
-/// The endhost API that `ClientConfig::new` gets if the stack customizer
-/// replaces it.
-const PLACEHOLDER_ENDHOST_API: &str = "https://discovery.scion.anapaya.net";
 
 /// Builds the transport without waiting on the network.
 ///
@@ -96,17 +88,70 @@ pub(crate) fn transport(config: Config) -> Result<Arc<dyn Transport>, CoreError>
     }
 }
 
+enum Auth {
+    Static(String),
+    AnapayaAa(AnapayaAaTokenSource),
+}
+
 /// The scion-http3 config.
 fn client_config(config: Config, quic: QuicConfigBuilder) -> Result<ClientConfig, CoreError> {
-    let endhost_api = match &config.endhost_api {
-        Some(url) => url.clone(),
-        None => {
-            PLACEHOLDER_ENDHOST_API
-                .parse::<Url>()
-                .expect("the placeholder is a valid URL")
+    let control_plane = config.control_plane;
+    let cp_client = control_plane.as_ref().map(|trust| trust.client.clone());
+
+    // Set up authentication.
+    let auth = match config.token_source {
+        None => None,
+        Some(TokenSource::Static(token)) => Some(Auth::Static(token)),
+        Some(TokenSource::AnapayaAa {
+            url,
+            api_key,
+            device_id,
+        }) => {
+            let source = match &control_plane {
+                Some(trust) => {
+                    AnapayaAaTokenSource::new_with_client_builder(
+                        api_key,
+                        &url,
+                        device_id,
+                        trust.builder(),
+                    )
+                }
+                None => AnapayaAaTokenSource::new(api_key, &url, device_id),
+            };
+            Some(Auth::AnapayaAa(source.map_err(|error| {
+                CoreError::invalid(format!("bad AA config: {error:#}"))
+            })?))
         }
     };
-    let mut out = ClientConfig::new(endhost_api)
+    let aa = match &auth {
+        Some(Auth::AnapayaAa(aa)) => Some(aa),
+        _ => None,
+    };
+
+    // Without a fixed endhost API, discover through the AA, else globally.
+    let mut out = match config.endhost_api {
+        Some(url) => ClientConfig::new(url),
+        None => {
+            match (aa, cp_client.clone()) {
+                (Some(aa), Some(client)) => {
+                    ClientConfig::from_endhost_api_source(
+                        aa.endhost_api_source().with_http_client(client),
+                    )
+                }
+                (Some(aa), None) => ClientConfig::from_endhost_api_source(aa.endhost_api_source()),
+                (None, Some(client)) => {
+                    ClientConfig::from_endhost_api_source(
+                        StaticEndhostApiDiscovery::global().with_http_client(client),
+                    )
+                }
+                (None, None) => {
+                    ClientConfig::from_endhost_api_source(StaticEndhostApiDiscovery::global())
+                }
+            }
+        }
+    };
+
+    out = out
         .with_quic_config(quic.build())
         .with_connect_timeout(config.connect_timeout)
         .with_request_timeout(config.request_timeout)
@@ -121,52 +166,15 @@ fn client_config(config: Config, quic: QuicConfigBuilder) -> Result<ClientConfig
         out = out.with_dns_override(host, addresses);
     }
 
-    // Set up authentication.
-    let control_plane = config.control_plane;
-    let cp_client = control_plane.as_ref().map(|trust| trust.client.clone());
-    let mut aa_discovery = None;
-    match config.token_source {
-        None => {}
-        Some(TokenSource::Static(token)) => out = out.with_auth_token(token),
-        Some(TokenSource::AnapayaAa {
-            url,
-            api_key,
-            device_id,
-        }) => {
-            // Build the AA refresher.
-            let refresher = aa::AaRefresher::new(&url, api_key, device_id, control_plane.as_ref())
-                .map_err(|error| CoreError::invalid(format!("bad AA config: {error:#}")))?;
-            aa_discovery = Some(refresher.discovery());
-            out = out.with_auth_token_source(
-                RefreshTokenSource::builder("aa-api-key", refresher).build(),
-            );
-        }
-    }
+    out = match auth {
+        Some(Auth::Static(token)) => out.with_auth_token(token),
+        Some(Auth::AnapayaAa(aa)) => out.with_auth_token_source(aa),
+        None => out,
+    };
 
-    // Without a fixed endhost API, discovery replaces the placeholder.
-    let discover = config.endhost_api.is_none();
-    if discover || cp_client.is_some() {
-        out = out.with_stack_customizer(move |mut builder| {
-            // Discover through the AA, else globally.
-            if discover {
-                builder = match &aa_discovery {
-                    Some(source) => builder.with_endhost_api_discovery_source(source.clone()),
-                    None => {
-                        builder.with_endhost_api_discovery_source(aa::attach_http_client(
-                            StaticEndhostApiDiscovery::global(),
-                            cp_client.clone(),
-                        ))
-                    }
-                };
-            }
-
-            // Use the anchors for the control plane.
-            if let Some(client) = &cp_client {
-                builder = builder.with_crpc_client(client.clone());
-            }
-
-            builder
-        });
+    // Use the anchors for the control plane.
+    if let Some(client) = cp_client {
+        out = out.with_stack_customizer(move |builder| builder.with_crpc_client(client.clone()));
     }
 
     Ok(out)

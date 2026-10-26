@@ -45,14 +45,14 @@ use std::{
 use async_trait::async_trait;
 use scion_quic::socket::GenericScionUdpSocket;
 use scion_stack::{
-    ScionStack,
+    ScionStack, ScionStackBuilder,
     resolver::{ScionDnsResolver, txt::ScionTxtDnsResolver},
     stack::ScionSocketBindError,
 };
 use sciparse::address::ip_addr::ScionIpAddr;
 
 use crate::{
-    config::{Config, SharedTokenSource},
+    config::{Config, EndhostApi, SharedEndhostApiSource, SharedTokenSource},
     error::Error,
     origin::Origin,
     pool::{OriginClient, OriginMap},
@@ -130,8 +130,13 @@ impl Epoch {
             None => default_resolver(config)?,
         };
 
-        let mut builder =
-            scion_stack::ScionStackBuilder::new().with_endhost_api(config.endhost_api.clone());
+        let mut builder = match &config.endhost_api {
+            EndhostApi::Fixed(url) => ScionStackBuilder::new().with_endhost_api(url.clone()),
+            EndhostApi::Source(source) => {
+                ScionStackBuilder::new()
+                    .with_endhost_api_discovery_source(SharedEndhostApiSource(source.clone()))
+            }
+        };
         if let Some(source) = &config.auth_token_source {
             builder = builder.with_auth_token_source(SharedTokenSource(source.clone()));
         }
@@ -226,7 +231,39 @@ fn default_resolver(config: &Config) -> Result<Arc<dyn ScionDnsResolver>, Error>
 mod tests {
     use std::net::Ipv4Addr;
 
+    use scion_stack::ea_source::{
+        EndhostApiSource, EndhostApiSourceError, models::EndhostApiGroup,
+    };
+
     use super::*;
+
+    struct FailingSource {
+        transient: bool,
+    }
+
+    #[async_trait]
+    impl EndhostApiSource for FailingSource {
+        async fn endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError> {
+            Err(EndhostApiSourceError::new(
+                "no endhost APIs",
+                self.transient,
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_endhost_api_source_reaches_the_stack() {
+        for transient in [true, false] {
+            let config = Config::from_endhost_api_source(FailingSource { transient });
+
+            let error = Epoch::build(&config).await.err().expect("the source fails");
+
+            assert!(
+                matches!(error, Error::StackBuild { retryable, .. } if retryable == transient),
+                "{error:?}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn dns_overrides_reach_the_default_resolver() {

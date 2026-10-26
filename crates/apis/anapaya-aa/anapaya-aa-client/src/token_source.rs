@@ -16,7 +16,6 @@
 
 use std::fmt;
 
-use anapaya_aa_protobuf::proto::anapaya::aa::v1::Metadata;
 use anyhow::Context;
 use async_trait::async_trait;
 use reqwest_connect_rpc::token_source::{
@@ -27,6 +26,7 @@ use url::Url;
 
 use crate::{
     client::CrpcAaAuthClient,
+    endhost_api_source::AnapayaAaEndhostApiSource,
     refresher::{ApiKeyTokenRefresher, ApiKeyTokenRefresherError},
 };
 
@@ -34,16 +34,28 @@ const SOURCE_NAME: &str = "aa-api-key";
 
 /// A [`TokenSource`] that exchanges an API key for tokens at the Anapaya AA, and renews the token.
 ///
+/// The source also gives the endhost API source that uses the discovery URL of the AA answers, see
+/// [`Self::endhost_api_source`].
+///
 /// ```no_run
 /// # async fn example() -> anyhow::Result<()> {
 /// use anapaya_aa_client::AnapayaAaTokenSource;
+/// use scion_stack::ScionStackBuilder;
 ///
 /// let aa_url = "https://auth.scion.anapaya.net".parse()?;
 /// let source = AnapayaAaTokenSource::new("aakey_...", &aa_url, "my-device-id")?;
+/// let stack = ScionStackBuilder::new()
+///     .with_endhost_api_discovery_source(source.endhost_api_source())
+///     .with_auth_token_source(source)
+///     .build()
+///     .await?;
 /// # Ok(())
 /// # }
 /// ```
-pub struct AnapayaAaTokenSource(RefreshTokenSource);
+pub struct AnapayaAaTokenSource {
+    source: RefreshTokenSource,
+    endhost_api_source: AnapayaAaEndhostApiSource,
+}
 
 impl AnapayaAaTokenSource {
     /// Creates a source that exchanges `api_key` at the AA at `aa_url`. The first exchange starts
@@ -69,13 +81,13 @@ impl AnapayaAaTokenSource {
         Self::spawn(refresher(api_key, aa_url, device_id, Some(builder))?)
     }
 
-    /// Runs the first exchange now, and returns the source with the [`Metadata`] that the AA sends
-    /// with the token. The arguments are the same as for [`Self::new`].
+    /// Runs the first exchange now, and returns the source. The arguments are the same as for
+    /// [`Self::new`].
     pub async fn start(
         api_key: impl Into<String>,
         aa_url: &Url,
         device_id: impl Into<String>,
-    ) -> Result<(Self, Option<Metadata>), AnapayaAaStartError> {
+    ) -> Result<Self, AnapayaAaStartError> {
         Self::start_from(refresher(api_key, aa_url, device_id, None)).await
     }
 
@@ -86,27 +98,40 @@ impl AnapayaAaTokenSource {
         aa_url: &Url,
         device_id: impl Into<String>,
         builder: reqwest::ClientBuilder,
-    ) -> Result<(Self, Option<Metadata>), AnapayaAaStartError> {
+    ) -> Result<Self, AnapayaAaStartError> {
         Self::start_from(refresher(api_key, aa_url, device_id, Some(builder))).await
+    }
+
+    /// Returns the endhost API source that discovers through the discovery URL that the AA sends
+    /// with the token, or through the global discovery service if the AA sends none. See
+    /// [`AnapayaAaEndhostApiSource`].
+    pub fn endhost_api_source(&self) -> AnapayaAaEndhostApiSource {
+        self.endhost_api_source.clone()
     }
 
     fn spawn(refresher: ApiKeyTokenRefresher) -> anyhow::Result<Self> {
         tokio::runtime::Handle::try_current()
             .context("the AA token source needs a Tokio runtime")?;
-        Ok(Self(
-            RefreshTokenSource::builder(SOURCE_NAME, refresher).build(),
-        ))
+        let endhost_api_source = refresher.endhost_api_source();
+        Ok(Self {
+            source: RefreshTokenSource::builder(SOURCE_NAME, refresher).build(),
+            endhost_api_source,
+        })
     }
 
     async fn start_from(
         refresher: anyhow::Result<ApiKeyTokenRefresher>,
-    ) -> Result<(Self, Option<Metadata>), AnapayaAaStartError> {
+    ) -> Result<Self, AnapayaAaStartError> {
         let refresher = refresher.map_err(|error| AnapayaAaStartError::Client(error.into()))?;
-        let (token, metadata) = refresher.refresh_with_metadata().await?;
+        let (token, _metadata) = refresher.refresh_with_metadata().await?;
+        let endhost_api_source = refresher.endhost_api_source();
         let source = RefreshTokenSource::builder(SOURCE_NAME, refresher)
             .with_initial_token(token)
             .build();
-        Ok((Self(source), metadata))
+        Ok(Self {
+            source,
+            endhost_api_source,
+        })
     }
 }
 
@@ -130,11 +155,11 @@ fn refresher(
 #[async_trait]
 impl TokenSource for AnapayaAaTokenSource {
     fn watch(&self) -> TokenSourceWatch {
-        self.0.watch()
+        self.source.watch()
     }
 
     async fn get_token(&self) -> Result<String, TokenSourceError> {
-        self.0.get_token().await
+        self.source.get_token().await
     }
 }
 
@@ -178,7 +203,7 @@ mod tests {
     };
 
     use anapaya_aa_protobuf::proto::anapaya::aa::v1::{
-        AuthenticateByKeyRequest, AuthenticateByKeyResponse,
+        AuthenticateByKeyRequest, AuthenticateByKeyResponse, Metadata,
     };
     use axum::{Router, routing::post};
     use axum_connect_rpc::extractor::ConnectRpc;
@@ -194,9 +219,7 @@ mod tests {
         AnapayaAaTokenSource::new(API_KEY, &aa_url.parse().unwrap(), "device")
     }
 
-    async fn start(
-        aa_url: &str,
-    ) -> Result<(AnapayaAaTokenSource, Option<Metadata>), AnapayaAaStartError> {
+    async fn start(aa_url: &str) -> Result<AnapayaAaTokenSource, AnapayaAaStartError> {
         AnapayaAaTokenSource::start(API_KEY, &aa_url.parse().unwrap(), "device").await
     }
 
@@ -245,21 +268,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_keeps_the_first_token_and_returns_the_metadata() {
+    async fn start_keeps_the_first_token_and_publishes_the_discovery_url() {
         scion_sdk_utils::rustls::select_ring_crypto_provider();
         let exchanges = Arc::new(AtomicUsize::new(0));
         let token = token_valid_for(Duration::from_secs(3600));
         let aa_url = serve_aa(token.clone(), exchanges.clone()).await;
 
-        let (source, metadata) = AnapayaAaTokenSource::start("key", &aa_url, "device")
+        let source = AnapayaAaTokenSource::start("key", &aa_url, "device")
             .await
             .unwrap();
 
         assert_eq!(
-            metadata
-                .and_then(|metadata| metadata.endhost_api_discovery_url)
-                .as_deref(),
-            Some(DISCOVERY_URL)
+            source.endhost_api_source().published(),
+            Some(Some(DISCOVERY_URL.parse().unwrap()))
         );
         assert_eq!(source.get_token().await.unwrap(), token);
         assert_eq!(exchanges.load(Ordering::SeqCst), 1);

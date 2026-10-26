@@ -136,6 +136,7 @@ name = "anapaya-aa-client"
 version = "0.8.5"
 dependencies = [
  "anapaya-aa-protobuf",
+ "anapaya-ead-models",
  "anyhow",
  "async-trait",
  "axum",
@@ -145,6 +146,7 @@ dependencies = [
  "reqwest",
  "reqwest-connect-rpc",
  "scion-sdk-utils",
+ "scion-stack",
  "serde",
  "thiserror 2.0.20",
  "tokio",
@@ -3404,7 +3406,6 @@ name = "ktor-scion-core"
 version = "0.1.0"
 dependencies = [
  "anapaya-aa-client",
- "anyhow",
  "async-trait",
  "boring",
  "http-body-util",

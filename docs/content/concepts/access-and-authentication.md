@@ -1,7 +1,7 @@
 ---
 title: Access and authentication
 description: How your app gets access to the SCION network. Subscriptions, resellers, the Anapaya AA, API keys, and SNAP tokens.
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 On the SNAP underlay (see [Transport underlays](./transport-underlays.md)), your app sends its
@@ -71,7 +71,7 @@ The SDK examples give it to the stack as a static token:
 ### The Anapaya AA token source
 
 The `anapaya-aa-client` crate supplies
-[`AnapayaAaTokenSource`](https://docs.rs/anapaya-aa-client/latest/anapaya_aa_client/struct.AnapayaAaTokenSource.html).
+[`AnapayaAaTokenSource`](https://docs.rs/anapaya-aa-client/latest/anapaya_aa_client/token_source/struct.AnapayaAaTokenSource.html).
 This token source exchanges your API key for a SNAP token at the Anapaya AA. It also renews the
 SNAP token periodically: before the current token expires, it sends the API key to the Anapaya AA
 again and gets a new token. Your app does not have to do anything for the renewal.
@@ -94,3 +94,5 @@ can get SNAP tokens for your subscription.
 
 - **[Transport underlays](./transport-underlays.md):** the SNAP underlay that uses the SNAP token.
 - **[The ScionStack model](./scionstack-model.md):** the stack that you give the token source to.
+- **[The endhost API](./endhost-api.md):** how the stack finds the endhost API, also through the
+  Anapaya AA.

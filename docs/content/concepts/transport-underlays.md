@@ -1,7 +1,7 @@
 ---
 title: Transport underlays
 description: How your SCION packets physically reach the network. The UDP and SNAP underlays, and how to choose between them.
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 A SCION packet still has to travel over a real network to reach the SCION infrastructure. The

@@ -15,11 +15,15 @@
 //! Client for the Anapaya AA (Auth/n Auth/z) service.
 //!
 //! [`AnapayaAaTokenSource`] exchanges an API key for SNAP tokens and renews them.
+//! [`AnapayaAaEndhostApiSource`] finds the endhost APIs through the discovery URL that the AA sends
+//! with the token, or through the global discovery service.
 
 pub mod client;
+pub mod endhost_api_source;
 pub mod refresher;
 pub mod token_source;
 
 pub use client::{AaAuthClient, AuthResult, CrpcAaAuthClient, InsecureAaUrl, check_aa_url};
+pub use endhost_api_source::AnapayaAaEndhostApiSource;
 pub use refresher::{ApiKeyTokenRefresher, ApiKeyTokenRefresherError};
 pub use token_source::{AnapayaAaStartError, AnapayaAaTokenSource};

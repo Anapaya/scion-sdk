@@ -19,11 +19,10 @@
 //! the task.
 //!
 //! The submodules hold the parts that run while the client lives: the tokio
-//! runtime, the transports, the certificate trust of the platform, and the
-//! token refresh through the AA. [`Engine::new`] builds them from a
-//! [`CoreConfig`], through the engine [`Config`](config::Config).
+//! runtime, the transports, and the certificate trust of the platform.
+//! [`Engine::new`] builds them from a [`CoreConfig`], through the engine
+//! [`Config`](config::Config).
 
-pub(crate) mod aa;
 mod config;
 pub(crate) mod platform;
 mod runtime;

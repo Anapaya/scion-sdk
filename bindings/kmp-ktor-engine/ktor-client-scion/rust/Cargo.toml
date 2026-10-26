@@ -17,7 +17,6 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 anapaya-aa-client = { workspace = true }
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 # The WebGateway transport.
 boring = { workspace = true }

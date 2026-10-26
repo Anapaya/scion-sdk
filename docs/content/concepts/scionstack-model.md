@@ -49,9 +49,9 @@ You configure a stack with
 [`ScionStackBuilder`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html)
 and finish with
 [`build`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.build).
-At minimum the stack needs to know where the local *endhost API* is, the service that answers
-underlay and path-lookup queries, and, when it will use a SNAP, how to authenticate. The examples
-wrap this in a one-line helper:
+At minimum the stack needs to know where the local [*endhost API*](./endhost-api.md) is, the service
+that answers underlay and path-lookup queries, and, when it will use a SNAP, how to authenticate.
+The examples wrap this in a one-line helper:
 
 ```rust reference="@sdk/crates/scion-stack/examples/common/mod.rs#build-stack" title="examples/common/mod.rs"
 ```
@@ -59,12 +59,15 @@ wrap this in a one-line helper:
 The builder is where the cross-cutting choices live: which underlay to prefer
 ([`with_preferred_underlay`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_preferred_underlay)),
 how to reach the endhost API
-([`with_endhost_api`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_endhost_api)),
+([`with_endhost_api`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_endhost_api)
+or
+[`with_endhost_api_discovery_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_endhost_api_discovery_source)),
 and how to obtain a SNAP token
 ([`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)
 or
 [`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source)).
-The [transport underlays](./transport-underlays.md) page covers the underlay settings, and
+The [endhost API](./endhost-api.md) page covers how the stack finds the endhost API, the
+[transport underlays](./transport-underlays.md) page covers the underlay settings, and
 [access and authentication](./access-and-authentication.md) covers the SNAP token.
 For the full set, see the
 [`ScionStackBuilder` reference](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html).
@@ -110,6 +113,8 @@ can reply without your code ever touching path selection. Path awareness is ther
 
 ## Where to go next
 
+- **[The endhost API](./endhost-api.md):** the service that tells the stack how to reach the
+  network, and how the stack finds it.
 - **[Addressing](./addressing.md):** how SCION addresses name a network and an endpoint.
 - **[Paths and path policies](./paths-and-policies.md):** inspect the paths to a destination and
   choose how your traffic is routed.

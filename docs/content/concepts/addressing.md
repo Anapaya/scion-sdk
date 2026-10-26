@@ -1,7 +1,7 @@
 ---
 title: Addressing
 description: How SCION addresses work. The ISD-AS model, how an endpoint is named, and the SDK types you use.
-sidebar_position: 2
+sidebar_position: 3
 ---
 
 import ScionAddress from './fig/scion-address.drawio.svg';

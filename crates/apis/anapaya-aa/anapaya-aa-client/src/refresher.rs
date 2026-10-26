@@ -40,8 +40,13 @@ use reqwest_connect_rpc::token_source::{
 };
 use serde::Deserialize;
 use thiserror::Error;
+use tokio::sync::watch;
+use url::Url;
 
-use crate::client::AaAuthClient;
+use crate::{
+    client::AaAuthClient,
+    endhost_api_source::{AaFailure, AnapayaAaEndhostApiSource, DiscoveryState},
+};
 
 /// Errors returned when refreshing a SNAP token via an API key.
 #[derive(Debug, Error)]
@@ -77,6 +82,16 @@ impl ApiKeyTokenRefresherError {
             Self::ExpInThePast { .. } => true,
         }
     }
+
+    /// Converts the error for a token source. A transient error makes the source unavailable, a
+    /// permanent error makes the source reject the token.
+    pub(crate) fn into_token_source_error(self) -> TokenSourceError {
+        if self.is_transient() {
+            TokenSourceError::unavailable(self)
+        } else {
+            TokenSourceError::rejected(self)
+        }
+    }
 }
 
 /// Minimal JWT claims used solely to read the `exp` field.
@@ -106,11 +121,15 @@ fn expires_at_from_token(token: &str) -> Result<Instant, ApiKeyTokenRefresherErr
 
 /// Fetches and renews SNAP tokens from the Anapaya AA service using a static
 /// API key.
+///
+/// An AA answer can carry an endhost API discovery URL. The refresher publishes the discovery URL
+/// of each answer to the source from [`Self::endhost_api_source`].
 pub struct ApiKeyTokenRefresher<C: AaAuthClient + 'static = crate::client::CrpcAaAuthClient> {
     client: C,
     api_key: String,
     device_id: String,
     requested_validity: i32,
+    discovery: watch::Sender<DiscoveryState>,
 }
 
 impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
@@ -127,20 +146,69 @@ impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
             api_key,
             device_id,
             requested_validity: 0, // use default TTL
+            discovery: watch::Sender::new(None),
         }
     }
 
+    /// Returns an endhost API source that discovers through the discovery URL of the AA answers
+    /// of this refresher. See [`AnapayaAaEndhostApiSource`].
+    pub fn endhost_api_source(&self) -> AnapayaAaEndhostApiSource {
+        AnapayaAaEndhostApiSource::new(self.discovery.subscribe())
+    }
+
     /// Fetches a fresh SNAP token and returns it together with the optional
-    /// [`Metadata`] from the AA response.
-    ///
-    /// Use this instead of [`TokenRefresher::refresh`] when you need the
-    /// metadata (e.g. the endhost API discovery URL) from the bootstrap call.
+    /// [`Metadata`] from the AA response. The call also publishes the discovery URL of the answer
+    /// to the source from [`Self::endhost_api_source`].
     ///
     /// Unlike [`TokenRefresher::refresh`], this reports the concrete
     /// [`ApiKeyTokenRefresherError`], so that callers can tell a rejected API
     /// key from a service they could not reach via
     /// [`ApiKeyTokenRefresherError::is_transient`].
     pub async fn refresh_with_metadata(
+        &self,
+    ) -> Result<(TokenWithExpiry, Option<Metadata>), ApiKeyTokenRefresherError> {
+        let result = self.fetch().await;
+        match &result {
+            Ok((_, metadata)) => self.publish_discovery_url(metadata.as_ref()),
+            Err(error) => {
+                self.publish_fallback(Err(AaFailure {
+                    message: format!("AA authentication failed: {error:#}"),
+                    transient: error.is_transient(),
+                }));
+            }
+        }
+        result
+    }
+
+    /// Publishes the discovery URL of a successful AA answer. The refresher ignores a bad URL.
+    fn publish_discovery_url(&self, metadata: Option<&Metadata>) {
+        let url = metadata
+            .and_then(|metadata| metadata.endhost_api_discovery_url.as_deref())
+            .filter(|url| !url.is_empty());
+        match url.map(Url::parse).transpose() {
+            Ok(url) => {
+                self.discovery.send_replace(Some(Ok(url)));
+            }
+            Err(error) => {
+                tracing::debug!(url, %error, "Ignored the bad discovery URL from the AA");
+                self.publish_fallback(Ok(None));
+            }
+        }
+    }
+
+    /// Publishes `fallback`, but keeps the discovery state of an earlier successful answer.
+    fn publish_fallback(&self, fallback: Result<Option<Url>, AaFailure>) {
+        self.discovery.send_if_modified(|state| {
+            if matches!(state, Some(Ok(_))) {
+                return false;
+            }
+
+            *state = Some(fallback);
+            true
+        });
+    }
+
+    async fn fetch(
         &self,
     ) -> Result<(TokenWithExpiry, Option<Metadata>), ApiKeyTokenRefresherError> {
         let result = self
@@ -181,16 +249,10 @@ impl<C: AaAuthClient + 'static> ApiKeyTokenRefresher<C> {
 #[async_trait]
 impl<C: AaAuthClient + 'static> TokenRefresher for ApiKeyTokenRefresher<C> {
     async fn refresh(&self) -> Result<TokenWithExpiry, TokenSourceError> {
-        let (token_with_expiry, _metadata) =
-            self.refresh_with_metadata().await.map_err(|error| {
-                // An auth service that could not be reached is worth another call, a rejected API
-                // key is not; keep the concrete error as the cause either way.
-                if error.is_transient() {
-                    TokenSourceError::unavailable(error)
-                } else {
-                    TokenSourceError::rejected(error)
-                }
-            })?;
+        let (token_with_expiry, _metadata) = self
+            .refresh_with_metadata()
+            .await
+            .map_err(ApiKeyTokenRefresherError::into_token_source_error)?;
         Ok(token_with_expiry)
     }
 }

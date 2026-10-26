@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use scion_quic::quic::config::QuicConfig;
 use scion_stack::{
     ScionStackBuilder,
+    ea_source::{EndhostApiSource, EndhostApiSourceError, models::EndhostApiGroup},
     reqwest_connect_rpc::token_source::{
         TokenSource, TokenSourceError, TokenSourceWatch, static_token::StaticTokenSource,
     },
@@ -70,15 +71,46 @@ impl TokenSource for SharedTokenSource {
     }
 }
 
+/// Adapts a shared [`EndhostApiSource`] to the by-value `impl EndhostApiSource`
+/// the stack builder takes, for the same reason as [`SharedTokenSource`].
+pub(crate) struct SharedEndhostApiSource(pub(crate) Arc<dyn EndhostApiSource>);
+
+#[async_trait]
+impl EndhostApiSource for SharedEndhostApiSource {
+    async fn endhost_apis(&self) -> Result<Vec<EndhostApiGroup>, EndhostApiSourceError> {
+        self.0.endhost_apis().await
+    }
+}
+
+/// Where a [`Config`] finds its endhost APIs.
+#[derive(Clone)]
+pub(crate) enum EndhostApi {
+    /// One fixed endhost API.
+    Fixed(Url),
+    /// The endhost APIs from a source.
+    Source(Arc<dyn EndhostApiSource>),
+}
+
+impl fmt::Debug for EndhostApi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EndhostApi::Fixed(url) => f.debug_tuple("Fixed").field(url).finish(),
+            EndhostApi::Source(_) => f.debug_tuple("Source").field(&"<source>").finish(),
+        }
+    }
+}
+
 /// Configuration for a [`Client`](crate::Client).
 ///
-/// Construct with [`Config::new`] and customize with the consuming `with_*`
-/// methods. The endhost API URL is the only required setting: it is how the
-/// client discovers the data planes available to it, and the same single
-/// setting reaches a real SCION network or a local `PocketSCION` topology.
+/// Construct with [`Config::new`] for one fixed endhost API, or with
+/// [`Config::from_endhost_api_source`] to discover the endhost APIs, and
+/// customize with the consuming `with_*` methods. The endhost API is the only
+/// required setting: it is how the client discovers the data planes available
+/// to it, and the same single setting reaches a real SCION network or a local
+/// `PocketSCION` topology.
 #[derive(Clone)]
 pub struct Config {
-    pub(crate) endhost_api: Url,
+    pub(crate) endhost_api: EndhostApi,
     pub(crate) auth_token_source: Option<Arc<dyn TokenSource>>,
     pub(crate) preferred_underlay: Option<PreferredUnderlay>,
     pub(crate) stack_customizer: Option<Arc<StackCustomizer>>,
@@ -97,6 +129,26 @@ impl Config {
     /// endhost API.
     #[must_use]
     pub fn new(endhost_api: Url) -> Self {
+        Config::with_defaults(EndhostApi::Fixed(endhost_api))
+    }
+
+    /// Creates a configuration that gets the endhost APIs from `source`, for
+    /// example from the global discovery service
+    /// ([`StaticEndhostApiDiscovery::global`](scion_stack::ea_source::StaticEndhostApiDiscovery::global)).
+    ///
+    /// All clones of the configuration share `source`. Each stack that the
+    /// client builds gets the endhost APIs from `source` again: on first use
+    /// and after each [`reset`](crate::Client::reset).
+    ///
+    /// If `source` fails, the request fails with
+    /// [`Error::StackBuild`](crate::Error::StackBuild). The error is retryable
+    /// if the source error is transient.
+    #[must_use]
+    pub fn from_endhost_api_source(source: impl EndhostApiSource) -> Self {
+        Config::with_defaults(EndhostApi::Source(Arc::new(source)))
+    }
+
+    fn with_defaults(endhost_api: EndhostApi) -> Self {
         Config {
             endhost_api,
             auth_token_source: None,
@@ -317,6 +369,18 @@ mod tests {
     fn default_idle_sweep_precedes_quic_idle_timeout() {
         let config = config();
         assert!(config.idle_connection_timeout < config.quic.idle_timeout);
+    }
+
+    #[test]
+    fn debug_shows_the_fixed_endhost_api_or_a_source() {
+        let debug = format!("{:?}", config());
+        assert!(debug.contains("endhost-api.example.org"), "{debug}");
+
+        let config = Config::from_endhost_api_source(
+            scion_stack::ea_source::StaticEndhostApiDiscovery::global(),
+        );
+        let debug = format!("{config:?}");
+        assert!(debug.contains("<source>"), "{debug}");
     }
 
     #[test]
