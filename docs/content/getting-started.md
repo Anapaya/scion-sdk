@@ -38,6 +38,9 @@ Path awareness is opt-in — the simplest programs ignore it and let the stack
 choose, and you reach for explicit path selection only when you want it (see
 [Going further: let your app pick the path](#going-further)).
 
+To see the SDK in an example application, read
+[The chat application](./example-application/overview.md).
+
 ## Prerequisites
 
 - **Rust** — the SDK pins its toolchain in `rust-toolchain.toml`, so if you have
@@ -183,6 +186,8 @@ socket, and `send_to` / `recv_from`.
 - **PocketSCION** — see
   [`crates/pocketscion/README.md`](https://github.com/Anapaya/scion-sdk/tree/main/crates/pocketscion)
   for the other topologies and underlays you can simulate.
+- **An example application** — [the chat application](./example-application/overview.md) is a
+  server and multiple clients on the SDK.
 
 ## Full example
 

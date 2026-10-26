@@ -30,6 +30,10 @@
  *
  *   codeImport({ aliases: { '@sdk': '/abs/path/to/sdk-sources' } })
  *
+ * A build that does not have the sources of an alias names it in
+ * `placeholderAliases`. A reference with such an alias gets a placeholder text
+ * in place of the code, and the plugin reads no file for it.
+ *
  * The optional `#selector` is either:
  *   - a named anchor:  `#server`  -> the lines between the mdBook-style markers
  *     `// ANCHOR: server` and `// ANCHOR_END: server` (anchor lines and any
@@ -66,13 +70,19 @@ export interface CodeImportOptions {
      * `/x/scion-stack/examples/foo.rs`.
      */
     aliases?: Record<string, string>;
+    /** Alias prefixes whose references get a placeholder text in place of the code. */
+    placeholderAliases?: string[];
 }
 
 const REFERENCE_RE = /(?:^|\s)reference="([^"]+)"/;
 
+function hasAlias(rawPath: string, prefix: string): boolean {
+    return rawPath === prefix || rawPath.startsWith(`${prefix}/`);
+}
+
 function resolvePath(rawPath: string, pageFile: string, aliases: Record<string, string>): string {
     for (const [prefix, target] of Object.entries(aliases)) {
-        if (rawPath === prefix || rawPath.startsWith(`${prefix}/`)) {
+        if (hasAlias(rawPath, prefix)) {
             const rest = rawPath.slice(prefix.length).replace(/^\/+/, '');
             return path.resolve(target, rest);
         }
@@ -162,8 +172,13 @@ function resolveReference(
     return dedent(block).replace(/\n+$/, '');
 }
 
+function placeholder(reference: string): string {
+    return `This build does not include the source of this snippet: ${reference}`;
+}
+
 export default function codeImport(options: CodeImportOptions = {}) {
     const aliases = options.aliases ?? {};
+    const placeholderAliases = options.placeholderAliases ?? [];
     return (tree: MdastNode, vfile: { path?: string; history?: string[] }) => {
         const pageFile = vfile.path ?? vfile.history?.[0];
         if (!pageFile) {
@@ -174,7 +189,10 @@ export default function codeImport(options: CodeImportOptions = {}) {
                 const code = node as unknown as MdastCode;
                 const match = code.meta?.match(REFERENCE_RE);
                 if (match) {
-                    code.value = resolveReference(match[1], pageFile, aliases);
+                    const reference = match[1];
+                    code.value = placeholderAliases.some((prefix) => hasAlias(reference, prefix))
+                        ? placeholder(reference)
+                        : resolveReference(reference, pageFile, aliases);
                     // Strip our custom attribute; leave the rest (e.g. title=) intact.
                     code.meta = (code.meta ?? '').replace(REFERENCE_RE, '').trim() || null;
                 }

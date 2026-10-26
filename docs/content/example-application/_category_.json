@@ -1,0 +1,9 @@
+{
+  "label": "Example application",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "title": "Example application",
+    "description": "A chat application on the SCION SDK, with one server and three clients: a terminal client in Rust, an Android app and an iOS app."
+  }
+}

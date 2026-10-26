@@ -72,5 +72,7 @@ how token sources work, and how you get an API key for the Anapaya AA.
   responsibilities.
 - **[Addressing](./addressing.md)** and **[Paths and path policies](./paths-and-policies.md):** what
   rides on top of the underlay once it is established.
+- **[From a local SCION network to a real network](../example-application/real-network.md):**
+  how the chat example application moves from a development token to an API key.
 - **[Access and authentication](./access-and-authentication.md):** subscriptions, API keys, and
   the SNAP token that the SNAP underlay needs.

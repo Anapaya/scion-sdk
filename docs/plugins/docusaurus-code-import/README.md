@@ -38,3 +38,17 @@ let server_socket = server_stack.bind(None).await?;
 
 The `reference` attribute is stripped after resolution, so the block gets normal
 syntax highlighting; other meta (e.g. `title=`) is preserved.
+
+## Placeholder aliases
+
+A build that does not have the sources of an alias names that alias in the
+`placeholderAliases` option. The plugin reads no file for a reference with such
+an alias. It puts a placeholder text into the code block.
+
+```ts
+codeImport({ aliases: { '@sdk': sdkRoot }, placeholderAliases: ['@chat'] })
+```
+
+The [local preview](../../preview/) uses a placeholder for `@chat` only when
+`SCION_SDK_CHAT_DIR` is not set. When it is set, `@chat` resolves to that
+checkout of the chat example application, like any other alias.

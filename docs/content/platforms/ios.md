@@ -246,6 +246,9 @@ app is done with a client before then, for example on sign-out.
 - **The sample app** —
   [`bindings/apple/hello-scion`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/apple/hello-scion)
   is the app this page is built from, ready to run.
+- **An example application** — `hello-scion` is the smallest app. The
+  [chat application](../example-application/overview.md) is a larger one, with an iOS client on
+  this library.
 
 ## Full sample
 

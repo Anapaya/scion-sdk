@@ -211,6 +211,9 @@ Cancellation needs nothing special: cancel the coroutine, and the request is can
 - **The sample app** —
   [`bindings/android/hello-scion`](https://github.com/Anapaya/scion-sdk/tree/main/bindings/android/hello-scion)
   is the app this page is built from, ready to run.
+- **An example application** — `hello-scion` is the smallest app. The
+  [chat application](../../example-application/overview.md) is a larger one, with an Android
+  client on this library.
 
 ## Full sample
 

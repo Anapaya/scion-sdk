@@ -81,6 +81,7 @@ async fn run() -> anyhow::Result<()> {
 
     // Start the HTTP/3 server in AS 2-ff00:0:212
     let (server_task, server_addr, shutdown) = {
+        // ANCHOR: axum-server
         // Build a SCION stack for the server in AS 2-ff00:0:212.
         let server_stack: ScionStack = common::build_stack(&ps, IA212).await?;
         // Bind a SCION UDP socket for the server to listen on.
@@ -120,6 +121,7 @@ async fn run() -> anyhow::Result<()> {
                 .await
             }
         });
+        // ANCHOR_END: axum-server
         println!("HTTP/3 server listening on {server_addr}");
 
         (server_task, server_addr, shutdown)

@@ -81,6 +81,9 @@ async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
 The full developer guide is published at **<https://learn.anapaya.net/docs/academy/scion-sdk>**.
 That site tracks the latest *released* version of the SDK.
 
+The [chat example application](https://github.com/Anapaya/scion-sdk-chat/tree/main)
+is a chat server and three clients, in the terminal, on Android and on iOS, built on top of the SDK.
+
 To preview the documentation for the current `HEAD` of this repository instead, use the standalone
 preview app in [docs/preview/](docs/preview/):
 

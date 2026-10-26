@@ -5,6 +5,10 @@
 # The guide pulls its snippets and topology diagrams out of real source files
 # with the code-import remark plugin, and a reference the plugin cannot resolve
 # fails only at Docusaurus build time.
+#
+# The guide also quotes the chat example application with `@chat` snippets. The
+# build resolves them against the main branch of the chat, because the guide
+# sources are the guide of the next SDK release. The chat files are only read.
 name: Docs
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -44,7 +48,15 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
+      - name: Check out the chat example application
+        uses: actions/checkout@v4
+        with:
+          repository: Anapaya/scion-sdk-chat
+          ref: main
+          path: scion-sdk-chat
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build the developer guide
         run: pnpm -C docs/preview build
+        env:
+          SCION_SDK_CHAT_DIR: ${{ github.workspace }}/scion-sdk-chat

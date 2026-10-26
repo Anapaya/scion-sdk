@@ -14,6 +14,7 @@
 // Minimal, standalone Docusaurus config for previewing the SCION SDK developer
 // guide.
 
+import fs from 'fs';
 import path from 'path';
 
 import type * as Preset from '@docusaurus/preset-classic';
@@ -23,6 +24,20 @@ import { themes as prismThemes } from 'prism-react-renderer';
 import codeImport from '@anapaya/docusaurus-code-import';
 
 const sdkRoot = path.resolve(__dirname, '../..');
+
+// A checkout of the chat example application, from SCION_SDK_CHAT_DIR. With it, the `@chat`
+// snippets resolve, and a missing file or anchor fails the build. Without it, each `@chat`
+// snippet is a placeholder.
+const chatRoot = process.env.SCION_SDK_CHAT_DIR
+    ? path.resolve(process.env.SCION_SDK_CHAT_DIR)
+    : undefined;
+if (chatRoot && !fs.existsSync(path.join(chatRoot, 'docs/anchors.txt'))) {
+    throw new Error(`SCION_SDK_CHAT_DIR=${chatRoot} is not a checkout of scion-sdk-chat`);
+}
+
+const codeImportOptions = chatRoot
+    ? { aliases: { '@sdk': sdkRoot, '@chat': chatRoot } }
+    : { aliases: { '@sdk': sdkRoot }, placeholderAliases: ['@chat'] };
 
 const config: Config = {
     title: 'SCION SDK Developer Documenation',
@@ -50,7 +65,7 @@ const config: Config = {
                     path: '../content',
                     routeBasePath: '/',
                     sidebarPath: './sidebars.ts',
-                    beforeDefaultRemarkPlugins: [[codeImport, { aliases: { '@sdk': sdkRoot } }]],
+                    beforeDefaultRemarkPlugins: [[codeImport, codeImportOptions]],
                 },
                 blog: false,
                 theme: { customCss: './src/css/custom.css' },
