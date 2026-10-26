@@ -1,6 +1,6 @@
 [package]
 name = "scion-sdk-observability"
-version = "0.8.5"
+version = "0.8.6"
 edition.workspace = true
 authors = ["Anapaya & contributors"]
 license = "Apache-2.0"
