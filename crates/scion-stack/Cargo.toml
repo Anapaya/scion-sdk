@@ -47,7 +47,9 @@ x25519-dalek = { workspace = true }
 windows-sys = "0.61.2"
 
 [dev-dependencies]
-anapaya-aa-client = { workspace = true }
+# No version: anapaya-aa-client depends on this crate, and cargo publish drops
+# version-less dev-dependencies, which breaks the cycle.
+anapaya-aa-client = { path = "../apis/anapaya-aa/anapaya-aa-client" }
 axum = { workspace = true }
 chrono = { workspace = true }
 hickory-server = { workspace = true }
