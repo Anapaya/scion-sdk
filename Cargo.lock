@@ -5386,6 +5386,7 @@ name = "scion-stack"
 version = "0.8.5"
 dependencies = [
  "ana-gotatun",
+ "anapaya-aa-client",
  "anapaya-ead-client",
  "anapaya-ead-models",
  "anyhow",

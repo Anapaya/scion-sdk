@@ -62,15 +62,17 @@ how to reach the endhost API
 ([`with_endhost_api`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_endhost_api)
 or
 [`with_endhost_api_discovery_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_endhost_api_discovery_source)),
-and how to obtain a SNAP token
-([`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)
-or
-[`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source)).
+and where to get the SNAP token
+([`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source)).
 The [endhost API](./endhost-api.md) page covers how the stack finds the endhost API, the
 [transport underlays](./transport-underlays.md) page covers the underlay settings, and
 [access and authentication](./access-and-authentication.md) covers the SNAP token.
 For the full set, see the
 [`ScionStackBuilder` reference](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html).
+
+A SNAP token is valid for one stack at a time. If two stacks use the same token at the same time,
+the SNAP forwards the traffic of only one of them. Do not give the same token source to two stacks
+that run at the same time.
 
 ### Lifecycle
 

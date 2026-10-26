@@ -52,12 +52,9 @@ sequenceDiagram
 
 The SDK gets the SNAP token from a **token source**
 ([`TokenSource`](https://docs.rs/reqwest-connect-rpc/latest/reqwest_connect_rpc/token_source/trait.TokenSource.html)).
-You give the token or the token source to the stack when you build it. There are two methods:
-
-- [`with_auth_token`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token)
-  takes a static token string.
-- [`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source)
-  takes a token source that renews the token.
+You give the token source to the stack with
+[`with_auth_token_source`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.with_auth_token_source)
+when you build it.
 
 ### Local development
 

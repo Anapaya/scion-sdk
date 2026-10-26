@@ -50,18 +50,25 @@ type OutboundIpResolverFactory = Box<dyn FnOnce(Url) -> Arc<dyn OutboundIpResolv
 
 /// Builder for creating a [`ScionStack`].
 ///
+/// A SNAP token is valid for one stack at a time. If two stacks use the same token at the same
+/// time, the SNAP forwards the traffic of only one of them. Do not give the same token or token
+/// source to two stacks that run at the same time.
+///
 /// # Example
 ///
 /// ```no_run
+/// use anapaya_aa_client::AnapayaAaTokenSource;
 /// use scion_stack::stack::builder::ScionStackBuilder;
 /// use url::Url;
 ///
 /// async fn setup_scion_stack() {
 ///     let control_plane_url: Url = "http://127.0.0.1:1234".parse().unwrap();
+///     let aa_url: Url = "https://auth.scion.anapaya.net".parse().unwrap();
+///     let token_source = AnapayaAaTokenSource::new("aakey_...", &aa_url, "my-device-id").unwrap();
 ///
 ///     let scion_stack = ScionStackBuilder::new()
 ///         .with_endhost_api(control_plane_url)
-///         .with_auth_token("snap_token".to_string())
+///         .with_auth_token_source(token_source)
 ///         .build()
 ///         .await
 ///         .unwrap();
@@ -161,9 +168,13 @@ impl ScionStackBuilder {
         self
     }
 
-    /// Set a static token to use for authentication both with the endhost API and the SNAP control
+    /// Set a fixed token to use for authentication both with the endhost API and the SNAP control
     /// plane.
-    /// If a more specific token is set, it takes precedence over this token.
+    ///
+    /// The stack cannot renew a fixed token. When the token expires, authentication fails. Use
+    /// [`with_auth_token_source`](Self::with_auth_token_source) with a token source that renews
+    /// the token, for example
+    /// [`AnapayaAaTokenSource`](https://docs.rs/anapaya-aa-client/latest/anapaya_aa_client/struct.AnapayaAaTokenSource.html).
     #[must_use]
     pub fn with_auth_token(mut self, token: String) -> Self {
         self.auth_token_source = Some(Arc::new(StaticTokenSource::from(token)));
@@ -595,7 +606,11 @@ pub struct SnapUnderlayConfig {
 }
 
 impl SnapUnderlayConfig {
-    /// Sets a static token to use for authentication with the SNAP control plane.
+    /// Sets a fixed token to use for authentication with the SNAP control plane.
+    ///
+    /// The stack cannot renew a fixed token. When the token expires, authentication fails. Use
+    /// [`with_auth_token_source`](Self::with_auth_token_source) with a token source that renews
+    /// the token.
     #[must_use]
     pub fn with_auth_token(mut self, token: String) -> Self {
         self.snap_token_source = Some(Arc::new(StaticTokenSource::from(token)));

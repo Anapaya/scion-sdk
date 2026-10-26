@@ -10,6 +10,10 @@ repository = "https://github.com/anapaya/scion-sdk"
 keywords = ["SCION", "networking"]
 categories = ["network-programming"]
 
+# Only the doctests use anapaya-aa-client.
+[package.metadata.cargo-shear]
+ignored = ["anapaya-aa-client"]
+
 [dependencies]
 ana-gotatun = { workspace = true }
 anapaya-ead-client = { workspace = true }
@@ -43,6 +47,7 @@ x25519-dalek = { workspace = true }
 windows-sys = "0.61.2"
 
 [dev-dependencies]
+anapaya-aa-client = { workspace = true }
 axum = { workspace = true }
 chrono = { workspace = true }
 hickory-server = { workspace = true }

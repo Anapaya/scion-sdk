@@ -23,6 +23,7 @@
 //! ### Creating a path-aware socket (recommended)
 //!
 //! ```
+//! use anapaya_aa_client::AnapayaAaTokenSource;
 //! use scion_stack::stack::{ScionStack, ScionStackBuilder};
 //! use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 //! use url::Url;
@@ -30,7 +31,9 @@
 //! # async fn socket_example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
+//! let aa_url: Url = "https://auth.scion.anapaya.net".parse()?;
+//! let token_source = AnapayaAaTokenSource::new("aakey_...", &aa_url, "my-device-id")?;
+//! let builder = ScionStackBuilder::new().with_auth_token_source(token_source);
 //!
 //! let scion_stack = builder.build().await?;
 //! let socket = scion_stack.bind(None).await?;
@@ -55,9 +58,12 @@
 //! use url::Url;
 //!
 //! # async fn connected_socket_example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let aa_url: Url = "https://auth.scion.anapaya.net".parse()?;
+//! # let token_source =
+//! #     anapaya_aa_client::AnapayaAaTokenSource::new("aakey_...", &aa_url, "my-device-id")?;
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token_source(token_source);
 //!
 //! // Parse destination address
 //! let destination: ScionSocketIpAddr = "1-ff00:0:111,[192.168.1.1]:8080".parse()?;
@@ -81,9 +87,12 @@
 //! use url::Url;
 //!
 //! # async fn basic_socket_example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let aa_url: Url = "https://auth.scion.anapaya.net".parse()?;
+//! # let token_source =
+//! #     anapaya_aa_client::AnapayaAaTokenSource::new("aakey_...", &aa_url, "my-device-id")?;
 //! // Create a SCION stack builder
 //! let control_plane_addr: url::Url = "http://127.0.0.1:1234".parse()?;
-//! let builder = ScionStackBuilder::new().with_auth_token("SNAP token".to_string());
+//! let builder = ScionStackBuilder::new().with_auth_token_source(token_source);
 //!
 //! // Parse addresses
 //! let bind_addr: ScionSocketIpAddr = "1-ff00:0:110,[127.0.0.1]:8080".parse()?;
@@ -136,8 +145,11 @@
 //! use sciparse::address::ip_socket_addr::ScionSocketIpAddr;
 //!
 //! # async fn manual_path_example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let aa_url: url::Url = "https://auth.scion.anapaya.net".parse()?;
+//! # let token_source =
+//! #     anapaya_aa_client::AnapayaAaTokenSource::new("aakey_...", &aa_url, "my-device-id")?;
 //! let stack = ScionStackBuilder::new()
-//!     .with_auth_token("SNAP token".to_string())
+//!     .with_auth_token_source(token_source)
 //!     .build()
 //!     .await?;
 //!
