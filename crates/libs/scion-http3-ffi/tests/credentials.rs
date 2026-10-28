@@ -48,7 +48,7 @@ fn config(server: &TestServer) -> ClientConfig {
             host: "localhost".to_string(),
             addresses: vec![server.target()],
         }],
-        ..default_client_config(server.endhost_api_url().to_string())
+        ..default_client_config(Some(server.endhost_api_url().to_string()))
     }
 }
 

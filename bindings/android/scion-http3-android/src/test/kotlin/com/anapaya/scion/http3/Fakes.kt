@@ -369,7 +369,7 @@ internal class RecordingLog : LibraryLog {
 // Builders for the fixtures every test needs, so that a test says only what it is actually about.
 
 internal fun settings(
-    endhostApiUrl: String = "https://endhost-api.example.org",
+    endhostApiUrl: String? = "https://endhost-api.example.org",
     trust: TrustAnchors = TrustAnchors.systemDefault(),
     idleConnectionTimeoutMillis: Long? = null,
     authToken: String? = null,

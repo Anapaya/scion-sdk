@@ -42,12 +42,22 @@ final class ClientConstructionTests: XCTestCase {
         XCTAssertEqual(settings.first?.endhostApiUrl, "https://endhost-api.example.org")
     }
 
-    func testTheEndhostApiIsRequired() {
+    func testAnEmptyEndhostApiIsRefused() {
         let error = thrown { try settings(endhostApi: "") } as? ScionHttp3Error
         guard case .invalidConfiguration(let detail)? = error else {
             return XCTFail("\(String(describing: error))")
         }
-        XCTAssertTrue(detail.contains("endhostApi is required"), detail)
+        XCTAssertTrue(detail.contains("endhostApi is optional"), detail)
+        XCTAssertTrue(detail.contains("it cannot be an empty string"), detail)
+    }
+
+    func testWithoutAnEndhostApiEveryCredentialIsEnough() {
+        XCTAssertNoThrow(try settings(endhostApi: nil))
+        XCTAssertNoThrow(try settings(endhostApi: nil, authToken: "token"))
+        XCTAssertNoThrow(
+            try settings(
+                endhostApi: nil,
+                authTokenSource: .anapayaAa(apiKey: "k", aaUrl: "https://aa.example.org")))
     }
 
     func testAPlaintextEndhostApiIsAllowed() {

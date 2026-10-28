@@ -91,6 +91,11 @@ and closes it when it is done:
 changes between a test network and a real one. `build()` does no I/O: the first request is what
 brings connectivity up.
 
+If you leave out `endhostApi`, the client discovers the endhost APIs. A client with an Anapaya AA
+token source uses the discovery URL that the AA sends with the token. Without an AA token source, or
+if the AA sends no discovery URL, the client uses the global discovery service. See [the endhost
+API](../../concepts/endhost-api.md).
+
 `dnsOverride` is for a server that has no SCION address records to look up. It resolves one host to
 fixed addresses and does nothing else: the port and the name the certificate has to match still
 come from the URL, so the URL stays truthful about where the request went. The override applies to

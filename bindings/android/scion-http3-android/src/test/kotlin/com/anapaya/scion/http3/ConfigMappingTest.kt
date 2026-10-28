@@ -133,6 +133,18 @@ class ConfigMappingTest {
     }
 
     @Test
+    fun `without endhostApi no URL crosses`() {
+        val config =
+            ClientSettings(
+                endhostApiUrl = null,
+                trust = TrustAnchors.systemDefault(),
+                authTokenSource = AuthTokenSource.anapayaAa("a-key", "https://aa.example.org"),
+            ).applyTo(base, FfiTrustAnchors.InsecureNoVerify)
+
+        assertNull(config.endhostApiUrl)
+    }
+
+    @Test
     fun `durations cross as milliseconds`() {
         val config =
             ClientSettings(

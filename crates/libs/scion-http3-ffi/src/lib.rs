@@ -137,10 +137,11 @@ uniffi::setup_scaffolding!();
 /// The defaults `scion-http3` applies, as a configuration record.
 ///
 /// Exported so that the foreign builder does not restate them: a default that is written down
-/// twice is a default that eventually disagrees with itself.
+/// twice is a default that eventually disagrees with itself. See
+/// [`ClientConfig::endhost_api_url`] for a client without an endhost API URL.
 #[uniffi::export]
 #[must_use]
-pub fn default_client_config(endhost_api_url: String) -> ClientConfig {
+pub fn default_client_config(endhost_api_url: Option<String>) -> ClientConfig {
     ClientConfig::with_defaults(endhost_api_url)
 }
 

@@ -414,7 +414,10 @@ public class ScionHttp3Client internal constructor(
         private var networkMonitor: NetworkMonitor? = null
 
         /**
-         * Where the client discovers SCION connectivity. Required.
+         * Where the client discovers SCION connectivity. Optional. Without it, the client
+         * discovers the endhost APIs. If [authTokenSource] is an [AuthTokenSource.anapayaAa], the
+         * client uses the discovery URL that the AA sends with the token. Without an AA source, or
+         * if the AA sends no URL, the client uses the global discovery service.
          *
          * This, and not a choice of transport, is what points the client at a network: the endhost
          * API reports what is available and the client uses it.
@@ -589,7 +592,7 @@ public class ScionHttp3Client internal constructor(
         public fun build(): ScionHttp3Client {
             val settings =
                 ClientSettings(
-                    endhostApiUrl = endhostApi.orEmpty(),
+                    endhostApiUrl = endhostApi,
                     trust = trust,
                     authToken = authToken,
                     authTokenSource = authTokenSource,

@@ -60,7 +60,7 @@ fn client(server: &TestServer) -> Arc<ScionHttp3Client> {
             host: "localhost".to_string(),
             addresses: vec![server.target()],
         }],
-        ..default_client_config(server.endhost_api_url().to_string())
+        ..default_client_config(Some(server.endhost_api_url().to_string()))
     })
     .expect("building a client")
 }

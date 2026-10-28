@@ -316,7 +316,7 @@ final class RecordingLog: LibraryLog {
 // Builders for the fixtures every test needs, so that a test says only what it is actually about.
 
 func configuration(
-    endhostApi: String = "https://endhost-api.example.org",
+    endhostApi: String? = "https://endhost-api.example.org",
     authToken: String? = nil,
     authTokenSource: AuthTokenSource? = nil,
     trust: TrustAnchors = .systemDefault,
@@ -330,7 +330,7 @@ func configuration(
 }
 
 func settings(
-    endhostApi: String = "https://endhost-api.example.org",
+    endhostApi: String? = "https://endhost-api.example.org",
     authToken: String? = nil,
     authTokenSource: AuthTokenSource? = nil,
     trust: TrustAnchors = .systemDefault,

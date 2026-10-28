@@ -26,7 +26,9 @@ use scion_http3::{
     http::{HeaderMap, HeaderName, HeaderValue, Method},
     scion_quic::quic::config::QuicConfig,
     scion_stack::{
-        ScionStackBuilder, reqwest,
+        ScionStackBuilder,
+        ea_source::StaticEndhostApiDiscovery,
+        reqwest,
         stack::builder::{PreferredUnderlay, SnapUnderlayConfig, UdpUnderlayConfig},
         x25519_dalek::StaticSecret,
     },
@@ -55,18 +57,13 @@ impl ClientConfig {
         self,
         auth_token: Option<SharedToken>,
     ) -> Result<Config, Error> {
-        let endhost_api = self
+        let endhost_api: Option<Url> = self
             .endhost_api_url
-            .parse()
+            .as_deref()
+            .map(str::parse)
+            .transpose()
             .map_err(|e| Error::invalid_request(format!("invalid endhost API URL: {e}")))?;
-
-        let mut config = Config::new(endhost_api)
-            .with_connect_timeout(Duration::from_millis(self.connect_timeout_ms))
-            .with_request_timeout(Duration::from_millis(self.request_timeout_ms))
-            .with_idle_connection_timeout(Duration::from_millis(self.idle_connection_timeout_ms))
-            .with_max_origins(self.max_origins as usize)
-            .with_connection_attempt_delay(Duration::from_millis(self.connection_attempt_delay_ms))
-            .with_quic_config(quic_config(&self.trust)?);
+        let quic = quic_config(&self.trust)?;
 
         // Parsed first, because the AA client trusts the same anchors.
         let control_plane_anchors = self
@@ -74,20 +71,77 @@ impl ClientConfig {
             .map(|pem| control_plane_anchors(&pem))
             .transpose()?;
 
-        // Installed only when there is a token. The stack's get_token awaits the first value, so a
-        // source with nothing in it would make the first endhost-API request hang rather than go
-        // out unauthenticated, which is what a client configured without a token wants.
-        if let Some(token) = auth_token {
-            config = config.with_auth_token_source(token);
-        }
-
+        let mut dns_overrides = Vec::with_capacity(self.dns_overrides.len());
         for DnsOverride { host, addresses } in self.dns_overrides {
             if addresses.is_empty() {
                 return Err(Error::invalid_request(format!(
                     "the DNS override for `{host}` has no addresses"
                 )));
             }
-            config = config.with_dns_override(host, parse_addresses(&addresses)?);
+            let addresses = parse_addresses(&addresses)?;
+            dns_overrides.push((host, addresses));
+        }
+
+        // Everything the stack builder owns has to go through the customizer, which runs on every
+        // rebuild of connectivity rather than once. Validate here, where a bad value can still be
+        // reported to the caller, and let the closure only assemble.
+        let discovery_config = self.discovery;
+        let snap = validated_snap(self.snap)?;
+        let udp = validated_udp(self.udp)?;
+
+        if self.auth_token_source.is_some() && self.auth_token.is_some() {
+            return Err(Error::invalid_request(
+                "a client is built with an auth_token or an auth_token_source, not both",
+            ));
+        }
+        // Built after all checks, because the AA source starts its first exchange at once.
+        let aa = self
+            .auth_token_source
+            .map(|source| token_source(source, control_plane_anchors.as_deref()))
+            .transpose()?;
+
+        let config = match endhost_api {
+            Some(url) => Config::new(url),
+            None => {
+                let http_client = control_plane_anchors.as_deref().map(discovery_client);
+                match (&aa, http_client) {
+                    (Some(aa), Some(http_client)) => {
+                        Config::from_endhost_api_source(
+                            aa.endhost_api_source().with_http_client(http_client),
+                        )
+                    }
+                    (Some(aa), None) => Config::from_endhost_api_source(aa.endhost_api_source()),
+                    (None, Some(http_client)) => {
+                        Config::from_endhost_api_source(
+                            StaticEndhostApiDiscovery::global().with_http_client(http_client),
+                        )
+                    }
+                    (None, None) => {
+                        Config::from_endhost_api_source(StaticEndhostApiDiscovery::global())
+                    }
+                }
+            }
+        };
+        let mut config = config
+            .with_connect_timeout(Duration::from_millis(self.connect_timeout_ms))
+            .with_request_timeout(Duration::from_millis(self.request_timeout_ms))
+            .with_idle_connection_timeout(Duration::from_millis(self.idle_connection_timeout_ms))
+            .with_max_origins(self.max_origins as usize)
+            .with_connection_attempt_delay(Duration::from_millis(self.connection_attempt_delay_ms))
+            .with_quic_config(quic);
+
+        // Installed only when there is a token. The stack's get_token awaits the first value, so a
+        // source with nothing in it would make the first endhost-API request hang rather than go
+        // out unauthenticated, which is what a client configured without a token wants.
+        if let Some(token) = auth_token {
+            config = config.with_auth_token_source(token);
+        }
+        if let Some(aa) = aa {
+            config = config.with_auth_token_source(aa);
+        }
+
+        for (host, addresses) in dns_overrides {
+            config = config.with_dns_override(host, addresses);
         }
 
         if let Some(underlay) = self.preferred_underlay {
@@ -97,28 +151,11 @@ impl ClientConfig {
             });
         }
 
-        // Everything the stack builder owns has to go through the customizer, which runs on every
-        // rebuild of connectivity rather than once. Validate here, where a bad value can still be
-        // reported to the caller, and let the closure only assemble.
-        let discovery = self.discovery;
-        let snap = validated_snap(self.snap)?;
-        let udp = validated_udp(self.udp)?;
-
-        if let Some(source) = self.auth_token_source {
-            if self.auth_token.is_some() {
-                return Err(Error::invalid_request(
-                    "a client is built with an auth_token or an auth_token_source, not both",
-                ));
-            }
-            config = config
-                .with_auth_token_source(token_source(source, control_plane_anchors.as_deref())?);
-        }
-
-        if control_plane_anchors.is_some() || customization_needed(&discovery, &snap, &udp) {
+        if control_plane_anchors.is_some() || customization_needed(&discovery_config, &snap, &udp) {
             config = config.with_stack_customizer(move |builder| {
                 customize(
                     builder,
-                    &discovery,
+                    &discovery_config,
                     &snap,
                     &udp,
                     control_plane_anchors.as_deref(),
@@ -237,6 +274,17 @@ fn control_plane_anchors(pem: &[u8]) -> Result<Vec<reqwest::Certificate>, Error>
 /// is gone, and a request on that connection gets no answer until the request timeout.
 fn control_plane_client(anchors: Vec<reqwest::Certificate>) -> reqwest::Result<reqwest::Client> {
     control_plane_client_builder(anchors).build()
+}
+
+/// Builds the HTTP client for the endhost API discovery. It trusts only `anchors`.
+///
+/// The client keeps no connections, because the next discovery comes only with the next rebuild of
+/// connectivity. After a network change, a kept connection can be on the network that is gone.
+fn discovery_client(anchors: &[reqwest::Certificate]) -> reqwest::Client {
+    control_plane_client_builder(anchors.to_vec())
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("the anchors built a client when they were parsed")
 }
 
 /// The settings of an HTTP client that trusts only `anchors`.
@@ -566,14 +614,15 @@ mod tests {
 
     #[test]
     fn a_config_carries_its_settings_and_rejects_a_bad_url() {
-        let config = ClientConfig::with_defaults("https://endhost-api.example.org".to_string());
+        let config =
+            ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()));
         config
             .clone()
             .into_client_config(None)
             .expect("building the configuration");
 
         let bad = ClientConfig {
-            endhost_api_url: "not a url".to_string(),
+            endhost_api_url: Some("not a url".to_string()),
             ..config
         }
         .into_client_config(None)
@@ -602,10 +651,35 @@ mod tests {
         ] {
             ClientConfig {
                 auth_token_source: Some(anapaya_aa("key", aa_url, "device")),
-                ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+                ..ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()))
             }
             .into_client_config(None)
             .unwrap_or_else(|e| panic!("building the configuration for {aa_url}: {e}"));
+        }
+    }
+
+    #[test]
+    fn without_an_endhost_api_a_configuration_builds() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        // The AA token source spawns its renewal task.
+        let _runtime = crate::runtime::runtime().unwrap().enter();
+        let pem = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("a certificate")
+            .cert
+            .pem();
+        for auth_token_source in [
+            None,
+            Some(anapaya_aa("key", "https://aa.example.org", "device")),
+        ] {
+            for control_plane_anchors_pem in [None, Some(pem.as_bytes().to_vec())] {
+                ClientConfig {
+                    auth_token_source: auth_token_source.clone(),
+                    control_plane_anchors_pem,
+                    ..ClientConfig::with_defaults(None)
+                }
+                .into_client_config(None)
+                .expect("building the configuration");
+            }
         }
     }
 
@@ -614,7 +688,7 @@ mod tests {
         let error = ClientConfig {
             auth_token: Some("token".to_string()),
             auth_token_source: Some(anapaya_aa("key", "https://aa.example.org", "device")),
-            ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+            ..ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()))
         }
         .into_client_config(None)
         .expect_err("two credentials are not a configuration");
@@ -635,7 +709,7 @@ mod tests {
         ] {
             let error = ClientConfig {
                 auth_token_source: Some(source),
-                ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+                ..ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()))
             }
             .into_client_config(None)
             .expect_err("an unusable source is not a configuration");
@@ -677,7 +751,8 @@ mod tests {
     /// that does nothing on every rebuild.
     #[test]
     fn the_stack_customizer_is_only_installed_when_needed() {
-        let untouched = ClientConfig::with_defaults("https://endhost-api.example.org".to_string());
+        let untouched =
+            ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()));
         assert!(!customization_needed(
             &untouched.discovery,
             &validated_snap(untouched.snap).expect("no identity"),
@@ -689,7 +764,7 @@ mod tests {
                 max_groups: Some(2),
                 ..DiscoveryConfig::default()
             },
-            ..ClientConfig::with_defaults("https://endhost-api.example.org".to_string())
+            ..ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()))
         };
         assert!(customization_needed(
             &tuned.discovery,
@@ -708,7 +783,7 @@ mod tests {
                     host: "pinned.example".to_string(),
                     addresses: addresses.into_iter().map(str::to_string).collect(),
                 }],
-                ..ClientConfig::with_defaults("https://endhost-api.invalid".to_string())
+                ..ClientConfig::with_defaults(Some("https://endhost-api.invalid".to_string()))
             }
             .into_client_config(None)
         };
@@ -728,43 +803,65 @@ mod tests {
     /// build. After a network change, that connection can be on the network that is gone.
     #[tokio::test]
     async fn each_control_plane_client_opens_its_own_connections() {
-        scion_sdk_utils::rustls::select_ring_crypto_provider();
-        let pem = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
-            .expect("a certificate")
-            .cert
-            .pem();
-        let anchors = control_plane_anchors(pem.as_bytes()).expect("valid anchors");
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("a listener");
-        let url = format!("http://{}/", listener.local_addr().expect("an address"));
-        let accepted = Arc::new(AtomicUsize::new(0));
-        tokio::spawn(serve_empty_responses(listener, accepted.clone()));
-
-        let get = |client: reqwest::Client| {
-            let url = url.clone();
-            async move {
-                let response = client.get(url).send().await.expect("a response");
-                assert!(response.status().is_success());
-            }
-        };
+        let anchors = test_anchors();
+        let (url, accepted) = empty_response_server().await;
 
         let first = control_plane_client(anchors.clone()).expect("a client");
-        get(first.clone()).await;
-        get(first).await;
+        get(&first, &url).await;
+        get(&first, &url).await;
         assert_eq!(
             accepted.load(Ordering::SeqCst),
             1,
             "one client keeps its connection"
         );
 
-        get(control_plane_client(anchors).expect("a client")).await;
+        get(&control_plane_client(anchors).expect("a client"), &url).await;
         assert_eq!(
             accepted.load(Ordering::SeqCst),
             2,
             "a new client opens a new connection"
         );
+    }
+
+    /// A discovery after a network change must not use a connection from an earlier discovery.
+    #[tokio::test]
+    async fn the_discovery_client_keeps_no_connections() {
+        let client = discovery_client(&test_anchors());
+        let (url, accepted) = empty_response_server().await;
+
+        get(&client, &url).await;
+        get(&client, &url).await;
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            2,
+            "each request opens a new connection"
+        );
+    }
+
+    fn test_anchors() -> Vec<reqwest::Certificate> {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        let pem = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("a certificate")
+            .cert
+            .pem();
+        control_plane_anchors(pem.as_bytes()).expect("valid anchors")
+    }
+
+    /// Starts [`serve_empty_responses`] on a new listener. Returns the URL of the listener and the
+    /// number of connections that it accepted.
+    async fn empty_response_server() -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a listener");
+        let url = format!("http://{}/", listener.local_addr().expect("an address"));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(serve_empty_responses(listener, accepted.clone()));
+        (url, accepted)
+    }
+
+    async fn get(client: &reqwest::Client, url: &str) {
+        let response = client.get(url).send().await.expect("a response");
+        assert!(response.status().is_success());
     }
 
     /// Answers every HTTP/1.1 request with an empty `200 OK`, and keeps each connection open.

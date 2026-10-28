@@ -158,7 +158,7 @@ class ClientConstructionTest {
         }
 
     @Test
-    fun `endhostApi is required, and says what it is for`() {
+    fun `an empty endhostApi is rejected, and says that it is optional`() {
         val failure =
             assertThrows<IllegalArgumentException> {
                 ClientSettings(
@@ -166,10 +166,17 @@ class ClientConstructionTest {
                     TrustAnchors.systemDefault(),
                 )
             }
-        assertTrue(failure.message!!.contains("endhostApi is required"))
-        assertTrue(
-            failure.message!!.contains("10.0.2.2"),
-            "the message is where someone stuck on their first client will look",
+        assertTrue(failure.message!!.contains("endhostApi is optional"))
+        assertTrue(failure.message!!.contains("it cannot be an empty string"))
+    }
+
+    @Test
+    fun `without endhostApi every credential is enough`() {
+        settings(endhostApiUrl = null)
+        settings(endhostApiUrl = null, authToken = "a-token")
+        settings(
+            endhostApiUrl = null,
+            authTokenSource = AuthTokenSource.anapayaAa("a-key", "https://aa.example.org"),
         )
     }
 

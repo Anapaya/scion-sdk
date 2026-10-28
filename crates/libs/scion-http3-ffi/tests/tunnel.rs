@@ -85,7 +85,7 @@ fn client_with_trust(
             })
             .collect(),
         request_timeout_ms: NEVER_MS,
-        ..default_client_config(server.endhost_api_url().to_string())
+        ..default_client_config(Some(server.endhost_api_url().to_string()))
     })
     .expect("building a client")
 }
@@ -641,7 +641,7 @@ async fn an_empty_dns_override_is_rejected() {
             host: "localhost".to_string(),
             addresses: vec![],
         }],
-        ..default_client_config(server.endhost_api_url().to_string())
+        ..default_client_config(Some(server.endhost_api_url().to_string()))
     });
 
     assert!(

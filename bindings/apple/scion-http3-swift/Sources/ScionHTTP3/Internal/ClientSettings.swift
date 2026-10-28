@@ -3,10 +3,10 @@ import Foundation
 
 /// Everything a client was configured with.
 ///
-/// Every setting except the endhost API and the trust anchors is optional and nil means "whatever
-/// the SCION stack does".
+/// Every setting except the trust anchors is optional and nil means "whatever the SCION stack
+/// does".
 struct ClientSettings: Sendable, Equatable {
-    let endhostApiUrl: String
+    let endhostApiUrl: String?
     let authToken: String?
     let authTokenSource: AuthTokenSource?
     let preferredUnderlay: PreferredUnderlay?
@@ -23,7 +23,9 @@ struct ClientSettings: Sendable, Equatable {
 
     /// Throws `ScionHttp3Error.invalidConfiguration` for the first setting that cannot be right.
     init(_ configuration: ScionHttp3Client.Configuration) throws {
-        try Self.validateEndhostApiUrl(configuration.endhostApi)
+        if let url = configuration.endhostApi {
+            try Self.validateEndhostApiUrl(url)
+        }
         if let token = configuration.authToken, token.isEmpty {
             throw ScionHttp3Error.invalidConfiguration(detail: "an auth token cannot be empty")
         }
@@ -115,9 +117,8 @@ struct ClientSettings: Sendable, Equatable {
     private static func validateEndhostApiUrl(_ url: String) throws {
         if url.isEmpty {
             throw ScionHttp3Error.invalidConfiguration(
-                detail: "endhostApi is required: it is the address the client discovers SCION "
-                    + "connectivity through. A local PocketSCION topology is reached at the "
-                    + "endhost API URL it prints, for example http://127.0.0.1:8041.")
+                detail: "endhostApi is optional. If you set it, it cannot be an empty string. "
+                    + "Leave it out to discover the endhost APIs.")
         }
         try validateUrl("endhostApi", url)
     }

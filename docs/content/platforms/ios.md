@@ -95,6 +95,11 @@ I/O. The first request is what brings connectivity up. The initializer throws
 `ScionHttp3Error.invalidConfiguration` for a setting that cannot be correct, for example a timeout
 that is not positive.
 
+If you leave out `endhostApi`, the client discovers the endhost APIs. A client with an Anapaya AA
+token source uses the discovery URL that the AA sends with the token. Without an AA token source, or
+if the AA sends no discovery URL, the client uses the global discovery service. See [the endhost
+API](../concepts/endhost-api.md).
+
 `dnsOverrides` is for a host that has no SCION address records, for example the server of the test
 network. It maps a host to the SCION addresses the client connects to, instead of a DNS lookup. The
 key is the host as it appears in the URL of a request. The addresses have no port: the port and the

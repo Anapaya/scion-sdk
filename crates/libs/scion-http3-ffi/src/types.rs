@@ -208,7 +208,12 @@ pub enum AuthTokenSource {
 #[derive(Clone, uniffi::Record)]
 pub struct ClientConfig {
     /// The endhost API to discover connectivity through.
-    pub endhost_api_url: String,
+    ///
+    /// Without it, the client discovers the endhost APIs. With an [`AuthTokenSource::AnapayaAa`]
+    /// in `auth_token_source`, the client uses the discovery URL that the AA sends with the token.
+    /// Without an AA source, or if the AA sends no URL, the client uses the global discovery
+    /// service.
+    pub endhost_api_url: Option<String>,
     /// The bearer token for the endhost API and the SNAP control plane.
     ///
     /// Replaceable while the client runs, through
@@ -279,7 +284,7 @@ pub struct DnsOverride {
 
 impl ClientConfig {
     /// The configuration `scion-http3` would apply on its own, for the given endhost API.
-    pub(crate) fn with_defaults(endhost_api_url: String) -> Self {
+    pub(crate) fn with_defaults(endhost_api_url: Option<String>) -> Self {
         ClientConfig {
             endhost_api_url,
             auth_token: None,
@@ -313,7 +318,8 @@ mod tests {
     /// first time one of them is tuned.
     #[test]
     fn defaults_follow_the_client_crate() {
-        let config = ClientConfig::with_defaults("https://endhost-api.example.org".to_string());
+        let config =
+            ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()));
         assert_eq!(
             config.request_timeout_ms,
             DEFAULT_REQUEST_TIMEOUT.as_millis() as u64
@@ -336,7 +342,8 @@ mod tests {
     /// Anything the stack has a default for stays absent, so that the stack keeps deciding.
     #[test]
     fn stack_settings_start_unset() {
-        let config = ClientConfig::with_defaults("https://endhost-api.example.org".to_string());
+        let config =
+            ClientConfig::with_defaults(Some("https://endhost-api.example.org".to_string()));
         assert!(config.preferred_underlay.is_none());
         assert!(config.discovery.max_groups.is_none());
         assert!(config.snap.dp_index.is_none());

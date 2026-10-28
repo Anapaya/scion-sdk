@@ -44,7 +44,7 @@ fn config() -> ClientConfig {
         // which somehow does not refuse it fails the test rather than hanging the suite.
         connect_timeout_ms: 2_000,
         request_timeout_ms: 5_000,
-        ..default_client_config(UNREACHABLE_URL.to_string())
+        ..default_client_config(Some(UNREACHABLE_URL.to_string()))
     }
 }
 
@@ -156,7 +156,7 @@ fn tunnel_methods_are_pollable_without_a_runtime() {
             host: "localhost".to_string(),
             addresses: vec![server.target()],
         }],
-        ..default_client_config(server.endhost_api_url().to_string())
+        ..default_client_config(Some(server.endhost_api_url().to_string()))
     };
     let authority = format!("localhost:{}", server.port());
 

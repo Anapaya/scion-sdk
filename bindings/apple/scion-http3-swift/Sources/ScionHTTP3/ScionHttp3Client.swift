@@ -40,12 +40,17 @@ public final class ScionHttp3Client: Sendable {
     ///
     /// Keep the whole value out of logs: it holds the token.
     public struct Configuration: Sendable, Equatable {
-        /// Where the client discovers SCION connectivity. Required.
+        /// Where the client discovers SCION connectivity. Optional.
+        ///
+        /// Without it, the client discovers the endhost APIs. If `authTokenSource` is an
+        /// `AuthTokenSource.anapayaAa(apiKey:aaUrl:)`, the client uses the discovery URL that the
+        /// AA sends with the token. Without an AA source, or if the AA sends no URL, the client
+        /// uses the global discovery service.
         ///
         /// This, and not a choice of transport, is what points the client at a network: the endhost
         /// API reports what is available and the client uses it. `http` is accepted, because a
         /// local PocketSCION topology serves its endhost API in plaintext.
-        public var endhostApi: String
+        public var endhostApi: String?
 
         /// The token for the endhost API and the SNAP control plane.
         ///
@@ -111,7 +116,7 @@ public final class ScionHttp3Client: Sendable {
         /// `ScionHttp3Request.maxResponseBodyBytes`.
         public var maxResponseBodyBytes: Int?
 
-        public init(endhostApi: String, authToken: String? = nil) {
+        public init(endhostApi: String? = nil, authToken: String? = nil) {
             self.endhostApi = endhostApi
             self.authToken = authToken
         }
@@ -155,9 +160,9 @@ public final class ScionHttp3Client: Sendable {
 
     /// A client with every setting spelled out. Performs no I/O.
     ///
-    /// Throws `ScionHttp3Error.invalidConfiguration` if a setting cannot be right: no endhost API,
-    /// a URL that is not one, a timeout that is not positive. Whatever only the SCION stack can
-    /// judge is reported by the first request instead.
+    /// Throws `ScionHttp3Error.invalidConfiguration` if a setting cannot be right: an empty
+    /// endhost API, a URL that is not one, a timeout that is not positive. Whatever only the SCION
+    /// stack can judge is reported by the first request instead.
     public convenience init(configuration: Configuration) throws {
         self.init(
             settings: try ClientSettings(configuration),

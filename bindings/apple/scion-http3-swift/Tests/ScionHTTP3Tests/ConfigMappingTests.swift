@@ -60,6 +60,12 @@ final class ConfigMappingTests: XCTestCase {
         XCTAssertEqual(try settings().applyTo(base), expected)
     }
 
+    func testWithoutAnEndhostApiNoUrlCrosses() throws {
+        var configuration = configuration(endhostApi: nil)
+        configuration.authTokenSource = .anapayaAa(apiKey: "k", aaUrl: "https://aa.example.org")
+        XCTAssertNil(try ClientSettings(configuration).applyTo(base).endhostApiUrl)
+    }
+
     func testAnAnapayaAaTokenSourceCrossesWithItsAaAndDeviceId() throws {
         var configuration = configuration()
         configuration.authTokenSource = .anapayaAa(apiKey: "k", aaUrl: "https://aa.example.org")

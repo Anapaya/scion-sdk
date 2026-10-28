@@ -35,7 +35,7 @@ import java.net.URISyntaxException
  * rejections can be exercised as ordinary unit tests rather than on a device.
  */
 internal class ClientSettings(
-    val endhostApiUrl: String,
+    val endhostApiUrl: String?,
     val trust: TrustAnchors,
     val authToken: String? = null,
     val authTokenSource: AuthTokenSource? = null,
@@ -51,7 +51,7 @@ internal class ClientSettings(
     val dnsOverrides: Map<String, List<ScionAddress>> = emptyMap(),
 ) {
     init {
-        validateEndhostApiUrl(endhostApiUrl)
+        endhostApiUrl?.let { validateEndhostApiUrl(it) }
         authToken?.let { require(it.isNotEmpty()) { "an auth token cannot be empty" } }
         authTokenSource?.let { source ->
             require(authToken == null) {
@@ -125,9 +125,8 @@ internal class ClientSettings(
 
         fun validateEndhostApiUrl(url: String) {
             require(url.isNotEmpty()) {
-                "endhostApi is required: it is the address the client discovers SCION " +
-                    "connectivity through. A local PocketSCION topology reached from the " +
-                    "emulator is http://10.0.2.2:8041."
+                "endhostApi is optional. If you set it, it cannot be an empty string. " +
+                    "Leave it out to discover the endhost APIs."
             }
             validateUrl("endhostApi", url)
         }
