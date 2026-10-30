@@ -16,12 +16,16 @@
 
 pub(crate) mod cert_tmp_dir;
 
-/// Returns a SNAP authentication token accepted by a PocketSCION simulation.
+/// Returns a SNAP token that the SNAPs of a PocketSCION simulation accept.
 ///
-/// PocketSCION does not verify SNAP tokens, so any well-formed token is accepted. This helper
-/// returns one so that examples and quick experiments can build a `ScionStack` against the
-/// simulation without pulling in `snap-tokens` themselves. Do **not** use it against a real SCION
+/// An insecure constant key signs the token. That key pairs with the default SNAP token public key
+/// of PocketSCION. The token stays valid for one day. Do **not** use it against a real SCION
 /// network.
+///
+/// The examples get their tokens from the [PocketSCION AA](crate::comp::aa) through
+/// [`PocketScionAaTokenSource`](crate::comp::aa::PocketScionAaTokenSource) instead, in the same way
+/// as an application on a real SCION network gets them from a production AA. Use this helper where
+/// a fixed token is enough, for example in a test.
 pub fn dev_auth_token() -> String {
     snap_tokens::v0::dummy_snap_token()
 }

@@ -27,11 +27,8 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-anapaya-aa-client = { workspace = true }
-anapaya-aa-protobuf = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
-axum-connect-rpc = { workspace = true }
 ntest = { workspace = true }
 pocketscion = { workspace = true }
 rcgen = { workspace = true }

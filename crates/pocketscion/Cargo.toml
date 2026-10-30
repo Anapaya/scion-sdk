@@ -14,6 +14,7 @@ categories = ["network-programming"]
 axum-connect-rpc = { workspace = true }
 # Local Dependencies
 dhsd = { workspace = true }
+reqwest-connect-rpc = { workspace = true }
 scion-connect-rpc = { workspace = true }
 scion-h3-axum = { workspace = true }
 scion-quic = { workspace = true }
@@ -47,7 +48,6 @@ chrono = { workspace = true }
 connectrpc = { workspace = true }
 derive_more = { workspace = true }
 ecdsa = { workspace = true }
-ed25519-dalek = { workspace = true }
 http = { workspace = true }
 ipnet = { workspace = true, features = ["serde"] }
 jsonwebtoken = { workspace = true }

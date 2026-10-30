@@ -168,6 +168,11 @@ impl PocketScionRuntime {
     pub fn network_forwarder_addr(&self, isd_asn: IsdAsn, ip: IpAddr) -> Option<SocketAddr> {
         self.io_config.network_forwarder_addr(isd_asn, ip)
     }
+
+    /// Returns the socket address of the PocketSCION AA, if it exists.
+    pub fn aa_addr(&self) -> Option<SocketAddr> {
+        self.state.aa().and_then(|_| self.io_config.aa_addr())
+    }
 }
 
 // Networking

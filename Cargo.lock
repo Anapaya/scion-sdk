@@ -4268,7 +4268,6 @@ dependencies = [
  "derive_more",
  "dhsd",
  "ecdsa",
- "ed25519-dalek",
  "endhost-api",
  "endhost-api-client",
  "endhost-api-models",
@@ -4282,6 +4281,7 @@ dependencies = [
  "rayon",
  "rcgen",
  "reqwest",
+ "reqwest-connect-rpc",
  "rustls",
  "scion-connect-rpc",
  "scion-h3-axum",
@@ -5289,12 +5289,9 @@ dependencies = [
 name = "scion-http3"
 version = "0.8.6"
 dependencies = [
- "anapaya-aa-client",
- "anapaya-aa-protobuf",
  "anyhow",
  "async-trait",
  "axum",
- "axum-connect-rpc",
  "bytes",
  "futures",
  "http 1.5.0",
@@ -5461,7 +5458,6 @@ dependencies = [
  "scc",
  "scion-h3-axum",
  "scion-quic",
- "scion-sdk-token-validator",
  "scion-sdk-utils",
  "sciparse",
  "simple-mermaid",

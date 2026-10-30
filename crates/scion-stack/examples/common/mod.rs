@@ -18,7 +18,7 @@
 #![allow(dead_code)]
 
 use anyhow::Context;
-use pocketscion::util::{dev_auth_token, topologies::PsSetup};
+use pocketscion::{comp::aa::PocketScionAaTokenSource, util::topologies::PsSetup};
 use scion_stack::stack::{ScionStack, ScionStackBuilder};
 use sciparse::identifier::isd_asn::IsdAsn;
 
@@ -36,10 +36,13 @@ pub async fn build_stack(ps: &PsSetup, isd_as: IsdAsn) -> anyhow::Result<ScionSt
     let endhost_api = ps
         .endhost_api(isd_as)
         .with_context(|| format!("PocketSCION has no endhost API for {isd_as}"))?;
+    let aa_url = ps.aa_url().context("PocketSCION has no AA")?;
 
     ScionStackBuilder::new()
         .with_endhost_api(endhost_api)
-        .with_auth_token(dev_auth_token())
+        // On a real SCION network, use the token source of a production AA instead. For
+        // example, use `AnapayaAaTokenSource` with your API key.
+        .with_auth_token_source(PocketScionAaTokenSource::new(&aa_url)?)
         .build()
         .await
         .with_context(|| format!("building SCION stack for {isd_as}"))

@@ -58,12 +58,15 @@ when you build it.
 
 ### Local development
 
-PocketSCION accepts a fixed development token
-([`pocketscion::util::dev_auth_token`](https://docs.rs/pocketscion/latest/pocketscion/util/fn.dev_auth_token.html)).
-The SDK examples give it to the stack as a static token:
+The **PocketSCION AA** runs with PocketSCION. The PocketSCION AA gives a SNAP token to each caller.
+The SDK examples get their SNAP tokens from it through
+[`PocketScionAaTokenSource`](https://docs.rs/pocketscion/latest/pocketscion/comp/aa/token_source/struct.PocketScionAaTokenSource.html):
 
 ```rust reference="@sdk/crates/scion-stack/examples/common/mod.rs#build-stack" title="examples/common/mod.rs"
 ```
+
+On a real SCION network, replace `PocketScionAaTokenSource` with the production AA token source like
+the Anapaya AA as described in the next section.
 
 ### The Anapaya AA token source
 
@@ -72,12 +75,6 @@ The `anapaya-aa-client` crate supplies
 This token source exchanges your API key for a SNAP token at the Anapaya AA. It also renews the
 SNAP token periodically: before the current token expires, it sends the API key to the Anapaya AA
 again and gets a new token. Your app does not have to do anything for the renewal.
-
-The HTTP/3 client takes the token source through
-[`Config::with_auth_token_source`](https://docs.rs/scion-http3/latest/scion_http3/struct.Config.html#method.with_auth_token_source):
-
-```rust reference="@sdk/crates/libs/scion-http3/examples/http3_get_post.rs#api-key" title="examples/http3_get_post.rs"
-```
 
 ## Get an API key
 

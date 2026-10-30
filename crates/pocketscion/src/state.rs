@@ -31,7 +31,7 @@ use sciparse::{address::ip_addr::ScionIpAddr, identifier::isd_asn::IsdAsn};
 
 use crate::{
     comp::{
-        authorization_server::AuthServerState,
+        aa::AaConfig,
         control_service::{ControlServiceState, segment_lookup::SegmentListingCache},
         daemon::DaemonServiceState,
         endhost_api::{EndhostApiId, EndhostApiState},
@@ -97,8 +97,8 @@ pub struct PocketScionStateInner {
 
     // Component States
     // -------------------------------------------------
-    /// The state of the authorization server.
-    pub auth_server: Option<AuthServerState>,
+    /// The configuration of the PocketSCION AA.
+    pub aa: Option<AaConfig>,
     /// The list of SNAPs in the system.
     pub snaps: BTreeMap<SnapId, SnapState>,
     /// The state of the routers in the system.
@@ -132,7 +132,7 @@ impl PocketScionStateInner {
             snaptun_keepalive_interval: DEFAULT_SNAPTUN_KEEPALIVE_INTERVAL,
             routers: Default::default(),
             daemon_services: Default::default(),
-            auth_server: Default::default(),
+            aa: Default::default(),
             topology: Self::default_topology(),
             segment_registry: SegmentRegistry::new(&FastTopologyLookup::new(
                 &Self::default_topology(),

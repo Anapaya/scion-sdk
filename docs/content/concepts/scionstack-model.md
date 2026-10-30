@@ -51,7 +51,8 @@ and finish with
 [`build`](https://docs.rs/scion-stack/latest/scion_stack/stack/builder/struct.ScionStackBuilder.html#method.build).
 At minimum the stack needs to know where the local [*endhost API*](./endhost-api.md) is, the service
 that answers underlay and path-lookup queries, and, when it will use a SNAP, how to authenticate.
-The examples wrap this in a one-line helper:
+The examples wrap this in a one-line helper. The helper gets its SNAP tokens from the
+PocketSCION AA of the local simulation:
 
 ```rust reference="@sdk/crates/scion-stack/examples/common/mod.rs#build-stack" title="examples/common/mod.rs"
 ```

@@ -19,6 +19,7 @@ use std::{collections::BTreeMap, num::NonZeroU16};
 use chrono::Utc;
 
 use crate::{
+    comp::aa::AaConfig,
     io_config::IoConfig,
     network::scion::topology::{ScionAs, ScionLink, ScionLinkType, ScionTopologyBuilder},
     runtime::builder::PocketScionRuntimeBuilder,
@@ -39,7 +40,8 @@ fn minimal_topology_builder() -> ScionTopologyBuilder {
 }
 
 /// Sets up a minimal PocketSCION topology with two [IA132] and [IA212] ASes and a single link
-/// between them. As well as either a SNAP or a UDP underlay, depending on the `underlay` parameter.
+/// between them. As well as either a SNAP or a UDP underlay, depending on the `underlay` parameter,
+/// and a [PocketSCION AA](crate::comp::aa).
 #[doc = simple_mermaid::mermaid!("diagrams/minimal.mmd")]
 pub async fn minimal_topology(underlay: UnderlayType) -> PsSetup {
     minimal_topology_with_io_config(underlay, IoConfig::new()).await
@@ -60,6 +62,9 @@ pub async fn minimal_topology_with_io_config(
     let eh212 = pstate.add_endhost_api(vec![IA212]);
 
     let endhost_apis = BTreeMap::from([(IA132, eh132), (IA212, eh212)]);
+
+    // Add the PocketSCION AA
+    pstate.set_aa(AaConfig::default()).unwrap();
 
     match underlay {
         // Add SNAPs
@@ -121,7 +126,7 @@ fn two_path_topology_builder() -> ScionTopologyBuilder {
 /// detour via [IA222].
 ///
 /// As well as either a SNAP or a UDP underlay, in both [IA132] and [IA212], depending on the
-/// `underlay` parameter.
+/// `underlay` parameter, and a [PocketSCION AA](crate::comp::aa).
 #[doc = simple_mermaid::mermaid!("diagrams/two_path.mmd")]
 pub async fn two_path_topology(underlay: UnderlayType) -> PsSetup {
     two_path_topology_with_io_config(underlay, IoConfig::new()).await
@@ -144,6 +149,9 @@ pub async fn two_path_topology_with_io_config(
     let eh212 = pstate.add_endhost_api(vec![IA212]);
 
     let endhost_apis = BTreeMap::from([(IA132, eh132), (IA212, eh212)]);
+
+    // Add the PocketSCION AA
+    pstate.set_aa(AaConfig::default()).unwrap();
 
     match underlay {
         // Create two SNAPs with data planes

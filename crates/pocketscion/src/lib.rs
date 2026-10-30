@@ -33,6 +33,7 @@
 //! - [state::PocketScionState] to configure the simulation, e.g. add ASes, links, and components to
 //!   the simulation.
 //! - [runtime::PocketScionRuntime] to start the simulation and interact with it while it's running.
+//! - [comp::aa::PocketScionAaTokenSource] to get SNAP tokens from the [PocketSCION AA](comp::aa).
 //!
 //! Example usage can be found in the tests and in the [util::topologies] module, which contains
 //! example topologies that can be used in tests.

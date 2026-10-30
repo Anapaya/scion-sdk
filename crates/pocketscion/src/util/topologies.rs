@@ -65,4 +65,11 @@ impl PsSetup {
             self.runtime.io_config().advertise(isd_as, addr),
         ))
     }
+
+    /// Returns the URL of the PocketSCION AA, if the topology has one.
+    ///
+    /// The URL contains the bound address. An advertised IP does not apply to it.
+    pub fn aa_url(&self) -> Option<Url> {
+        self.runtime.aa_addr().map(addr_to_http_url)
+    }
 }

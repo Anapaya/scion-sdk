@@ -24,7 +24,7 @@
 //! components are responsible for managing specific parts of that state and implementing the logic
 //! related to that state.
 
-pub mod authorization_server;
+pub mod aa;
 pub mod control_service;
 pub mod daemon;
 pub mod echo_responder;

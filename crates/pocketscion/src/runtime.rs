@@ -51,7 +51,7 @@ use x25519_dalek::StaticSecret;
 
 use crate::{
     comp::{
-        authorization_server,
+        aa,
         control_service::{ControlService, segment_lookup::SegmentListingCache},
         daemon::PsDaemonService,
         echo_responder::PsEchoResponder,
@@ -118,7 +118,7 @@ impl PocketScionRuntime {
         Self::start_daemon_services(&state, &io_config).await?;
         Self::start_router_sockets(&mut join_set, &state, &io_config).await?;
         Self::start_network_forwarders(&mut join_set, &state, &io_config).await?;
-        Self::start_auth_server(&mut join_set, &cancel_token, &state, &io_config).await?;
+        Self::start_aa(&mut join_set, &cancel_token, &state, &io_config).await?;
 
         Ok(PocketScionRuntime {
             join_set,
@@ -600,29 +600,26 @@ impl PocketScionRuntime {
         Ok(())
     }
 
-    /// Starts the authorization server if one is configured in the system state.
-    async fn start_auth_server(
+    /// Starts the PocketSCION AA if one is configured in the system state.
+    async fn start_aa(
         join_set: &mut JoinSet<Result<(), io::Error>>,
         cancel_token: &CancellationToken,
         pstate: &PocketScionState,
         io_config: &IoConfig,
     ) -> anyhow::Result<()> {
-        if pstate.has_auth_server() {
+        if let Some(config) = pstate.aa() {
             let listener = Self::bind_tcp_or_random(
-                io_config.auth_server_addr(),
+                io_config.aa_addr(),
                 io_config.default_bind_ip(),
                 |addr| {
-                    io_config.set_auth_server_addr(addr);
+                    io_config.set_aa_addr(addr);
                 },
-                "auth server",
+                "PocketSCION AA",
             )
             .await?;
 
-            let auth_server = pstate.auth_server();
             let token = cancel_token.clone();
-            join_set.spawn(async move {
-                authorization_server::api::start(token, auth_server, listener).await
-            });
+            join_set.spawn(async move { aa::api::start(token, config, listener).await });
         }
         Ok(())
     }

@@ -60,7 +60,6 @@ pocketscion = { workspace = true }
 rand = { workspace = true }
 rcgen = { workspace = true }
 scion-h3-axum = { workspace = true }
-scion-sdk-token-validator = { workspace = true }
 simple-mermaid = { workspace = true }
 snap-tokens = { workspace = true }
 tempfile = { workspace = true }

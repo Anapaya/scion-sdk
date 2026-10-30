@@ -56,7 +56,7 @@ helper::io_config! {
     addr_map(control_service: IsdAsn),
     addr_map_keyed(external_as_interface: (isd_asn: IsdAsn, interface_id: u16)),
     addr_map_keyed(network_forwarder: (isd_asn: IsdAsn, ip_addr: IpAddr)),
-    addr_singleton(auth_server),
+    addr_singleton(aa),
     ip_singleton(bind_ip),
     ip_map(advertised_ip: IsdAsn),
 }
