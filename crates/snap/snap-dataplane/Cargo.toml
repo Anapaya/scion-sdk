@@ -20,7 +20,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
-utoipa = { workspace = true, features = ["yaml", "time"] }
+utoipa = { workspace = true, features = ["time"] }
 x25519-dalek = { workspace = true }
 
 # Local dependencies

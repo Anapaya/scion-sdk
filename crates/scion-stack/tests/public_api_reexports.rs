@@ -38,7 +38,7 @@ fn reexports_are_reachable() {
     // file fails to compile.
     type _Url = url::Url;
     type _ResolverBuilder =
-        hickory_resolver::ResolverBuilder<hickory_resolver::name_server::TokioConnectionProvider>;
+        hickory_resolver::ResolverBuilder<hickory_resolver::net::runtime::TokioRuntimeProvider>;
     type _Client = reqwest::Client;
     type _StaticSecret = x25519_dalek::StaticSecret;
 

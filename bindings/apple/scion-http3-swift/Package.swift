@@ -17,6 +17,7 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Security"),
                 .linkedFramework("CoreFoundation"),
+                .linkedFramework("SystemConfiguration"),
                 .linkedLibrary("c++"),
                 .linkedLibrary("iconv"),
             ]

@@ -17,22 +17,18 @@ use std::{net::Ipv4Addr, str::FromStr, sync::Arc, time::Duration};
 
 use hickory_resolver::{
     Resolver,
-    config::{NameServerConfig, NameServerConfigGroup, ResolverConfig},
-    name_server::TokioConnectionProvider,
-    proto::{
-        rr::{
-            Name, RData, Record,
-            rdata::{SOA, TXT},
-        },
-        runtime::TokioRuntimeProvider,
-        xfer::Protocol,
+    config::{ConnectionConfig, NameServerConfig, ResolverConfig},
+    net::runtime::TokioRuntimeProvider,
+    proto::rr::{
+        Name, RData, Record,
+        rdata::{SOA, TXT},
     },
 };
 use hickory_server::{
-    ServerFuture,
-    authority::{Catalog, ZoneType},
+    Server,
     proto::rr::LowerName,
-    store::in_memory::InMemoryAuthority,
+    store::in_memory::InMemoryZoneHandler,
+    zone_handler::{AxfrPolicy, Catalog, ZoneType},
 };
 use scion_stack::resolver::{ResolveError, ScionDnsResolver, txt::ScionTxtDnsResolver};
 use sciparse::address::ip_addr::ScionIpAddr;
@@ -53,7 +49,11 @@ impl TestDns {
     /// TXT records gets an authoritative negative answer rather than a referral.
     async fn start(records: Vec<Record>) -> Self {
         let origin = name(ORIGIN);
-        let mut zone = InMemoryAuthority::empty(origin.clone(), ZoneType::Primary, false);
+        let mut zone = InMemoryZoneHandler::<TokioRuntimeProvider>::empty(
+            origin.clone(),
+            ZoneType::Primary,
+            AxfrPolicy::Deny,
+        );
         let serial = 1;
 
         let soa = SOA::new(
@@ -76,7 +76,7 @@ impl TestDns {
         let mut catalog = Catalog::new();
         catalog.upsert(LowerName::new(&origin), vec![Arc::new(zone)]);
 
-        let mut server = ServerFuture::new(catalog);
+        let mut server = Server::new(catalog);
         let socket = UdpSocket::bind("127.0.0.1:0").await.expect("udp bind");
         let server_addr = socket.local_addr().expect("local addr");
         server.register_socket(socket);
@@ -86,13 +86,14 @@ impl TestDns {
             let _ = server.block_until_done().await;
         });
 
-        let mut name_servers = NameServerConfigGroup::new();
-        name_servers.push(NameServerConfig::new(server_addr, Protocol::Udp));
-        let resolver_config = ResolverConfig::from_parts(None, vec![], name_servers);
-        let mut builder = Resolver::builder_with_config(
-            resolver_config,
-            TokioConnectionProvider::new(TokioRuntimeProvider::new()),
-        );
+        let mut connection = ConnectionConfig::udp();
+        connection.port = server_addr.port();
+        // Trust negative responses, so the tests of names without TXT records get a permanent
+        // answer from this one server.
+        let name_server = NameServerConfig::new(server_addr.ip(), true, vec![connection]);
+        let resolver_config = ResolverConfig::from_parts(None, vec![], vec![name_server]);
+        let mut builder =
+            Resolver::builder_with_config(resolver_config, TokioRuntimeProvider::default());
         // One short attempt, so the test that shuts the server down does not wait out the default
         // retry schedule.
         let options = builder.options_mut();

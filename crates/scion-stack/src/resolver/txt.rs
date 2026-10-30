@@ -40,8 +40,9 @@ use std::{collections::HashMap, net::IpAddr, str::FromStr};
 
 use async_trait::async_trait;
 use hickory_resolver::{
-    ResolveErrorKind, ResolverBuilder, TokioResolver, name_server::TokioConnectionProvider,
-    proto::rr::rdata::TXT,
+    ResolverBuilder, TokioResolver,
+    net::{NetError, runtime::TokioRuntimeProvider},
+    proto::rr::{RData, rdata::TXT},
 };
 use sciparse::{address::ip_addr::ScionIpAddr, identifier::isd_asn::IsdAsn};
 use thiserror::Error;
@@ -117,15 +118,15 @@ impl ScionTxtDnsResolver {
     ///
     /// # Errors
     ///
-    /// This function is currently infallible, but returns `Result` for future compatibility with
-    /// hickory-dns builder changes.
+    /// Returns [`TxtResolverError`] if hickory-dns cannot build the resolver from `builder`.
     // Intentionally exposes hickory-dns's builder type as the escape hatch for full control over
     // DNS resolution. See API_CONVENTIONS.md.
     pub fn from_builder(
-        builder: ResolverBuilder<TokioConnectionProvider>,
+        builder: ResolverBuilder<TokioRuntimeProvider>,
     ) -> Result<Self, TxtResolverError> {
+        let resolver = builder.build()?;
         Ok(Self {
-            resolver: builder.build(),
+            resolver,
             overrides: HashMap::new(),
         })
     }
@@ -143,15 +144,15 @@ impl ScionTxtDnsResolver {
     ///
     /// Returns [`TxtResolverError`] if system configuration cannot be loaded (non-Android/iOS
     /// platforms only).
-    pub fn builder() -> Result<ResolverBuilder<TokioConnectionProvider>, TxtResolverError> {
+    pub fn builder() -> Result<ResolverBuilder<TokioRuntimeProvider>, TxtResolverError> {
         #[cfg(any(target_os = "android", target_os = "ios"))]
         {
-            use hickory_resolver::config::ResolverConfig;
+            use hickory_resolver::config::{GOOGLE, ResolverConfig};
             // Android and iOS do not have /etc/resolv.conf.
             // Fall back to Google Public DNS for SCION TXT record resolution.
             Ok(TokioResolver::builder_with_config(
-                ResolverConfig::google(),
-                TokioConnectionProvider::default(),
+                ResolverConfig::udp_and_tcp(&GOOGLE),
+                TokioRuntimeProvider::default(),
             ))
         }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -176,7 +177,10 @@ impl ScionDnsResolver for ScionTxtDnsResolver {
 
         let mut txt_records = Vec::new();
         let mut invalid_entries = Vec::new();
-        for txt in lookup.iter() {
+        for record in lookup.answers() {
+            let RData::TXT(txt) = &record.data else {
+                continue;
+            };
             match txt_record_to_string(txt) {
                 Ok(txt_record) => txt_records.push(txt_record),
                 Err(err) => invalid_entries.push(err),
@@ -206,8 +210,8 @@ pub enum TxtResolverError {
     },
 }
 
-impl From<hickory_resolver::ResolveError> for TxtResolverError {
-    fn from(error: hickory_resolver::ResolveError) -> Self {
+impl From<NetError> for TxtResolverError {
+    fn from(error: NetError) -> Self {
         Self::DnsConfig {
             message: error.to_string(),
             source: Box::new(error),
@@ -232,16 +236,15 @@ impl PartialEq for TxtResolverError {
 /// permanent for as long as the negative answer is valid, so the distinction between "no such name"
 /// and "the name exists without TXT records" is not carried over. Failure kinds we do not recognize
 /// stay transient, which is the safe default for a retry decision.
-fn classify_lookup_error(domain: &str, err: &hickory_resolver::ResolveError) -> ResolveError {
-    match err.kind() {
-        ResolveErrorKind::Proto(proto) if proto.is_no_records_found() => {
-            ResolveError::NoValidEntries {
-                domain: domain.to_string(),
-                invalid_entries: Vec::new(),
-            }
-        }
-        _ => ResolveError::DnsLookup(err.to_string()),
+fn classify_lookup_error(domain: &str, err: &NetError) -> ResolveError {
+    if err.is_no_records_found() {
+        return ResolveError::NoValidEntries {
+            domain: domain.to_string(),
+            invalid_entries: Vec::new(),
+        };
     }
+
+    ResolveError::DnsLookup(err.to_string())
 }
 
 #[derive(Debug, Error)]
@@ -351,7 +354,7 @@ fn parse_txt_payload(payload: &str) -> Result<Vec<ScionIpAddr>, TxtParseError> {
 
 fn txt_record_to_string(txt: &TXT) -> Result<String, InvalidEntry> {
     let bytes: Vec<u8> = txt
-        .txt_data()
+        .txt_data
         .iter()
         .flat_map(|chunk| chunk.iter())
         .copied()
@@ -370,31 +373,21 @@ fn format_invalid_entries(entries: &[InvalidEntry]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use hickory_resolver::proto::{
-        ProtoError, ProtoErrorKind,
-        op::{Query, ResponseCode},
-        rr::{Name, RecordType},
+    use hickory_resolver::{
+        net::{DnsError, NoRecords},
+        proto::{
+            op::{Query, ResponseCode},
+            rr::{Name, RecordType},
+        },
     };
 
     use super::*;
 
     /// Builds the failure hickory reports for a TXT query that found no records, which is also how
     /// it reports a name that does not exist (`response_code` tells the two apart).
-    fn no_records_error(
-        domain: &str,
-        response_code: ResponseCode,
-    ) -> hickory_resolver::ResolveError {
+    fn no_records_error(domain: &str, response_code: ResponseCode) -> NetError {
         let query = Query::query(Name::from_str(domain).expect("valid name"), RecordType::TXT);
-        ResolveErrorKind::Proto(ProtoError::nx_error(
-            Box::new(query),
-            None,
-            None,
-            None,
-            response_code,
-            false,
-            None,
-        ))
-        .into()
+        DnsError::NoRecordsFound(NoRecords::new(query, response_code)).into()
     }
 
     #[test]
@@ -431,8 +424,7 @@ mod tests {
 
     #[test]
     fn classify_timeout_as_transient_lookup_failure() {
-        let raw: hickory_resolver::ResolveError =
-            ResolveErrorKind::Proto(ProtoError::from(ProtoErrorKind::Timeout)).into();
+        let raw = NetError::Timeout;
 
         let err = classify_lookup_error("example.com", &raw);
 

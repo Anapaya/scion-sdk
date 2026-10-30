@@ -148,7 +148,7 @@ mod helper {
             $(ip_map($field6:ident : $Key6:ty),)*
             $(custom_map($field3:ident : $Key3:ty => $Val:ty),)*
         ) => {
-            paste::paste! {
+            pastey::paste! {
                 // --- Inner data struct ---
                 #[derive(
                     ::std::default::Default,
