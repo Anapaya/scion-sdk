@@ -65,18 +65,7 @@ pub async fn start(
     listener: TcpListener,
     metrics_registry: MetricsRegistry,
 ) -> std::io::Result<()> {
-    let metrics = PrometheusHttpEndpointMetrics::new(&metrics_registry);
-    let metrics_service = Router::new()
-        .route("/metrics", get(metrics_endpoint))
-        .layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(map_box_error_to_response))
-                .load_shed()
-                .layer(TimeoutLayer::new(METRICS_TIMEOUT))
-                .layer(GlobalConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS)),
-        )
-        .with_state((metrics_registry.clone(), metrics.clone()))
-        .into_make_service();
+    let metrics_service = router(metrics_registry).into_make_service();
 
     tracing::info!(addr=?listener.local_addr(), "Starting metrics endpoint");
     if let Err(e) = axum::serve(listener, metrics_service)
@@ -88,6 +77,25 @@ pub async fn start(
         tracing::info!("Metrics endpoint server stopped gracefully");
     }
     Ok(())
+}
+
+/// Creates a router that responds to a GET request for the /metrics path with the textual
+/// representation of the prometheus metrics in `metrics_registry`.
+///
+/// The router registers its request metrics in `metrics_registry`. Thus, call this function only
+/// one time for each registry.
+pub fn router(metrics_registry: MetricsRegistry) -> Router {
+    let metrics = PrometheusHttpEndpointMetrics::new(&metrics_registry);
+    Router::new()
+        .route("/metrics", get(metrics_endpoint))
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(map_box_error_to_response))
+                .load_shed()
+                .layer(TimeoutLayer::new(METRICS_TIMEOUT))
+                .layer(GlobalConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS)),
+        )
+        .with_state((metrics_registry, metrics))
 }
 
 async fn metrics_endpoint(
