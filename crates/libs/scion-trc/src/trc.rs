@@ -66,7 +66,7 @@ impl Trc {
             .encap_content_info
             .econtent
             .as_ref()
-            .unwrap()
+            .ok_or(ParseTrcError::MissingPayload())?
             .value();
 
         let mut payload_bytes = SliceReader::new(payload_bytes)?;
@@ -191,6 +191,7 @@ impl Trc {
 
 /// Errors produced when DER- or PEM-encoding a TRC.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EncodingError {
     /// DER encoding error.
     #[error("error producing DER encoding: {0}")]
@@ -202,6 +203,7 @@ pub enum EncodingError {
 
 /// TRC parsing errors.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ParseTrcError {
     /// DER decoding error.
     #[error("error parsing DER encoding: {0}")]
@@ -215,10 +217,14 @@ pub enum ParseTrcError {
     /// Invalid integer value.
     #[error("invalid integer value")]
     InvalidIntegerValue(),
+    /// The CMS signed data has no TRC payload.
+    #[error("missing TRC payload")]
+    MissingPayload(),
 }
 
 /// TRC writing errors.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum BuildTrcError {
     /// DER encoding error.
     #[error("error producing DER encoding: {0}")]
@@ -332,7 +338,7 @@ pub fn der_int_to_u64(asn_int: &Int) -> Result<u64, ParseTrcError> {
     }
     let mut be_bytes = [0u8; U64_SIZE];
 
-    let start_idx = U64_SIZE - bytes.len() + offset;
+    let start_idx = U64_SIZE + offset - bytes.len();
     for idx in start_idx..U64_SIZE {
         be_bytes[idx] = bytes[idx - start_idx + offset];
     }
@@ -372,9 +378,16 @@ fn system_time_to_generalized(time: SystemTime) -> Result<GeneralizedTime, Build
 mod tests {
     use std::str::FromStr;
 
+    use cms::{
+        content_info::{CmsVersion, ContentInfo},
+        signed_data::{EncapsulatedContentInfo, SignedData, SignerInfos},
+    };
+    use der::{Any, Encode, asn1::Int, pem::LineEnding};
     use sciparse::identifier::{isd::Isd, isd_asn::IsdAsn};
 
-    use super::{Trc, TrcId};
+    use super::{
+        ID_SIGNED_DATA, ID_TRC_CONTENT, ParseTrcError, Trc, TrcId, der_int_to_u64, u64_to_int,
+    };
 
     const TRC_ISD64_B1_S11: &[u8] = include_bytes!("testdata/ISD64-B1-S11.trc");
     const ISD64_CORE_ASES: &[&str] = &[
@@ -460,6 +473,42 @@ mod tests {
 
         let parsed_cores: Vec<IsdAsn> = parsed.core_ases().collect();
         assert_eq!(parsed_cores.as_slice(), core_ases.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn parse_fails_without_payload() -> TestResult {
+        let signed_data = SignedData {
+            version: CmsVersion::V1,
+            digest_algorithms: Default::default(),
+            encap_content_info: EncapsulatedContentInfo {
+                econtent_type: ID_TRC_CONTENT,
+                econtent: None,
+            },
+            certificates: None,
+            crls: None,
+            signer_infos: SignerInfos(Default::default()),
+        };
+        let content_info = ContentInfo {
+            content_type: ID_SIGNED_DATA,
+            content: Any::encode_from(&signed_data)?,
+        };
+        let pem = der::pem::encode_string("TRC", LineEnding::LF, &content_info.to_der()?)
+            .expect("encoding the PEM");
+
+        let result = Trc::parse_from_pem(pem.as_bytes());
+        assert!(
+            matches!(result, Err(ParseTrcError::MissingPayload())),
+            "{result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn der_int_to_u64_accepts_values_with_the_highest_bit() -> TestResult {
+        let int = Int::new(&[0x00, 0x80, 0, 0, 0, 0, 0, 0, 0])?;
+        assert_eq!(der_int_to_u64(&int)?, 1 << 63);
+        assert_eq!(der_int_to_u64(&u64_to_int(u64::MAX)?)?, u64::MAX);
         Ok(())
     }
 }
