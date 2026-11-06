@@ -34,7 +34,7 @@ pub enum ProtocolNumber {
     /// SCION/UDP next-header protocol number.
     Udp  = 17,
     /// SCION/Hop-by-hop options.
-    Hbh  = 43,
+    Hbh  = 200,
     /// SCION End-to-End Options.
     E2e  = 201,
     /// SCION protocol number for SCMP.
@@ -71,7 +71,7 @@ impl From<u8> for ProtocolNumber {
         match value {
             6 => ProtocolNumber::Tcp,
             17 => ProtocolNumber::Udp,
-            43 => ProtocolNumber::Hbh,
+            200 => ProtocolNumber::Hbh,
             201 => ProtocolNumber::E2e,
             202 => ProtocolNumber::Scmp,
             203 => ProtocolNumber::Bfd,
@@ -85,7 +85,7 @@ impl From<ProtocolNumber> for u8 {
         match value {
             ProtocolNumber::Tcp => 6,
             ProtocolNumber::Udp => 17,
-            ProtocolNumber::Hbh => 43,
+            ProtocolNumber::Hbh => 200,
             ProtocolNumber::E2e => 201,
             ProtocolNumber::Scmp => 202,
             ProtocolNumber::Bfd => 203,
