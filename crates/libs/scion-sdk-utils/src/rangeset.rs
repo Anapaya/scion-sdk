@@ -25,6 +25,7 @@ use thiserror::Error;
 
 /// Errors that can occur when removing a value from a range set.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum RemoveError<T> {
     /// Value not in set.
     #[error("Value {0} not in set")]
@@ -33,6 +34,7 @@ pub enum RemoveError<T> {
 
 /// Errors that can occur when inserting a value into a range set.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum InsertError<T> {
     /// Value already in set.
     #[error("value {0} already in set")]
@@ -41,6 +43,7 @@ pub enum InsertError<T> {
 
 /// Rangeset creation errors.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum NewRangeSetError {
     /// Invalid ranges.
     #[error("ranges must be non-overlapping and sorted by start")]

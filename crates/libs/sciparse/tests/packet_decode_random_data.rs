@@ -22,8 +22,7 @@ use proptest::{
     prop_assert, prop_oneof, proptest,
 };
 use sciparse::{
-    core::view::{View, ViewConversionError},
-    packet::view::ScionRawPacketView,
+    core::view::View, packet::view::ScionRawPacketView,
     util::fuzz::packet_shape::bias_to_packet_shape,
 };
 
@@ -49,8 +48,7 @@ fn parsing_random_packet_data_must_not_panic() {
                         view,
                     );
                 }
-                Err(ViewConversionError::BufferTooSmall { .. })
-                | Err(ViewConversionError::Other(_)) => {
+                Err(_) => {
                     return Ok(());
                 }
             }

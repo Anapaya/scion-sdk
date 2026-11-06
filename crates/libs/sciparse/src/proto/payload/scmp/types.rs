@@ -19,6 +19,7 @@ use crate::core::{read::FromUnalignedRead, write::IntoUnalignedWrite};
 /// SCMP message types.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum ScmpMessageType {
     /// Destination Unreachable message.
     DestinationUnreachable = 1,
@@ -91,6 +92,7 @@ impl IntoUnalignedWrite for ScmpMessageType {
 /// Destination Unreachable Codes for SCMP Destination Unreachable messages.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum ScmpDestinationUnreachableCode {
     /// No Route to Destination.
     NoRouteToDestination = 0,
@@ -155,6 +157,7 @@ impl IntoUnalignedWrite for ScmpDestinationUnreachableCode {
 /// Parameter Problem Codes for SCMP Parameter Problem messages.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum ScmpParameterProblemCode {
     /// Erroneous Header Field.
     ErroneousHeaderField = 0,

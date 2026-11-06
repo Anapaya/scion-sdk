@@ -28,6 +28,7 @@ pub const SCMP_ERROR_MAX_PACKET_SIZE: usize = 1232;
 
 /// Layout for all SCMP messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ScmpMessageLayout {
     /// Layout for a `DestinationUnreachable` SCMP message.
     DestinationUnreachable(ScmpDestinationUnreachableLayout),

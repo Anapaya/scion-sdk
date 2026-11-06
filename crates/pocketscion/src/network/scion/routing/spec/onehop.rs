@@ -172,6 +172,7 @@ impl OneHopRoutingLogic {
 
 /// Errors that can occur during one-hop path routing.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum OneHopRoutingError {
     /// The packet's path could not be advanced because it is invalid or malformed
     #[error("failed to advance one-hop path due to invalid or malformed path")]

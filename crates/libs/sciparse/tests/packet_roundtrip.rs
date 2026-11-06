@@ -112,6 +112,7 @@ fn assert_packet_eq(
                 "Original and reconstructed Other packets do not match"
             );
         }
+        other => panic!("unknown packet class: {other:?}"),
     }
     Ok(())
 }

@@ -94,7 +94,7 @@ impl RoutingLogic for SpecRoutingLogic {
                 }
             }
             ScionDpPathViewRefMut::Empty => Ok(LocalAsRoutingAction::ForwardLocal.into()),
-            ScionDpPathViewRefMut::Unsupported { .. } => {
+            _ => {
                 // Can't send a reply, since we don't know the path type, so we just drop
                 // the packet
                 return Ok(AsRoutingAction::Drop);
@@ -120,6 +120,7 @@ impl RoutingLogic for SpecRoutingLogic {
 }
 
 /// Next Action to be taken after Ingress Router processing
+#[non_exhaustive]
 pub enum IngressNextAction {
     /// Processing is complete
     Complete(AsRoutingAction),

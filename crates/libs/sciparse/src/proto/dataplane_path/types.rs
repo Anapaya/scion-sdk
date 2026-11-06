@@ -23,6 +23,7 @@ use std::{borrow::Cow, fmt::Debug};
 ///[rfc]: https://www.ietf.org/archive/id/draft-dekater-scion-dataplane-00.html#name-common-header
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum PathType {
     /// The empty path type.
     Empty = 0,

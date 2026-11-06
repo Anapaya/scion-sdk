@@ -57,6 +57,7 @@ pub fn random_static_private() -> x25519::StaticSecret {
 /// The callback owns whatever it obtains the token from, so it is the only place that can tell
 /// whether a retry might work; the variant it picks is how it says so.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AuthTokenError {
     /// No token right now, but a later call may produce one, e.g. because the request to the
     /// token service did not get through.
@@ -203,6 +204,7 @@ impl EdgeTunnelOptionsBuilder {
 
 /// Error type for [`EdgeTunnel`] operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EdgeTunnelError {
     /// Failed to obtain an auth token.
     #[error("auth token acquisition failed")]

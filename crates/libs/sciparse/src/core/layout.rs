@@ -46,6 +46,7 @@ pub trait Layout {
 
 /// Errors that can occur when parsing a SCION header layout from a byte slice
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum LayoutParseError {
     /// The SCION version is unsupported
     #[error("Unsupported version")]

@@ -180,6 +180,7 @@ impl Display for HopPredicate {
 /// "1" - Any interface must be 1
 /// "1,2" - Ingress must be 1, egress must be 2
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum InterfacesPredicate {
     /// No Predicate
     Any,

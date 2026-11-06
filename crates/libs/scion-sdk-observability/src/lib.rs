@@ -57,6 +57,7 @@ pub const LOG_LEVEL_ENV: &str = "RUST_LOG";
 /// Selects where log lines are written.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum LogOutput {
     /// Write to stderr.
     #[default]
@@ -94,6 +95,7 @@ impl fmt::Display for LogOutput {
 /// Selects the log line format.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum LogFormat {
     /// Human-readable text, with ANSI colours when the output is a terminal.
     #[default]

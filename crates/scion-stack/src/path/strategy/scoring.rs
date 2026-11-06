@@ -64,7 +64,7 @@ impl PathScoring for PathLengthScorer {
                 encoded_standard_path.hop_field_count()
             }
             ScionDpPathView::OneHop(_) => 0,
-            ScionDpPathView::Unsupported { .. } => HOP_COUNT_FOR_MIN_SCORE as u8,
+            _ => HOP_COUNT_FOR_MIN_SCORE as u8,
         };
 
         const MAX_SCORE: f32 = 1.0;

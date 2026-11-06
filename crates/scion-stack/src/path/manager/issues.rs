@@ -315,6 +315,7 @@ impl IssueKind {
                             }
                             // Filter out unspecific
                             Unassigned(_) | PortUnreachable => None,
+                            _ => None,
                         }
                     }
                     ScmpErrorMessage::ExternalInterfaceDown(msg) => {
@@ -357,6 +358,7 @@ impl IssueKind {
                             _ => None,
                         }
                     }
+                    _ => None,
                 }
             }
             IssueKind::Icmp { .. } => None,
@@ -420,6 +422,7 @@ impl IssueKind {
 
                     // Irrelevant
                     ScmpErrorMessage::PacketTooBig(_) => 0.0,
+                    _ => 0.0,
                 }
             }
 

@@ -113,6 +113,7 @@ impl Codec {
 
 /// Possible rejections when extracting a Connect RPC request.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ConnectRpcRejection {
     /// Failed to extract bytes.
     BytesRejection(BytesRejection),

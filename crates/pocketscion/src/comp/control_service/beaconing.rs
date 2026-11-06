@@ -298,6 +298,7 @@ impl BeaconingService {
 
 /// Action to be taken by the beaconing service after ticking the beaconing state for all
 /// interfaces.
+#[non_exhaustive]
 pub enum BeaconServiceAction {
     /// Send the given beacons to the External AS, and mark the given interfaces as having sent
     /// beacons successfully or unsuccessfully based on whether sending was successful or not.
@@ -372,6 +373,7 @@ impl InterfaceBeaconState {
 }
 
 /// The action to be taken after ticking the beaconing state for an interface.
+#[non_exhaustive]
 pub enum InterfaceBeaconAction {
     /// Send the given beacons on the interface
     ///

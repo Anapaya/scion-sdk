@@ -100,6 +100,7 @@ impl From<Result<AsRoutingAction, ScmpErrorMessage>> for AsRoutingAction {
 
 /// Routing action to be executed on the current AS
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LocalAsRoutingAction {
     /// Packet should be handled as a SCMP request at the ingress interface
     IngressSCMPHandleRequest {
@@ -134,6 +135,7 @@ impl From<LocalAsRoutingAction> for AsRoutingAction {
 
 /// Action to be taken after a the routing step.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AsRoutingAction {
     /// Packet is to be handled at the current AS
     Local(LocalAsRoutingAction),

@@ -127,6 +127,7 @@ pub fn extract_bearer_token(req: &Request<Body>) -> Result<String, ExtractBearer
 
 /// Bearer token extraction error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ExtractBearerTokenError {
     /// Authorization header is missing.
     #[error("authorization header is missing")]

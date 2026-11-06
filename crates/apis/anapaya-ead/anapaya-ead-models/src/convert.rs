@@ -23,6 +23,7 @@ use crate::{
 
 /// Errors that can occur when trying to convert RpcEndhostApiInfo to EndhostApiInfo.
 #[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
+#[non_exhaustive]
 pub enum EndhostApiFromRpcError {
     /// The address field was empty.
     #[error("address field was empty")]

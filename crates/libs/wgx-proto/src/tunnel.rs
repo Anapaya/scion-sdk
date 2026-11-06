@@ -84,6 +84,7 @@ pub struct TunnelConfig {
 
 /// The action that [`TunnelState::recv_from_net`] asks the caller to take.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RecvAction {
     /// The message needed no action.
     Nothing,
@@ -103,6 +104,7 @@ pub enum RecvAction {
 
 /// The action that [`TunnelState::send_to_net`] asks the caller to take.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SendAction {
     /// The first `len` bytes of the buffer hold a message for the peer.
     Send {
@@ -121,6 +123,7 @@ pub enum SendAction {
 
 /// The action that [`TunnelState::update_timers`] asks the caller to take.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TimerAction {
     /// The tunnel has nothing to do.
     Nothing,

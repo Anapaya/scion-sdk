@@ -35,6 +35,7 @@ pub struct Hostname(String);
 
 /// Hostname validation error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum HostnameError {
     /// Empty hostname.
     #[error("Hostname is empty")]

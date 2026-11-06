@@ -35,6 +35,7 @@ use crate::error::CrpcError;
 
 /// Connect RPC client error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum RequestError {
     /// Error that occurs when there is a connection issue.
     #[error("connection error {context}: {source:#?}")]
@@ -134,6 +135,7 @@ pub struct CrpcClient {
 
 /// HTTP/3 connection error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CrpcClientError {
     /// Underlying HTTP/3 connection establishment error.
     #[error(transparent)]

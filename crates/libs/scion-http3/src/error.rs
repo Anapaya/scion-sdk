@@ -225,15 +225,15 @@ impl Error {
             | H3RequestError::H3(squiche::h3::Error::TransportError(squiche::Error::StreamLimit)) => {
                 Error::ConnectionLimit
             }
-            H3RequestError::H3(_) => {
-                Error::Protocol {
-                    source: Box::new(err),
-                }
-            }
             H3RequestError::ConnectionClosed | H3RequestError::LocallyClosed => {
                 Error::Connect {
                     host: host.to_string(),
                     port,
+                    source: Box::new(err),
+                }
+            }
+            _ => {
+                Error::Protocol {
                     source: Box::new(err),
                 }
             }
@@ -325,7 +325,7 @@ impl Error {
             }
             CollectToStringError::Utf8(source) => Error::InvalidBody { source },
             CollectToStringError::H3(H3Error::Reset(code)) => Error::StreamReset { code },
-            CollectToStringError::H3(_) => {
+            _ => {
                 Error::Protocol {
                     source: Box::new(err),
                 }

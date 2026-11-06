@@ -50,6 +50,7 @@ const BASE_URL: &str = "https://localhost";
 
 /// Error returned by the edge-tun control plane client.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EdgeTunClientError {
     /// A transport-level error occurred.
     #[error("request error: {0}")]

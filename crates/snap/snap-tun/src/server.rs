@@ -107,6 +107,7 @@ struct ActiveTunnel {
 /// This is an opt-in extension of the original `TunnResult`-based API so the
 /// dataplane can reuse the resolved session without forcing existing snap-tun
 /// callers to change their control flow.
+#[non_exhaustive]
 pub enum HandleIncomingPacketResult<S> {
     /// The result returned by the underlying WireGuard tunnel state machine
     /// when no tunneled SCION payload was forwarded.

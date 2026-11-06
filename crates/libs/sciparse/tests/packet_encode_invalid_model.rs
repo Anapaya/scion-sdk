@@ -172,6 +172,7 @@ mod packet_manipulation {
                     )
                 }
                 ClassifiedPacket::Other(pkt) => (pkt.header, PayloadState::Raw(pkt.payload)),
+                other => panic!("unknown packet class: {other:?}"),
             };
 
             for modification in modifications {
@@ -311,6 +312,7 @@ mod packet_manipulation {
                         ClassifiedPacket::Other(p) => {
                             matches!(p.header.path, DpPath::Standard(_))
                         }
+                        other => panic!("unknown packet class: {other:?}"),
                     };
 
                     prop::collection::vec(packet_modification_strategy(has_scion_path), 1..=5)

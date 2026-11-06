@@ -39,6 +39,7 @@ pub mod socket_addr;
 /// An error which can be returned when parsing various SCION address formats.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum AddressParseError {
     #[error("invalid ISD format")]
     Isd,

@@ -33,6 +33,7 @@ use crate::{
 /// Everything this covers is a property of the request alone, so it always means the client has
 /// to send a different request rather than send this one again.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum ConvertError {
     /// The request authorizes nothing, which is never what the client wants.
     #[error("the request does not name a target")]

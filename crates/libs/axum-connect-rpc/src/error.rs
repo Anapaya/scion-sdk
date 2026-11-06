@@ -78,6 +78,7 @@ impl std::fmt::Display for CrpcError {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq, Hash)]
 /// Connect RPC error codes. See <https://connectrpc.com/docs/protocol/#error-code>.
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CrpcErrorCode {
     /// RPC canceled, usually by the caller.
     Canceled,

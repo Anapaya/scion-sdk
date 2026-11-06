@@ -29,6 +29,7 @@ pub trait UnderlayDiscovery: Send + Sync {
 
 /// Path segment error.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SegmentsError {
     /// Invalid argument.
     #[error("invalid argument: {0}")]

@@ -240,6 +240,7 @@ impl ScmpPayloadView {
 
 /// A view over an SCMP message.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum ScmpMessageView<'a> {
     /// A view over an SCMP DestinationUnreachable message.
     DestinationUnreachable(&'a ScmpDestinationUnreachableMessageView),
@@ -271,6 +272,7 @@ impl ScmpMessageExt for ScmpMessageView<'_> {
 
 /// A mutable view over an SCMP message.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ScmpMessageViewMut<'a> {
     /// A mutable view over an SCMP DestinationUnreachable message.
     DestinationUnreachable(&'a mut ScmpDestinationUnreachableMessageView),

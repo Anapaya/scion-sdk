@@ -203,6 +203,7 @@ pub trait View {
 
 /// Errors that can occur during view conversion
 #[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ViewConversionError {
     /// Buffer is too small for the view
     #[error("Buffer too small at {at}: required {required}, got {actual}")]

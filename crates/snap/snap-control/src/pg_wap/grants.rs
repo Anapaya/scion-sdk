@@ -1026,6 +1026,7 @@ fn release_segment_grant(store: &mut HashMap<SegmentFp, AuthSegmentEntry>, fp: S
 
 /// Failures of [`GrantManager::authorize`].
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AuthorizeError {
     /// The request is over [`GrantManagerConfig::max_segments_per_request`].
     #[error("request grants {requested} segments, at most {max} are allowed per request")]
@@ -1110,6 +1111,7 @@ struct PlannedGrant {
 
 /// Identification of a segment of the authoritative store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum GrantedSegmentId {
     /// A core segment with the given fingerprint.
     Core(SegmentFp),

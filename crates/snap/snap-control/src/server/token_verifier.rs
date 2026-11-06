@@ -24,6 +24,7 @@ use crate::server::jwks_key_store::JwksKeyStore;
 
 /// Errors returned by [`SnapTokenVerifier::verify`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SnapTokenVerifyError {
     /// Could not decode the JWT header.
     #[error("failed to decode JWT header: {0}")]

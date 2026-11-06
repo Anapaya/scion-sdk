@@ -123,6 +123,7 @@ impl WireSocketAddr {
 
 /// The error that the conversion of a [`WireSocketAddr`] returns.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum WireSocketAddrError {
     /// The message holds a version that is neither 4 nor 6.
     #[error("invalid IP version: {0}")]
@@ -482,6 +483,7 @@ impl Data {
 }
 
 /// A parsed message. It borrows the buffer that holds the message.
+#[non_exhaustive]
 pub enum Message<'a> {
     /// A handshake initiation.
     HandshakeInit(&'a mut HandshakeInit),
@@ -495,6 +497,7 @@ pub enum Message<'a> {
 
 /// The error that a parse returns.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ParseError {
     /// The first byte holds a type that the protocol does not define.
     #[error("unknown message type: {0}")]

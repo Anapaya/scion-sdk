@@ -172,6 +172,7 @@ impl fmt::Debug for AnapayaAaTokenSource {
 
 /// Why [`AnapayaAaTokenSource::start`] did not get a first token.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AnapayaAaStartError {
     /// The Anapaya AA client could not be built.
     #[error("cannot build the Anapaya AA client: {0}")]

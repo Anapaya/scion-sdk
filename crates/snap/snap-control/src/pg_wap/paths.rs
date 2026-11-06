@@ -288,6 +288,7 @@ impl PathManager {
 
 /// Errors that can occur while computing the best path.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum BestPathError {
     /// The client holds no valid grant for the destination.
     #[error("the client is not authorized to access the given destination")]
@@ -365,6 +366,7 @@ fn segment_source(
 /// Lets a consumer of a path go back to the segment it was built from, either to pick up a
 /// fresher copy of it, or to observe the expiry of the grant that made it available.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SegmentSourceId {
     /// A public segment from the [`SegmentManager`].
     Store(SegmentStoreId),

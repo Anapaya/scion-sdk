@@ -237,6 +237,7 @@ impl Drop for SnapTunEndpoint {
 
 /// Error when connecting to a SNAP tunnel.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ConnectSnapTunSocketError {
     /// Error when connecting to the snaptun control plane to register the identity.
     #[error("error registering identity with control plane: {0}")]

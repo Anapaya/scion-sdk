@@ -56,6 +56,7 @@ const LIST_SEGMENTS: &str = "ListSegments";
 
 /// List segments error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ListSegmentsError {
     /// Request error.
     #[error("request error: {0}")]

@@ -263,6 +263,7 @@ enum AclMatchResult {
 ///
 /// Defines the operation to apply on a hop matching the [`AclEntry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AclEntryOperator {
     /// Allows the usage of this segment
     Allow,

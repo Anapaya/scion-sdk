@@ -24,6 +24,7 @@ use crate::{h3::common::H3Error, quic::cert_verifier::CertRejected, socket::Boxe
 
 /// An error establishing an HTTP/3 connection (the `connect()` bootstrap).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EstablishError {
     /// The local or remote socket address could not be resolved to an
     /// IPv4/IPv6 SCION address.
@@ -105,6 +106,7 @@ impl EstablishError {
 
 /// An error issuing a request or opening a `CONNECT` tunnel.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RequestError {
     /// Establishing (or re-establishing) the connection failed.
     #[error("connection establishment failed: {0}")]
@@ -134,6 +136,7 @@ pub enum RequestError {
 
 /// A failure while streaming a request body
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum UploadError {
     /// The request body yielded an error while being read.
     #[error("request body error: {0}")]

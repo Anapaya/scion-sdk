@@ -83,6 +83,7 @@ pub struct AuthorizeTargetsResponse {
 
 /// The failures a [`ControlServiceAPIHandler`] reports.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AuthorizeTargetsError {
     /// The client has to send a different request.
     #[error("{0}")]
@@ -115,6 +116,7 @@ pub struct ResolveDomainResponse {
 
 /// The failures of [`ControlServiceAPIHandler::resolve_domain`].
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ResolveDomainError {
     /// The domain has no SCION gateway.
     #[error("{0}")]

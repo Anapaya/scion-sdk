@@ -36,6 +36,7 @@ use crate::{
 /// [ScionPath](crate::path::ScionPath) together with metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(clippy::large_enum_variant)]
+#[non_exhaustive]
 pub enum DpPath {
     /// Standard SCION path
     Standard(StandardPath),

@@ -721,6 +721,7 @@ pub enum RecvOutcome<'a, T> {
 }
 
 /// The result of calling [`QuicScionServerEndpoint::on_timeout`].
+#[non_exhaustive]
 pub enum TimeoutOutcome<'a> {
     /// A timeout of a connection that is currently being established was
     /// triggered.
@@ -776,6 +777,7 @@ impl Metrics {
 
 /// An error that occurred while processing an incoming packet.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PacketProcessError {
     /// Could not parse the local/remote address.
     #[error("failed to parse local/remote address")]
@@ -809,6 +811,7 @@ pub enum PacketProcessError {
 
 /// An error that occurred while verifying an address validation token.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TokenVerificationError {
     /// Token is larger than the maximum allowed size.
     /// (Maximum CID length + Tag length)

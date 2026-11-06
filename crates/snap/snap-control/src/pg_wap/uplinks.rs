@@ -226,6 +226,7 @@ impl From<anyhow::Error> for UplinkError {
 
 /// The error returned by [`UplinkManager::establish_stream`] when the client is not authorized
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EstablishStreamError {
     /// The client holds no grant for the destination or for a segment of the path.
     #[error("Client is not authorized to use the path")]

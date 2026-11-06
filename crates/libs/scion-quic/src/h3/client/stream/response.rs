@@ -243,6 +243,7 @@ impl H3ResponseBody {
 
 /// An error that can occur while collecting the response body into a buffer.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CollectError {
     /// An error that occurred while reading the response body.
     #[error(transparent)]
@@ -257,6 +258,7 @@ pub enum CollectError {
 
 /// An error that can occur while collecting the response body into a string.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CollectToStringError {
     /// An error that occurred while reading the response body.
     #[error(transparent)]

@@ -30,6 +30,7 @@ use thiserror::Error;
 /// Supported digest algorithms for signing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(missing_docs)]
+#[non_exhaustive]
 pub enum DigestAlgorithm {
     Sha256,
     Sha384,
@@ -38,6 +39,7 @@ pub enum DigestAlgorithm {
 
 #[derive(Debug, Error)]
 /// Validation failures returned when verifying signed messages.
+#[non_exhaustive]
 pub enum ValidateError {
     /// Header-and-body framing could not be decoded.
     #[error("invalid header and body")]

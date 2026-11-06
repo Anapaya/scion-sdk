@@ -25,10 +25,7 @@ use proptest::{
     prop_assert, proptest,
 };
 use sciparse::{
-    core::{
-        encode::WireEncode,
-        view::{View, ViewConversionError},
-    },
+    core::{encode::WireEncode, view::View},
     header::view::ScionHeaderView,
     packet::{classify::ClassifiedPacket, view::ScionRawPacketView},
 };
@@ -56,8 +53,7 @@ fn broken_wire_packets_must_not_panic() {
                         view,
                     );
                 }
-                Err(ViewConversionError::BufferTooSmall { .. })
-                | Err(ViewConversionError::Other(_)) => {
+                Err(_) => {
                     return Ok(());
                 }
             }

@@ -27,6 +27,7 @@ use crate::dataplane_path::standard::{
 
 /// Error type for failures during path advance.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AdvanceError {
     /// The hop field index is out of bounds.
     #[error("hop out of bounds: {0}")]
@@ -140,6 +141,7 @@ pub struct IngressAdvanceOutput {
 
 /// Action to perform with the packet after advancing the ingress of a path
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum IngressAdvanceAction {
     /// The packet should be sent out by its egress interface
     ContinueEgress {
@@ -153,6 +155,7 @@ pub enum IngressAdvanceAction {
 
 /// Result of advancing the ingress of a path, including potential validation errors
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum IngressValidateResult<ValidationErrorType> {
     /// The path was successfully advanced and validated, and can be processed according to the
     /// returned [IngressAdvanceOutput].
@@ -405,6 +408,7 @@ pub struct EgressAdvanceOutput {
 
 /// Result of advancing the egress of a path, including potential validation errors
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum EgressValidateResult<ValidationErrorType> {
     /// The path was successfully advanced and validated, and can be processed according to the
     /// returned [EgressAdvanceOutput].

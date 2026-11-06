@@ -34,6 +34,7 @@ pub const IA222: IsdAsn = IsdAsn::new(Isd(2), Asn::new(0xff00_0000_0222));
 
 /// Underlay type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UnderlayType {
     /// UDP underlay.
     Udp,

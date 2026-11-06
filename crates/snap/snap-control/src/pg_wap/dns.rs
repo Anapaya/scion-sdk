@@ -130,6 +130,7 @@ impl Default for DnsManagerConfig {
 
 /// The error a DNS resolution returns.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum DnsResolveError {
     /// The lookup did not complete, for example on a timeout or a network error. A retry can
     /// succeed.
@@ -410,6 +411,7 @@ fn lowest_priority<'a, P: Ord>(
 
 /// The answer of [`DnsCache::get`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CacheLookup {
     /// The cache holds no valid answer for the name.
     Miss,

@@ -201,6 +201,7 @@ impl Sansio {
                     .to_vec()
             }
             SendAction::Wait => panic!("a handshake is already in flight"),
+            action => panic!("unexpected send action: {action:?}"),
         }
     }
 
@@ -225,6 +226,7 @@ impl Sansio {
                     payload: Some(self.buffer[start..start + usize::from(len)].to_vec()),
                 }
             }
+            action => panic!("unexpected receive action: {action:?}"),
         }
     }
 
@@ -244,6 +246,7 @@ impl Sansio {
                         .to_vec(),
                 )
             }
+            action => panic!("unexpected timer action: {action:?}"),
         }
     }
 }

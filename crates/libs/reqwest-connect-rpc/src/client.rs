@@ -27,6 +27,7 @@ use crate::{
 
 /// Connect RPC client error.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CrpcClientError {
     /// Error that occurs when there is a connection issue.
     #[error("connection error {context}: {source:#?}")]
@@ -78,6 +79,7 @@ impl CrpcClientError {
 
 /// Error creating a [`CrpcClient`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CrpcClientCreationError {
     /// The HTTP client could not be built.
     #[error("failed to build HTTP client")]

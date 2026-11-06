@@ -104,6 +104,14 @@ async fn list_segments_handler(
             tracing::error!(src = %src, dst = %dst, error = %msg, "list_segments internal error");
             Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg).into_response())
         }
+        Err(err) => {
+            tracing::error!(src = %src, dst = %dst, error = %err, "list_segments error");
+            Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                err.to_string(),
+            )
+                .into_response())
+        }
     }
 }
 

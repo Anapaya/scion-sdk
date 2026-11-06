@@ -34,6 +34,7 @@ pub struct ListSegmentPlan {
 
 /// Error returned when creating a [`ListSegmentPlan`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ListSegmentPlanError {
     /// Source and destination AS must differ in path segment lookup.
     #[error("source and destination AS must differ in path segment lookup")]

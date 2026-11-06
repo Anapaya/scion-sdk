@@ -97,6 +97,7 @@ impl From<ScionTopology> for ScionTopologyDto {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ScionAsDto {
     /// AS that is simulated by PocketSCION. Packets to and from this AS will be handled by the
     /// simulator.

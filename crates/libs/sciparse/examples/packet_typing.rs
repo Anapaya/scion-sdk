@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sciparse::payload::ProtocolNumber::Bfd => {
             println!("Received a BFD packet extension: {:?}", packet);
         }
-        sciparse::payload::ProtocolNumber::Other(_) => {
+        _ => {
             println!("Received a packet with unknown next header: {:?}", packet);
         }
     }
@@ -72,6 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Received packet with unexpected next header: {:?}",
                 scion_packet_view
             );
+        }
+        _ => {
+            println!("Received a packet of an unknown type: {:?}", packet);
         }
     }
 

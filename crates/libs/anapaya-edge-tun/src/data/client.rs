@@ -113,6 +113,7 @@ impl GenericScionUdpSocket for SendErrorTolerantSocket {
 
 /// Error when driving the edge-tun WireGuard client.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClientDriverError {
     /// I/O error when sending packets on the underlay socket.
     #[error("send i/o error: {0}")]
@@ -256,6 +257,7 @@ impl ClientDriver {
 
 /// Error when sending on the [`EdgeTunClient`].
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EdgeTunClientSendError {
     /// I/O error when sending packets on the underlay socket.
     #[error("send i/o error: {0}")]
@@ -264,6 +266,7 @@ pub enum EdgeTunClientSendError {
 
 /// Error when receiving on the [`EdgeTunClient`].
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EdgeTunClientRecvError {
     /// The receive queue is closed (driver exited).
     #[error("receive queue closed")]

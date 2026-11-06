@@ -47,6 +47,7 @@ where
 
 /// Token validation errors.
 #[derive(Clone, Debug, Error, PartialEq)]
+#[non_exhaustive]
 pub enum TokenValidatorError {
     /// JWT errors.
     #[error("JWT error: {0}")]

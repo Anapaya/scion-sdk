@@ -299,6 +299,7 @@ impl<const BATCH_SIZE: usize> BatchedScenario<BATCH_SIZE> {
                 match err {
                     RecvBatchError::Io(source) => source,
                     RecvBatchError::Handler(source) => source,
+                    _ => io::Error::other("unknown batched receive error"),
                 }
             })?;
             if handled == 0 {

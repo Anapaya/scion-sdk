@@ -31,6 +31,7 @@ pub type TokenSourceCause = Arc<dyn std::error::Error + Sync + Send>;
 /// asking again may work. The variant it picks is how it says so; callers read it back through
 /// [`TokenSourceError::is_transient`] instead of interpreting the cause themselves.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum TokenSourceError {
     /// No token right now, but a later call may produce one, e.g. because the request to the
     /// token service did not get through.

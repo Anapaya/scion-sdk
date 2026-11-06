@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 /// - `ver` is unknown: Returns an error.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum AnyClaims {
     /// Version 1 SNAP token claims.
     V1(v1::SnapTokenClaims),

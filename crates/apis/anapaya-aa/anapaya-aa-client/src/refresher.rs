@@ -50,6 +50,7 @@ use crate::{
 
 /// Errors returned when refreshing a SNAP token via an API key.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ApiKeyTokenRefresherError {
     /// The Anapaya AA service returned an error.
     #[error("AA authenticate-by-key error: {0:#}")]

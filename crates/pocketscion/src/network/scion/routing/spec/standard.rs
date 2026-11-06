@@ -168,6 +168,7 @@ impl StdRoutingLogic {
                     LocalAsRoutingAction::ForwardLocal.into(),
                 ))
             }
+            _ => Ok(IngressNextAction::Complete(AsRoutingAction::Drop)),
         }
     }
 
@@ -230,6 +231,7 @@ impl StdRoutingLogic {
 
 /// Errors that can occur during standard SCION path routing.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum StandardRoutingError {
     /// The path could not be advanced because it is broken or malformed in some way
     #[error("Failed to advance path: {0}")]

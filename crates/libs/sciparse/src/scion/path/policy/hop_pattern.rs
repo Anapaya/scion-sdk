@@ -432,6 +432,7 @@ mod tests {
 pub mod lexer {
     /// The different kinds of tokens that can appear in a hop pattern expression.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    #[non_exhaustive]
     pub enum TokenKind {
         /// A hop predicate, e.g. "1-ff00:0:133#1"
         HopPredicate(String),

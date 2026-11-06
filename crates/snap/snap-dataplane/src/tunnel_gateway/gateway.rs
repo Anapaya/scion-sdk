@@ -288,6 +288,11 @@ where
                                      expected forwarded packet metadata; dropping packet"
                                 );
                             },
+                            _ => {
+                                tracing::error!(
+                                    "unknown result from incoming packet handling; dropping packet"
+                                );
+                            },
                         }
                         Ok::<(), std::convert::Infallible>(())
                     }) => {
@@ -296,6 +301,7 @@ where
                             Err(RecvBatchError::Io(e)) => {
                                 tracing::error!(err=?e, "i/o error on batched udp recv");
                             }
+                            Err(_) => tracing::error!("unknown error on batched udp recv"),
                         }
                     }
                     outbound = self.outbound_queue.recv() => {
@@ -420,6 +426,9 @@ where
                         max_packet_size,
                         "dropping outbound packet because it exceeds the batched sender max"
                     );
+                }
+                error => {
+                    tracing::debug!(?error, "dropping outbound packet");
                 }
             }
         }

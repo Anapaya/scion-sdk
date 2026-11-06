@@ -80,6 +80,7 @@ impl LocalNetworkSimulation<'_> {
 }
 
 /// Effect of a dispatched packet
+#[non_exhaustive]
 pub enum DispatchEffect {
     /// A SCMP reply should be sent back
     ScmpReply(ScmpErrorMessage),

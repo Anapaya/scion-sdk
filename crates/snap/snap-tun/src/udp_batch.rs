@@ -66,6 +66,7 @@ impl std::fmt::Display for SocketNotWritable {
 impl std::error::Error for SocketNotWritable {}
 
 /// Errors returned while receiving and processing a UDP batch.
+#[non_exhaustive]
 pub enum RecvBatchError<E> {
     /// The socket operation itself failed.
     Io(io::Error),
@@ -75,6 +76,7 @@ pub enum RecvBatchError<E> {
 
 /// Errors returned while queueing packets for batched transmission.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum QueuePacketError {
     /// The sender queue is full and cannot accept another packet right now.
     Full {

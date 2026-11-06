@@ -462,6 +462,7 @@ impl ScionTopology {
 
 /// Representation of a SCION Autonomous System (AS).
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
+#[non_exhaustive]
 pub enum ScionAs {
     /// Representation of a simulated AS, which can be linked to other simulated ASes and external
     /// ASes.
@@ -957,6 +958,7 @@ impl ScionRouter {
 
 /// Defines the interfaces associated with a SCION router.
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[non_exhaustive]
 pub enum ScionRouterInterface {
     /// The router is not explicitly associated with any interface, and should be used as a fallback
     /// for the AS unless another router is explicitly assigned.

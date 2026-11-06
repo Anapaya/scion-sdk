@@ -75,6 +75,7 @@ fn error_code(error: &CrpcError) -> ErrorCode {
         From::Unavailable => ErrorCode::Unavailable,
         From::DataLoss => ErrorCode::DataLoss,
         From::Unauthenticated => ErrorCode::Unauthenticated,
+        _ => ErrorCode::Unknown,
     }
 }
 #[allow(refining_impl_trait)]

@@ -212,6 +212,7 @@ impl Fragmenter {
 
 /// Error returned by [`Fragmenter::send`] when a packet cannot be fragmented.
 #[derive(Error, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FragmenterSendError {
     /// The packet is too large to be sent.
     #[error("packet exceeds maximum size of {MAX_PACKET_SIZE} bytes")]
@@ -620,6 +621,7 @@ impl DefragQueue {
 
 /// Error returned when a fragment frame cannot be inserted into a reassembly queue.
 #[derive(Debug, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DefragmentInsertError {
     /// The frame could not be inserted because the queue doesn't accept new frames.
     #[error("queue does not accept new frames")]
@@ -736,6 +738,7 @@ pub mod proto {
 
     /// Protocol flags
     #[repr(u16)]
+    #[non_exhaustive]
     pub enum FragmentFlags {
         /// Is the last frame of a fragmented packet
         LAST = 0x1 << 15,

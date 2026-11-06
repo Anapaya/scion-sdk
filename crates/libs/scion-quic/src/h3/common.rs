@@ -38,6 +38,7 @@ pub(crate) const H3_REQUEST_CANCELLED: u64 = 0x010C;
 ///
 /// Used by both the server's request body and the client's response body.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum H3Error {
     /// The peer reset the stream with the given HTTP/3 error code: a
     /// `RESET_STREAM` on the read side or a `STOP_SENDING` on the write side.

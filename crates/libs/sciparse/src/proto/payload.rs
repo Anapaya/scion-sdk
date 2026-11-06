@@ -27,6 +27,7 @@ pub mod udp;
 ///[rfc]: https://www.ietf.org/archive/id/draft-dekater-scion-dataplane-00.html#protnum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum ProtocolNumber {
     /// SCION/TCP next-header protocol number.
     Tcp  = 6,

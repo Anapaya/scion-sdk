@@ -46,6 +46,7 @@ const REHANDSHAKE_BUDGET: Duration = Duration::from_secs(600);
 
 /// Error when sending or receiving packets on the SNAP tunnel.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SnapTunnelDriverError {
     /// I/O error when sending packets on the underlay socket.
     #[error("send i/o error: {0}")]
@@ -516,6 +517,7 @@ fn rehandshake_outcome(
 
 /// Error when receiving a packet from the SNAP tunnel connection.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SnapTunnelReceiveError {
     /// The receive queue is closed because the tunnel is closed. See [`SnapTunnel::is_closed`].
     #[error("receive queue closed")]

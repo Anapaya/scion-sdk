@@ -96,6 +96,7 @@ pub trait WireEncode {
 
 /// Errors that can occur during encoding.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum EncodeError {
     /// The structure which was attempted to be encoded is invalid.
     #[error(transparent)]
