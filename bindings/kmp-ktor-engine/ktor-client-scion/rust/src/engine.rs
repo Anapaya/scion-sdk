@@ -61,6 +61,8 @@ struct Inflight {
 
 impl Engine {
     pub(crate) fn new(config: CoreConfig) -> Result<Self, CoreError> {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+
         let config = config::Config::new(config)?;
         let runtime = runtime::shared()?;
 
@@ -164,4 +166,38 @@ fn describe_error(error: &dyn std::error::Error) -> String {
     }
 
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Engine;
+    use crate::ffi::types::CoreConfig;
+
+    #[test]
+    fn an_engine_with_control_plane_anchors_builds() {
+        let mut params = rcgen::CertificateParams::new(Vec::new()).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = params
+            .self_signed(&rcgen::KeyPair::generate().unwrap())
+            .unwrap();
+
+        let engine = Engine::new(CoreConfig {
+            endhost_api_url: None,
+            token_source: None,
+            preferred_underlay: None,
+            ca_certificates_pem: None,
+            control_plane_ca_certificates_pem: Some(ca.pem().into_bytes()),
+            accept_invalid_certs: false,
+            dns_overrides: Vec::new(),
+            connect_timeout_ms: None,
+            request_timeout_ms: None,
+            idle_timeout_ms: None,
+            max_origins: None,
+            connection_attempt_delay_ms: None,
+            max_response_body_bytes: None,
+            web_gateway: None,
+        });
+
+        assert!(engine.is_ok());
+    }
 }

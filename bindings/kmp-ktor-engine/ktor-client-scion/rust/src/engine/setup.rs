@@ -39,9 +39,6 @@ use crate::ffi::types::CoreError;
 /// Call it inside the runtime context. Some parts spawn a task at once, for
 /// example the AA token source its refresh task.
 pub(crate) fn transport(config: Config) -> Result<Arc<dyn Transport>, CoreError> {
-    // rustls refuses to build a TLS config before a provider is installed.
-    scion_sdk_utils::rustls::select_ring_crypto_provider();
-
     // With a gateway, the origin trust moves to the TLS session inside the
     // tunnel. The QUIC connection to the gateway skips the peer check.
     let (quic, gateway) = match &config.web_gateway {
