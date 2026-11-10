@@ -54,7 +54,7 @@
 
 use std::{
     collections::HashMap,
-    net::IpAddr,
+    net::SocketAddr,
     sync::{
         Arc, RwLock,
         atomic::{AtomicUsize, Ordering},
@@ -224,6 +224,15 @@ impl From<anyhow::Error> for UplinkError {
     }
 }
 
+/// Info about the TCP connection of a client to the WAP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConnectionInfo {
+    /// The address of the client.
+    pub client: SocketAddr,
+    /// The address of the WAP that the client connected to.
+    pub wap: SocketAddr,
+}
+
 /// The error returned by [`UplinkManager::establish_stream`] when the client is not authorized
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -252,7 +261,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
         &self.0.establisher
     }
 
-    /// Opens a stream for `client_ip` to `dst_sni` over the uplink for the given (path, WAG) pair,
+    /// Opens a stream for `conn` to `dst_sni` over the uplink for the given (path, WAG) pair,
     /// establishing that uplink if it does not exist yet.
     ///
     /// The uplink stays alive as long as at least one of the returned guards is alive.
@@ -262,7 +271,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
     /// [`PathManager::best_path`] returned for this client and SNI.
     pub async fn establish_stream(
         &self,
-        client_ip: IpAddr,
+        conn: ConnectionInfo,
         sni: &WapSNI,
         used_path: UsedPath,
         wag: ScionSocketIpAddr,
@@ -273,7 +282,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
         let grants = self
             .0
             .paths
-            .watch_grants(client_ip, sni.customer_domain(), &used_path, now)
+            .watch_grants(conn.client.ip(), sni.customer_domain(), &used_path, now)
             .map_err(|_| EstablishStreamError::NotAuthorized)?;
 
         // Prepare the uplink and increase its stream count, so it is not cleaned while the stream
@@ -286,7 +295,7 @@ impl<Establisher: UplinkEstablisher> UplinkManager<Establisher> {
         let stream = reservation
             .entry()
             .uplink
-            .establish_stream(sni)
+            .establish_stream(sni, &conn)
             .await
             .map_err(EstablishStreamError::UplinkError)?;
 
@@ -699,10 +708,14 @@ pub trait GenericUplink: Send + Sync + 'static {
     /// A stream multiplexed onto the uplink.
     type StreamType: Send;
 
-    /// Opens a new stream to `dst_sni` on this uplink.
+    /// Opens a new stream for `conn` to `dst_sni` on this uplink.
     ///
     /// Sets [`UplinkError::status`] if the WAG refused the stream with a status code.
-    async fn establish_stream(&self, dst_sni: &WapSNI) -> Result<Self::StreamType, UplinkError>;
+    async fn establish_stream(
+        &self,
+        dst_sni: &WapSNI,
+        conn: &ConnectionInfo,
+    ) -> Result<Self::StreamType, UplinkError>;
 
     /// Switches the uplink over to `new_path` without interrupting its streams.
     fn replace_path(&self, new_path: ScionPath) -> Result<(), UplinkError>;
@@ -895,6 +908,7 @@ mod tests {
         async fn establish_stream(
             &self,
             dst_sni: &WapSNI,
+            _conn: &ConnectionInfo,
         ) -> Result<Self::StreamType, UplinkError> {
             self.0.with_state(|state| {
                 if state.failing.stream {
@@ -930,6 +944,14 @@ mod tests {
     /// Everything a test needs: the primitives, the uplinks the manager establishes, the manager,
     /// and a path to establish them over.
     type Harness = (Fixture, TestUplinks, UplinkManager<TestUplinks>, UsedPath);
+
+    /// A connection from `client_ip` to the WAP.
+    fn connection(client_ip: std::net::IpAddr) -> ConnectionInfo {
+        ConnectionInfo {
+            client: SocketAddr::new(client_ip, 50000),
+            wap: "198.51.100.1:443".parse().unwrap(),
+        }
+    }
 
     /// An uplink manager on top of `fixture`, which re-paths uplinks with less than
     /// `min_path_lifetime` left.
@@ -1018,12 +1040,18 @@ mod tests {
         fixture.grant_target(client_ip(), other_sni().customer_domain(), at(0));
 
         let first = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .expect("the first stream is established");
         let second = manager
             .establish_stream(
-                client_ip(),
+                connection(client_ip()),
                 &other_sni(),
                 used.clone(),
                 wag(leaf_ia()),
@@ -1049,7 +1077,7 @@ mod tests {
 
         // A different WAG over the same path is a different uplink.
         let other_wag = manager
-            .establish_stream(client_ip(), &sni(), used, wag(core_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(core_ia()), at(0))
             .await
             .expect("the stream to the other WAG is established");
         assert_eq!(uplinks.connections(), 2);
@@ -1064,14 +1092,26 @@ mod tests {
         let (_fixture, uplinks, manager, used) = uplink_fixture().await;
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .expect("the stream is established");
 
         // As long as a stream is alive, the uplink survives maintenance and is reused.
         manager.maintain(at(0)).await;
         let second = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .expect("the second stream is established");
         assert_eq!(uplinks.connections(), 1);
@@ -1081,7 +1121,7 @@ mod tests {
 
         manager.maintain(at(0)).await;
         manager
-            .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(leaf_ia()), at(0))
             .await
             .expect("a new stream is established");
         assert_eq!(
@@ -1115,12 +1155,18 @@ mod tests {
         let (fixture, uplinks, manager, used) = shared_uplink_fixture().await;
 
         let first = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(core_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(core_ia()),
+                at(0),
+            )
             .await
             .expect("the first client's stream is established");
         let second = manager
             .establish_stream(
-                other_client_ip(),
+                connection(other_client_ip()),
                 &sni(),
                 used.clone(),
                 wag(core_ia()),
@@ -1194,7 +1240,13 @@ mod tests {
 
         assert!(
             manager
-                .establish_stream(stranger_ip(), &sni(), used, wag(core_ia()), at(0))
+                .establish_stream(
+                    connection(stranger_ip()),
+                    &sni(),
+                    used,
+                    wag(core_ia()),
+                    at(0)
+                )
                 .await
                 .is_err(),
             "a client without a grant on the path's segments must not get a stream on it"
@@ -1213,7 +1265,13 @@ mod tests {
         assert!(!fixture.grant.ip_is_authorized(stranger_ip(), at(0)));
         assert!(
             manager
-                .establish_stream(stranger_ip(), &sni(), used, wag(leaf_ia()), at(0))
+                .establish_stream(
+                    connection(stranger_ip()),
+                    &sni(),
+                    used,
+                    wag(leaf_ia()),
+                    at(0)
+                )
                 .await
                 .is_err(),
             "an unauthenticated client must not get a stream"
@@ -1237,7 +1295,13 @@ mod tests {
         // `GrantManager::clean` having run.
         assert!(
             manager
-                .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(101))
+                .establish_stream(
+                    connection(client_ip()),
+                    &sni(),
+                    used.clone(),
+                    wag(leaf_ia()),
+                    at(101)
+                )
                 .await
                 .is_err(),
             "a lapsed grant does not authorize a stream, swept or not"
@@ -1246,7 +1310,13 @@ mod tests {
         fixture.grant.clean(at(101));
         assert!(
             manager
-                .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(101))
+                .establish_stream(
+                    connection(client_ip()),
+                    &sni(),
+                    used,
+                    wag(leaf_ia()),
+                    at(101)
+                )
                 .await
                 .is_err(),
             "and still does not once it has been swept"
@@ -1263,7 +1333,13 @@ mod tests {
         let (_fixture, uplinks, manager, used) = uplink_fixture().await;
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .expect("the stream is established");
         let entry = stream.uplink_entry().clone();
@@ -1272,7 +1348,7 @@ mod tests {
         // there to be picked up again.
         drop(stream);
         let second = manager
-            .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(leaf_ia()), at(0))
             .await
             .expect("the second stream is established");
 
@@ -1299,7 +1375,13 @@ mod tests {
         let (_fixture, uplinks, manager, used) = uplink_fixture().await;
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .expect("the stream is established");
         assert_eq!(uplinks.connections(), 1);
@@ -1318,7 +1400,13 @@ mod tests {
         // A new stream must not be put on the closed uplink, even before maintenance runs and even
         // though the old stream still holds it.
         let replacement = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .expect("the stream is established on a new uplink");
         assert_eq!(uplinks.connections(), 2, "the closed uplink is replaced");
@@ -1337,7 +1425,13 @@ mod tests {
         let (_fixture, uplinks, manager, used) = uplink_fixture().await;
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .expect("the stream is established");
 
@@ -1346,7 +1440,7 @@ mod tests {
 
         // The stream is still alive and holding the entry, but the manager has let it go.
         let replacement = manager
-            .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(leaf_ia()), at(0))
             .await
             .expect("the stream is established");
         assert_eq!(
@@ -1365,7 +1459,7 @@ mod tests {
         let (_fixture, _uplinks, manager, used) = uplink_fixture().await;
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(leaf_ia()), at(0))
             .await
             .expect("the stream is established");
         let entry = stream.uplink_entry().clone();
@@ -1386,7 +1480,13 @@ mod tests {
         let (fixture, _uplinks, manager, used) = public_path_fixture(NEVER_REPATH).await;
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(core_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(core_ia()),
+                at(0),
+            )
             .await
             .expect("the stream is established");
 
@@ -1433,7 +1533,7 @@ mod tests {
             .expect("a combined path has an expiration");
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used, wag(core_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(core_ia()), at(0))
             .await
             .expect("the stream is established");
 
@@ -1470,7 +1570,7 @@ mod tests {
             .expect("a combined path has an expiration");
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used, wag(core_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(core_ia()), at(0))
             .await
             .expect("the stream is established");
 
@@ -1514,7 +1614,13 @@ mod tests {
             .expect("a combined path has an expiration");
 
         let stream = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(core_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(core_ia()),
+                at(0),
+            )
             .await
             .expect("the stream is established");
 
@@ -1547,7 +1653,13 @@ mod tests {
         uplinks.fail_streams(true);
         assert!(
             manager
-                .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+                .establish_stream(
+                    connection(client_ip()),
+                    &sni(),
+                    used.clone(),
+                    wag(leaf_ia()),
+                    at(0)
+                )
                 .await
                 .is_err(),
             "the client gets no stream if the uplink cannot open one"
@@ -1569,7 +1681,7 @@ mod tests {
 
         uplinks.fail_streams(false);
         manager
-            .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(leaf_ia()), at(0))
             .await
             .expect("the next stream is established");
         assert_eq!(
@@ -1585,7 +1697,13 @@ mod tests {
 
         uplinks.fail_streams_with_status(StatusCode::FORBIDDEN);
         let error = manager
-            .establish_stream(client_ip(), &sni(), used.clone(), wag(leaf_ia()), at(0))
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used.clone(),
+                wag(leaf_ia()),
+                at(0),
+            )
             .await
             .err()
             .expect("the uplink refused the stream");
@@ -1597,7 +1715,7 @@ mod tests {
 
         uplinks.fail_streams(true);
         let error = manager
-            .establish_stream(client_ip(), &sni(), used, wag(leaf_ia()), at(0))
+            .establish_stream(connection(client_ip()), &sni(), used, wag(leaf_ia()), at(0))
             .await
             .err()
             .expect("the uplink refused the stream");
@@ -1615,7 +1733,13 @@ mod tests {
         uplinks.fail_connections(true);
         assert!(
             manager
-                .establish_stream(client_ip(), &sni(), used.clone(), wag(core_ia()), at(0))
+                .establish_stream(
+                    connection(client_ip()),
+                    &sni(),
+                    used.clone(),
+                    wag(core_ia()),
+                    at(0)
+                )
                 .await
                 .is_err(),
             "the client gets no stream if the uplink cannot be established"
@@ -1644,7 +1768,13 @@ mod tests {
         // Nothing was left in the manager either, so a later client establishes its own uplink.
         uplinks.fail_connections(false);
         manager
-            .establish_stream(client_ip(), &sni(), used, wag(core_ia()), idle_at)
+            .establish_stream(
+                connection(client_ip()),
+                &sni(),
+                used,
+                wag(core_ia()),
+                idle_at,
+            )
             .await
             .expect("the next stream is established");
         assert_eq!(uplinks.connections(), 1);
@@ -1661,7 +1791,13 @@ mod tests {
 
         assert!(
             manager
-                .establish_stream(client_ip(), &sni(), used, wag(core_ia()), evicted_at)
+                .establish_stream(
+                    connection(client_ip()),
+                    &sni(),
+                    used,
+                    wag(core_ia()),
+                    evicted_at
+                )
                 .await
                 .is_err(),
             "an uplink whose segments cannot be kept available must not be established"

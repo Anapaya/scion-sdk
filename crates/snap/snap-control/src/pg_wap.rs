@@ -48,6 +48,7 @@ use crate::pg_wap::{
 
 pub mod crpc;
 pub mod dns;
+pub mod forwarded;
 pub mod grants;
 pub mod paths;
 pub mod segments;
