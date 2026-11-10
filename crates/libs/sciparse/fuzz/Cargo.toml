@@ -24,3 +24,10 @@ path = "fuzz_targets/packet_parsing.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "packet_encoding"
+path = "fuzz_targets/packet_encoding.rs"
+test = false
+doc = false
+bench = false

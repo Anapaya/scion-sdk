@@ -18,7 +18,7 @@
 
 use libfuzzer_sys::{fuzz_mutator, fuzz_target, fuzzer_mutate};
 use sciparse::{
-    core::view::{View, ViewConversionError},
+    core::view::View,
     packet::view::ScionRawPacketView,
     util::fuzz::{
         packet_shape::bias_to_packet_shape, view_function_checks::packet::exec_every_view_function,
@@ -26,15 +26,12 @@ use sciparse::{
 };
 
 fuzz_target!(|data: &[u8]| {
-    // `from_mut_slice` needs `&mut [u8]`; the copy only satisfies that API, the
+    // `try_from_mut_slice` needs `&mut [u8]`; the copy only satisfies that API, the
     // bytes themselves are exactly the corpus entry under test.
     let mut data = data.to_vec();
 
-    match ScionRawPacketView::from_mut_slice(&mut data) {
-        Ok((view, _rest)) => {
-            exec_every_view_function(view);
-        }
-        Err(ViewConversionError::BufferTooSmall { .. }) | Err(ViewConversionError::Other(_)) => {}
+    if let Ok((view, _rest)) = ScionRawPacketView::try_from_mut_slice(&mut data) {
+        exec_every_view_function(view);
     }
 });
 

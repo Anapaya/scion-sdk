@@ -23,7 +23,7 @@
 //! The library is designed to be efficient and flexible, allowing users to work
 //! with SCION packets in a straightforward manner.
 //!
-//! SciParse exposes both view-based and model-based representations of SCION packets.
+//! SciParse exposes views, models, and borrowed models of SCION packets.
 //!
 //! ## Overview
 //!
@@ -100,6 +100,37 @@
 //! println!("Parsed model: {:?}", model);
 //! ```
 //!
+//! ## Borrowed Models
+//!
+//! A borrowed model is a packet model that borrows its path and its payload. It writes the same
+//! bytes as the matching model.
+//!
+//! Use a borrowed model to send a payload over a path that you already hold, for example the path
+//! of a [ScionPath](crate::path::ScionPath). The encoder copies both straight into your buffer.
+//!
+//! Most relevant structs include:
+//! * [ScionUdpPacketRef](proto::packet::model::ScionUdpPacketRef)
+//! * [ScionScmpPacketRef](proto::packet::model::ScionScmpPacketRef)
+//! * [ScionRawPacketRef](proto::packet::model::ScionRawPacketRef)
+//!
+//! Borrowed models only encode. [Model::try_encode_to_view](crate::core::model::Model) writes the
+//! packet into your buffer and returns a view over it.
+//!
+//! ```
+//! # use sciparse::address::socket_addr::ScionSocketAddr;
+//! # use sciparse::core::{encode::WireEncode, model::Model};
+//! # use sciparse::dataplane_path::view::ScionDpPathViewRef;
+//! # use sciparse::packet::model::ScionUdpPacketRef;
+//! # let src: ScionSocketAddr = "[1-ff00:0:110,10.0.0.1]:12345".parse().unwrap();
+//! # let dst: ScionSocketAddr = "[1-ff00:0:111,10.0.0.2]:54321".parse().unwrap();
+//! let packet = ScionUdpPacketRef::new(src, dst, ScionDpPathViewRef::Empty, b"payload");
+//! let mut buf = vec![0u8; packet.required_size()];
+//! let (view, _rest) = packet
+//!     .try_encode_to_view(&mut buf)
+//!     .expect("Failed to encode SCION packet");
+//!
+//! println!("Encoded view: {:?}", view);
+//! ```
 //!
 //! ## Control Plane Primitives
 //!

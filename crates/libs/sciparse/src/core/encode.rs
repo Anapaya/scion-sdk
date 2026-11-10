@@ -52,6 +52,9 @@ pub trait WireEncode {
     ///
     /// Returns the number of bytes written.
     ///
+    /// An implementation must write every byte in `buf[..self.required_size()]`, because the
+    /// caller can pass a buffer with old data.
+    ///
     /// ## SAFETY
     /// 1. The buffer must be at least `self.required_size()` bytes long
     /// 2. The structure must be valid for encoding, i.e., `self.valid()` must return `Ok(())`

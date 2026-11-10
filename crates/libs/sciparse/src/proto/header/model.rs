@@ -15,7 +15,7 @@
 //! SCION header models
 
 use crate::{
-    address::addr::ScionAddr,
+    address::{addr::ScionAddr, host_addr::UnknownAddressTypeError},
     core::{
         convert::{FromView, TryFromView},
         encode::{EncodeError, InvalidStructureError, WireEncode},
@@ -23,7 +23,11 @@ use crate::{
         view::ViewConversionError,
         write::unchecked_bit_range_be_write,
     },
-    dataplane_path::{model::DpPath, types::PathType},
+    dataplane_path::{
+        model::DpPath,
+        types::PathType,
+        view::{ScionDpPathViewExt, ScionDpPathViewRef},
+    },
     header::{
         layout::{AddressHeaderLayout, CommonHeaderLayout, ScionHeaderLayout},
         view::ScionHeaderView,
@@ -48,13 +52,6 @@ pub struct ScionPacketHeader {
     /// The path information of the SCION packet
     pub path: DpPath,
 }
-impl ScionPacketHeader {
-    /// Returns the size of the SCION packet header in 4-byte units used in the header length field.
-    #[inline]
-    fn size_units(&self) -> u8 {
-        (self.required_size() / 4) as u8
-    }
-}
 // Wire Encode (needs size, so can't use trait)
 impl ScionPacketHeader {
     /// Returns the size required for the wire encoding.
@@ -64,7 +61,7 @@ impl ScionPacketHeader {
     /// If this size is smaller than the actual encoded size, undefined behavior will occur.
     #[inline]
     pub fn required_size(&self) -> usize {
-        CommonHeaderLayout::SIZE_BYTES + self.address.required_size() + self.path.required_size()
+        header_size(&self.address, self.path.required_size())
     }
 
     /// Validates that all fields in the structure are valid for encoding.
@@ -75,21 +72,7 @@ impl ScionPacketHeader {
     /// Returns Ok(()) if valid, otherwise a static error reference.
     #[inline]
     pub fn wire_valid(&self) -> Result<(), InvalidStructureError> {
-        let required_size = self.required_size();
-        if !required_size.is_multiple_of(4) {
-            return Err(InvalidStructureError::from(
-                "header size must be a multiple of 4 bytes",
-            ));
-        }
-
-        if required_size > ScionHeaderLayout::MAX_SIZE_BYTES {
-            return Err(InvalidStructureError::from(
-                "header size exceeds maximum encodeable value of 1020 bytes",
-            ));
-        }
-
-        self.common.valid()?;
-        self.address.wire_valid()?;
+        validate_header(&self.common, &self.address, self.path.required_size())?;
         self.path.wire_valid()?;
         Ok(())
     }
@@ -104,25 +87,18 @@ impl ScionPacketHeader {
     #[inline]
     pub unsafe fn encode_unchecked(&self, buf: &mut [u8], payload_size: u16) -> usize {
         unsafe {
-            use CommonHeaderLayout as CHL;
-            // Encode common header
-            self.common.encode_unchecked(
+            // Common and address header
+            let path_offset = encode_header_without_path_unchecked(
                 buf,
-                self.size_units(),
+                &self.common,
+                &self.address,
                 self.path.path_type(),
-                self.address.dst_addr_type(),
-                self.address.src_addr_type(),
+                self.path.required_size(),
                 payload_size,
             );
 
-            // Encode address header
-            let offset = CHL::SIZE_BYTES;
-            let address_buf = buf.split_at_mut_unchecked(offset).1;
-            self.address.encode_unchecked(address_buf);
-
-            // Encode path
-            let offset = offset + self.address.required_size();
-            let path_buf = buf.split_at_mut_unchecked(offset).1;
+            // Path
+            let path_buf = buf.split_at_mut_unchecked(path_offset).1;
             self.path.encode_unchecked(path_buf);
         }
 
@@ -158,6 +134,134 @@ impl TryFromView for ScionPacketHeader {
             path: DpPath::from_view(&view.path()),
         })
     }
+}
+
+/// A SCION packet header that borrows its path.
+///
+/// Use it to encode a header without a [`DpPath`] model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScionPacketHeaderRef<'a> {
+    /// The common header of the SCION packet
+    pub common: CommonHeader,
+    /// The address header of the SCION packet
+    pub address: AddressHeader,
+    /// The path of the SCION packet
+    pub path: ScionDpPathViewRef<'a>,
+}
+// Wire Encode (needs size, so can't use trait)
+impl ScionPacketHeaderRef<'_> {
+    /// Returns the size required for the wire encoding.
+    #[inline]
+    pub fn required_size(&self) -> usize {
+        header_size(&self.address, self.path.as_slice().len())
+    }
+
+    /// Validates that all fields in the structure are valid for encoding.
+    ///
+    /// The path view holds a parsed path, so the check covers only the header size, the common
+    /// header, and the address header.
+    #[inline]
+    pub fn wire_valid(&self) -> Result<(), InvalidStructureError> {
+        validate_header(&self.common, &self.address, self.path.as_slice().len())
+    }
+
+    /// Writes the wire encoding into the provided buffer.
+    ///
+    /// Returns the number of bytes written.
+    ///
+    /// ## SAFETY
+    /// 1. The buffer must be at least `self.required_size()` bytes long
+    /// 2. The structure must be valid for encoding, i.e., `self.wire_valid()` must return `Ok(())`
+    #[inline]
+    pub unsafe fn encode_unchecked(&self, buf: &mut [u8], payload_size: u16) -> usize {
+        let path = self.path.as_slice();
+
+        unsafe {
+            // Common and address header
+            let path_offset = encode_header_without_path_unchecked(
+                buf,
+                &self.common,
+                &self.address,
+                self.path.path_type(),
+                path.len(),
+                payload_size,
+            );
+
+            // Path, copied as raw bytes
+            buf.get_unchecked_mut(path_offset..path_offset + path.len())
+                .copy_from_slice(path);
+        }
+
+        self.required_size()
+    }
+}
+
+#[inline]
+fn header_size(address: &AddressHeader, path_size: usize) -> usize {
+    CommonHeaderLayout::SIZE_BYTES + address.required_size() + path_size
+}
+/// Does not check the path, because only the caller knows if its path needs a check.
+#[inline]
+fn validate_header(
+    common: &CommonHeader,
+    address: &AddressHeader,
+    path_size: usize,
+) -> Result<(), InvalidStructureError> {
+    // Header size limits
+    let size = header_size(address, path_size);
+    if !size.is_multiple_of(4) {
+        return Err(InvalidStructureError::from(
+            "header size must be a multiple of 4 bytes",
+        ));
+    }
+
+    if size > ScionHeaderLayout::MAX_SIZE_BYTES {
+        return Err(InvalidStructureError::from(
+            "header size exceeds maximum encodeable value of 1020 bytes",
+        ));
+    }
+
+    // Header parts
+    common.valid()?;
+    address.wire_valid()?;
+    Ok(())
+}
+/// Returns the offset of the path in `buf`.
+///
+/// ## SAFETY
+/// 1. The buffer must be at least `header_size(address, path_size)` bytes long
+/// 2. `validate_header(common, address, path_size)` must return `Ok(())`
+#[inline]
+unsafe fn encode_header_without_path_unchecked(
+    buf: &mut [u8],
+    common: &CommonHeader,
+    address: &AddressHeader,
+    path_type: PathType,
+    path_size: usize,
+    payload_size: u16,
+) -> usize {
+    use CommonHeaderLayout as CHL;
+
+    // The header length field counts 4-byte units.
+    let size_units = (header_size(address, path_size) / 4) as u8;
+
+    unsafe {
+        // Common header
+        common.encode_unchecked(
+            buf,
+            size_units,
+            path_type,
+            address.dst_addr_type(),
+            address.src_addr_type(),
+            payload_size,
+        );
+
+        // Address header
+        let address_buf = buf.split_at_mut_unchecked(CHL::SIZE_BYTES).1;
+        address.encode_unchecked(address_buf);
+    }
+
+    CHL::SIZE_BYTES + address.required_size()
 }
 
 /// Represents the common header of a SCION packet
@@ -271,6 +375,38 @@ impl AddressHeader {
     #[inline]
     pub fn src_addr_type(&self) -> WireHostAddrType {
         self.src_host_addr.addr_type()
+    }
+
+    /// Returns the source SCION address.
+    ///
+    /// If the source host address has an unknown type, it returns an error.
+    #[inline]
+    pub fn src_scion_addr(&self) -> Result<ScionAddr, UnknownAddressTypeError> {
+        let host = self.src_host_addr.scion_host_addr()?;
+        Ok(ScionAddr::new(self.src_ia, host))
+    }
+
+    /// Returns the destination SCION address.
+    ///
+    /// If the destination host address has an unknown type, it returns an error.
+    #[inline]
+    pub fn dst_scion_addr(&self) -> Result<ScionAddr, UnknownAddressTypeError> {
+        let host = self.dst_host_addr.scion_host_addr()?;
+        Ok(ScionAddr::new(self.dst_ia, host))
+    }
+
+    /// Sets the source ISD-AS and host address.
+    #[inline]
+    pub fn set_src_scion_addr(&mut self, addr: ScionAddr) {
+        self.src_ia = addr.isd_asn();
+        self.src_host_addr = addr.host().into();
+    }
+
+    /// Sets the destination ISD-AS and host address.
+    #[inline]
+    pub fn set_dst_scion_addr(&mut self, addr: ScionAddr) {
+        self.dst_ia = addr.isd_asn();
+        self.dst_host_addr = addr.host().into();
     }
 }
 impl WireEncode for AddressHeader {

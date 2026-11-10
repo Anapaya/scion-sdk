@@ -240,6 +240,7 @@ impl WireEncode for StandardPath {
         unsafe {
             unchecked_bit_range_be_write(buf, SL::CURR_INFO_FIELD_RNG, self.current_info_field);
             unchecked_bit_range_be_write(buf, SL::CURR_HOP_FIELD_RNG, self.current_hop_field);
+            unchecked_bit_range_be_write(buf, SL::RSV_RNG, 0u8);
             unchecked_bit_range_be_write(buf, SL::SEG0_LEN_RNG, seg0);
             unchecked_bit_range_be_write(buf, SL::SEG1_LEN_RNG, seg1);
             unchecked_bit_range_be_write(buf, SL::SEG2_LEN_RNG, seg2);

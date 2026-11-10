@@ -907,7 +907,7 @@ pub struct ScmpUnknownMessageLayout {
     payload_length: usize,
 }
 impl ScmpUnknownMessageLayout {
-    const HEADER_SIZE_BYTES: usize = 8;
+    const HEADER_SIZE_BYTES: usize = 4;
 
     /// Create a layout based on the byte length of the message specific data.
     #[inline]

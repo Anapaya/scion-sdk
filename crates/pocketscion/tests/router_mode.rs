@@ -26,7 +26,7 @@ use sciparse::{
     address::{addr::ScionAddr, socket_addr::ScionSocketAddr},
     core::{convert::TryFromView, encode::WireEncode, model::Model, view::View},
     dataplane_path::view::ScionDpPathViewExt,
-    packet::model::{ScionScmpPacket, ScionUdpPacket},
+    packet::model::{ScionPacketExt, ScionScmpPacket, ScionUdpPacket, ScionUdpPacketExt},
     payload::scmp::model::{ScmpEchoRequest, ScmpExternalInterfaceDown, ScmpMessage},
 };
 use test_log::test;

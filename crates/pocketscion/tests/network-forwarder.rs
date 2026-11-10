@@ -33,7 +33,7 @@ use sciparse::{
     core::{convert::TryFromView, encode::WireEncode},
     dataplane_path::model::DpPath,
     identifier::isd_asn::IsdAsn,
-    packet::model::{ScionRawPacket, ScionUdpPacket},
+    packet::model::{ScionPacketExt, ScionRawPacket, ScionUdpPacket},
 };
 use tokio::time::{Duration, timeout as tokio_timeout};
 

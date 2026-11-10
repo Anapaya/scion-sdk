@@ -28,8 +28,10 @@ use crate::header::model::AddressHeader;
     "buffer too small for payload encoding: expected at least {expected_size} bytes, got {actual_size} bytes"
 )]
 pub struct BufferTooSmallError {
-    expected_size: usize,
-    actual_size: usize,
+    /// The size in bytes that the encoding needs.
+    pub expected_size: usize,
+    /// The size in bytes of the given buffer.
+    pub actual_size: usize,
 }
 
 /// Allows encoding scion packet payload models to wire format.
@@ -52,6 +54,10 @@ pub trait PayloadEncode: Debug + Send + Sync + PartialEq + PartialOrd + Hash {
     /// Writes the wire encoding into the provided buffer.
     ///
     /// Returns the number of bytes written.
+    ///
+    /// An implementation must write every byte in
+    /// `buf[..self.required_size(header_and_extensions_size)]`, because the caller can pass a
+    /// buffer with old data.
     ///
     /// ## Safety
     /// - The buffer must be at least `self.required_size(header_and_extensions_size)` bytes long.

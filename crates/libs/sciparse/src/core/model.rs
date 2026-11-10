@@ -25,6 +25,9 @@ use crate::core::{
 /// [FromView](crate::core::convert::FromView) and implement
 /// [TryFromModel](crate::core::convert::TryFromModel) for their corresponding view type.
 ///
+/// A model that borrows its data implements only [Model]. A view names only one model in
+/// [TryFromModel](crate::core::convert::TryFromModel), and that is the owned model.
+///
 /// Not all models can implement [Model] as they require additional information to be encoded.
 pub trait Model: WireEncode {
     /// The type of view that corresponds to this model.

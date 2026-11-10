@@ -17,7 +17,7 @@ use anyhow::Context as _;
 use sciparse::{
     dataplane_path::view::ScionDpPathViewExt,
     packet::{
-        model::{ScionRawPacket, ScionScmpPacket},
+        model::{ScionPacketExt, ScionRawPacket, ScionScmpPacket},
         view::ScionRawPacketView,
     },
     payload::scmp::{

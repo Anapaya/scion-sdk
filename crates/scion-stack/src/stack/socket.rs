@@ -14,6 +14,8 @@
 //! SCION socket types.
 
 use std::{
+    cell::RefCell,
+    io,
     net::{self},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -22,10 +24,14 @@ use std::{
 use scion_quic::socket::{BoxedSocketError, GenericScionUdpSocket};
 use sciparse::{
     address::{addr::ScionAddr, ip_socket_addr::ScionSocketIpAddr},
-    core::{model::Model, view::View},
+    core::{
+        encode::{EncodeError, WireEncode},
+        model::Model,
+        view::View,
+    },
     dataplane_path::view::ScionDpPathViewExt,
     packet::{
-        model::{ScionScmpPacket, ScionUdpPacket},
+        model::{ScionScmpPacketRef, ScionUdpPacketRef},
         view::ScionRawPacketView,
     },
     path::ScionPath,
@@ -91,20 +97,18 @@ impl PathUnawareUdpScionSocket {
         destination: ScionSocketIpAddr,
         path: &ScionPath,
     ) -> Result<(), ScionSocketSendError> {
-        // TODO: Should look into a way to encode without cloning payload and parsing dp_path
-        let packet = ScionUdpPacket::new(
+        let packet = ScionUdpPacketRef::new(
             self.local_addr.into(),
             destination.into(),
-            path.dp_path().to_model(),
-            payload.to_vec(),
-        )
-        .try_encode_to_owned_view()
-        .map_err(|e| {
-            ScionSocketSendError::InvalidPacket(format!("error encoding packet: {e}").into())
-        })?
-        .into_raw();
+            path.dp_path().as_ref(),
+            payload,
+        );
 
-        self.inner.send(&packet).await
+        encode_and_send(self.inner.as_ref(), packet.required_size(), |buf| {
+            let (view, _) = packet.try_encode_to_view(buf)?;
+            Ok(view.as_raw())
+        })
+        .await
     }
 
     /// Receive a SCION packet with the sender and path.
@@ -352,18 +356,18 @@ impl ScmpScionSocket {
         destination: ScionAddr,
         path: &ScionPath,
     ) -> Result<(), ScionSocketSendError> {
-        let packet = ScionScmpPacket::new(
+        let packet = ScionScmpPacketRef::new(
             self.local_addr.scion_ip_addr().into(),
             destination,
-            path.dp_path().to_model(),
-            message,
-        )
-        .try_encode_to_owned_view()
-        .map_err(|e| {
-            ScionSocketSendError::InvalidPacket(format!("error encoding packet: {e}").into())
-        })?
-        .into_raw();
-        self.inner.send(&packet).await
+            path.dp_path().as_ref(),
+            &message,
+        );
+
+        encode_and_send(self.inner.as_ref(), packet.required_size(), |buf| {
+            let (view, _) = packet.try_encode_to_view(buf)?;
+            Ok(view.as_raw())
+        })
+        .await
     }
 
     /// Receive a SCMP message with the sender and path.
@@ -754,381 +758,638 @@ impl<P: PathManager + Sync + Send + 'static> GenericScionUdpSocket for UdpScionS
     }
 }
 
+thread_local! {
+    /// Send buffer of the thread, large enough for each packet that the underlay can carry.
+    static SEND_BUF: RefCell<Box<[u8]>> =
+        RefCell::new(vec![0u8; MAX_UNDERLAY_PACKET_SIZE].into_boxed_slice());
+}
+
+/// Encodes a packet into the send buffer of the thread and sends it over `socket`.
+///
+/// `encode` writes the packet into a buffer of `size` bytes and returns a view over it. The buffer
+/// holds data of earlier packets, see [`WireEncode::encode_unchecked`].
+///
+/// If the socket is not ready, the function waits and encodes again, because the buffer borrow
+/// must not live across an `.await`.
+///
+/// `socket.try_send` must not send through this function on the same thread, because the second
+/// borrow of the buffer would panic.
+async fn encode_and_send(
+    socket: &dyn UnderlaySocket,
+    size: usize,
+    encode: impl for<'b> Fn(&'b mut [u8]) -> Result<&'b ScionRawPacketView, EncodeError>,
+) -> Result<(), ScionSocketSendError> {
+    if size > MAX_UNDERLAY_PACKET_SIZE {
+        return Err(ScionSocketSendError::InvalidPacket(
+            format!("packet of {size} bytes exceeds the underlay maximum").into(),
+        ));
+    }
+
+    loop {
+        let sent = SEND_BUF.with_borrow_mut(|buf| {
+            let view = encode(&mut buf[..size]).map_err(|e| {
+                ScionSocketSendError::InvalidPacket(format!("error encoding packet: {e}").into())
+            })?;
+
+            socket.try_send(view)
+        });
+
+        // A full socket: wait outside the borrow, then encode again
+        match sent {
+            Err(ScionSocketSendError::IoError(e)) if e.kind() == io::ErrorKind::WouldBlock => {
+                socket.writeable().await;
+            }
+            result => return result,
+        }
+    }
+}
+
 #[cfg(test)]
-mod cancel_safety_tests {
-    //! Unit tests verifying that all async methods on [`UdpScionSocket`] and
-    //! [`PathUnawareUdpScionSocket`] are cancel-safe.
-    //!
-    //! The tests use two hand-rolled test doubles rather than the real underlay and path manager:
-    //!
-    //! - [`ManualUnderlaySocket`]: backed by a bounded `tokio::sync::mpsc` channel. Injecting
-    //!   packets is done via the paired `Sender`. The `recv` future is backed by
-    //!   `tokio::sync::mpsc::Receiver::recv()`, which IS cancel-safe (the message stays in the
-    //!   channel if the future is dropped before returning `Ready`).
-    //!
-    //! - [`ImmediatePathManager`]: always returns a local (empty) path immediately, so tests do not
-    //!   depend on any background task.
-    //!
-    //! ## What these tests verify
-    //!
-    //! The tests verify that dropping a future at realistically reachable await points (the inner
-    //! underlay `recv`) leaves no corrupted socket state and that unconsumed packets remain
-    //! available for the next caller. They also verify that the wrong-sender filtering loop in
-    //! [`UdpScionSocket::recv`] can be safely cancelled mid-iteration.
-    //!
-    //! Because all processing steps after the underlay `recv` resolves run synchronously within
-    //! the same `poll()` invocation, there is no intermediate await point between "data received"
-    //! and "data returned" that could be independently cancelled. The tests therefore focus on
-    //! the cancel points that actually exist at runtime.
-
-    use std::{
-        io,
-        net::Ipv4Addr,
-        sync::{Arc, Mutex},
-        time::SystemTime,
-    };
-
-    use async_trait::async_trait;
-    use sciparse::{
-        identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
-        util::test_builder::{TestPathBuilder, TestPathContext},
-    };
-
+mod tests {
     use super::*;
-    use crate::{
-        internal::Subscribers,
-        path::manager::traits::{PathWaitError, SyncPathManager},
-        stack::{ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket},
-    };
 
-    struct ManualUnderlaySocket {
-        rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Box<ScionRawPacketView>>>,
-        /// A packet staged by `readable` and not yet returned by `try_recv` (see the SNAP
-        /// underlay for the same pattern).
-        peeked: tokio::sync::Mutex<Option<Box<ScionRawPacketView>>>,
-    }
+    mod cancel_safety {
+        //! Unit tests verifying that all async methods on [`UdpScionSocket`] and
+        //! [`PathUnawareUdpScionSocket`] are cancel-safe.
+        //!
+        //! The tests use two hand-rolled test doubles rather than the real underlay and path
+        //! manager:
+        //!
+        //! - [`ManualUnderlaySocket`]: backed by a bounded `tokio::sync::mpsc` channel. Injecting
+        //!   packets is done via the paired `Sender`. The `recv` future is backed by
+        //!   `tokio::sync::mpsc::Receiver::recv()`, which IS cancel-safe (the message stays in the
+        //!   channel if the future is dropped before returning `Ready`).
+        //!
+        //! - [`ImmediatePathManager`]: always returns a local (empty) path immediately, so tests do
+        //!   not depend on any background task.
+        //!
+        //! ## What these tests verify
+        //!
+        //! The tests verify that dropping a future at realistically reachable await points (the
+        //! inner underlay `recv`) leaves no corrupted socket state and that unconsumed
+        //! packets remain available for the next caller. They also verify that the
+        //! wrong-sender filtering loop in [`UdpScionSocket::recv`] can be safely cancelled
+        //! mid-iteration.
+        //!
+        //! Because all processing steps after the underlay `recv` resolves run synchronously within
+        //! the same `poll()` invocation, there is no intermediate await point between "data
+        //! received" and "data returned" that could be independently cancelled. The tests
+        //! therefore focus on the cancel points that actually exist at runtime.
 
-    impl ManualUnderlaySocket {
-        fn new() -> (Self, tokio::sync::mpsc::Sender<Box<ScionRawPacketView>>) {
-            // Use a large bounded channel so tests never block on send.
-            let (inject_tx, recv_rx) = tokio::sync::mpsc::channel::<Box<ScionRawPacketView>>(64);
-            let socket = Self {
-                rx: tokio::sync::Mutex::new(recv_rx),
-                peeked: tokio::sync::Mutex::new(None),
-            };
-            (socket, inject_tx)
+        use std::{
+            io,
+            net::Ipv4Addr,
+            sync::{Arc, Mutex},
+            time::SystemTime,
+        };
+
+        use async_trait::async_trait;
+        use sciparse::{
+            identifier::{asn::Asn, isd::Isd, isd_asn::IsdAsn},
+            util::test_builder::{TestPathBuilder, TestPathContext},
+        };
+
+        use super::*;
+        use crate::{
+            internal::Subscribers,
+            path::manager::traits::{PathWaitError, SyncPathManager},
+            stack::{ScionSocketReceiveError, ScionSocketSendError, UnderlaySocket},
+        };
+
+        struct ManualUnderlaySocket {
+            rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Box<ScionRawPacketView>>>,
+            /// A packet staged by `readable` and not yet returned by `try_recv` (see the SNAP
+            /// underlay for the same pattern).
+            peeked: tokio::sync::Mutex<Option<Box<ScionRawPacketView>>>,
         }
-    }
 
-    #[async_trait]
-    impl UnderlaySocket for ManualUnderlaySocket {
-        fn try_send(&self, _packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
-            Ok(())
-        }
-
-        async fn writeable(&self) {}
-
-        fn try_recv(&self, buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError> {
-            let would_block =
-                || ScionSocketReceiveError::IoError(io::Error::from(io::ErrorKind::WouldBlock));
-
-            let packet: Box<ScionRawPacketView> = {
-                let Ok(mut peeked) = self.peeked.try_lock() else {
-                    return Err(would_block());
+        impl ManualUnderlaySocket {
+            fn new() -> (Self, tokio::sync::mpsc::Sender<Box<ScionRawPacketView>>) {
+                // Use a large bounded channel so tests never block on send.
+                let (inject_tx, recv_rx) =
+                    tokio::sync::mpsc::channel::<Box<ScionRawPacketView>>(64);
+                let socket = Self {
+                    rx: tokio::sync::Mutex::new(recv_rx),
+                    peeked: tokio::sync::Mutex::new(None),
                 };
-                match peeked.take() {
-                    Some(packet) => packet,
-                    None => {
-                        let Ok(mut rx) = self.rx.try_lock() else {
-                            return Err(would_block());
-                        };
-                        match rx.try_recv() {
-                            Ok(packet) => packet,
-                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                (socket, inject_tx)
+            }
+        }
+
+        #[async_trait]
+        impl UnderlaySocket for ManualUnderlaySocket {
+            fn try_send(&self, _packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
+                Ok(())
+            }
+
+            async fn writeable(&self) {}
+
+            fn try_recv(&self, buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError> {
+                let would_block =
+                    || ScionSocketReceiveError::IoError(io::Error::from(io::ErrorKind::WouldBlock));
+
+                let packet: Box<ScionRawPacketView> = {
+                    let Ok(mut peeked) = self.peeked.try_lock() else {
+                        return Err(would_block());
+                    };
+                    match peeked.take() {
+                        Some(packet) => packet,
+                        None => {
+                            let Ok(mut rx) = self.rx.try_lock() else {
                                 return Err(would_block());
-                            }
-                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                                return Err(ScionSocketReceiveError::IoError(io::Error::other(
-                                    "channel closed",
-                                )));
+                            };
+                            match rx.try_recv() {
+                                Ok(packet) => packet,
+                                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                    return Err(would_block());
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                    return Err(ScionSocketReceiveError::IoError(
+                                        io::Error::other("channel closed"),
+                                    ));
+                                }
                             }
                         }
                     }
+                };
+
+                let bytes = packet.as_slice();
+                let n = bytes.len();
+                buf[..n].copy_from_slice(bytes);
+                Ok(n)
+            }
+
+            async fn readable(&self) {
+                let mut peeked = self.peeked.lock().await;
+                if peeked.is_some() {
+                    return;
                 }
-            };
-
-            let bytes = packet.as_slice();
-            let n = bytes.len();
-            buf[..n].copy_from_slice(bytes);
-            Ok(n)
-        }
-
-        async fn readable(&self) {
-            let mut peeked = self.peeked.lock().await;
-            if peeked.is_some() {
-                return;
-            }
-            // `tokio::sync::mpsc::Receiver::recv` is cancel-safe: if this future is dropped before
-            // a message arrives, the message stays in the channel.
-            if let Some(packet) = self.rx.lock().await.recv().await {
-                *peeked = Some(packet);
+                // `tokio::sync::mpsc::Receiver::recv` is cancel-safe: if this future is dropped
+                // before a message arrives, the message stays in the channel.
+                if let Some(packet) = self.rx.lock().await.recv().await {
+                    *peeked = Some(packet);
+                }
             }
         }
-    }
 
-    #[derive(Default)]
-    struct ImmediatePathManager {
-        registered_paths: Mutex<Vec<ScionPath>>,
-    }
-
-    impl SyncPathManager for ImmediatePathManager {
-        fn register_path(&self, _src: IsdAsn, _dst: IsdAsn, _now: SystemTime, path: ScionPath) {
-            self.registered_paths.lock().expect("poisoned").push(path);
+        #[derive(Default)]
+        struct ImmediatePathManager {
+            registered_paths: Mutex<Vec<ScionPath>>,
         }
 
-        fn try_cached_path(
-            &self,
-            src: IsdAsn,
-            _dst: IsdAsn,
-            _now: SystemTime,
-        ) -> io::Result<Option<ScionPath>> {
-            Ok(Some(
-                ScionPath::local(src).expect("src is not a wildcard IA"),
-            ))
-        }
-    }
+        impl SyncPathManager for ImmediatePathManager {
+            fn register_path(&self, _src: IsdAsn, _dst: IsdAsn, _now: SystemTime, path: ScionPath) {
+                self.registered_paths.lock().expect("poisoned").push(path);
+            }
 
-    impl PathManager for ImmediatePathManager {
-        fn path_wait(
-            &self,
-            src: IsdAsn,
-            _dst: IsdAsn,
-            _now: SystemTime,
-        ) -> impl std::future::Future<Output = Result<ScionPath, PathWaitError>> + Send + '_
-        {
-            async move { Ok(ScionPath::local(src).expect("src is not a wildcard IA")) }
-        }
-    }
-
-    const LOCAL_ISD_ASN: IsdAsn = IsdAsn::new(Isd(1), Asn(1));
-    const REMOTE_ISD_ASN: IsdAsn = IsdAsn::new(Isd(1), Asn(2));
-    const OTHER_ISD_ASN: IsdAsn = IsdAsn::new(Isd(1), Asn(3));
-
-    fn local_addr() -> ScionSocketIpAddr {
-        ScionSocketIpAddr::new(LOCAL_ISD_ASN, Ipv4Addr::LOCALHOST.into(), 8080)
-    }
-
-    fn remote_addr() -> ScionSocketIpAddr {
-        ScionSocketIpAddr::new(REMOTE_ISD_ASN, Ipv4Addr::new(127, 0, 0, 2).into(), 9090)
-    }
-
-    fn other_addr() -> ScionSocketIpAddr {
-        ScionSocketIpAddr::new(OTHER_ISD_ASN, Ipv4Addr::new(127, 0, 0, 3).into(), 7070)
-    }
-
-    /// Build a [`TestPathContext`] carrying a path from `src` to `dst`.
-    fn test_path_ctx(src: ScionAddr, dst: ScionAddr) -> TestPathContext {
-        TestPathBuilder::new(src, dst)
-            .using_info_timestamp(1_000_000)
-            .up()
-            .add_hop(0, 1)
-            .add_hop(1, 0)
-            .build(1_000_000)
-    }
-
-    /// Create a valid [`ScionPacketRaw`] that looks like a UDP packet from `src` to `dst`
-    /// with `payload`.
-    fn make_udp_raw(
-        src: ScionSocketIpAddr,
-        dst: ScionSocketIpAddr,
-        payload: &[u8],
-    ) -> Box<ScionRawPacketView> {
-        let ctx = test_path_ctx(src.scion_addr(), dst.scion_addr());
-        ctx.scion_packet_udp(payload, src.port(), dst.port())
-            .try_encode_to_owned_view()
-            .expect("should encode")
-            .into()
-    }
-
-    /// Build a connected [`UdpScionSocket`] backed by the test doubles.
-    /// Returns the socket, the packet injector, and the path manager.
-    fn build_socket() -> (
-        UdpScionSocket<ImmediatePathManager>,
-        tokio::sync::mpsc::Sender<Box<ScionRawPacketView>>,
-        Arc<ImmediatePathManager>,
-    ) {
-        let (underlay, inject_tx) = ManualUnderlaySocket::new();
-        let pather = Arc::new(ImmediatePathManager::default());
-        let path_unaware = PathUnawareUdpScionSocket::new(
-            BoundUnderlaySocket {
-                socket: Box::new(underlay),
-                local_addr: local_addr(),
-                snap_data_plane: None,
-            },
-            vec![], // no SCMP handlers needed
-        );
-        let socket = UdpScionSocket::new(
-            path_unaware,
-            pather.clone(),
-            std::time::Duration::from_secs(5),
-            Subscribers::new(),
-        );
-        (socket, inject_tx, pather)
-    }
-
-    /// Dropping a [`recv_from_with_path`] future while it is pending (waiting in the channel)
-    /// must not consume the packet. The next call must receive that packet.
-    ///
-    /// This verifies that the underlay's `recv` future is cancel-safe: the message stays in the
-    /// channel when the outer future is dropped before returning `Ready`.
-    #[tokio::test]
-    async fn recv_from_with_path_cancel_while_pending_does_not_lose_packet() {
-        let (socket, inject_tx, _pather) = build_socket();
-
-        // Poll once — returns Pending because the channel is empty.
-        {
-            let mut buf = [0u8; 64];
-            let mut fut = std::pin::pin!(socket.recv_from_with_path(&mut buf));
-            let waker = futures::task::noop_waker();
-            let mut cx = std::task::Context::from_waker(&waker);
-            // The future must be Pending (no packet injected yet).
-            assert!(fut.as_mut().poll(&mut cx).is_pending());
-            // Drop `fut` here — the future is cancelled while pending.
+            fn try_cached_path(
+                &self,
+                src: IsdAsn,
+                _dst: IsdAsn,
+                _now: SystemTime,
+            ) -> io::Result<Option<ScionPath>> {
+                Ok(Some(
+                    ScionPath::local(src).expect("src is not a wildcard IA"),
+                ))
+            }
         }
 
-        // Inject the packet AFTER the first future was dropped.
-        let payload = b"cancel-safe";
-        inject_tx
-            .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
-            .unwrap();
+        impl PathManager for ImmediatePathManager {
+            fn path_wait(
+                &self,
+                src: IsdAsn,
+                _dst: IsdAsn,
+                _now: SystemTime,
+            ) -> impl std::future::Future<Output = Result<ScionPath, PathWaitError>> + Send + '_
+            {
+                async move { Ok(ScionPath::local(src).expect("src is not a wildcard IA")) }
+            }
+        }
 
-        // The packet must be available to the next future.
-        let mut buf2 = vec![0u8; 64];
-        let (len, sender, _path) = socket.recv_from_with_path(&mut buf2).await.unwrap();
+        const LOCAL_ISD_ASN: IsdAsn = IsdAsn::new(Isd(1), Asn(1));
+        const REMOTE_ISD_ASN: IsdAsn = IsdAsn::new(Isd(1), Asn(2));
+        const OTHER_ISD_ASN: IsdAsn = IsdAsn::new(Isd(1), Asn(3));
 
-        assert_eq!(len, payload.len());
-        assert_eq!(&buf2[..len], payload);
-        assert_eq!(sender, remote_addr());
-    }
+        fn local_addr() -> ScionSocketIpAddr {
+            ScionSocketIpAddr::new(LOCAL_ISD_ASN, Ipv4Addr::LOCALHOST.into(), 8080)
+        }
 
-    /// `recv` (connected socket) correctly filters wrong-sender packets and returns
-    /// the packet from the connected remote address.
-    #[tokio::test]
-    async fn recv_filters_wrong_sender_and_delivers_correct_packet() {
-        let (mut socket, inject_tx, _pather) = build_socket();
-        // Connect to remote_addr.
-        socket.remote_addr = Some(remote_addr());
+        fn remote_addr() -> ScionSocketIpAddr {
+            ScionSocketIpAddr::new(REMOTE_ISD_ASN, Ipv4Addr::new(127, 0, 0, 2).into(), 9090)
+        }
 
-        // Inject wrong-sender packet first, then correct-sender packet.
-        inject_tx
-            .try_send(make_udp_raw(other_addr(), local_addr(), b"wrong"))
-            .unwrap();
-        inject_tx
-            .try_send(make_udp_raw(remote_addr(), local_addr(), b"correct"))
-            .unwrap();
+        fn other_addr() -> ScionSocketIpAddr {
+            ScionSocketIpAddr::new(OTHER_ISD_ASN, Ipv4Addr::new(127, 0, 0, 3).into(), 7070)
+        }
 
-        let mut buf = [0u8; 64];
-        let len = socket.recv(&mut buf).await.unwrap();
-        assert_eq!(&buf[..len], b"correct");
-    }
+        /// Build a [`TestPathContext`] carrying a path from `src` to `dst`.
+        fn test_path_ctx(src: ScionAddr, dst: ScionAddr) -> TestPathContext {
+            TestPathBuilder::new(src, dst)
+                .using_info_timestamp(1_000_000)
+                .up()
+                .add_hop(0, 1)
+                .add_hop(1, 0)
+                .build(1_000_000)
+        }
 
-    /// After cancelling `recv` mid-filtering (a wrong-sender packet was consumed),
-    /// the socket must still be usable and must deliver subsequent correct-sender packets.
-    #[tokio::test]
-    async fn recv_cancel_during_filtering_socket_remains_usable() {
-        let (mut socket, inject_tx, _pather) = build_socket();
-        socket.remote_addr = Some(remote_addr());
+        /// Create a valid [`ScionPacketRaw`] that looks like a UDP packet from `src` to `dst`
+        /// with `payload`.
+        fn make_udp_raw(
+            src: ScionSocketIpAddr,
+            dst: ScionSocketIpAddr,
+            payload: &[u8],
+        ) -> Box<ScionRawPacketView> {
+            let ctx = test_path_ctx(src.scion_addr(), dst.scion_addr());
+            ctx.scion_packet_udp(payload, src.port(), dst.port())
+                .try_encode_to_owned_view()
+                .expect("should encode")
+                .into()
+        }
 
-        // Inject only a wrong-sender packet — `recv` will consume it and loop back
-        // to await the next packet (Pending at that point).
-        inject_tx
-            .try_send(make_udp_raw(other_addr(), local_addr(), b"wrong"))
-            .unwrap();
-
-        // Poll once with a noop waker: recv processes the wrong-sender packet, finds it does not
-        // match the connected address, and loops back to yield on the inner recv (Pending).
-        // No Tokio runtime involvement is needed here — the channel already holds the packet.
-        {
-            let mut filter_buf = [0u8; 64];
-            let mut fut = std::pin::pin!(socket.recv(&mut filter_buf));
-            let waker = futures::task::noop_waker();
-            let mut cx = std::task::Context::from_waker(&waker);
-            assert!(
-                fut.as_mut().poll(&mut cx).is_pending(),
-                "recv must be Pending after consuming wrong-sender packet"
+        /// Build a connected [`UdpScionSocket`] backed by the test doubles.
+        /// Returns the socket, the packet injector, and the path manager.
+        fn build_socket() -> (
+            UdpScionSocket<ImmediatePathManager>,
+            tokio::sync::mpsc::Sender<Box<ScionRawPacketView>>,
+            Arc<ImmediatePathManager>,
+        ) {
+            let (underlay, inject_tx) = ManualUnderlaySocket::new();
+            let pather = Arc::new(ImmediatePathManager::default());
+            let path_unaware = PathUnawareUdpScionSocket::new(
+                BoundUnderlaySocket {
+                    socket: Box::new(underlay),
+                    local_addr: local_addr(),
+                    snap_data_plane: None,
+                },
+                vec![], // no SCMP handlers needed
             );
-            // Drop the future here — the wrong-sender packet has been consumed and discarded.
+            let socket = UdpScionSocket::new(
+                path_unaware,
+                pather.clone(),
+                std::time::Duration::from_secs(5),
+                Subscribers::new(),
+            );
+            (socket, inject_tx, pather)
         }
 
-        // Now inject a correct-sender packet and verify the socket is still usable.
-        inject_tx
-            .try_send(make_udp_raw(remote_addr(), local_addr(), b"after-cancel"))
-            .unwrap();
+        /// Dropping a [`recv_from_with_path`] future while it is pending (waiting in the channel)
+        /// must not consume the packet. The next call must receive that packet.
+        ///
+        /// This verifies that the underlay's `recv` future is cancel-safe: the message stays in the
+        /// channel when the outer future is dropped before returning `Ready`.
+        #[tokio::test]
+        async fn recv_from_with_path_cancel_while_pending_does_not_lose_packet() {
+            let (socket, inject_tx, _pather) = build_socket();
 
-        let mut buf = [0u8; 64];
-        let len = socket.recv(&mut buf).await.unwrap();
-        assert_eq!(&buf[..len], b"after-cancel");
-    }
+            // Poll once — returns Pending because the channel is empty.
+            {
+                let mut buf = [0u8; 64];
+                let mut fut = std::pin::pin!(socket.recv_from_with_path(&mut buf));
+                let waker = futures::task::noop_waker();
+                let mut cx = std::task::Context::from_waker(&waker);
+                // The future must be Pending (no packet injected yet).
+                assert!(fut.as_mut().poll(&mut cx).is_pending());
+                // Drop `fut` here — the future is cancelled while pending.
+            }
 
-    /// Buffer contents are only valid after a successful `Ok` return; after a
-    /// cancel and retry the buffer must contain the correct data from the retry.
-    #[tokio::test]
-    async fn recv_from_buffer_valid_only_after_ok() {
-        let (socket, inject_tx, _pather) = build_socket();
+            // Inject the packet AFTER the first future was dropped.
+            let payload = b"cancel-safe";
+            inject_tx
+                .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
+                .unwrap();
 
-        // Pre-fill buffer with sentinel bytes.
-        let mut buf = [0xFFu8; 64];
+            // The packet must be available to the next future.
+            let mut buf2 = vec![0u8; 64];
+            let (len, sender, _path) = socket.recv_from_with_path(&mut buf2).await.unwrap();
 
-        // Cancel while pending (no packet).
-        {
-            let mut fut = std::pin::pin!(socket.recv_from(&mut buf));
-            let waker = futures::task::noop_waker();
-            let mut cx = std::task::Context::from_waker(&waker);
-            assert!(fut.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(len, payload.len());
+            assert_eq!(&buf2[..len], payload);
+            assert_eq!(sender, remote_addr());
         }
 
-        // Inject a packet with known payload.
-        let payload = b"real-data";
-        inject_tx
-            .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
-            .unwrap();
+        /// `recv` (connected socket) correctly filters wrong-sender packets and returns
+        /// the packet from the connected remote address.
+        #[tokio::test]
+        async fn recv_filters_wrong_sender_and_delivers_correct_packet() {
+            let (mut socket, inject_tx, _pather) = build_socket();
+            // Connect to remote_addr.
+            socket.remote_addr = Some(remote_addr());
 
-        let (len, _sender) = socket.recv_from(&mut buf).await.unwrap();
-        assert_eq!(len, payload.len());
-        assert_eq!(
-            &buf[..len],
-            payload,
-            "buffer must contain the real payload after Ok return"
-        );
+            // Inject wrong-sender packet first, then correct-sender packet.
+            inject_tx
+                .try_send(make_udp_raw(other_addr(), local_addr(), b"wrong"))
+                .unwrap();
+            inject_tx
+                .try_send(make_udp_raw(remote_addr(), local_addr(), b"correct"))
+                .unwrap();
+
+            let mut buf = [0u8; 64];
+            let len = socket.recv(&mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"correct");
+        }
+
+        /// After cancelling `recv` mid-filtering (a wrong-sender packet was consumed),
+        /// the socket must still be usable and must deliver subsequent correct-sender packets.
+        #[tokio::test]
+        async fn recv_cancel_during_filtering_socket_remains_usable() {
+            let (mut socket, inject_tx, _pather) = build_socket();
+            socket.remote_addr = Some(remote_addr());
+
+            // Inject only a wrong-sender packet — `recv` will consume it and loop back
+            // to await the next packet (Pending at that point).
+            inject_tx
+                .try_send(make_udp_raw(other_addr(), local_addr(), b"wrong"))
+                .unwrap();
+
+            // Poll once with a noop waker: recv processes the wrong-sender packet, finds it does
+            // not match the connected address, and loops back to yield on the inner
+            // recv (Pending). No Tokio runtime involvement is needed here — the channel
+            // already holds the packet.
+            {
+                let mut filter_buf = [0u8; 64];
+                let mut fut = std::pin::pin!(socket.recv(&mut filter_buf));
+                let waker = futures::task::noop_waker();
+                let mut cx = std::task::Context::from_waker(&waker);
+                assert!(
+                    fut.as_mut().poll(&mut cx).is_pending(),
+                    "recv must be Pending after consuming wrong-sender packet"
+                );
+                // Drop the future here — the wrong-sender packet has been consumed and discarded.
+            }
+
+            // Now inject a correct-sender packet and verify the socket is still usable.
+            inject_tx
+                .try_send(make_udp_raw(remote_addr(), local_addr(), b"after-cancel"))
+                .unwrap();
+
+            let mut buf = [0u8; 64];
+            let len = socket.recv(&mut buf).await.unwrap();
+            assert_eq!(&buf[..len], b"after-cancel");
+        }
+
+        /// Buffer contents are only valid after a successful `Ok` return; after a
+        /// cancel and retry the buffer must contain the correct data from the retry.
+        #[tokio::test]
+        async fn recv_from_buffer_valid_only_after_ok() {
+            let (socket, inject_tx, _pather) = build_socket();
+
+            // Pre-fill buffer with sentinel bytes.
+            let mut buf = [0xFFu8; 64];
+
+            // Cancel while pending (no packet).
+            {
+                let mut fut = std::pin::pin!(socket.recv_from(&mut buf));
+                let waker = futures::task::noop_waker();
+                let mut cx = std::task::Context::from_waker(&waker);
+                assert!(fut.as_mut().poll(&mut cx).is_pending());
+            }
+
+            // Inject a packet with known payload.
+            let payload = b"real-data";
+            inject_tx
+                .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
+                .unwrap();
+
+            let (len, _sender) = socket.recv_from(&mut buf).await.unwrap();
+            assert_eq!(len, payload.len());
+            assert_eq!(
+                &buf[..len],
+                payload,
+                "buffer must contain the real payload after Ok return"
+            );
+        }
+
+        /// `recv_from` returns the number of bytes written if the buffer is too small.
+        #[tokio::test]
+        async fn recv_from_truncates_to_buffer_size() {
+            let (socket, inject_tx, _pather) = build_socket();
+            let payload = b"truncated-payload";
+            inject_tx
+                .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
+                .unwrap();
+
+            let mut buf = [0u8; 4];
+            let (len, _sender) = socket.recv_from(&mut buf).await.unwrap();
+            assert_eq!(len, buf.len());
+            assert_eq!(&buf[..], &payload[..4]);
+        }
+
+        /// `recv_from_with_path` returns the number of bytes written if the buffer is too small.
+        #[tokio::test]
+        async fn recv_from_with_path_truncates_to_buffer_size() {
+            let (socket, inject_tx, _pather) = build_socket();
+            let payload = b"truncated-payload";
+            inject_tx
+                .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
+                .unwrap();
+
+            let mut buf = [0u8; 4];
+            let (len, _sender, _path) = socket.recv_from_with_path(&mut buf).await.unwrap();
+            assert_eq!(len, buf.len());
+            assert_eq!(&buf[..], &payload[..4]);
+        }
     }
 
-    /// `recv_from` returns the number of bytes written if the buffer is too small.
-    #[tokio::test]
-    async fn recv_from_truncates_to_buffer_size() {
-        let (socket, inject_tx, _pather) = build_socket();
-        let payload = b"truncated-payload";
-        inject_tx
-            .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
-            .unwrap();
+    mod encode_and_send {
+        use std::{
+            cell::Cell,
+            collections::VecDeque,
+            io,
+            net::Ipv4Addr,
+            sync::{
+                Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
 
-        let mut buf = [0u8; 4];
-        let (len, _sender) = socket.recv_from(&mut buf).await.unwrap();
-        assert_eq!(len, buf.len());
-        assert_eq!(&buf[..], &payload[..4]);
-    }
+        use async_trait::async_trait;
+        use sciparse::{
+            address::socket_addr::ScionSocketAddr,
+            dataplane_path::{model::DpPath, types::PathType, view::ScionDpPathViewRef},
+            identifier::isd_asn::IsdAsn,
+            packet::model::{ScionRawPacketRef, ScionUdpPacket},
+        };
 
-    /// `recv_from_with_path` returns the number of bytes written if the buffer is too small.
-    #[tokio::test]
-    async fn recv_from_with_path_truncates_to_buffer_size() {
-        let (socket, inject_tx, _pather) = build_socket();
-        let payload = b"truncated-payload";
-        inject_tx
-            .try_send(make_udp_raw(remote_addr(), local_addr(), payload))
-            .unwrap();
+        use super::*;
 
-        let mut buf = [0u8; 4];
-        let (len, _sender, _path) = socket.recv_from_with_path(&mut buf).await.unwrap();
-        assert_eq!(len, buf.len());
-        assert_eq!(&buf[..], &payload[..4]);
+        /// Underlay double whose `try_send` follows a script and records each sent packet.
+        #[derive(Default)]
+        struct ScriptedUnderlaySocket {
+            /// Results for the next `try_send` calls. An empty script means `Ok`.
+            script: Mutex<VecDeque<io::ErrorKind>>,
+            sent: Mutex<Vec<Vec<u8>>>,
+            writeable_calls: AtomicUsize,
+        }
+
+        impl ScriptedUnderlaySocket {
+            fn failing_with(errors: &[io::ErrorKind]) -> Self {
+                Self {
+                    script: Mutex::new(errors.iter().copied().collect()),
+                    ..Default::default()
+                }
+            }
+
+            fn sent(&self) -> Vec<Vec<u8>> {
+                self.sent.lock().unwrap().clone()
+            }
+        }
+
+        #[async_trait]
+        impl UnderlaySocket for ScriptedUnderlaySocket {
+            fn try_send(&self, packet: &ScionRawPacketView) -> Result<(), ScionSocketSendError> {
+                if let Some(kind) = self.script.lock().unwrap().pop_front() {
+                    return Err(ScionSocketSendError::IoError(io::Error::from(kind)));
+                }
+
+                self.sent.lock().unwrap().push(packet.as_slice().to_vec());
+                Ok(())
+            }
+
+            async fn writeable(&self) {
+                self.writeable_calls.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn try_recv(&self, _buf: &mut [u8]) -> Result<usize, ScionSocketReceiveError> {
+                Err(ScionSocketReceiveError::IoError(io::Error::from(
+                    io::ErrorKind::WouldBlock,
+                )))
+            }
+
+            async fn readable(&self) {
+                std::future::pending::<()>().await;
+            }
+        }
+
+        fn src() -> ScionSocketAddr {
+            ScionSocketIpAddr::new(IsdAsn(0x1_ff00_0000_0110), Ipv4Addr::LOCALHOST.into(), 8080)
+                .into()
+        }
+
+        fn dst() -> ScionSocketAddr {
+            ScionSocketIpAddr::new(
+                IsdAsn(0x1_ff00_0000_0111),
+                Ipv4Addr::new(127, 0, 0, 2).into(),
+                9090,
+            )
+            .into()
+        }
+
+        /// Encodes a UDP packet with `payload` like the owned model does.
+        fn expected_udp_bytes(payload: &[u8]) -> Vec<u8> {
+            ScionUdpPacket::new(src(), dst(), DpPath::Empty, payload.to_vec())
+                .try_encode_to_vec()
+                .unwrap()
+        }
+
+        /// Sends a UDP packet with `payload` through `encode_and_send`.
+        async fn send_udp(
+            socket: &ScriptedUnderlaySocket,
+            payload: &[u8],
+        ) -> Result<(), ScionSocketSendError> {
+            let packet = ScionUdpPacketRef::new(src(), dst(), ScionDpPathViewRef::Empty, payload);
+            encode_and_send(socket, packet.required_size(), |buf| {
+                let (view, _) = packet.try_encode_to_view(buf)?;
+                Ok(view.as_raw())
+            })
+            .await
+        }
+
+        #[tokio::test]
+        async fn should_send_the_encoded_bytes_if_the_socket_is_ready() {
+            let socket = ScriptedUnderlaySocket::default();
+
+            send_udp(&socket, b"payload").await.unwrap();
+
+            assert_eq!(socket.sent(), vec![expected_udp_bytes(b"payload")]);
+        }
+
+        #[tokio::test]
+        async fn should_return_invalid_packet_without_a_send_if_the_packet_exceeds_the_underlay_maximum()
+         {
+            let socket = ScriptedUnderlaySocket::default();
+            let encode_calls = Cell::new(0);
+
+            let result = encode_and_send(&socket, MAX_UNDERLAY_PACKET_SIZE + 1, |_buf| {
+                encode_calls.set(encode_calls.get() + 1);
+                Err(EncodeError::BufferTooSmall(0))
+            })
+            .await;
+
+            assert!(matches!(
+                result,
+                Err(ScionSocketSendError::InvalidPacket(_))
+            ));
+            assert_eq!(encode_calls.get(), 0);
+            assert!(socket.sent().is_empty());
+        }
+
+        #[tokio::test]
+        async fn should_return_invalid_packet_without_a_send_if_the_encoding_fails() {
+            let socket = ScriptedUnderlaySocket::default();
+            // A header of 1024 bytes exceeds the maximum header size of 1020 bytes.
+            let path_data = [0u8; 988];
+            let path = ScionDpPathViewRef::Unsupported {
+                path_type: PathType::Other(9),
+                data: &path_data,
+            };
+            let packet = ScionRawPacketRef::new(
+                src().scion_addr(),
+                dst().scion_addr(),
+                path,
+                ProtocolNumber::Other(99),
+                b"payload",
+            );
+
+            let result = encode_and_send(&socket, packet.required_size(), |buf| {
+                let (view, _) = packet.try_encode_to_view(buf)?;
+                Ok(&*view)
+            })
+            .await;
+
+            assert!(matches!(
+                result,
+                Err(ScionSocketSendError::InvalidPacket(_))
+            ));
+            assert!(socket.sent().is_empty());
+        }
+
+        #[tokio::test]
+        async fn should_return_a_send_error_other_than_would_block_without_a_retry() {
+            let socket = ScriptedUnderlaySocket::failing_with(&[io::ErrorKind::ConnectionRefused]);
+
+            let result = send_udp(&socket, b"payload").await;
+
+            assert!(matches!(
+                result,
+                Err(ScionSocketSendError::IoError(e)) if e.kind() == io::ErrorKind::ConnectionRefused
+            ));
+            assert_eq!(socket.writeable_calls.load(Ordering::SeqCst), 0);
+            assert!(socket.sent().is_empty());
+        }
+
+        #[tokio::test]
+        async fn should_await_writeable_after_would_block_then_send_the_intact_packet() {
+            let socket = ScriptedUnderlaySocket::failing_with(&[io::ErrorKind::WouldBlock]);
+
+            send_udp(&socket, b"payload").await.unwrap();
+
+            assert_eq!(socket.writeable_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(socket.sent(), vec![expected_udp_bytes(b"payload")]);
+        }
+
+        #[tokio::test]
+        async fn should_send_the_right_bytes_for_a_small_packet_after_a_large_one() {
+            // The tokio test runtime runs on one thread, so both sends share one buffer.
+            let socket = ScriptedUnderlaySocket::default();
+            let large = vec![0xAAu8; 1000];
+
+            send_udp(&socket, &large).await.unwrap();
+            send_udp(&socket, b"small").await.unwrap();
+
+            assert_eq!(
+                socket.sent(),
+                vec![expected_udp_bytes(&large), expected_udp_bytes(b"small")]
+            );
+        }
     }
 }

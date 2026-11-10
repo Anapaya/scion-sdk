@@ -255,6 +255,17 @@ pub trait ScionDpPathViewExt {
         }
     }
 
+    /// Returns the type of the path.
+    #[inline]
+    fn path_type(&self) -> PathType {
+        match self.as_ref() {
+            ScionDpPathViewRef::Standard(_) => PathType::Scion,
+            ScionDpPathViewRef::OneHop(_) => PathType::OneHop,
+            ScionDpPathViewRef::Empty => PathType::Empty,
+            ScionDpPathViewRef::Unsupported { path_type, .. } => PathType::Other(path_type.into()),
+        }
+    }
+
     /// Returns the expiration time of the path in seconds since the UNIX epoch.
     ///
     /// Returns `None` if the expiration time cannot be determined (e.g., for unsupported path

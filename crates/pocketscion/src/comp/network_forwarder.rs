@@ -33,7 +33,10 @@ use sciparse::{
     },
     identifier::isd_asn::IsdAsn,
     packet::{
-        model::{ScionRawPacket, ScionUdpPacket},
+        model::{
+            ScionPacketExt, ScionPacketExtMut, ScionRawPacket, ScionUdpPacket, ScionUdpPacketExt,
+            ScionUdpPacketExtMut,
+        },
         view::ScionPacketView,
     },
     payload::ProtocolNumber,
@@ -430,7 +433,7 @@ mod tests {
         core::{convert::TryFromView, encode::WireEncode},
         dataplane_path::model::DpPath,
         identifier::isd_asn::IsdAsn,
-        packet::model::{ScionRawPacket, ScionUdpPacket},
+        packet::model::{ScionPacketExt, ScionRawPacket, ScionUdpPacket},
     };
     use tokio::time::{Duration, timeout};
 
