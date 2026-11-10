@@ -34,7 +34,11 @@ public sealed class ScionTokenSource {
      */
     public class AnapayaAa(
         public val apiKey: String,
-        /** The URL of the AA. */
+        /**
+         * The HTTPS URL of the AA. `null` uses `https://auth.scion.anapaya.net`.
+         * This is not a SCION address. To set the address of a WebGateway,
+         * use [ScionEngineConfig.dnsOverride].
+         */
         public val url: String? = null,
         /** The device ID that the engine sends to the AA. */
         public val deviceId: String? = null,
@@ -55,7 +59,9 @@ public enum class ScionUnderlay { Snap, Udp }
  *
  * The gateway is transparent. The engine resolves the request host through
  * TSAR or [ScionEngineConfig.dnsOverride], and expects the gateway at that
- * address, at [port].
+ * address, at [port]. The class has no address setting. If the request host
+ * has no TSAR record, call [ScionEngineConfig.dnsOverride] with the request
+ * host and the SCION address of the gateway.
  *
  * It opens an HTTP/3 `CONNECT` tunnel over SCION to the gateway, with the
  * request host and port as the authority.
@@ -155,8 +161,12 @@ public class ScionEngineConfig : HttpClientEngineConfig() {
 
     /**
      * Resolves [host] to fixed SCION [addresses] instead of through DNS. Use
-     * it for a host without TSAR records. Each address has the form
-     * `<isd>-<as>,<ip>`, without a port.
+     * it for a host without TSAR records. [host] is the host of the request
+     * URL. Each address has the form `<isd>-<as>,<ip>`, for example
+     * `1-ff00:0:110,192.0.2.10`, without brackets and without a port.
+     *
+     * With a [webGateway], the addresses are the SCION addresses of the
+     * gateway.
      */
     public fun dnsOverride(host: String, vararg addresses: String) {
         dnsOverrides[host] = addresses.toList()

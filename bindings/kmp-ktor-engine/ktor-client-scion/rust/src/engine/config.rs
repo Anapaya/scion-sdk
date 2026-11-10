@@ -215,8 +215,12 @@ impl Config {
     }
 
     fn url(name: &str, url: &str) -> Result<Url, CoreError> {
-        url.parse()
-            .map_err(|error| CoreError::invalid(format!("bad {name} URL: {error}")))
+        let message = format!("the {name} URL must be an https:// or http:// URL, got {url:?}");
+        match url.parse::<Url>() {
+            Ok(parsed) if matches!(parsed.scheme(), "https" | "http") => Ok(parsed),
+            Ok(_) => Err(CoreError::invalid(message)),
+            Err(error) => Err(CoreError::invalid(format!("{message}: {error}"))),
+        }
     }
 
     fn dns_override(
@@ -342,6 +346,33 @@ mod tests {
             panic!("expected AA auth");
         };
         assert_eq!(url.as_str().trim_end_matches('/'), DEFAULT_AA_URL);
+    }
+
+    #[test]
+    fn urls_without_an_http_scheme_are_rejected() {
+        for url in [
+            "64-13267,10.128.128.131",
+            "[64-13267,10.128.128.131]",
+            "ftp://auth.example.com",
+        ] {
+            let result = Config::new(CoreConfig {
+                token_source: Some(CoreTokenSource::AnapayaAa {
+                    api_key: "key".into(),
+                    url: Some(url.into()),
+                    device_id: None,
+                }),
+                ..empty()
+            });
+            let Err(CoreError::InvalidArgument { message }) = result else {
+                panic!("expected an invalid argument for {url}");
+            };
+            assert!(
+                message.starts_with(&format!(
+                    "the AA URL must be an https:// or http:// URL, got {url:?}"
+                )),
+                "unexpected message: {message}"
+            );
+        }
     }
 
     #[test]

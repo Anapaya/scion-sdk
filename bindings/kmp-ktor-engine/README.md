@@ -63,6 +63,11 @@ With `ScionTokenSource.AnapayaAa`, the client gets a SNAP token from the
 Anapaya AA and renews it before it expires. The token authenticates with the
 endhost API and the SNAP control plane.
 
+The engine uses the AA at `https://auth.scion.anapaya.net`. To use a different
+AA, set `ScionTokenSource.AnapayaAa(url = ...)` to the HTTPS URL of that AA.
+The `url` is not a SCION address. It does not select the origin or the
+WebGateway.
+
 If the AA answer carries an endhost API discovery URL, the client discovers
 its endhost APIs there. Otherwise, it uses the global discovery service.
 
@@ -92,10 +97,44 @@ val client = HttpClient(ScionHttp) {
 }
 ```
 
-The gateway is transparent. TSAR (TXT-based SCION Address Resolution)
-publishes the SCION address of a host as a DNS TXT record. The engine
-resolves the request host through TSAR and expects the gateway at that
-address, on port 443 by default (`ScionWebGateway(port = ...)`).
+The gateway is transparent. The engine has no setting for the address of the
+gateway. The engine resolves the host of the request URL, and it expects the
+gateway at that SCION address. The engine connects to port 443 of the gateway.
+To use a different port, set `ScionWebGateway(port = ...)`.
+
+The engine resolves the request host in one of two ways:
+
+- TSAR (TXT-based SCION Address Resolution) publishes the SCION address of a
+  host as a DNS TXT record. For a host behind a gateway, the record holds the
+  SCION address of the gateway.
+- `dnsOverride(host, address)` sets the SCION address of a host in the app.
+  Use it if the host has no TSAR record.
+
+### Set the gateway address without TSAR
+
+If the request host has no TSAR record, call `dnsOverride` with the SCION
+address of the gateway. In this example, the gateway has the SCION address
+`1-ff00:0:110,192.0.2.10`, and the app sends requests to `api.example.com`:
+
+```kotlin
+val client = HttpClient(ScionHttp) {
+    engine {
+        tokenSource = ScionTokenSource.AnapayaAa(apiKey = key)
+        webGateway = ScionWebGateway()
+        dnsOverride("api.example.com", "1-ff00:0:110,192.0.2.10")
+    }
+}
+
+val response = client.get("https://api.example.com/accounts")
+```
+
+- The first argument is the host of the request URL. It is not a name of the
+  gateway.
+- The address has the form `<ISD>-<AS>,<IP>`. Do not add brackets or a port.
+- Call `dnsOverride` once for each host that the app sends through the
+  gateway. All calls use the same gateway address.
+
+### The tunnel
 
 The engine opens the tunnel with `CONNECT <request host>:<request port>`. It
 does not check the certificate of the gateway.
