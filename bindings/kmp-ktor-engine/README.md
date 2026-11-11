@@ -224,6 +224,16 @@ samples/hello-scion/build/bin/linuxX64/releaseExecutable/hello-scion.kexe <api-k
 A third argument sets a fixed endhost API URL. Without it, the client
 discovers the endhost APIs.
 
+To send the requests through a WebGateway, add `--gateway`. If the request
+host has no TSAR record, give the SCION address of the gateway with
+`--gateway-address`. That option also sets `--gateway`.
+`--gateway-port` sets a port other than 443:
+
+```bash
+./gradlew :hello-scion:runJvm \
+  --args="--gateway-address 1-ff00:0:110,192.0.2.10 <api-key> https://api.example.com/"
+```
+
 ### Android app
 
 The Android app (`./gradlew :hello-scion:installRelease`) has three fields: the
