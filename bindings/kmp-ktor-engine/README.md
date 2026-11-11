@@ -238,9 +238,10 @@ host has no TSAR record, give the SCION address of the gateway with
 
 The Android app (`./gradlew :hello-scion:installRelease`) has three fields: the
 endhost API URL, the AA API key, and the request URL. The app saves them
-between launches. It trusts the system and user CAs of the device, for the
-origin, the AA, and the control plane. If the endhost API field is empty,
-the app discovers the endhost APIs.
+between launches. For the origin, it trusts the system and user CAs of the
+device. For the AA and the control plane, it uses the Mozilla root set in the
+library. If the endhost API field is empty, the app discovers the endhost
+APIs.
 
 If the API key field is empty, the app starts a `ScionTestNetwork` in its own
 process on the first run, and sends the requests to its test API. This needs
@@ -280,6 +281,18 @@ provisioning profile. The bundle ID is in `src/iosMain/Info.plist`.
   remove the user CAs or pin a certificate. The library initializes the
   verifier through `ScionTrustProvider`, a content provider in its manifest.
   An app that removes the provider cannot use the engine.
+- On Android, the platform verifier checks if an origin certificate is
+  revoked. If the certificate has no OCSP URL, Android must get the CRL of
+  the CA over plain HTTP. If the Network Security Config of the app blocks
+  plain HTTP to the CRL host, the request fails with `Revoked`, also for a
+  valid certificate. To prevent this, allow plain HTTP to the CRL hosts of
+  the CAs of your origins. `rustls-platform-verifier` publishes a config
+  with all known CRL hosts in its Android component.
+- On Android, the AA, the discovery service, the endhost API, and the SNAP
+  control plane do not use the platform verifier. They use the Mozilla root
+  set in the library, without a revocation check, and the user CAs do not
+  apply. Thus they do not depend on the Network Security Config of the app.
+  `controlPlaneCaCertificatesPem` replaces the root set.
 - A `ScionTokenSource.Static` token stays for the life of the client. A new
   token needs a new client. The AA token from `ScionTokenSource.AnapayaAa`
   renews itself.

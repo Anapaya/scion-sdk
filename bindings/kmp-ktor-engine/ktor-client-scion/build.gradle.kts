@@ -60,27 +60,40 @@ dependencies {
 val coreDirectory: File = layout.projectDirectory.dir("rust").asFile
 
 /**
- * The AAR with the Kotlin side of rustls-platform-verifier. It ships in the
- * source of the rustls-platform-verifier-android crate, not on Maven, so the
- * crate that cargo resolves for the Rust library decides the version.
+ * The version of the Kotlin side of rustls-platform-verifier. It must be the
+ * version of the rustls-platform-verifier-android crate that cargo resolves
+ * for the Rust library.
  */
-fun rustlsPlatformVerifierAar(): File {
-    // Find the crate that cargo resolves for Android.
+fun rustlsPlatformVerifierVersion(): String {
     val packages = Cargo.metadata(coreDirectory, "--filter-platform", "aarch64-linux-android")["packages"] as List<*>
     val crate = packages.map { it as Map<*, *> }.single { it["name"] == "rustls-platform-verifier-android" }
+    return crate["version"] as String
+}
 
-    // Find the AAR in its source.
-    val maven = File(crate["manifest_path"] as String).resolveSibling("maven")
-    return maven.walkTopDown().single { it.extension == "aar" }
+/** The AAR with the Kotlin side of rustls-platform-verifier, from its Maven repository. */
+val rustlsPlatformVerifierAar: Configuration = configurations.create("rustlsPlatformVerifierAar") {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
+dependencies {
+    addProvider(
+        rustlsPlatformVerifierAar.name,
+        provider { "org.rustls:rustls-platform-verifier:${rustlsPlatformVerifierVersion()}@aar" },
+    )
 }
 
 /**
- * The AAR holds only classes.jar. A library module cannot depend on a local
- * AAR, but it bundles a local jar, so apps need no extra repository.
+ * Bundles only classes.jar of the AAR. A library module cannot depend on a
+ * local AAR, but it bundles a local jar, so apps need no extra repository.
+ *
+ * The AAR also sets a network security config that allows plain HTTP to the
+ * CRL hosts. The engine does not take it: in an app with its own config, the
+ * manifest merge fails. See the README for the effect on origin certificates.
  */
 val extractRustlsPlatformVerifier = tasks.register<Copy>("extractRustlsPlatformVerifier") {
     group = "build"
-    from({ zipTree(rustlsPlatformVerifierAar()) }) { include("classes.jar") }
+    from({ zipTree(rustlsPlatformVerifierAar.singleFile) }) { include("classes.jar") }
     rename { "rustls-platform-verifier.jar" }
     into(layout.buildDirectory.dir("rustls-platform-verifier"))
 }

@@ -57,7 +57,7 @@ pub(crate) struct Config {
     pub(crate) preferred_underlay: Option<PreferredUnderlay>,
     pub(crate) origin_trust: Trust,
     /// The anchors for the AA, the discovery service, and the control plane.
-    /// If `None`, they use the reqwest default.
+    /// If `None`, they use the reqwest default, the platform verifier.
     pub(crate) control_plane: Option<ControlPlaneTrust>,
     pub(crate) dns_overrides: Vec<(String, Vec<ScionIpAddr>)>,
     pub(crate) connect_timeout: Duration,
@@ -93,8 +93,7 @@ pub(crate) enum Trust {
     None,
 }
 
-/// The caller anchors for the AA, the discovery service, and the control
-/// plane.
+/// The anchors for the AA, the discovery service, and the control plane.
 pub(crate) struct ControlPlaneTrust {
     anchors: Vec<reqwest::Certificate>,
     /// The client that the discovery service and the control plane share.
@@ -105,16 +104,50 @@ impl ControlPlaneTrust {
     /// Builds the shared client, so that a bad bundle fails now, not at the
     /// first request.
     pub(crate) fn new(pem: &[u8]) -> Result<Self, CoreError> {
-        let trust = reqwest::Certificate::from_pem_bundle(pem).and_then(|anchors| {
-            let client = ControlPlaneTrust::builder_with(anchors.clone()).build()?;
-            Ok(ControlPlaneTrust { anchors, client })
-        });
+        let trust = reqwest::Certificate::from_pem_bundle(pem).and_then(ControlPlaneTrust::build);
         trust.map_err(|error| {
             CoreError::invalid(format!(
                 "bad control-plane anchors: {}",
                 describe_error(&error)
             ))
         })
+    }
+
+    /// The anchors if the caller sets none. `None` keeps the reqwest default.
+    ///
+    /// On Android, the default is the Mozilla root set in the library, so that
+    /// the control plane does not depend on the Network Security Config of the
+    /// app. The platform verifier fetches CRLs over plain HTTP, and only that
+    /// config can allow it.
+    #[cfg(target_os = "android")]
+    pub(crate) fn platform_default() -> Result<Option<Self>, CoreError> {
+        ControlPlaneTrust::mozilla_roots().map(Some)
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    fn mozilla_roots() -> Result<Self, CoreError> {
+        let trust = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|der| reqwest::Certificate::from_der(der))
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(ControlPlaneTrust::build);
+        trust.map_err(|error| {
+            CoreError::invalid(format!(
+                "bad bundled control-plane anchors: {}",
+                describe_error(&error)
+            ))
+        })
+    }
+
+    /// The anchors if the caller sets none. `None` keeps the reqwest default.
+    #[cfg(not(target_os = "android"))]
+    pub(crate) fn platform_default() -> Result<Option<Self>, CoreError> {
+        Ok(None)
+    }
+
+    fn build(anchors: Vec<reqwest::Certificate>) -> Result<Self, reqwest::Error> {
+        let client = ControlPlaneTrust::builder_with(anchors.clone()).build()?;
+        Ok(ControlPlaneTrust { anchors, client })
     }
 
     /// A new client builder with the anchors and the control-plane timeout.
@@ -150,10 +183,10 @@ impl Config {
             (false, None) => Trust::Platform,
         };
 
-        let control_plane = config
-            .control_plane_ca_certificates_pem
-            .map(|pem| ControlPlaneTrust::new(&pem))
-            .transpose()?;
+        let control_plane = match config.control_plane_ca_certificates_pem {
+            Some(pem) => Some(ControlPlaneTrust::new(&pem)?),
+            None => ControlPlaneTrust::platform_default()?,
+        };
 
         let dns_overrides = config
             .dns_overrides
@@ -302,7 +335,9 @@ mod tests {
 
     use scion_http3::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_ORIGINS};
 
-    use super::{Config, DEFAULT_AA_URL, DEFAULT_MAX_RESPONSE_BODY_BYTES, TokenSource};
+    use super::{
+        Config, ControlPlaneTrust, DEFAULT_AA_URL, DEFAULT_MAX_RESPONSE_BODY_BYTES, TokenSource,
+    };
     use crate::ffi::types::{CoreConfig, CoreError, CoreTokenSource};
 
     fn empty() -> CoreConfig {
@@ -346,6 +381,13 @@ mod tests {
             panic!("expected AA auth");
         };
         assert_eq!(url.as_str().trim_end_matches('/'), DEFAULT_AA_URL);
+    }
+
+    #[test]
+    fn mozilla_roots_build() {
+        scion_sdk_utils::rustls::select_ring_crypto_provider();
+        let trust = ControlPlaneTrust::mozilla_roots().unwrap();
+        assert!(!trust.anchors.is_empty());
     }
 
     #[test]

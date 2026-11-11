@@ -39,10 +39,12 @@ rustls-platform-verifier = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true }
+webpki-root-certs = { workspace = true }
 
 [dev-dependencies]
 rcgen = { workspace = true }
 tokio = { workspace = true }
+webpki-root-certs = { workspace = true }
 
 [lints]
 workspace = true

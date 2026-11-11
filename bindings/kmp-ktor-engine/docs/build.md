@@ -110,7 +110,8 @@ Each Kotlin Multiplatform target publishes its own module. The engine and
   platform as classifier.
 - **AAR.** `jni/<abi>/libktor_scion_core.so` for each ABI. `libs/` holds the
   Kotlin side of `rustls-platform-verifier`, which the Rust code calls on
-  Android.
+  Android. The build downloads it from the Maven repository of
+  `rustls-platform-verifier` on GitHub, at the version in `Cargo.lock`.
 
 ## Steps
 

@@ -192,6 +192,7 @@ utoipa-axum = "0.3"
 utoipa-redoc = { version = "7.0", features = ["axum"] }
 uuid = "1.16"
 walkdir = "2.5"
+webpki-root-certs = "1.0"
 x25519-dalek = { version = "2.0.1", features = [
     "static_secrets",
     "reusable_secrets",

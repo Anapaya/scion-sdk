@@ -118,7 +118,14 @@ public class ScionEngineConfig : HttpClientEngineConfig() {
 
     /**
      * Trust anchors for the AA, the discovery service, the endhost API, and
-     * the SNAP control plane, as a PEM bundle. The same `null` rule as
+     * the SNAP control plane, as a PEM bundle.
+     *
+     * If `null` on Android, the Rust library uses the Mozilla root set that it
+     * bundles, without a revocation check. Thus the control plane does not
+     * depend on the Network Security Config of the app. The platform verifier
+     * fetches CRLs over plain HTTP, so it needs a config that allows plain
+     * HTTP to the CRL hosts of the control-plane CAs. The user CAs of the
+     * device do not apply. On the other platforms, the same `null` rule as
      * [caCertificatesPem] applies.
      */
     public var controlPlaneCaCertificatesPem: String? = null
