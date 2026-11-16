@@ -675,7 +675,7 @@ impl PayloadEncode for ScmpDestinationUnreachable {
                 .copy_from_slice(&self.offending_packet[..offending_packet_len]);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
@@ -754,7 +754,7 @@ impl PayloadEncode for ScmpPacketTooBig {
                 .copy_from_slice(&self.offending_packet[..offending_packet_len]);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
@@ -839,7 +839,7 @@ impl PayloadEncode for ScmpParameterProblem {
                 .copy_from_slice(&self.offending_packet[..offending_packet_len]);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
@@ -921,7 +921,7 @@ impl PayloadEncode for ScmpExternalInterfaceDown {
                 .copy_from_slice(&self.offending_packet[..offending_packet_len]);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
@@ -1015,7 +1015,7 @@ impl PayloadEncode for ScmpInternalConnectivityDown {
                 .copy_from_slice(&self.offending_packet[..offending_packet_len]);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..message_length],
@@ -1137,7 +1137,7 @@ impl PayloadEncode for ScmpEchoRequest {
                 .copy_from_slice(&self.data[..included_len]);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..self.required_size(header_and_extensions_size)],
@@ -1205,7 +1205,7 @@ impl PayloadEncode for ScmpEchoReply {
                 .copy_from_slice(&self.data[..included_len]);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..self.required_size(header_and_extensions_size)],
@@ -1271,7 +1271,7 @@ impl PayloadEncode for ScmpTracerouteRequest {
             unchecked_bit_range_be_write::<u64>(buf, L::INTERFACE_ID_RNG, 0u64);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..self.required_size(header_and_extensions_size)],
@@ -1343,7 +1343,7 @@ impl PayloadEncode for ScmpTracerouteReply {
             unchecked_bit_range_be_write::<u64>(buf, L::INTERFACE_ID_RNG, self.interface_id as u64);
 
             // Calculate and set the checksum.
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..self.required_size(header_and_extensions_size)],
@@ -1432,7 +1432,7 @@ impl PayloadEncode for ScmpMessageUnknown {
             buf.get_unchecked_mut(range)
                 .copy_from_slice(&self.message_specific_data[..data_len]);
 
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Scmp.into(),
                 &buf[0..self.required_size(header_and_extensions_size)],
@@ -1573,6 +1573,45 @@ pub mod ptest {
                     }
                 })
                 .boxed()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{address::addr::ScionAddr, scion::checksum::test_util::has_valid_checksum};
+
+    #[test]
+    fn checksum_should_cover_the_pseudo_header_and_the_message() {
+        let src: ScionAddr = "1-ff00:0:110,10.0.0.1".parse().unwrap();
+        let dst: ScionAddr = "1-ff00:0:111,fd00::2".parse().unwrap();
+        let address = AddressHeader::new(src, dst);
+        let header_size = 36;
+        let ia: IsdAsn = "1-ff00:0:112".parse().unwrap();
+        let offending = b"offending packet".to_vec();
+
+        let messages: Vec<ScmpMessage> = vec![
+            ScmpDestinationUnreachable::new(1.into(), offending.clone()).into(),
+            ScmpPacketTooBig::new(1280, offending.clone()).into(),
+            ScmpParameterProblem::new(1.into(), 4, offending.clone()).into(),
+            ScmpExternalInterfaceDown::new(ia, 7, offending.clone()).into(),
+            ScmpInternalConnectivityDown::new(ia, 7, 8, offending).into(),
+            ScmpEchoRequest::new(1, 2, b"ping!".to_vec()).into(),
+            ScmpEchoReply::new(1, 2, b"ping!".to_vec()).into(),
+            ScmpTracerouteRequest::new(1, 2).into(),
+            ScmpTracerouteReply::new(1, 2, ia, 7).into(),
+            ScmpMessageUnknown::new(250, 3, b"unknown".to_vec()).into(),
+        ];
+
+        for message in messages {
+            let mut buf = vec![0u8; message.required_size(header_size)];
+            message.try_encode(&mut buf, &address, header_size).unwrap();
+
+            assert!(
+                has_valid_checksum(&address, ProtocolNumber::Scmp.into(), &buf),
+                "invalid checksum for {message:?}"
+            );
         }
     }
 }

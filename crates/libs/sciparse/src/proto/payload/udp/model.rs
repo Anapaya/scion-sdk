@@ -228,7 +228,7 @@ impl PayloadEncode for UdpDatagramRef<'_> {
                 self.payload.len(),
             );
 
-            let checksum = ChecksumDigest::with_pseudoheader(
+            let checksum = ChecksumDigest::for_message(
                 address_header,
                 ProtocolNumber::Udp.into(),
                 &buf[0..self.required_size(header_and_extensions_size)],
@@ -296,6 +296,45 @@ mod tests {
 
             assert!(datagram.to_ref().wire_valid().is_err());
             assert!(datagram.wire_valid().is_err());
+        }
+    }
+
+    mod checksum {
+        use super::*;
+        use crate::scion::checksum::test_util::has_valid_checksum;
+
+        fn encode(payload: &[u8]) -> (AddressHeader, Vec<u8>) {
+            let src: ScionAddr = "1-ff00:0:110,10.0.0.1".parse().unwrap();
+            let dst: ScionAddr = "1-ff00:0:111,fd00::2".parse().unwrap();
+            let address = AddressHeader::new(src, dst);
+            let datagram = UdpDatagram::new(12345, 54321, payload.to_vec());
+            let header_size = 36;
+
+            let mut buf = vec![0u8; datagram.required_size(header_size)];
+            datagram
+                .try_encode(&mut buf, &address, header_size)
+                .unwrap();
+            (address, buf)
+        }
+
+        #[test]
+        fn should_cover_the_pseudo_header_and_the_datagram() {
+            for payload in [&b""[..], b"data", b"odd length payload!"] {
+                let (address, buf) = encode(payload);
+
+                assert!(
+                    has_valid_checksum(&address, ProtocolNumber::Udp.into(), &buf),
+                    "invalid checksum for payload {payload:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn should_change_if_the_payload_changes() {
+            let (_, first) = encode(b"data");
+            let (_, second) = encode(b"dat\x00");
+
+            assert_ne!(first[6..8], second[6..8]);
         }
     }
 

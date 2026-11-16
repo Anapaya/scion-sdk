@@ -24,8 +24,8 @@ use crate::{core::encode::WireEncode as _, header::model::AddressHeader};
 /// Incrementally computes the 16-bit checksum for upper layer protocols.
 ///
 /// A new, empty digest can be created with [`ChecksumDigest::new()`], or
-/// [`ChecksumDigest::with_pseudoheader()`] can be used to create a new digest
-/// already initialized with a partial checksum over the SCION pseudoheader.
+/// [`ChecksumDigest::for_message()`] can be used to create a digest over the
+/// SCION pseudo-header and an encoded message.
 ///
 /// The final checksum value can then be retrieved with
 /// [`ChecksumDigest::checksum()`], and is in the host's native endianness.
@@ -53,16 +53,15 @@ impl ChecksumDigest {
         Self::default()
     }
 
-    /// Calculate the checksum for a SCION message.
+    /// Creates a digest over the SCION pseudo-header and the encoded `message`.
+    ///
+    /// To calculate the checksum of a message, set the checksum field in `message` to zero.
+    /// [`ChecksumDigest::checksum()`] then returns the value to write to the checksum field.
+    ///
+    /// To verify a received message, pass the message unchanged. The checksum is correct if
+    /// [`ChecksumDigest::checksum()`] returns 0.
     #[inline]
-    pub fn with_pseudoheader(
-        // Address header of the packet.
-        addr_header: &AddressHeader,
-        // Protocol number of the packet.
-        protocol: u8,
-        // Encoded Message
-        buf: &[u8],
-    ) -> Self {
+    pub fn for_message(addr_header: &AddressHeader, protocol: u8, message: &[u8]) -> Self {
         let mut digest = Self::new();
 
         digest.add_u64(addr_header.dst_ia.to_u64());
@@ -74,8 +73,9 @@ impl ChecksumDigest {
         // SAFETY: The encoded host address can be at most 16 bytes long.
         let encoded_len = unsafe { addr_header.src_host_addr.encode_unchecked(buffer.as_mut()) };
         digest.add_slice(&buffer[..encoded_len]);
-        digest.add_u32(buf.len() as u32);
+        digest.add_u32(message.len() as u32);
         digest.add_u32(protocol as u32);
+        digest.add_slice(message);
 
         digest
     }
@@ -181,12 +181,17 @@ impl ChecksumDigest {
     }
 }
 
+/// Reference implementation of the checksum for tests. It does not use [`ChecksumDigest`].
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::address::host_addr::{ServiceAddr, WireHostAddr};
+pub(crate) mod test_util {
+    use crate::{core::encode::WireEncode as _, header::model::AddressHeader};
 
-    fn pseudoheader_with_data(addresses: &AddressHeader, protocol: u8, data: &[u8]) -> Vec<u8> {
+    /// Returns the pseudo-header for `data`, followed by `data`.
+    pub(crate) fn pseudoheader_with_data(
+        addresses: &AddressHeader,
+        protocol: u8,
+        data: &[u8],
+    ) -> Vec<u8> {
         let mut buffer = vec![0; addresses.required_size()];
         addresses.try_encode(&mut buffer).unwrap();
         buffer.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -196,7 +201,8 @@ mod tests {
         buffer
     }
 
-    fn reference_checksum(data: &[u8]) -> u16 {
+    /// Returns the checksum of `data`.
+    pub(crate) fn reference_checksum(data: &[u8]) -> u16 {
         let mut cumsum = 0u32;
         let mut i = 0usize;
 
@@ -218,6 +224,24 @@ mod tests {
 
         !(cumsum as u16)
     }
+
+    /// Returns true if the checksum field of the encoded `message` is correct.
+    pub(crate) fn has_valid_checksum(
+        addresses: &AddressHeader,
+        protocol: u8,
+        message: &[u8],
+    ) -> bool {
+        reference_checksum(&pseudoheader_with_data(addresses, protocol, message)) == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        test_util::{pseudoheader_with_data, reference_checksum},
+        *,
+    };
+    use crate::address::host_addr::{ServiceAddr, WireHostAddr};
 
     #[test]
     fn checksum_with_overflow() {
@@ -315,18 +339,16 @@ mod tests {
                 }
 
                 #[test]
-                fn checksum_using_pseudoheader() -> Result<(), Box<dyn std::error::Error>> {
+                fn checksum_using_for_message() -> Result<(), Box<dyn std::error::Error>> {
                     let address_header = $addresses;
                     let data = $data;
 
-                    let pseudoheader_checksum =
-                        ChecksumDigest::with_pseudoheader(&address_header, $protocol, data)
-                            .add_slice(data)
-                            .checksum();
+                    let message_checksum =
+                        ChecksumDigest::for_message(&address_header, $protocol, data).checksum();
 
                     assert_eq!(
-                        $checksum, pseudoheader_checksum,
-                        "invalid checksum using pseudoheader",
+                        $checksum, message_checksum,
+                        "invalid checksum using for_message",
                     );
                     Ok(())
                 }
