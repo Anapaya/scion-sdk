@@ -16,7 +16,11 @@ val stage = tasks.register<Sync>("stageJvmNativeLibrary") {
 
     // Gobley puts each library at its JNA path, in one jar per target.
     // The jar also holds a manifest under that path.
-    NativeTarget.jvmTargets.forEach { target ->
+    // -Pscion.jvmHostOnly=true skips the cross builds, for a host without
+    // their toolchain.
+    val hostOnly = providers.gradleProperty("scion.jvmHostOnly").orNull == "true"
+    val targets = if (hostOnly) listOf(NativeTarget.host) else NativeTarget.jvmTargets
+    targets.forEach { target ->
         val jar = tasks.named<AbstractArchiveTask>("jarJvmRustRuntime${target.gobleyTarget}Release")
         from(jar.flatMap { it.archiveFile }.map { zipTree(it) }) { exclude("**/META-INF/**") }
     }

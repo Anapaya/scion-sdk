@@ -133,7 +133,9 @@ Each Kotlin Multiplatform target publishes its own module. The engine and
    the static library into the cinterop klib. Kotlin compiles the main klib.
 5. **JVM.** Gobley packs the shared library of each JVM target into a jar of
    its own. `native-jar-combiner` in `build-logic` copies the libraries from
-   those jars into the main jar, each into its JNA folder.
+   those jars into the main jar, each into its JNA folder. With
+   `-Pscion.jvmHostOnly=true`, the main jar holds only the library of the
+   host. CI uses it, because CI has no cross toolchain.
 6. **Android.** Gobley builds one shared library per ABI with the NDK and
    puts it into the AAR. If `-Pscion.androidAbis` names a list of ABIs,
    Gobley builds only those.
@@ -143,13 +145,12 @@ Each Kotlin Multiplatform target publishes its own module. The engine and
 `commonTest` also runs as an Android instrumented test, in the release
 variant. The test network runs in the test app, as on the other targets.
 The dev shell supplies the emulator and a system image with the ABI of the
-host: `x86_64` on Linux, `arm64-v8a` on a Mac. Set `ABI` to that value:
+host: `x86_64` on Linux, `arm64-v8a` on a Mac. `tools/emulator-test.sh`
+creates the AVD, starts the emulator, runs `connectedAndroidTest` for that
+ABI, and stops the emulator. CI runs the same script:
 
 ```sh
-echo no | avdmanager create avd -n ktor-scion -k "system-images;android-36;google_apis;$ABI"
-emulator -avd ktor-scion -no-window -no-audio -no-snapshot &
-adb wait-for-device
-./gradlew connectedAndroidTest -Pscion.androidAbis=$ABI
+./tools/emulator-test.sh
 ```
 
 On Linux, the emulator needs KVM: the user must be able to open `/dev/kvm`.
