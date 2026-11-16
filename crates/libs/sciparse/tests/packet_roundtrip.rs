@@ -128,7 +128,6 @@ fn assert_packet_eq(
                 "Original and reconstructed Other packets do not match"
             );
         }
-        other => panic!("unknown packet class: {other:?}"),
     }
     Ok(())
 }
@@ -137,7 +136,7 @@ fn assert_packet_eq(
 /// packet, also into a buffer with old data.
 ///
 /// Skips a packet with a host address of unknown type, because the ref constructors take SCION
-/// addresses. Also skips a packet kind without a ref type.
+/// addresses.
 fn assert_ref_eq(packet: &ClassifiedPacket) -> Result<(), TestCaseError> {
     // Owned encoding with traffic class and flow ID 0, as the ref constructors set them
     let mut normalized = packet.clone();
@@ -145,7 +144,6 @@ fn assert_ref_eq(packet: &ClassifiedPacket) -> Result<(), TestCaseError> {
         ClassifiedPacket::Udp(p) => &mut p.header.common,
         ClassifiedPacket::Scmp(p) => &mut p.header.common,
         ClassifiedPacket::Other(p) => &mut p.header.common,
-        _ => return Ok(()),
     };
     common.traffic_class = 0;
     common.flow_id = 0;
@@ -192,7 +190,6 @@ fn assert_ref_eq(packet: &ClassifiedPacket) -> Result<(), TestCaseError> {
                 &p.payload,
             ))
         }
-        _ => return Ok(()),
     };
 
     let (zeroed, stale) = encoded;

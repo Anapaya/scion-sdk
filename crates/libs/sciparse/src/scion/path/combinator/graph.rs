@@ -166,7 +166,6 @@ impl Vertex {
 /// Input segment is a wrapper around PathSegment that also includes the segment type (core or
 /// non-core).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum InputSegment<'a, EntryType: Entry> {
     /// Core segment.
     Core(&'a PathSegment<EntryType>, SegmentFp),

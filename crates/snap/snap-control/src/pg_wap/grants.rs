@@ -1111,7 +1111,6 @@ struct PlannedGrant {
 
 /// Identification of a segment of the authoritative store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
 pub enum GrantedSegmentId {
     /// A core segment with the given fingerprint.
     Core(SegmentFp),

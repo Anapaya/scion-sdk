@@ -33,9 +33,28 @@ changing anything `pub`. Deviations are listed at the end.
 
 ## `#[non_exhaustive]`
 
-- On every public error enum, and on public enums/structs expected to grow
-  (`PreferredUnderlay`, `UnderlayInfo`, `Segments`, ...). Not on closed value types (`Score`).
-- A `#[non_exhaustive]` struct that downstream constructs gets a constructor (`Segments::new`).
+`#[non_exhaustive]` lets us add a variant or field without a breaking change. In exchange, callers
+lose the compile error that tells them to handle the new case, potentially leading to runtime errors.
+
+Put `#[non_exhaustive]` on:
+
+- Every public error enum.
+- A public enum that can get a new variant, such as `Event` (`Connected`, `Disconnected`). A
+  new `Reconnected` event adds a variant, and a listener can skip the events it does not know.
+- A public struct that can get a new field, such as `ServerConfig` (`port`, `max_connections`).
+
+If downstream code builds a `#[non_exhaustive]` struct, give the struct a constructor, such as
+`ServerConfig::new`.
+
+Never put `#[non_exhaustive]` on:
+
+- A newtype whose shape cannot grow, such as `Asn(u64)`.
+- A closed enum, whose variants cover every possible value, such as `YesOrNo`.
+- An enum with a catch-all variant, such as `Other(String)`. The catch-all already holds unknown
+  values. A new variant moves values out of `Other`, so callers that match on `Other` break anyway.
+- An enum where a new variant silently breaks callers. For example, a new `Micros` on a
+  `TimeUnit` (`Seconds`, `Millis`) falls into the wildcard arm of each caller and converts with
+  the wrong factor.
 
 ## Builders
 

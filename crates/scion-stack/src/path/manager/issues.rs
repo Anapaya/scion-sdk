@@ -315,7 +315,6 @@ impl IssueKind {
                             }
                             // Filter out unspecific
                             Unassigned(_) | PortUnreachable => None,
-                            _ => None,
                         }
                     }
                     ScmpErrorMessage::ExternalInterfaceDown(msg) => {

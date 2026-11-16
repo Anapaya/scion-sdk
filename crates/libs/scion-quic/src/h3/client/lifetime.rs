@@ -30,7 +30,6 @@ use tokio_util::sync::CancellationToken;
 
 /// Why a connection ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum CloseReason {
     /// Closed locally, by [`Http3Client::close`](super::Http3Client::close) or
     /// by the client being dropped.

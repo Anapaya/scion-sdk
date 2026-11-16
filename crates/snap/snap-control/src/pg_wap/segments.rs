@@ -601,7 +601,6 @@ impl Drop for PairGuard {
 /// A unique identifier for a segment in the store, based on the (src, dst) pair it was fetched
 /// for and its fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum SegmentStoreId {
     /// A core segment.
     Core {

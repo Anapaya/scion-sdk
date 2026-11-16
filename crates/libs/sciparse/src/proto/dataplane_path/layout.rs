@@ -31,7 +31,6 @@ use crate::{
 
 /// Layout for the SCION path header
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum ScionHeaderPathLayout {
     /// Layout for the standard SCION path
     Standard(StdPathMetaLayout, StdPathDataLayout),

@@ -73,9 +73,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 scion_packet_view
             );
         }
-        _ => {
-            println!("Received a packet of an unknown type: {:?}", packet);
-        }
     }
 
     Ok(())

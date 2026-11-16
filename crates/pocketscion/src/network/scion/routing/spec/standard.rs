@@ -168,7 +168,6 @@ impl StdRoutingLogic {
                     LocalAsRoutingAction::ForwardLocal.into(),
                 ))
             }
-            _ => Ok(IngressNextAction::Complete(AsRoutingAction::Drop)),
         }
     }
 

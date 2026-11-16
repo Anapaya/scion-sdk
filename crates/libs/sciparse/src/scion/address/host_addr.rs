@@ -270,7 +270,6 @@ impl_from!(ServiceAddr, WireHostAddr, |value| {
 /// Includes the `Unknown` variant to represent address types that are not recognized by this
 /// version of the library or are invalid.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum WireHostAddr {
     /// IPv4 address.
     V4(Ipv4Addr),
@@ -470,7 +469,6 @@ impl_from!(ScionHostAddr, WireHostAddr, |value| {
 /// Host Address types on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
-#[non_exhaustive]
 pub enum WireHostAddrType {
     /// IPv4 address.
     IPV4 = 0b0000,

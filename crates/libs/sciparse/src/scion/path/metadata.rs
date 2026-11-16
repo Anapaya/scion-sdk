@@ -309,7 +309,6 @@ pub mod link {
 
     /// Metadata about a link used in a path
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    #[non_exhaustive]
     pub enum LinkMeta {
         /// The route to the next hop is internal to the AS
         Ingress {
@@ -328,7 +327,6 @@ pub mod link {
     /// The type of an inter-domain link based on the underlay connection.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
     #[repr(i32)]
-    #[non_exhaustive]
     pub enum LinkType {
         /// Unspecified.
         #[default]

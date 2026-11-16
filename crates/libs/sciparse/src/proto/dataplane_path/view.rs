@@ -28,7 +28,6 @@ use crate::{
 
 /// View over a SCION dataplane path, which can be of different types (e.g., standard, one-hop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ScionDpPathViewRef<'a> {
     /// View over a standard SCION path
     Standard(&'a StandardPathView),
@@ -72,7 +71,6 @@ impl Display for ScionDpPathViewRef<'_> {
 
 /// Mutable view over different path types
 #[derive(Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ScionDpPathViewRefMut<'a> {
     /// Mutable view over a standard SCION path
     Standard(&'a mut StandardPathView),
@@ -148,7 +146,6 @@ impl Display for ScionDpPathViewRefMut<'_> {
 
 /// Owned view over different path types
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ScionDpPathView {
     /// Owned view over a standard SCION path
     Standard(Box<StandardPathView>),

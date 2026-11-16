@@ -64,7 +64,6 @@ use crate::{
 /// There are separate enum types [`ScmpErrorMessage`] and [`ScmpInformationalMessage`] that only
 /// include error and informational messages, respectively.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
 pub enum ScmpMessage {
     /// An SCMP DestinationUnreachable message.
     ///

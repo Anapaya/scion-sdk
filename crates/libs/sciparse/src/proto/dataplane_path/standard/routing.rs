@@ -141,7 +141,6 @@ pub struct IngressAdvanceOutput {
 
 /// Action to perform with the packet after advancing the ingress of a path
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum IngressAdvanceAction {
     /// The packet should be sent out by its egress interface
     ContinueEgress {

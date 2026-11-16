@@ -36,7 +36,6 @@ use crate::{
 ///
 /// Use [`ClassifiedPacketView::dst_socket_addr`] to obtain the destination [`ScionSocketAddr`].
 #[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
 pub enum ClassifiedPacketView<'a> {
     /// A SCION/UDP packet.  `dst_port` is taken from the UDP header.
     Udp(&'a ScionUdpPacketView),
@@ -112,7 +111,6 @@ impl<'a> ClassifiedPacketView<'a> {
 
 /// The result of classifying a SCION packet by its payload protocol.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum ClassifiedPacket {
     /// A SCMP packet with a parsed SCMP message as payload.
     Scmp(ScionScmpPacket),
