@@ -70,7 +70,7 @@ impl Dispatcher for TunnelGatewayDispatcher {
         let classification = match packet.try_classify() {
             Ok(c) => c,
             Err(e) => {
-                self.metrics.invalid_packets_errors.inc();
+                self.metrics.invalid_destination.inc();
                 tracing::debug!(error=%e, "Failed to classify packet");
                 return;
             }
@@ -82,7 +82,7 @@ impl Dispatcher for TunnelGatewayDispatcher {
         {
             Some(addr) => addr,
             None => {
-                self.metrics.invalid_packets_errors.inc();
+                self.metrics.invalid_destination.inc();
                 tracing::debug!("Could not deduce destination socket address from packet");
                 return;
             }
@@ -94,9 +94,9 @@ impl Dispatcher for TunnelGatewayDispatcher {
         pooled_packet.truncate(raw_bytes.len());
 
         match self.outbound_queue.try_send((sock_addr, pooled_packet)) {
-            Ok(_) => self.metrics.dispatch_queue_size.inc(),
-            Err(TrySendError::Closed(_)) => self.metrics.closed_dispatch_queue_errors.inc(),
-            Err(TrySendError::Full(_)) => self.metrics.full_dispatch_queue_errors.inc(),
+            Ok(_) => {}
+            Err(TrySendError::Closed(_)) => self.metrics.queue_closed.inc(),
+            Err(TrySendError::Full(_)) => self.metrics.queue_full.inc(),
         }
     }
 }

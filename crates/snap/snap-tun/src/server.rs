@@ -26,7 +26,10 @@ use std::{
 };
 
 use ana_gotatun::{
-    noise::{Tunn, TunnResult, handshake::parse_handshake_anon, rate_limiter::RateLimiter},
+    noise::{
+        Tunn, TunnResult, errors::WireGuardError, handshake::parse_handshake_anon,
+        rate_limiter::RateLimiter,
+    },
     packet::{Packet, WgKind},
     x25519,
 };
@@ -126,15 +129,23 @@ pub enum HandleIncomingPacketResult<S> {
         /// The active session data resolved while processing the packet.
         session_data: Arc<S>,
     },
+    /// The server dropped the packet because the identity of the peer is not authorized.
+    Unauthorized,
 }
 
 impl<S> HandleIncomingPacketResult<S> {
     /// Converts the result back into the underlying WireGuard tunnel result.
+    ///
+    /// [`HandleIncomingPacketResult::Unauthorized`] becomes
+    /// [`WireGuardError::UnexpectedPacket`].
     pub fn into_result(self) -> TunnResult {
         match self {
             HandleIncomingPacketResult::Result { result } => result,
             HandleIncomingPacketResult::Forwarded { packet, .. } => {
                 TunnResult::WriteToTunnel(packet)
+            }
+            HandleIncomingPacketResult::Unauthorized => {
+                TunnResult::Err(WireGuardError::UnexpectedPacket)
             }
         }
     }
@@ -208,6 +219,11 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
         }
     }
 
+    /// Returns the number of tunnels that the server holds.
+    pub fn active_tunnel_count(&self) -> usize {
+        self.active_tunnels.len()
+    }
+
     /// Handle incoming packet for a tunnel assocated with remote socket address
     /// `from`.
     ///
@@ -271,7 +287,6 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
 
         use std::collections::hash_map::Entry;
 
-        use ana_gotatun::noise::errors::WireGuardError;
         match (self.active_tunnels.entry(from), parsed_packet) {
             (Entry::Occupied(mut occupied_entry), p) => {
                 let active_tunnel = occupied_entry.get_mut();
@@ -286,9 +301,7 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                     .is_authorized(packet_now, active_tunnel.peer_static.as_bytes())
                 else {
                     tracing::debug!(remote = ?from, peer_static = ?active_tunnel.peer_static, "rejected packet from unauthorized peer");
-                    return HandleIncomingPacketResult::Result {
-                        result: TunnResult::Err(WireGuardError::UnexpectedPacket),
-                    };
+                    return HandleIncomingPacketResult::Unauthorized;
                 };
                 let result = Self::handle_incoming_and_drain_queue(
                     send_to_network,
@@ -322,9 +335,7 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                     .is_authorized(packet_now, &peer.peer_static_public)
                 else {
                     tracing::debug!(remote = ?from, "rejected handshake from unauthorized peer");
-                    return HandleIncomingPacketResult::Result {
-                        result: TunnResult::Err(WireGuardError::UnexpectedPacket),
-                    };
+                    return HandleIncomingPacketResult::Unauthorized;
                 };
                 tracing::debug!(remote = ?from, "accepted new handshake, inserting tunnel");
                 let peer_static = x25519::PublicKey::from(peer.peer_static_public);
@@ -1116,5 +1127,71 @@ mod tests {
             snaptun_server.active_tunnels[&sockaddr_client].peer_static, identity,
             "the address must still hold the tunnel of the same identity"
         );
+    }
+
+    #[test]
+    fn a_handshake_of_an_unauthorized_identity_is_unauthorized() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let (mut snaptun_server, rate_limiter, static_server_public) =
+            server_with_authorized_identities(&[]);
+        let mut send_to_network = VecDeque::<WgKind>::new();
+        let mut tunn = client_tunn(
+            x25519::StaticSecret::from([0u8; 32]),
+            static_server_public,
+            rate_limiter,
+        );
+        let hs_init = handshake_init_of(&mut tunn, test_packet(*b"ONE"));
+
+        let result = snaptun_server.handle_incoming_packet_with_session(
+            Packet::copy_from(&hs_init[..]),
+            sockaddr_client,
+            &mut send_to_network,
+        );
+        assert!(matches!(result, HandleIncomingPacketResult::Unauthorized));
+        let result =
+            snaptun_server.handle_incoming_packet(hs_init, sockaddr_client, &mut send_to_network);
+        assert!(
+            matches!(result, TunnResult::Err(WireGuardError::UnexpectedPacket)),
+            "got {result:?}"
+        );
+        assert_eq!(snaptun_server.active_tunnel_count(), 0);
+        assert!(send_to_network.is_empty());
+    }
+
+    #[test]
+    fn a_packet_of_an_identity_that_lost_its_authorization_is_unauthorized() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let static_client = x25519::StaticSecret::from([0u8; 32]);
+        let static_server = x25519::StaticSecret::from([2u8; 32]);
+        let static_server_public = x25519::PublicKey::from(&static_server);
+        let rate_limiter = Arc::new(RateLimiter::new(&static_server_public, 100));
+        let authz = Arc::new(MutableAuthz::default());
+        authz.set_session_data(
+            *x25519::PublicKey::from(&static_client).as_bytes(),
+            session_data_of(0),
+        );
+        let mut snaptun_server =
+            SnapTunServer::new(static_server, rate_limiter.clone(), authz.clone());
+        let mut send_to_network = VecDeque::<WgKind>::new();
+        let mut tunn = client_tunn(static_client, static_server_public, rate_limiter);
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn,
+            &test_packet(*b"ONE"),
+            sockaddr_client,
+            &mut send_to_network,
+        );
+        let Some(WgKind::Data(client_data)) = tunn.get_queued_packets().next() else {
+            panic!("expected the client to complete the handshake and queue a packet");
+        };
+
+        authz.sessions.lock().unwrap().clear();
+
+        let result = snaptun_server.handle_incoming_packet_with_session(
+            Packet::copy_from(client_data.as_bytes()),
+            sockaddr_client,
+            &mut send_to_network,
+        );
+        assert!(matches!(result, HandleIncomingPacketResult::Unauthorized));
     }
 }

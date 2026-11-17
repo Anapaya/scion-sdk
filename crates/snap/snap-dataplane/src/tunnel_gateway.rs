@@ -87,7 +87,7 @@ impl<S> TunnelGatewayObserver<S> for NoopTunnelGatewayObserver {
 ///   Used for flow accounting and metrics.
 /// * `tun_dispatcher_rx`: The receiving end of the dispatcher interface.
 /// * `server_static_secret`: The static secret of the tunnel gateway's tunnel endpoint.
-/// * `metrics`: Counters for events on the gateway's own send path.
+/// * `metrics`: The traffic, the drops, and the tunnels of the gateway.
 pub fn start_tunnel_gateway<A, D, O>(
     tasks: &mut CancelTaskSet,
     socket: UdpSocket,

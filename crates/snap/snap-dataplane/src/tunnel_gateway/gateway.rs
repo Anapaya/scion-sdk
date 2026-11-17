@@ -25,6 +25,7 @@ use ana_gotatun::{
     packet::{Packet, WgKind},
     x25519,
 };
+use prometheus::IntGauge;
 use sciparse::{
     address::{addr::ScionAddr, host_addr::ScionHostAddr},
     core::{
@@ -114,14 +115,22 @@ where
 
     fn handle_outgoing_packet(
         observer: &O,
+        metrics: &TunnelGatewayMetrics,
         snaptun_srv: &mut SnapTunServer<A>,
         packet: Packet,
         target: SocketAddr,
     ) -> Option<WgKind> {
         let packet_meta = Self::outbound_packet_meta(&packet);
-        let handled = snaptun_srv.handle_outgoing_packet_with_session(packet, target)?;
+        let Some(handled) = snaptun_srv.handle_outgoing_packet_with_session(packet, target) else {
+            metrics
+                .dropped_packets
+                .to_endhost_no_authorized_tunnel
+                .inc();
+            return None;
+        };
 
         if let Some(packet_meta) = packet_meta {
+            metrics.to_endhost.count(packet_meta.packet_len);
             observer.observe_packet(
                 handled.processed_at,
                 handled.session_data.as_ref(),
@@ -217,11 +226,16 @@ where
                             HandleIncomingPacketResult::Result {
                                 result: TunnResult::Err(wire_guard_error),
                             } => {
+                                metrics.dropped_datagrams.to_scion_router_wireguard_error.inc();
                                 tracing::error!(err=?wire_guard_error, "wireguard error on incoming packet");
+                            },
+                            HandleIncomingPacketResult::Unauthorized => {
+                                metrics.dropped_datagrams.to_scion_router_unauthorized.inc();
                             },
                             HandleIncomingPacketResult::Result {
                                 result: TunnResult::WriteToNetwork(_wg_kind),
                             } => {
+                                metrics.dropped_datagrams.to_scion_router_internal_error.inc();
                                 tracing::error!(
                                     "unexpected TunnResult::WriteToNetwork for incoming packet; \
                                      expected Done, Err, or WriteToTunnel; dropping packet"
@@ -246,6 +260,7 @@ where
                                     }
                                     Err(e) => {
                                         tracing::debug!(err=%e, "Inbound datagram check failed");
+                                        Self::count_policy_drop(&metrics, &e);
                                         // Use the first assigned address for the SCMP reply.
                                         let mut target_buf = self.pool.get();
                                         match Self::create_scmp_error(
@@ -258,19 +273,22 @@ where
                                             &mut target_buf,
                                         ) {
                                             Ok(n) => {
-                                                // XXX: `handle_outgoing_packet` allocates a new packet
-                                                // for the response (see comment in impl)
+                                                // XXX: `handle_outgoing_packet_with_session` allocates
+                                                // a new packet for the response (see comment in impl)
                                                 target_buf.truncate(n);
-                                                if let Some(out_pkt) =
-                                                    snaptun_srv.handle_outgoing_packet(target_buf, from)
+                                                if let Some(handled) = snaptun_srv
+                                                    .handle_outgoing_packet_with_session(target_buf, from)
                                                 {
-                                                    Self::try_queue_batched_packet(
-                                                        &socket,
-                                                        &mut sender,
-                                                        Self::wg_kind_to_bytes(out_pkt),
-                                                        from,
-                                                        &metrics,
-                                                    );
+                                                    metrics.to_endhost.count(n);
+                                                    if let Some(out_pkt) = handled.network_packet {
+                                                        Self::try_queue_batched_packet(
+                                                            &socket,
+                                                            &mut sender,
+                                                            Self::wg_kind_to_bytes(out_pkt),
+                                                            from,
+                                                            &metrics,
+                                                        );
+                                                    }
                                                 }
                                             },
                                             Err(e) => {
@@ -283,12 +301,14 @@ where
                             HandleIncomingPacketResult::Result {
                                 result: TunnResult::WriteToTunnel(_packet),
                             } => {
+                                metrics.dropped_datagrams.to_scion_router_internal_error.inc();
                                 tracing::error!(
                                     "unexpected plain WriteToTunnel result from incoming packet handling; \
                                      expected forwarded packet metadata; dropping packet"
                                 );
                             },
                             _ => {
+                                metrics.dropped_datagrams.to_scion_router_internal_error.inc();
                                 tracing::error!(
                                     "unknown result from incoming packet handling; dropping packet"
                                 );
@@ -312,6 +332,7 @@ where
 
                         if let Some(out_pkt) = Self::handle_outgoing_packet(
                             self.observer.as_ref(),
+                            &metrics,
                             &mut snaptun_srv,
                             packet,
                             target,
@@ -330,6 +351,7 @@ where
                             };
                             let Some(out_pkt) = Self::handle_outgoing_packet(
                                 self.observer.as_ref(),
+                                &metrics,
                                 &mut snaptun_srv,
                                 packet,
                                 target,
@@ -351,6 +373,13 @@ where
                         for (addr, action) in snaptun_srv.update_timers() {
                             Self::try_send_log_err(&socket, &Self::wg_kind_to_bytes(action), addr);
                         }
+                        metrics.tunnels.set(
+                            i64::try_from(snaptun_srv.active_tunnel_count()).unwrap_or(i64::MAX),
+                        );
+                        Self::report_dispatch_queue_size(
+                            &metrics.dispatch_queue_size,
+                            &self.outbound_queue,
+                        );
                         // Retry datagrams that stayed queued because the socket was not
                         // writable, so a stalled queue does not wait for the next packet.
                         Self::try_flush_batch_log_err(&socket, &mut sender, &metrics);
@@ -388,7 +417,8 @@ where
         // The sender only logs a sample of the datagrams it had to discard, so account for
         // all of them here, including those discarded before the flush hit back pressure.
         metrics
-            .discarded_datagrams
+            .dropped_datagrams
+            .to_endhost_socket_refused
             .inc_by(sender.take_discarded_datagrams());
 
         // The queue is retained and flushed again on the next loop iteration or on the next
@@ -410,6 +440,7 @@ where
                 QueuePacketError::Full { packet, target } => {
                     Self::try_flush_batch_log_err(socket, sender, metrics);
                     if sender.try_queue_packet(packet, target).is_err() {
+                        metrics.dropped_datagrams.to_endhost_sender_full.inc();
                         tracing::debug!(
                             ?target,
                             "dropping outbound packet because batched sender remains full"
@@ -421,6 +452,7 @@ where
                     max_packet_size,
                     ..
                 } => {
+                    metrics.dropped_datagrams.to_endhost_too_large.inc();
                     tracing::debug!(
                         packet_len,
                         max_packet_size,
@@ -428,10 +460,27 @@ where
                     );
                 }
                 error => {
+                    metrics.dropped_datagrams.to_endhost_internal_error.inc();
                     tracing::debug!(?error, "dropping outbound packet");
                 }
             }
         }
+    }
+
+    fn count_policy_drop(metrics: &TunnelGatewayMetrics, err: &PacketPolicyError) {
+        let dropped = &metrics.dropped_packets;
+        let counter = match err {
+            PacketPolicyError::MalformedPacket(..) => &dropped.to_scion_router_malformed,
+            PacketPolicyError::InvalidSourceAddress(_) => {
+                &dropped.to_scion_router_invalid_source_address
+            }
+            PacketPolicyError::InvalidPathType(..) => &dropped.to_scion_router_invalid_path_type,
+        };
+        counter.inc();
+    }
+
+    fn report_dispatch_queue_size(gauge: &IntGauge, queue: &Receiver<(SocketAddr, Packet)>) {
+        gauge.set(i64::try_from(queue.len()).unwrap_or(i64::MAX));
     }
 
     fn create_scmp_error(
@@ -502,16 +551,18 @@ mod tests {
         packet::WgKind,
         x25519,
     };
+    use scion_sdk_observability::metrics::registry::MetricsRegistry;
     use sciparse::{
-        address::{addr::ScionAddr, host_addr::ScionHostAddr},
+        address::{addr::ScionAddr, host_addr::ScionHostAddr, socket_addr::ScionSocketAddr},
         core::encode::WireEncode,
         identifier::isd_asn::IsdAsn as ProtoIsdAsn,
-        packet::model::ScionRawPacket,
+        packet::model::{ScionRawPacket, ScionUdpPacket},
         payload::ProtocolNumber,
     };
     use snap_tun::server::{SnapTunAuthorization, SnapTunServer};
 
     use super::*;
+    use crate::{metrics::DataPlaneMetrics, tunnel_gateway::dispatcher::TunnelGatewayDispatcher};
 
     struct NoopDispatcher;
 
@@ -632,8 +683,10 @@ mod tests {
 
         let outbound_raw = test_packet_bytes("1-ff00:0:111", "1-ff00:0:110");
         let expected_len = outbound_raw.len();
+        let metrics = test_metrics();
         let outbound_wg = TestTunnelGateway::handle_outgoing_packet(
             &observer,
+            &metrics,
             &mut server,
             Packet::copy_from(outbound_raw.as_slice()),
             client_addr,
@@ -656,6 +709,15 @@ mod tests {
                 direction: ObservedPacketDirection::Egress,
             }]
         );
+        assert_eq!(metrics.to_endhost.packets.get(), 1);
+        assert_eq!(metrics.to_endhost.bytes.get(), expected_len as u64);
+        assert_eq!(
+            metrics
+                .dropped_packets
+                .to_endhost_no_authorized_tunnel
+                .get(),
+            0
+        );
     }
 
     #[test]
@@ -668,12 +730,27 @@ mod tests {
         let mut server = SnapTunServer::new(static_server, rate_limiter, Arc::new(TestAuthz));
         let raw = test_packet_bytes("1-ff00:0:111", "1-ff00:0:110");
         let packet = Packet::copy_from(raw.as_slice());
+        let metrics = test_metrics();
 
         assert!(
-            TestTunnelGateway::handle_outgoing_packet(&observer, &mut server, packet, client_addr,)
-                .is_none()
+            TestTunnelGateway::handle_outgoing_packet(
+                &observer,
+                &metrics,
+                &mut server,
+                packet,
+                client_addr,
+            )
+            .is_none()
         );
         assert!(observer.observed.lock().unwrap().is_empty());
+        assert_eq!(metrics.to_endhost.packets.get(), 0);
+        assert_eq!(
+            metrics
+                .dropped_packets
+                .to_endhost_no_authorized_tunnel
+                .get(),
+            1
+        );
     }
 
     #[test]
@@ -812,6 +889,7 @@ mod tests {
 
         let _outbound_wg = TestTunnelGateway::handle_outgoing_packet(
             &observer,
+            &test_metrics(),
             &mut server,
             Packet::copy_from(outbound_raw.as_slice()),
             client_addr,
@@ -858,6 +936,226 @@ mod tests {
         }
 
         assert_eq!(observer.observed.lock().unwrap().len(), 1);
+    }
+
+    fn test_metrics() -> TunnelGatewayMetrics {
+        let registry = MetricsRegistry::new();
+        TunnelGatewayMetrics::new(&registry, &DataPlaneMetrics::new(&registry))
+    }
+
+    /// A tunnel gateway that runs on a local socket until the test cancels it.
+    struct RunningGateway {
+        addr: SocketAddr,
+        static_public: x25519::PublicKey,
+        metrics: TunnelGatewayMetrics,
+        dispatcher: TunnelGatewayDispatcher,
+        cancel: CancellationToken,
+    }
+
+    impl RunningGateway {
+        async fn start() -> Self {
+            let metrics = test_metrics();
+            let (dispatcher, dispatcher_rx) = TunnelGatewayDispatcher::new(metrics.dispatcher());
+            let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let addr = socket.local_addr().unwrap();
+            let static_secret = x25519::StaticSecret::from([2u8; 32]);
+            let static_public = x25519::PublicKey::from(&static_secret);
+            let gateway: TestTunnelGateway = TunnelGateway::new(
+                socket,
+                static_secret,
+                Arc::new(TestAuthz),
+                Arc::new(NoopDispatcher),
+                Arc::new(RecordingObserver::default()),
+                dispatcher_rx,
+                metrics.clone(),
+            );
+            let cancel = CancellationToken::new();
+            tokio::spawn(gateway.start_server(cancel.clone()));
+            Self {
+                addr,
+                static_public,
+                metrics,
+                dispatcher,
+                cancel,
+            }
+        }
+    }
+
+    impl Drop for RunningGateway {
+        fn drop(&mut self) {
+            self.cancel.cancel();
+        }
+    }
+
+    /// Waits until `done` returns true. Panics after five seconds.
+    async fn wait_until(what: &str, done: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !done() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out: {what}"));
+    }
+
+    #[tokio::test]
+    async fn gateway_counts_the_tunnel_of_an_endhost() {
+        let gateway = RunningGateway::start().await;
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let rate_limiter = Arc::new(RateLimiter::new(&gateway.static_public, 100));
+        let mut client = Tunn::new(
+            x25519::StaticSecret::from([0u8; 32]),
+            gateway.static_public,
+            None,
+            None,
+            0,
+            rate_limiter,
+            gateway.addr,
+        );
+        let raw = test_packet_bytes("1-ff00:0:110", "1-ff00:0:111");
+
+        let Some(WgKind::HandshakeInit(hs_init)) =
+            client.handle_outgoing_packet(Packet::copy_from(raw.as_slice()))
+        else {
+            panic!("expected handshake init")
+        };
+        client_socket
+            .send_to(&hs_init.into_bytes(), gateway.addr)
+            .await
+            .unwrap();
+        let mut buf = vec![0u8; PACKET_BUF_SIZE];
+        let (len, _) = client_socket.recv_from(&mut buf).await.unwrap();
+        let hs_resp = Packet::copy_from(&buf[..len]).try_into_wg().unwrap();
+        assert!(matches!(hs_resp, WgKind::HandshakeResp(_)));
+
+        wait_until("the gateway reports the tunnel", || {
+            gateway.metrics.tunnels.get() == 1
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn gateway_answers_a_packet_with_a_wrong_source_address_with_an_scmp_error() {
+        let gateway = RunningGateway::start().await;
+        let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let rate_limiter = Arc::new(RateLimiter::new(&gateway.static_public, 100));
+        let mut client = Tunn::new(
+            x25519::StaticSecret::from([0u8; 32]),
+            gateway.static_public,
+            None,
+            None,
+            0,
+            rate_limiter,
+            gateway.addr,
+        );
+        // The client sends from 127.0.0.1, so the source address 127.0.0.3 is wrong.
+        let ia: ProtoIsdAsn = "1-ff00:0:110".parse().unwrap();
+        let packet = ScionRawPacket::new(
+            ScionAddr::new(ia, ScionHostAddr::V4("127.0.0.3".parse().unwrap())),
+            ScionAddr::new(ia, ScionHostAddr::V4("127.0.0.2".parse().unwrap())),
+            DpPath::Empty,
+            ProtocolNumber::Udp,
+            b"payload".to_vec(),
+        );
+        let mut raw = vec![0; packet.required_size()];
+        packet.try_encode(&mut raw).unwrap();
+
+        let Some(WgKind::HandshakeInit(hs_init)) =
+            client.handle_outgoing_packet(Packet::copy_from(raw.as_slice()))
+        else {
+            panic!("expected handshake init")
+        };
+        client_socket
+            .send_to(&hs_init.into_bytes(), gateway.addr)
+            .await
+            .unwrap();
+        let mut buf = vec![0u8; PACKET_BUF_SIZE];
+        let (len, _) = client_socket.recv_from(&mut buf).await.unwrap();
+        let hs_resp = Packet::copy_from(&buf[..len]).try_into_wg().unwrap();
+        let mut to_gateway: Vec<WgKind> = Vec::new();
+        if let TunnResult::WriteToNetwork(packet) = client.handle_incoming_packet(hs_resp) {
+            to_gateway.push(packet);
+        }
+        to_gateway.extend(client.get_queued_packets());
+        for packet in to_gateway {
+            client_socket
+                .send_to(&TestTunnelGateway::wg_kind_to_bytes(packet), gateway.addr)
+                .await
+                .unwrap();
+        }
+
+        wait_until("the gateway drops the packet", || {
+            gateway
+                .metrics
+                .dropped_packets
+                .to_scion_router_invalid_source_address
+                .get()
+                == 1
+        })
+        .await;
+        // The gateway counts the drop and the SCMP error without a yield in between.
+        assert_eq!(gateway.metrics.to_endhost.packets.get(), 1);
+    }
+
+    /// A SCION/UDP packet that the tunnel gateway dispatcher accepts.
+    fn dispatchable_packet_bytes() -> Vec<u8> {
+        let ia: ProtoIsdAsn = "1-ff00:0:110".parse().unwrap();
+        let packet = ScionUdpPacket::new(
+            ScionSocketAddr::new(ia, ScionHostAddr::V4("127.0.0.1".parse().unwrap()), 5000),
+            ScionSocketAddr::new(ia, ScionHostAddr::V4("127.0.0.2".parse().unwrap()), 6000),
+            DpPath::Empty,
+            b"payload".as_ref().into(),
+        )
+        .into_raw();
+        let mut raw = vec![0; packet.required_size()];
+        packet.try_encode(&mut raw).unwrap();
+        raw
+    }
+
+    #[tokio::test]
+    async fn gateway_drops_a_packet_to_an_endhost_without_a_tunnel() {
+        let gateway = RunningGateway::start().await;
+        let raw = dispatchable_packet_bytes();
+        let (view, _) = ScionPacketView::try_from_slice(&raw).unwrap();
+
+        gateway.dispatcher.try_dispatch(view);
+
+        wait_until("the gateway drops the packet", || {
+            gateway
+                .metrics
+                .dropped_packets
+                .to_endhost_no_authorized_tunnel
+                .get()
+                == 1
+        })
+        .await;
+        assert_eq!(gateway.metrics.to_endhost.packets.get(), 0);
+    }
+
+    #[test]
+    fn dispatch_queue_size_is_the_number_of_queued_packets() {
+        let metrics = test_metrics();
+        let (dispatcher, mut receiver) = TunnelGatewayDispatcher::new(metrics.dispatcher());
+        let raw = dispatchable_packet_bytes();
+        let (view, _) = ScionPacketView::try_from_slice(&raw).unwrap();
+        dispatcher.try_dispatch(view);
+        dispatcher.try_dispatch(view);
+
+        TestTunnelGateway::report_dispatch_queue_size(
+            &metrics.dispatch_queue_size,
+            &receiver.outbound_queue,
+        );
+        assert_eq!(metrics.dispatch_queue_size.get(), 2);
+
+        receiver
+            .outbound_queue
+            .try_recv()
+            .expect("a packet in the queue");
+        TestTunnelGateway::report_dispatch_queue_size(
+            &metrics.dispatch_queue_size,
+            &receiver.outbound_queue,
+        );
+        assert_eq!(metrics.dispatch_queue_size.get(), 1);
     }
 
     fn dispatch_one(tunn: &mut Tunn, packets: &mut VecDeque<WgKind>) -> TunnResult {

@@ -39,11 +39,12 @@ use jsonwebtoken::DecodingKey;
 use scion_sdk_observability::metrics::registry::MetricsRegistry;
 use scion_sdk_utils::task_handler::CancelTaskSet;
 use snap_control::server::identity_registry::IdentityRegistry;
-use snap_dataplane::tunnel_gateway::{
-    NoopTunnelGatewayObserver,
-    dispatcher::TunnelGatewayDispatcher,
-    metrics::{TunnelGatewayDispatcherMetrics, TunnelGatewayMetrics},
-    start_tunnel_gateway,
+use snap_dataplane::{
+    metrics::DataPlaneMetrics,
+    tunnel_gateway::{
+        NoopTunnelGatewayObserver, dispatcher::TunnelGatewayDispatcher,
+        metrics::TunnelGatewayMetrics, start_tunnel_gateway,
+    },
 };
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
@@ -326,9 +327,12 @@ impl PocketScionRuntime {
             let addr = socket.local_addr()?;
             tracing::info!(%addr, %snap_id, "Starting snap dataplane");
 
-            let tun_gw_metrics = TunnelGatewayDispatcherMetrics::new(&metrics_registry);
+            let tun_gw_metrics = TunnelGatewayMetrics::new(
+                &metrics_registry,
+                &DataPlaneMetrics::new(&metrics_registry),
+            );
             let (tunnel_gw_dispatcher, tun_dispatcher_rx) =
-                TunnelGatewayDispatcher::new(tun_gw_metrics);
+                TunnelGatewayDispatcher::new(tun_gw_metrics.dispatcher());
             let tunnel_gw_dispatcher = Arc::new(tunnel_gw_dispatcher);
 
             for isd_as in snap.isd_ases() {
@@ -354,7 +358,7 @@ impl PocketScionRuntime {
                 Arc::new(NoopTunnelGatewayObserver),
                 tun_dispatcher_rx,
                 static_secret,
-                TunnelGatewayMetrics::new(&metrics_registry),
+                tun_gw_metrics,
             );
             let (reclaimed, _) = c_task_set.into_parts();
             *join_set = reclaimed;
