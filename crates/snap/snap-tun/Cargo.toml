@@ -30,6 +30,7 @@ zerocopy = { workspace = true }
 windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
 
 [dev-dependencies]
+blake2 = { workspace = true }
 ed25519-dalek = { workspace = true }
 mockall = { workspace = true }
 pem = { workspace = true }

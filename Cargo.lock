@@ -6047,6 +6047,7 @@ dependencies = [
  "async-channel",
  "async-trait",
  "bitfield-struct 0.13.0",
+ "blake2",
  "bytes",
  "ed25519-dalek",
  "mockall",

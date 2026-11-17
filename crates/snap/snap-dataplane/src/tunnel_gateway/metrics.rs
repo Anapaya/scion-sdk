@@ -75,6 +75,7 @@ impl TunnelGatewayMetrics {
             invalid_destination: self.dropped_packets.to_endhost_invalid_destination.clone(),
             queue_full: self.dropped_packets.to_endhost_queue_full.clone(),
             queue_closed: self.dropped_packets.to_endhost_queue_closed.clone(),
+            too_large: self.dropped_packets.to_endhost_too_large.clone(),
         }
     }
 }
@@ -97,6 +98,8 @@ pub struct TunnelGatewayPacketDropMetrics {
     /// Packets to an endhost that the dispatcher dropped because the gateway closed the
     /// dispatch queue.
     pub to_endhost_queue_closed: IntCounter,
+    /// Packets to an endhost that are too large for a datagram of the tunnel after encryption.
+    pub to_endhost_too_large: IntCounter,
     /// Packets to an endhost that has no tunnel, or whose tunnel is no longer authorized.
     pub to_endhost_no_authorized_tunnel: IntCounter,
 }
@@ -113,6 +116,7 @@ impl TunnelGatewayPacketDropMetrics {
             to_endhost_invalid_destination: to_endhost("invalid_destination"),
             to_endhost_queue_full: to_endhost("queue_full"),
             to_endhost_queue_closed: to_endhost("queue_closed"),
+            to_endhost_too_large: to_endhost("too_large"),
             to_endhost_no_authorized_tunnel: to_endhost("no_authorized_tunnel"),
         }
     }
@@ -187,4 +191,6 @@ pub struct TunnelGatewayDispatcherMetrics {
     pub queue_full: IntCounter,
     /// Packets that the dispatcher dropped because the gateway closed the dispatch queue.
     pub queue_closed: IntCounter,
+    /// Packets that are too large for a datagram of the tunnel after encryption.
+    pub too_large: IntCounter,
 }

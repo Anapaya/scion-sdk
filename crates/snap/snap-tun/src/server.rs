@@ -258,7 +258,8 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
     /// packet, and it authorizes the identity of that tunnel. It parses and
     /// authorizes the identity that a handshake initiation carries only for an
     /// address that holds no tunnel yet. An address that holds a tunnel
-    /// therefore stays with the identity of that tunnel.
+    /// therefore stays with the identity of that tunnel. The method adds a
+    /// tunnel for a new address only after the full handshake succeeds.
     #[tracing::instrument(skip_all, fields(remote = %from))]
     pub fn handle_incoming_packet_with_session(
         &mut self,
@@ -337,7 +338,6 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                     tracing::debug!(remote = ?from, "rejected handshake from unauthorized peer");
                     return HandleIncomingPacketResult::Unauthorized;
                 };
-                tracing::debug!(remote = ?from, "accepted new handshake, inserting tunnel");
                 let peer_static = x25519::PublicKey::from(peer.peer_static_public);
                 let mut tunn = Tunn::new(
                     self.static_private.clone(),
@@ -353,9 +353,21 @@ impl<T: SnapTunAuthorization> SnapTunServer<T> {
                     WgKind::HandshakeInit(wg_init),
                     &mut tunn,
                 );
+                // `parse_handshake_anon` does not prove that the initiator holds the private key
+                // of the static key it claims. Only the full handshake in `tunn` proves it.
+                if let TunnResult::Err(err) = &res {
+                    tracing::debug!(remote = ?from, ?err, "handshake failed, not inserting tunnel");
+                    return HandleIncomingPacketResult::Result { result: res };
+                }
+                tracing::debug!(remote = ?from, "accepted new handshake, inserting tunnel");
                 // Derive the caller-visible forwarded-packet result before
                 // moving `session_data` into the active-tunnel entry below.
                 let handled = Self::incoming_packet_result(res, session_data.clone(), packet_now);
+
+                // XXX: A valid handshake does not prove that the initiator receives packets at
+                // `from`. A sender that spoofs `from` and has a valid handshake initiation, for
+                // example a captured one or one made with its own authorized key, can bind `from`
+                // until the tunnel expires. See https://github.com/Anapaya/scion/issues/32334.
                 e.insert_entry(ActiveTunnel { peer_static, tunn });
                 handled
             }
@@ -476,10 +488,14 @@ mod tests {
 
     use ana_gotatun::{
         noise::{Tunn, TunnResult, errors::WireGuardError, rate_limiter::RateLimiter},
-        packet::{IpNextProtocol, Packet, WgKind},
+        packet::{IpNextProtocol, Packet, WgHandshakeBase, WgHandshakeInit, WgKind},
         x25519,
     };
-    use zerocopy::IntoBytes;
+    use blake2::{
+        Blake2s256, Blake2sMac, Digest,
+        digest::{FixedOutput, KeyInit, Update, consts::U16},
+    };
+    use zerocopy::{FromBytes, IntoBytes};
 
     use crate::{
         scion_packet::{Scion, ScionHeader},
@@ -1015,6 +1031,94 @@ mod tests {
             panic!("expected handshake init")
         };
         Packet::copy_from(hs_init.as_bytes())
+    }
+
+    /// Changes the encrypted timestamp of a handshake initiation and computes `mac1` again. The
+    /// result still carries the static key of the initiator, but the full handshake rejects it.
+    fn with_corrupt_timestamp(hs_init: Packet, static_server_public: &x25519::PublicKey) -> Packet {
+        let mut bytes = hs_init.as_bytes().to_vec();
+        let init = WgHandshakeInit::mut_from_bytes(&mut bytes).expect("a handshake init");
+        init.timestamp.encrypted[0] ^= 0xff;
+
+        let mac1_key = Blake2s256::new()
+            .chain_update(b"mac1----")
+            .chain_update(static_server_public.as_bytes())
+            .finalize();
+        let mut mac1 = Blake2sMac::<U16>::new_from_slice(&mac1_key).expect("a valid key length");
+        Update::update(&mut mac1, init.until_mac1());
+        *init.mac1_mut() = mac1.finalize_fixed().into();
+
+        Packet::copy_from(&bytes[..])
+    }
+
+    /// Checks that a failed handshake does not bind the address to the static key.
+    ///
+    /// An initiation carries a static key, but only a full handshake proves that the initiator
+    /// holds the private key. If a failed handshake binds the address, an attacker can spoof the
+    /// address of an endhost and block its handshakes until the tunnel expires.
+    ///
+    /// The test sends a forged initiation. The initiation has the static key of an authorized
+    /// identity and a valid `mac1`, but a wrong encrypted timestamp.
+    #[test]
+    fn a_failed_handshake_does_not_bind_the_address() {
+        let sockaddr_client: SocketAddr = "192.168.1.1:1234".parse().unwrap();
+        let static_endhost = x25519::StaticSecret::from([0u8; 32]);
+        let static_other = x25519::StaticSecret::from([1u8; 32]);
+        let identity_endhost = x25519::PublicKey::from(&static_endhost);
+
+        let (mut snaptun_server, rate_limiter, static_server_public) =
+            server_with_authorized_identities(&[&static_endhost, &static_other]);
+        let mut send_to_network = VecDeque::<WgKind>::new();
+
+        let mut tunn_other = client_tunn(static_other, static_server_public, rate_limiter.clone());
+        let forged_init = with_corrupt_timestamp(
+            handshake_init_of(&mut tunn_other, test_packet(*b"FORGED")),
+            &static_server_public,
+        );
+        let result = snaptun_server.handle_incoming_packet(
+            forged_init,
+            sockaddr_client,
+            &mut send_to_network,
+        );
+
+        assert!(
+            matches!(result, TunnResult::Err(_)),
+            "the forged handshake must not be accepted, got {result:?}"
+        );
+        assert!(
+            send_to_network.is_empty(),
+            "the server must not answer the forged handshake"
+        );
+        assert!(
+            !snaptun_server.active_tunnels.contains_key(&sockaddr_client),
+            "the forged handshake must not bind the address"
+        );
+
+        let endhost_packet = test_packet(*b"ENDHOST");
+        let mut tunn_endhost = client_tunn(static_endhost, static_server_public, rate_limiter);
+        establish_tunnel(
+            &mut snaptun_server,
+            &mut tunn_endhost,
+            &endhost_packet,
+            sockaddr_client,
+            &mut send_to_network,
+        );
+
+        let Some(WgKind::Data(client_data)) = tunn_endhost.get_queued_packets().next() else {
+            panic!("expected the endhost to complete the handshake and queue a packet");
+        };
+        let TunnResult::WriteToTunnel(packet) = snaptun_server.handle_incoming_packet(
+            Packet::copy_from(client_data.as_bytes()),
+            sockaddr_client,
+            &mut send_to_network,
+        ) else {
+            panic!("expected the packet of the endhost to be forwarded")
+        };
+        assert_eq!(packet.as_bytes(), endhost_packet.as_bytes());
+        assert_eq!(
+            snaptun_server.active_tunnels[&sockaddr_client].peer_static,
+            identity_endhost
+        );
     }
 
     /// A socket address belongs to the identity that established the tunnel on it. A second
