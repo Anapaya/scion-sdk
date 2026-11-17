@@ -24,6 +24,13 @@ val stage = tasks.register<Sync>("stageJvmNativeLibrary") {
         val jar = tasks.named<AbstractArchiveTask>("jarJvmRustRuntime${target.gobleyTarget}Release")
         from(jar.flatMap { it.archiveFile }.map { zipTree(it) }) { exclude("**/META-INF/**") }
     }
+
+    // -Pscion.jvmPrebuiltLibraries=<dir> adds the libraries of other hosts,
+    // in their JNA folders, for example from `tools/ktor.py linux-libraries`.
+    providers.gradleProperty("scion.jvmPrebuiltLibraries").orNull?.let { dir ->
+        val library = Cargo.libraryName(layout.projectDirectory.dir("rust").asFile, "cdylib")
+        from(dir) { include("*/lib$library.so", "*/lib$library.dylib", "*/$library.dll") }
+    }
 }
 
 tasks.withType<ProcessResources>().matching { it.name == "jvmProcessResources" }.configureEach {

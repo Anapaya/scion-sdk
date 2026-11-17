@@ -11,8 +11,3 @@ plugins {
     alias(libs.plugins.gobleyUniffi) apply false
     alias(libs.plugins.kotlinAtomicfu) apply false
 }
-
-allprojects {
-    group = "net.anapaya.ktor"
-    version = "0.1.0"
-}

@@ -14,8 +14,8 @@ plugins {
  * test, and on the native targets of the host.
  *
  * An app outside this build uses the Maven coordinates instead of the project
- * paths: `net.anapaya.ktor:ktor-client-scion` and, for the tests,
- * `net.anapaya.ktor:ktor-client-scion-testing`. For the Android host test, it
+ * paths: `net.anapaya.scion:ktor-client-scion` and, for the tests,
+ * `net.anapaya.scion:ktor-client-scion-testing`. For the Android host test, it
  * adds the `-jvm` artifacts of both.
  */
 kotlin {

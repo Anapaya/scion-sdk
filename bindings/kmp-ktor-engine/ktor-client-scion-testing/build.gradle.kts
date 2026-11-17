@@ -4,6 +4,8 @@ plugins {
     id("rust-kmp-library")
 }
 
+description = "A SCION test network in the test process, for tests of apps that use ktor-client-scion."
+
 /**
  * The test network runs in the test process: through the cdylib on the JVM
  * and on Android, and through the static library on Kotlin/Native.

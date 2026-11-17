@@ -13,8 +13,35 @@ artifacts.
 
 ## Install
 
-The artifacts are not on Maven Central yet. Build them into a Maven
-repository in `build/repository`:
+Each SDK release publishes the engine to Maven Central. The engine has the
+version of the SDK:
+
+```kotlin
+// build.gradle.kts of a Kotlin Multiplatform module
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation("net.anapaya.scion:ktor-client-scion:<version>")
+        }
+    }
+}
+```
+
+A release has these targets:
+
+| Target              | Native code                                            |
+| ------------------- | ------------------------------------------------------ |
+| Android             | arm64-v8a, armeabi-v7a, x86, x86-64                    |
+| `iosArm64`          | iOS devices                                            |
+| `iosSimulatorArm64` | the iOS simulator on Apple Silicon                     |
+| JVM                 | macOS arm64, and Linux x86-64 with glibc 2.28 or later |
+
+The klibs need the Kotlin version of `gradle/libs.versions.toml` at the
+release tag, or a newer one.
+
+The JVM jar of a release has no Windows library. On Windows, and for the
+other targets, build the artifacts into a Maven repository in
+`build/repository`:
 
 ```bash
 ./gradlew publishAllPublicationsToLocalBuildRepository
@@ -22,9 +49,8 @@ repository in `build/repository`:
 
 The build needs the tools in [Tools per host](docs/build.md#tools-per-host).
 The repository only contains the targets that the build host can build.
-[Results per platform](docs/build.md#results-per-platform) lists the targets per host.
-
-Add the repository to your project:
+[Results per platform](docs/build.md#results-per-platform) lists the targets
+per host. Add the repository to your project:
 
 ```kotlin
 // settings.gradle.kts
@@ -35,12 +61,6 @@ dependencyResolutionManagement {
         google()
     }
 }
-```
-
-Then add the engine as a dependency:
-
-```kotlin
-implementation("net.anapaya.ktor:ktor-client-scion:0.1.0")
 ```
 
 Alternatively, `./gradlew publishToMavenLocal` writes to `~/.m2/repository`.
@@ -151,7 +171,7 @@ TLS to the origin runs end to end inside the tunnel.
 on the JVM and on the native targets:
 
 ```kotlin
-testImplementation("net.anapaya.ktor:ktor-client-scion-testing:0.1.0")
+testImplementation("net.anapaya.scion:ktor-client-scion-testing:<version>")
 ```
 
 ```kotlin
@@ -198,14 +218,19 @@ java.lang.UnsatisfiedLinkError: Unable to load library 'ktor_scion_testing'
 To fix this, add the JVM artifacts, which hold the desktop libraries,
 to the host test.
 
-Use the same version as for the AAR:
+Use the same version as for the AAR. With
+`com.android.kotlin.multiplatform.library`, the source set is
+`androidHostTest`:
 
 ```kotlin
 androidUnitTest.dependencies {
-    runtimeOnly("net.anapaya.ktor:ktor-client-scion-jvm:0.1.0")
-    runtimeOnly("net.anapaya.ktor:ktor-client-scion-testing-jvm:0.1.0")
+    runtimeOnly("net.anapaya.scion:ktor-client-scion-jvm:<version>")
+    runtimeOnly("net.anapaya.scion:ktor-client-scion-testing-jvm:<version>")
 }
 ```
+
+[`tests/consumer`](tests/consumer) is an app with this setup. CI runs it
+against the publication of each release.
 
 ## Samples
 

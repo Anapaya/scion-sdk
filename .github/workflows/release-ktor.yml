@@ -1,0 +1,241 @@
+# Copyright 2026 Anapaya Systems
+#
+# Builds the Ktor SCION engine from a release tag, tests the publication in an app, and uploads it to
+# Maven Central. It also attaches the signed Maven repository to the GitHub release.
+#
+# `sdk-releaser tag` pushes the tag, and the tag starts this workflow. workflow_dispatch builds an
+# existing tag again. With `publish: none`, it uploads nothing, so a dispatch can also test a release.
+#
+# The upload job runs in the `maven-central` environment, which holds the secrets
+# CENTRAL_TOKEN_USERNAME, CENTRAL_TOKEN_PASSWORD, SIGNING_KEY, and SIGNING_KEY_PASSWORD.
+name: Release Ktor
+"on":
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing release tag to build, for example v0.9.0.
+        required: true
+        type: string
+      publish:
+        description: >-
+          USER_MANAGED waits for a person to publish the deployment in the Central Portal. AUTOMATIC
+          publishes it after the validation. none uploads nothing.
+        type: choice
+        options:
+          - USER_MANAGED
+          - AUTOMATIC
+          - none
+        default: USER_MANAGED
+permissions:
+  contents: read
+concurrency:
+  # Never cancelled in flight: a cancelled upload leaves a deployment in the Central Portal.
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  TAG: ${{ inputs.tag || github.ref_name }}
+  # A tag push uploads with USER_MANAGED. Change it to AUTOMATIC when the releases run without
+  # surprises.
+  PUBLISH: ${{ inputs.publish || 'USER_MANAGED' }}
+  engine: bindings/kmp-ktor-engine
+  XCODE_VERSION: "26.3"
+jobs:
+  linux-libraries:
+    name: ktor/linux-libraries
+    runs-on: ubuntu-24.04
+    # glibc 2.28, so that the libraries load on every Linux with glibc 2.28 or later.
+    container: quay.io/pypa/manylinux_2_28_x86_64@sha256:d086f64cddcace250ef0f0073583c51b8298159303290a730c9f59bd91edfd2c
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      # boring-sys runs bindgen, which loads libclang.
+      - name: Install libclang and Rust
+        run: |
+          set -euo pipefail
+          dnf install -y -q clang-devel
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build the Linux libraries
+        run: ./${{ env.engine }}/tools/ktor.py linux-libraries "$RUNNER_TEMP/linux-libraries"
+      - name: Upload the Linux libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ktor-linux-libraries
+          path: ${{ runner.temp }}/linux-libraries
+          if-no-files-found: error
+
+  publication:
+    name: ktor/publication
+    needs: linux-libraries
+    runs-on: macos-15
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.engine }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Select Xcode
+        uses: ./.github/actions/select-xcode
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Read the Android versions from the version catalog
+        run: |
+          set -euo pipefail
+          catalog=gradle/libs.versions.toml
+          read_version() { sed -n "s/^$1 = \"\(.*\)\"$/\1/p" "$catalog"; }
+          ndk=$(read_version androidNdk)
+          sdk=$(read_version androidCompileSdk)
+          test -n "$ndk" && test -n "$sdk"
+          {
+            echo "ANDROID_NDK_VERSION=$ndk"
+            echo "ANDROID_COMPILE_SDK=$sdk"
+          } >> "$GITHUB_ENV"
+      - name: Setup the Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: >-
+            platforms;android-${{ env.ANDROID_COMPILE_SDK }}
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+      - name: Download the Linux libraries
+        uses: actions/download-artifact@v4
+        with:
+          name: ktor-linux-libraries
+          path: ${{ runner.temp }}/linux-libraries
+      # Nothing is cached. A release runs once, and a stale cache is a worse risk than a cold build.
+      # The modules read the version from the Cargo workspace. A tag on the wrong tree fails here.
+      - name: Build and check the publication
+        run: >-
+          ./tools/ktor.py publish --linux-libraries "$RUNNER_TEMP/linux-libraries"
+          --version "${TAG#v}"
+      - name: Test the publication in an app
+        run: >-
+          ./gradlew --no-daemon -p tests/consumer -PscionRepository="$PWD/build/repository"
+          -PscionVersion="${TAG#v}" jvmTest testAndroidHostTest iosSimulatorArm64Test
+      - name: Upload the test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ktor-publication-test-reports
+          path: ${{ github.workspace }}/${{ env.engine }}/tests/consumer/build/reports/tests/**
+          if-no-files-found: warn
+      - name: Upload the publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: ktor-publication
+          path: ${{ github.workspace }}/${{ env.engine }}/build/repository
+          if-no-files-found: error
+
+  linux-consumer:
+    name: ktor/linux-consumer
+    needs: publication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.engine }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Validate the Gradle wrapper
+        uses: gradle/actions/wrapper-validation@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Download the publication
+        uses: actions/download-artifact@v4
+        with:
+          name: ktor-publication
+          path: ${{ runner.temp }}/repository
+      # The Linux libraries in the JVM jar come from the manylinux image, so this tests them on a
+      # newer Linux.
+      - name: Test the publication in an app
+        run: >-
+          ./gradlew --no-daemon -p tests/consumer -PscionRepository="$RUNNER_TEMP/repository"
+          -PscionVersion="${TAG#v}" jvmTest testAndroidHostTest
+      - name: Upload the test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ktor-linux-consumer-test-reports
+          path: ${{ github.workspace }}/${{ env.engine }}/tests/consumer/build/reports/tests/**
+          if-no-files-found: warn
+
+  upload:
+    name: ktor/upload
+    needs:
+      - publication
+      - linux-consumer
+    if: ${{ inputs.publish != 'none' }}
+    runs-on: ubuntu-24.04
+    environment: maven-central
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.engine }}
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Download the publication
+        uses: actions/download-artifact@v4
+        with:
+          name: ktor-publication
+          path: ${{ runner.temp }}/repository
+      - name: Sign the publication and pack the bundle
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: >-
+          ./tools/ktor.py bundle "$RUNNER_TEMP/repository"
+          "$RUNNER_TEMP/assets/ktor-client-scion-${TAG#v}-maven.zip"
+      - name: Upload the bundle to Maven Central
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+        run: >-
+          ./tools/ktor.py upload "$RUNNER_TEMP/assets/ktor-client-scion-${TAG#v}-maven.zip"
+          "ktor-client-scion ${TAG#v}" "$PUBLISH"
+      - name: Attach the bundle to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/assets"
+          # Named per platform: the other release workflows attach their own sums.
+          sha256sum ktor-client-scion-* > SHA256SUMS-ktor
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "$TAG" --notes "Release $TAG"
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" ./* --clobber

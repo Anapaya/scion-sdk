@@ -140,6 +140,47 @@ Each Kotlin Multiplatform target publishes its own module. The engine and
    puts it into the AAR. If `-Pscion.androidAbis` names a list of ABIs,
    Gobley builds only those.
 
+## Releases
+
+The workflow `.github/workflows/release-ktor.yml` of `scion-sdk` publishes
+the engine and `ktor-client-scion-testing` to Maven Central. A release tag
+starts it. `tools/ktor.py` does the work of each job:
+
+1. **Linux libraries.** `ktor.py linux-libraries` builds the Linux x86-64
+   libraries for the JVM jar with cargo. The job runs in the
+   `manylinux_2_28` image, so the libraries need glibc 2.28 only. The
+   subcommand fails if a library needs a newer glibc.
+2. **Publication.** On a Mac, `ktor.py publish` builds the publication into
+   `build/repository` and checks it. It gives Gradle these properties:
+   - `-Pscion.release=true` declares only the native targets of a release:
+     `iosArm64` and `iosSimulatorArm64`.
+   - `-Pscion.jvmHostOnly=true` and `-Pscion.jvmPrebuiltLibraries=<dir>` put
+     the macOS library of the Mac and the Linux libraries of job 1 into the
+     JVM jar.
+
+   Then the job runs `tests/consumer`, an app that gets the engine from the
+   publication, on the JVM, as an Android host test, and on the iOS
+   simulator.
+3. **Linux consumer.** The job runs `tests/consumer` on Linux, with the
+   libraries of job 1.
+4. **Upload.** `ktor.py bundle` signs the publication, and `ktor.py upload`
+   uploads it to the Central Portal. The job also attaches the signed bundle
+   to the GitHub release. It runs in the `maven-central` environment, which
+   holds the token and the signing key.
+
+A tag push uploads with `USER_MANAGED`: Central validates the deployment,
+and a person publishes it in the Central Portal. A manual run takes the tag
+and the publishing type. With `none`, it uploads nothing.
+
+The version is the version of the `scion-stack` crate, as for the Android
+AAR of `scion-http3`. `ktor.py version` prints it. CI runs jobs 1 to 3 for
+each pull request that changes the engine, and each night. It also runs the
+unit tests of `ktor.py`:
+
+```sh
+python3 -m unittest discover -s tools -p 'test_*.py'
+```
+
 ## Tests on an Android emulator
 
 `commonTest` also runs as an Android instrumented test, in the release

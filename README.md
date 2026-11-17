@@ -117,7 +117,8 @@ Language bindings live outside `crates/`:
   with a hand-written Swift facade on top.
 - [bindings/kmp-ktor-engine/](bindings/kmp-ktor-engine/): A Ktor client engine for Kotlin
   Multiplatform (preview), on top of [scion-http3](crates/libs/scion-http3/), with a testing
-  library that runs a SCION network in the test process.
+  library that runs a SCION network in the test process. Maven Central has both as
+  `net.anapaya.scion:ktor-client-scion` and `net.anapaya.scion:ktor-client-scion-testing`.
 
 ## Contributing
 

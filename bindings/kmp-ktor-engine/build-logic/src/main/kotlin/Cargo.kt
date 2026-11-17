@@ -24,6 +24,24 @@ object Cargo {
         return JsonSlurper().parseText(metadata) as Map<*, *>
     }
 
+    /**
+     * The name of the library of [kind], for example `staticlib`, of the
+     * package whose manifest is in [dir]. For example `ktor_scion_core`.
+     */
+    fun libraryName(dir: File, kind: String): String {
+        val manifest = dir.resolve("Cargo.toml").canonicalPath
+        val packages = metadata(dir, "--no-deps")["packages"] as List<*>
+        val crate = packages.map { it as Map<*, *> }.single { File(it["manifest_path"] as String).canonicalPath == manifest }
+        val targets = (crate["targets"] as List<*>).map { it as Map<*, *> }
+        return targets.single { kind in (it["kind"] as List<*>) }["name"] as String
+    }
+
+    /** The version of the workspace package [name], seen from [dir]. */
+    fun packageVersion(dir: File, name: String): String {
+        val packages = metadata(dir, "--no-deps")["packages"] as List<*>
+        return packages.map { it as Map<*, *> }.single { it["name"] == name }["version"] as String
+    }
+
     /** Where cargo puts the build output of the package in [dir]. */
     fun targetDirectory(dir: File): File = File(metadata(dir, "--no-deps")["target_directory"] as String)
 }

@@ -25,16 +25,7 @@ val profileDirectory: Provider<String> = providers.provider {
 }
 
 /** The library name of the crate, for example `ktor_scion_core`. */
-val libraryName: Provider<String> = providers.provider {
-    // Find the package of the crate.
-    val manifest = crateDirectory.resolve("Cargo.toml").canonicalPath
-    val packages = Cargo.metadata(crateDirectory, "--no-deps")["packages"] as List<*>
-    val crate = packages.map { it as Map<*, *> }.single { File(it["manifest_path"] as String).canonicalPath == manifest }
-
-    // Take the name of its static library.
-    val targets = (crate["targets"] as List<*>).map { it as Map<*, *> }
-    targets.single { "staticlib" in (it["kind"] as List<*>) }["name"] as String
-}
+val libraryName: Provider<String> = providers.provider { Cargo.libraryName(crateDirectory, "staticlib") }
 
 /** The Kotlin/Native targets of this host: Gobley target name to Rust triple. */
 val nativeTargets: Map<String, String> = when (NativeTarget.hostOs) {

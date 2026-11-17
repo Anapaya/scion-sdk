@@ -9,6 +9,8 @@ plugins {
     id("rust-kmp-library")
 }
 
+description = "A Ktor HttpClientEngine that sends HTTP requests over SCION."
+
 kotlin {
     sourceSets {
         commonMain.dependencies {

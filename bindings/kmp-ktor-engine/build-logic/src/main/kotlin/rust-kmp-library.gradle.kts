@@ -37,6 +37,12 @@ pluginManager.apply("rust-staticlib-isolation")
 val versions = the<VersionCatalogsExtension>().named("libs")
 fun version(name: String): String = versions.findVersion(name).get().requiredVersion
 
+val isRelease = providers.gradleProperty("scion.release").orNull == "true"
+
+group = "net.anapaya.scion"
+// The SDK version, as for the Android AAR of scion-http3.
+version = Cargo.packageVersion(layout.projectDirectory.dir("rust").asFile, "scion-stack")
+
 configure<KotlinMultiplatformExtension> {
     explicitApi()
 
@@ -56,7 +62,14 @@ configure<KotlinMultiplatformExtension> {
     // the Windows target. Only a Mac builds the Apple targets, because they
     // need Xcode. A Mac also cross compiles the Linux and the Windows targets,
     // so that it builds every artifact.
-    when (NativeTarget.hostOs) {
+    //
+    // -Pscion.release=true declares only the native targets of a release.
+    if (isRelease) {
+        if (NativeTarget.hostOs == NativeTarget.Os.MacOs) {
+            iosArm64()
+            iosSimulatorArm64()
+        }
+    } else when (NativeTarget.hostOs) {
         NativeTarget.Os.Linux -> {
             linuxX64()
             mingwX64()
@@ -145,11 +158,46 @@ tasks.matching { it.name.startsWith("lint") }.configureEach { enabled = false }
 // Gobley hooks a cargo check per target into check, duplicating work of the build.
 tasks.matching { it.name.startsWith("cargoCheck") }.configureEach { enabled = false }
 
+// The release workflow signs this repository and uploads it to Maven Central.
 configure<PublishingExtension> {
     repositories {
         maven {
             name = "localBuild"
             url = uri(rootProject.layout.buildDirectory.dir("repository"))
+        }
+    }
+
+    publications.withType<MavenPublication>().configureEach {
+        // Maven Central requires a javadoc jar. The API docs are in the README.
+        val publication = name
+        artifact(tasks.register<Jar>("${publication}JavadocJar") {
+            archiveAppendix.set(publication)
+            archiveClassifier.set("javadoc")
+        })
+
+        pom {
+            name.set(project.name)
+            description.set(provider { project.description })
+            url.set("https://github.com/Anapaya/scion-sdk")
+            licenses {
+                license {
+                    name.set("Apache License, Version 2.0")
+                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                }
+            }
+            developers {
+                developer {
+                    name.set("Anapaya Systems")
+                    email.set("engineering@anapaya.net")
+                    organization.set("Anapaya Systems")
+                    organizationUrl.set("https://www.anapaya.net")
+                }
+            }
+            scm {
+                connection.set("scm:git:https://github.com/Anapaya/scion-sdk.git")
+                developerConnection.set("scm:git:ssh://git@github.com/Anapaya/scion-sdk.git")
+                url.set("https://github.com/Anapaya/scion-sdk")
+            }
         }
     }
 }
