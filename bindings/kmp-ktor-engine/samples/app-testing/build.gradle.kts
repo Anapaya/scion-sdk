@@ -23,8 +23,8 @@ kotlin {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
     }
 
-    // Only for the Android host test: it runs commonTest with the setup from
-    // "Android host tests" in the README. The android block below and the lint
+    // Only for the Android host test: it runs commonTest with the setup for
+    // Android host tests from the guide. The android block below and the lint
     // switch only configure this target.
     androidTarget {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
@@ -57,7 +57,7 @@ kotlin {
             implementation(libs.ktor.server.cio)
         }
 
-        // See "Android host tests" in the README.
+        // The desktop libraries for the Android host test, which runs on the JVM.
         androidUnitTest.dependencies {
             runtimeOnly(project(":ktor-client-scion", "jvmRuntimeElements"))
             runtimeOnly(project(":ktor-client-scion-testing", "jvmRuntimeElements"))

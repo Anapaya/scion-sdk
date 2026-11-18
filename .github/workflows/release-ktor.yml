@@ -134,7 +134,7 @@ jobs:
       - name: Test the publication in an app
         run: >-
           ./gradlew --no-daemon -p tests/consumer -PscionRepository="$PWD/build/repository"
-          -PscionVersion="${TAG#v}" jvmTest testAndroidHostTest iosSimulatorArm64Test
+          -PsdkVersion="${TAG#v}" jvmTest testAndroidHostTest iosSimulatorArm64Test
       - name: Upload the test reports
         if: failure()
         uses: actions/upload-artifact@v4
@@ -180,7 +180,7 @@ jobs:
       - name: Test the publication in an app
         run: >-
           ./gradlew --no-daemon -p tests/consumer -PscionRepository="$RUNNER_TEMP/repository"
-          -PscionVersion="${TAG#v}" jvmTest testAndroidHostTest
+          -PsdkVersion="${TAG#v}" jvmTest testAndroidHostTest
       - name: Upload the test reports
         if: failure()
         uses: actions/upload-artifact@v4

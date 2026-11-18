@@ -91,7 +91,7 @@ dependencies {
  *
  * The AAR also sets a network security config that allows plain HTTP to the
  * CRL hosts. The engine does not take it: in an app with its own config, the
- * manifest merge fails. See the README for the effect on origin certificates.
+ * manifest merge fails. The guide describes the effect on origin certificates.
  */
 val extractRustlsPlatformVerifier = tasks.register<Copy>("extractRustlsPlatformVerifier") {
     group = "build"

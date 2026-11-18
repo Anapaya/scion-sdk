@@ -14,18 +14,27 @@ import kotlin.test.assertEquals
 
 class ConsumerTest {
 
+    // ANCHOR: first-request
     @Test
     fun thePublishedEngineReachesTheTestApi() {
+        // Start a SCION network in the test process.
         ScionTestNetwork.start().use { network ->
             runBlocking {
+                // Attach the engine to the network, and trust the CA of its test API.
                 val client = HttpClient(ScionHttp) {
                     engine {
                         useTestNetwork(network)
                         caCertificatesPem = network.testApiCaPem
                     }
                 }
-                client.use { assertEquals("world", it.get("${network.testApiUrl}/hello").bodyAsText()) }
+
+                // Send a request over SCION.
+                client.use {
+                    val response = it.get("${network.testApiUrl}/hello")
+                    assertEquals("world", response.bodyAsText())
+                }
             }
         }
     }
+    // ANCHOR_END: first-request
 }

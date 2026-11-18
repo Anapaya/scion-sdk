@@ -57,6 +57,7 @@ class GreetingApiTest {
 
     @BeforeTest
     fun start() {
+        // ANCHOR: api-server
         // The API of the app, on plain TCP. In production, it runs behind the
         // gateway.
         api = embeddedServer(CIO, host = "127.0.0.1", port = 0) {
@@ -67,13 +68,17 @@ class GreetingApiTest {
 
         // Retrieve the port of the API, so the gateway can connect to it.
         val apiPort = runBlocking { api.engine.resolvedConnectors().first().port }
+        // ANCHOR_END: api-server
 
+        // ANCHOR: network
         // The built-in server of the network plays the gateway. It connects
         // each tunnel for API_HOST to the API.
         network = ScionTestNetwork.start {
             gatewayBackend(API_HOST, "127.0.0.1:$apiPort")
         }
+        // ANCHOR_END: network
 
+        // ANCHOR: client
         // Build a client using the ScionHttp engine.
         client = HttpClient(ScionHttp) {
             engine {
@@ -85,6 +90,7 @@ class GreetingApiTest {
                 requestTimeoutMillis = 20_000
             }
         }
+        // ANCHOR_END: client
     }
 
     @AfterTest
@@ -94,12 +100,14 @@ class GreetingApiTest {
         api.stop()
     }
 
+    // ANCHOR: test
     @Test
     fun greetsOverScion(): Unit = runBlocking {
         // The scheme is http, because the API has no TLS.
         val greeting = GreetingApi(client, "http://$API_HOST").greet("SCION")
         assertEquals("Hello, SCION!", greeting)
     }
+    // ANCHOR_END: test
 
     private companion object {
         const val API_HOST = "api.example.com"

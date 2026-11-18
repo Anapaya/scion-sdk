@@ -168,7 +168,7 @@ configure<PublishingExtension> {
     }
 
     publications.withType<MavenPublication>().configureEach {
-        // Maven Central requires a javadoc jar. The API docs are in the README.
+        // Maven Central requires a javadoc jar. The API docs are in the KDoc and in the guide.
         val publication = name
         artifact(tasks.register<Jar>("${publication}JavadocJar") {
             archiveAppendix.set(publication)

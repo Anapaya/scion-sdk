@@ -10,12 +10,15 @@ import net.anapaya.ktor.scion.ScionTokenSource
 import net.anapaya.ktor.scion.ScionHttp
 import net.anapaya.ktor.scion.ScionWebGateway
 
+// ANCHOR: api
 /** The API of the app. It knows nothing about SCION. */
 class GreetingApi(private val client: HttpClient, private val baseUrl: String) {
     suspend fun greet(name: String): String =
         client.get("$baseUrl/greeting") { parameter("name", name) }.bodyAsText()
 }
+// ANCHOR_END: api
 
+// ANCHOR: production-client
 /** The client that the app ships with: the AA, and the WebGateway of the API. */
 fun productionClient(apiKey: String): HttpClient = HttpClient(ScionHttp) {
     engine {
@@ -23,3 +26,4 @@ fun productionClient(apiKey: String): HttpClient = HttpClient(ScionHttp) {
         webGateway = ScionWebGateway()
     }
 }
+// ANCHOR_END: production-client

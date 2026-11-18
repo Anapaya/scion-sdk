@@ -33,14 +33,18 @@ fun main(args: Array<String>): Unit = runBlocking {
         return@runBlocking
     }
 
+    // ANCHOR: engine-config
     runSample(arguments.url) {
         tokenSource = ScionTokenSource.AnapayaAa(apiKey = arguments.apiKey)
         endhostApiUrl = arguments.endhostApiUrl
+        // ANCHOR: gateway
         if (arguments.gateway) {
             webGateway = ScionWebGateway(port = arguments.gatewayPort)
         }
         arguments.gatewayAddress?.let { dnsOverride(Url(arguments.url).host, it) }
+        // ANCHOR_END: gateway
     }
+    // ANCHOR_END: engine-config
 }
 
 private class Arguments(

@@ -5,43 +5,23 @@ HTTP/1.1 through a WebGateway.
 
 Status: preview. The API can change between releases.
 
+The guide on learn.anapaya.net shows how to use the engine in an app:
+[Kotlin Multiplatform](https://learn.anapaya.net/docs/academy/scion-sdk/platforms/kotlin-multiplatform).
+It covers the Maven coordinates, the settings, the WebGateway, the errors, the
+limits, and the tests over SCION. This README covers the build from source and
+the samples.
+
 ## Platforms
 
-The engine targets Linux, Windows, the JVM, Android, iOS, and macOS.
+The engine targets Linux, Windows, the JVM, Android, iOS, and macOS. A release
+on Maven Central has Android, iOS, and the JVM.
 [docs/build.md](docs/build.md) describes the state per platform and the
 artifacts.
 
-## Install
+## Build from source
 
-Each SDK release publishes the engine to Maven Central. The engine has the
-version of the SDK:
-
-```kotlin
-// build.gradle.kts of a Kotlin Multiplatform module
-kotlin {
-    sourceSets {
-        commonMain.dependencies {
-            implementation("net.anapaya.scion:ktor-client-scion:<version>")
-        }
-    }
-}
-```
-
-A release has these targets:
-
-| Target              | Native code                                            |
-| ------------------- | ------------------------------------------------------ |
-| Android             | arm64-v8a, armeabi-v7a, x86, x86-64                    |
-| `iosArm64`          | iOS devices                                            |
-| `iosSimulatorArm64` | the iOS simulator on Apple Silicon                     |
-| JVM                 | macOS arm64, and Linux x86-64 with glibc 2.28 or later |
-
-The klibs need the Kotlin version of `gradle/libs.versions.toml` at the
-release tag, or a newer one.
-
-The JVM jar of a release has no Windows library. On Windows, and for the
-other targets, build the artifacts into a Maven repository in
-`build/repository`:
+For Windows, and for the targets that a release does not have, build the
+artifacts into a Maven repository in `build/repository`:
 
 ```bash
 ./gradlew publishAllPublicationsToLocalBuildRepository
@@ -63,174 +43,10 @@ dependencyResolutionManagement {
 }
 ```
 
-Alternatively, `./gradlew publishToMavenLocal` writes to `~/.m2/repository`.
-Then use `mavenLocal()` in place of the `maven(url = ...)` line.
-
-## Use
-
-The engine is a Ktor `HttpClientEngine` that sends HTTP over SCION. So it can be
-initialized drop-in in a Ktor `HttpClient`:
-
-```kotlin
-val client = HttpClient(ScionHttp) {
-    engine { tokenSource = ScionTokenSource.AnapayaAa(apiKey = key) }
-}
-
-val response = client.get("https://example.org/")
-```
-
-With `ScionTokenSource.AnapayaAa`, the client gets a SNAP token from the
-Anapaya AA and renews it before it expires. The token authenticates with the
-endhost API and the SNAP control plane.
-
-The engine uses the AA at `https://auth.scion.anapaya.net`. To use a different
-AA, set `ScionTokenSource.AnapayaAa(url = ...)` to the HTTPS URL of that AA.
-The `url` is not a SCION address. It does not select the origin or the
-WebGateway.
-
-If the AA answer carries an endhost API discovery URL, the client discovers
-its endhost APIs there. Otherwise, it uses the global discovery service.
-
-`endhostApiUrl` replaces discovery with one fixed endhost API.
-`ScionTokenSource.Static` replaces the AA with a fixed token.
-
-`ScionEngineConfig` lists every engine setting.
-
-If you cancel the coroutine of a request, the engine aborts the request and
-resets its HTTP/3 stream.
-
-## Transports
-
-The engine has two transports:
-
-| Transport  | Setting      | Wire                                                                                      |
-| ---------- | ------------ | ----------------------------------------------------------------------------------------- |
-| HTTP/3     | default      | HTTP/3 over QUIC over SCION, to the origin                                                |
-| WebGateway | `webGateway` | HTTP/1.1 over TLS, inside an HTTP/3 `CONNECT` tunnel over SCION to a PathGuard WebGateway |
-
-```kotlin
-val client = HttpClient(ScionHttp) {
-    engine {
-        tokenSource = ScionTokenSource.AnapayaAa(apiKey = key)
-        webGateway = ScionWebGateway()
-    }
-}
-```
-
-The gateway is transparent. The engine has no setting for the address of the
-gateway. The engine resolves the host of the request URL, and it expects the
-gateway at that SCION address. The engine connects to port 443 of the gateway.
-To use a different port, set `ScionWebGateway(port = ...)`.
-
-The engine resolves the request host in one of two ways:
-
-- TSAR (TXT-based SCION Address Resolution) publishes the SCION address of a
-  host as a DNS TXT record. For a host behind a gateway, the record holds the
-  SCION address of the gateway.
-- `dnsOverride(host, address)` sets the SCION address of a host in the app.
-  Use it if the host has no TSAR record.
-
-### Set the gateway address without TSAR
-
-If the request host has no TSAR record, call `dnsOverride` with the SCION
-address of the gateway. In this example, the gateway has the SCION address
-`1-ff00:0:110,192.0.2.10`, and the app sends requests to `api.example.com`:
-
-```kotlin
-val client = HttpClient(ScionHttp) {
-    engine {
-        tokenSource = ScionTokenSource.AnapayaAa(apiKey = key)
-        webGateway = ScionWebGateway()
-        dnsOverride("api.example.com", "1-ff00:0:110,192.0.2.10")
-    }
-}
-
-val response = client.get("https://api.example.com/accounts")
-```
-
-- The first argument is the host of the request URL. It is not a name of the
-  gateway.
-- The address has the form `<ISD>-<AS>,<IP>`. Do not add brackets or a port.
-- Call `dnsOverride` once for each host that the app sends through the
-  gateway. All calls use the same gateway address.
-
-### The tunnel
-
-The engine opens the tunnel with `CONNECT <request host>:<request port>`. It
-does not check the certificate of the gateway.
-
-The gateway selects the backend by that authority and connects the tunnel to it
-over TCP.
-
-TLS to the origin runs end to end inside the tunnel.
-`caCertificatesPem` and the platform verifier apply to that TLS session.
-
-## Testing an app
-
-`ktor-client-scion-testing` runs a PocketSCION topology in the test process,
-on the JVM and on the native targets:
-
-```kotlin
-testImplementation("net.anapaya.scion:ktor-client-scion-testing:<version>")
-```
-
-```kotlin
-ScionTestNetwork.start {
-    gatewayBackend("api.example.com", "127.0.0.1:8080")
-}.use { network ->
-    val client = HttpClient(ScionHttp) {
-        engine { useTestNetwork(network, "api.example.com") }
-    }
-}
-```
-
-`useTestNetwork` sets `endhostApiUrl`, `tokenSource`, and DNS overrides to the
-server AS. It does not set `caCertificatesPem`, because your app's server has
-its own CA.
-
-The topology reaches your app's server in one of two ways:
-
-| Transport  | Your app's server                                                                                                       |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------- |
-| HTTP/3     | opens a SCION socket in AS 2-ff00:0:212 with `serverEndhostApiUrl` and `authToken`. It gets the address `serverAddress` |
-| WebGateway | listens on TCP. `gatewayBackend` maps the `CONNECT` authority to it. Set `ScionWebGateway(port = network.gatewayPort)`  |
-
-[`samples/app-testing`](samples/app-testing) shows the WebGateway case: a
-Ktor server on TCP as the API of the app, and a test that sends requests to it
-over SCION. The test is in `commonTest`, so it runs on the JVM, as an Android
-host test, and on the native targets of the host:
-`./gradlew :app-testing:allTests :app-testing:testReleaseUnitTest`.
-
-The built-in server also serves a test API at `testApiUrl`, with the CA
-`testApiCaPem`.
-
-### Android host tests
-
-An Android host test (`androidUnitTest`, or `androidHostTest` with
-`com.android.kotlin.multiplatform.library`) runs on the desktop JVM, but gets
-the AAR, which holds only the Android native libraries. Without extra setup,
-it fails with:
-
-```text
-java.lang.UnsatisfiedLinkError: Unable to load library 'ktor_scion_testing'
-```
-
-To fix this, add the JVM artifacts, which hold the desktop libraries,
-to the host test.
-
-Use the same version as for the AAR. With
-`com.android.kotlin.multiplatform.library`, the source set is
-`androidHostTest`:
-
-```kotlin
-androidUnitTest.dependencies {
-    runtimeOnly("net.anapaya.scion:ktor-client-scion-jvm:<version>")
-    runtimeOnly("net.anapaya.scion:ktor-client-scion-testing-jvm:<version>")
-}
-```
-
-[`tests/consumer`](tests/consumer) is an app with this setup. CI runs it
-against the publication of each release.
+The local build has the coordinates of a release, and the version of the SDK
+in the source tree. Alternatively, `./gradlew publishToMavenLocal` writes to
+`~/.m2/repository`. Then use `mavenLocal()` in place of the `maven(url = ...)`
+line.
 
 ## Samples
 
@@ -293,34 +109,16 @@ For an iPhone, `./gradlew :hello-scion:assembleIosAppIosArm64` writes
 project, Xcode does not sign it. Sign it with `codesign` and your
 provisioning profile. The bundle ID is in `src/iosMain/Info.plist`.
 
-## Limits
+### App testing
 
-- The engine buffers each body in memory. No streaming yet, in either
-  direction. `maxResponseBodyBytes` bounds a response body, 16 MiB by default.
-- No WebSocket, no SSE, no protocol upgrade, no `CONNECT` tunnel for the app.
-- `HttpClientEngineConfig.proxy` has no effect.
-- The engine follows no redirects. The Ktor `HttpRedirect` plugin does.
-- The engine drops response trailers.
-- On Android, the platform verifier trusts the system CAs and the user CAs.
-  It ignores the Network Security Config of the app, so the config cannot
-  remove the user CAs or pin a certificate. The library initializes the
-  verifier through `ScionTrustProvider`, a content provider in its manifest.
-  An app that removes the provider cannot use the engine.
-- On Android, the platform verifier checks if an origin certificate is
-  revoked. If the certificate has no OCSP URL, Android must get the CRL of
-  the CA over plain HTTP. If the Network Security Config of the app blocks
-  plain HTTP to the CRL host, the request fails with `Revoked`, also for a
-  valid certificate. To prevent this, allow plain HTTP to the CRL hosts of
-  the CAs of your origins. `rustls-platform-verifier` publishes a config
-  with all known CRL hosts in its Android component.
-- On Android, the AA, the discovery service, the endhost API, and the SNAP
-  control plane do not use the platform verifier. They use the Mozilla root
-  set in the library, without a revocation check, and the user CAs do not
-  apply. Thus they do not depend on the Network Security Config of the app.
-  `controlPlaneCaCertificatesPem` replaces the root set.
-- A `ScionTokenSource.Static` token stays for the life of the client. A new
-  token needs a new client. The AA token from `ScionTokenSource.AnapayaAa`
-  renews itself.
+`samples/app-testing` is an app with an API behind a WebGateway, and a test
+that sends requests to the API over SCION. The page "Testing your app" of the
+guide explains it. The test is in `commonTest`, so it runs on the JVM, as an
+Android host test, and on the native targets of the host:
+
+```bash
+./gradlew :app-testing:allTests :app-testing:testReleaseUnitTest
+```
 
 ## Contributing
 

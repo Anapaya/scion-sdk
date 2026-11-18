@@ -29,6 +29,8 @@ concurrency:
       - bindings/android/hello-scion/**
       - bindings/apple/hello-scion/**
       - bindings/apple/scion-http3-swift/Tests/**
+      - bindings/kmp-ktor-engine/samples/**
+      - bindings/kmp-ktor-engine/tests/consumer/**
       - .github/workflows/docs.yml
 jobs:
   build:

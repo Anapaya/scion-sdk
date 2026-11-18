@@ -22,10 +22,12 @@ public suspend fun runSample(
     log: (String) -> Unit = ::println,
     engine: ScionEngineConfig.() -> Unit,
 ) {
+    // ANCHOR: build-client
     val client = HttpClient(ScionHttp) {
         engine(engine)
         install(HttpTimeout) { requestTimeoutMillis = 20_000 }
     }
+    // ANCHOR_END: build-client
 
     client.use {
         // Send one request.

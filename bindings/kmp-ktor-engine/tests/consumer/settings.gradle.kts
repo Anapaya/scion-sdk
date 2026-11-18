@@ -10,7 +10,7 @@
  *   ./gradlew -p tests/consumer -PscionRepository=<repository> allTests testAndroidHostTest
  *
  * Without -PscionRepository, it uses build/repository of the engine build.
- * -PscionVersion selects a version. The default is the newest one.
+ * -PsdkVersion selects a version. The default is the newest one.
  */
 
 pluginManagement {
